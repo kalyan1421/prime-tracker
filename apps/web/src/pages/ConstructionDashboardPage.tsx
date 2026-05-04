@@ -1,0 +1,308 @@
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Card, CardHeader, CardBody, Progress } from '@heroui/react';
+import {
+  PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer,
+} from 'recharts';
+import { FiTrendingUp } from 'react-icons/fi';
+import { useConstructionDashboard } from '../hooks/useApi';
+import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { useAuthStore } from '../store/authStore';
+
+const PHASE_COLORS: Record<string, string> = {
+  PRE_DEVELOPMENT: '#805AD5', PERMITTING: '#DD6B20', CONSTRUCTION: '#3182CE',
+  LEASE_UP: '#319795', STABILIZED: '#38A169', SOLD_REFI: '#00B5D8',
+};
+
+export default function ConstructionDashboardPage() {
+  const { user } = useAuthStore();
+  const navigate = useNavigate();
+  const { data, isLoading, error } = useConstructionDashboard();
+  const role = user?.role || '';
+
+  useEffect(() => {
+    if (!user?.role) return;
+    if (!['PROJECT_MANAGER', 'CONSTRUCTION'].includes(user.role)) {
+      if (['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE'].includes(user.role)) navigate('/dashboard/founder', { replace: true });
+      else if (['SALES', 'MARKETING'].includes(user.role)) navigate('/dashboard/sales', { replace: true });
+      else navigate('/', { replace: true });
+    }
+  }, [user?.role, navigate]);
+
+  if (isLoading) return <LoadingState message="Loading construction dashboard..." />;
+  if (error) return <ErrorState />;
+  if (!data) return null;
+
+  const d = data as any;
+  const isPM = role === 'PROJECT_MANAGER';
+  const budgetPct = Math.round((d.budgetSpentPct || 0) * 100);
+  const budgetVariancePct = d.totalBudget > 0
+    ? Math.abs(((d.totalBudget - d.totalActuals) / d.totalBudget) * 100).toFixed(1)
+    : '0';
+
+  const phaseData = (d.projectSummaries || []).reduce((acc: Record<string, number>, p: any) => {
+    acc[p.phase] = (acc[p.phase] || 0) + 1;
+    return acc;
+  }, {});
+  const phaseChartData = Object.entries(phaseData).map(([name, value]) => ({
+    name: name.replace(/_/g, ' '),
+    value: value as number,
+    color: PHASE_COLORS[name] || '#A0AEC0',
+  }));
+
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-6">
+        {isPM ? 'Project Manager Dashboard' : 'Construction Dashboard'}
+      </h1>
+
+      {/* Zone A — Summary Stat Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Active Projects" value={String(d.activeProjectCount)} variant="construction" colorScheme="brand" />
+        <StatCard
+          label="Overdue Milestones"
+          value={String(d.overdueMilestoneCount)}
+          helpText={d.overdueMilestoneCount > 0 ? 'Action required' : 'All on track'}
+          variant="construction"
+          colorScheme={d.overdueMilestoneCount > 0 ? 'red' : 'green'}
+        />
+        <StatCard label="In-Progress Milestones" value={String(d.inProgressMilestoneCount)} variant="construction" colorScheme="orange" />
+        <StatCard label="Budget Spent" value={`${budgetPct}%`} helpText="across all active projects" variant="construction" colorScheme="brand" />
+      </div>
+
+      {/* Zone A2 — Financial Overview (all roles) */}
+      <Card shadow="sm" className="mb-6">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-amber-700">Construction Financials</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard
+              label="Total Budget Allocated"
+              value={fmt(d.totalBudget)}
+              helpText="across active projects"
+              variant="construction"
+              colorScheme="brand"
+            />
+            <StatCard
+              label="Total Actual Spent"
+              value={fmt(d.totalActuals)}
+              helpText={`${budgetPct}% of budget`}
+              variant="construction"
+              colorScheme="orange"
+            />
+            <StatCard
+              label="Budget Variance"
+              value={fmt(d.budgetVariance)}
+              helpText={`${budgetVariancePct}% ${d.budgetVariance >= 0 ? 'remaining' : 'over'}`}
+              trend={d.budgetVariance >= 0 ? 'increase' : 'decrease'}
+              colorScheme={d.budgetVariance >= 0 ? 'green' : 'red'}
+              variant="construction"
+            />
+            <StatCard
+              label="Total Loan Available"
+              value={fmt(d.totalLoanAvailable)}
+              helpText="total principal committed"
+              variant="construction"
+              colorScheme="purple"
+            />
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Zone B — Project Status Board */}
+      <Card shadow="sm" className="mb-6">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-600">Project Status Board</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
+                  <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Phase</th>
+                  <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase min-w-[140px]">Budget Spent</th>
+                  <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Overdue</th>
+                  <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">In-Progress</th>
+                  <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Done</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(d.projectSummaries || []).map((p: any) => (
+                  <tr
+                    key={p.id}
+                    className="border-b border-gray-50 cursor-pointer hover:bg-gray-50"
+                    onClick={() => navigate(`/projects/${p.id}`)}
+                  >
+                    <td className="py-2 px-2 font-medium">{p.name}</td>
+                    <td className="py-2 px-2"><StatusBadge status={p.phase} /></td>
+                    <td className="py-2 px-2">
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">
+                          {p.rawBudget
+                            ? `${fmt(p.rawBudget.actuals)} / ${fmt(p.rawBudget.budget)}`
+                            : `${Math.round(p.budgetSpentPct * 100)}%`}
+                        </div>
+                        <Progress
+                          value={p.budgetSpentPct * 100}
+                          size="sm"
+                          color={p.budgetSpentPct > 1 ? 'danger' : p.budgetSpentPct > 0.9 ? 'warning' : 'primary'}
+                        />
+                      </div>
+                    </td>
+                    <td className="py-2 px-2 text-center">
+                      <span className={p.milestoneCounts.overdue > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}>
+                        {p.milestoneCounts.overdue}
+                      </span>
+                    </td>
+                    <td className="py-2 px-2 text-center text-blue-600">{p.milestoneCounts.inProgress}</td>
+                    <td className="py-2 px-2 text-center text-green-600">{p.milestoneCounts.completed}</td>
+                  </tr>
+                ))}
+                {(d.projectSummaries || []).length === 0 && (
+                  <tr><td colSpan={6} className="text-center py-6 text-gray-400">No active projects</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Zone C — Action Items */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Overdue Milestones */}
+        <Card shadow="sm">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <FiTrendingUp className="text-amber-600" />
+              <p className="font-semibold text-sm text-gray-600">Overdue Milestones</p>
+            </div>
+          </CardHeader>
+          <CardBody className="pt-0">
+            {(d.recentMilestones || []).filter((m: any) => m.status === 'OVERDUE').length === 0 ? (
+              <p className="text-sm text-gray-400 py-4 text-center">No overdue milestones</p>
+            ) : (
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Due</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(d.recentMilestones as any[]).filter((m: any) => m.status === 'OVERDUE').map((m: any) => (
+                      <tr
+                        key={m.id}
+                        className="border-b border-gray-50 cursor-pointer hover:bg-amber-50"
+                        onClick={() => navigate(`/projects/${m.projectId}/milestones`)}
+                      >
+                        <td className="py-2 px-2 font-medium text-amber-700">{m.title}</td>
+                        <td className="py-2 px-2 text-xs text-gray-500">{m.projectName}</td>
+                        <td className="py-2 px-2 text-xs text-red-600">{fmtDate(m.dueDate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        {/* Draw Requests */}
+        <Card shadow="sm">
+          <CardHeader className="pb-2">
+            <p className="font-semibold text-sm text-gray-600">Draw Requests</p>
+          </CardHeader>
+          <CardBody className="pt-0">
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <StatCard
+                label="Pending"
+                value={String(d.drawRequestStats?.pendingCount ?? 0)}
+                helpText={isPM && d.drawRequestStats?.totalPendingAmt != null ? fmt(d.drawRequestStats.totalPendingAmt) : undefined}
+                variant="construction"
+                colorScheme="orange"
+              />
+              <StatCard
+                label="Approved"
+                value={String(d.drawRequestStats?.approvedCount ?? 0)}
+                variant="construction"
+                colorScheme="green"
+              />
+            </div>
+            {d.drawRequestStats?.pendingCount === 0 && (
+              <p className="text-sm text-gray-400 text-center py-2">No pending draw requests</p>
+            )}
+          </CardBody>
+        </Card>
+      </div>
+
+      {/* Zone D — Chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <Card shadow="sm">
+          <CardHeader className="pb-0">
+            <p className="font-semibold text-sm text-gray-600">Projects by Phase</p>
+          </CardHeader>
+          <CardBody>
+            {phaseChartData.length === 0 ? (
+              <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie data={phaseChartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+                    {phaseChartData.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </CardBody>
+        </Card>
+
+        {/* Zone E — Activity Feed */}
+        <Card shadow="sm">
+          <CardHeader className="pb-2">
+            <p className="font-semibold text-sm text-gray-600">Recent Milestone Activity</p>
+          </CardHeader>
+          <CardBody className="pt-0">
+            {(d.recentMilestones || []).length === 0 ? (
+              <p className="text-sm text-gray-400 py-4 text-center">No recent activity</p>
+            ) : (
+              <div className="overflow-auto max-h-[200px]">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Due</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(d.recentMilestones as any[]).map((m: any) => (
+                      <tr
+                        key={m.id}
+                        className="border-b border-gray-50 cursor-pointer hover:bg-gray-50"
+                        onClick={() => navigate(`/projects/${m.projectId}/milestones`)}
+                      >
+                        <td className="py-2 px-2">{m.title}</td>
+                        <td className="py-2 px-2 text-xs text-gray-500">{m.projectName}</td>
+                        <td className="py-2 px-2 text-xs">{fmtDate(m.dueDate)}</td>
+                        <td className="py-2 px-2"><StatusBadge status={m.status} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </div>
+    </div>
+  );
+}

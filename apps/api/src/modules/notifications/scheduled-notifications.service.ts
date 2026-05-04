@@ -1,0 +1,180 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { PrismaService } from '../../prisma/prisma.service';
+import { NotificationsService } from './notifications.service';
+
+@Injectable()
+export class ScheduledNotificationsService {
+  private readonly logger = new Logger(ScheduledNotificationsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationsService,
+  ) {}
+
+  // Run daily at 8:00 AM Central Time
+  @Cron('0 8 * * *', { timeZone: 'America/Chicago' })
+  async runDailyChecks() {
+    this.logger.log('Running daily notification checks...');
+    await Promise.allSettled([
+      this.checkOverdueMilestones(),
+      this.checkExpiringLeases(),
+      this.checkLoanMaturities(),
+      this.checkBudgetVariances(),
+    ]);
+  }
+
+  private async checkOverdueMilestones() {
+    const now = new Date();
+
+    // Find milestones past due that haven't been marked OVERDUE or COMPLETED yet
+    const toMarkOverdue = await this.prisma.milestone.findMany({
+      where: {
+        dueDate: { lt: now },
+        status: { notIn: ['COMPLETED', 'OVERDUE'] },
+      },
+    });
+
+    if (toMarkOverdue.length > 0) {
+      await this.prisma.milestone.updateMany({
+        where: { id: { in: toMarkOverdue.map((m) => m.id) } },
+        data: { status: 'OVERDUE' },
+      });
+      this.logger.log(`Marked ${toMarkOverdue.length} milestones as OVERDUE`);
+    }
+
+    // Notify on all currently-overdue milestones (newly marked + existing)
+    const overdue = await this.prisma.milestone.findMany({
+      where: {
+        dueDate: { lt: now },
+        status: 'OVERDUE',
+      },
+    });
+
+    const projectIds = [...new Set(overdue.map((m) => m.projectId))];
+    const projects = await this.prisma.project.findMany({
+      where: { id: { in: projectIds } },
+      select: { id: true, name: true },
+    });
+    const projectMap = new Map(projects.map((p) => [p.id, p]));
+
+    for (const milestone of overdue) {
+      const project = projectMap.get(milestone.projectId);
+      if (!project) continue;
+      try {
+        await this.notifications.notifyMilestoneOverdue({
+          id: milestone.id,
+          title: milestone.title,
+          projectId: milestone.projectId,
+          project: { name: project.name },
+        });
+      } catch (err) {
+        this.logger.warn(`Milestone overdue notify failed for ${milestone.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Checked ${overdue.length} overdue milestones`);
+  }
+
+  private async checkExpiringLeases() {
+    const now = new Date();
+    const in30 = new Date(now);
+    in30.setDate(in30.getDate() + 30);
+    const in7 = new Date(now);
+    in7.setDate(in7.getDate() + 7);
+
+    // Leases expiring within 30 days
+    const leases30 = await this.prisma.lease.findMany({
+      where: {
+        leaseEnd: { gte: now, lte: in30 },
+        status: 'ACTIVE',
+      },
+      include: {
+        unit: {
+          include: {
+            building: {
+              include: {
+                project: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    for (const lease of leases30) {
+      const daysLeft = Math.ceil((lease.leaseEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      try {
+        await this.notifications.notifyLeaseExpiring(
+          {
+            unitId: lease.unitId,
+            tenantName: lease.tenantName,
+            leaseEnd: lease.leaseEnd,
+            unit: lease.unit,
+          },
+          daysLeft,
+        );
+      } catch (err) {
+        this.logger.warn(`Lease expiry notify failed for ${lease.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Checked ${leases30.length} expiring leases`);
+  }
+
+  private async checkLoanMaturities() {
+    const now = new Date();
+    const in60 = new Date(now);
+    in60.setDate(in60.getDate() + 60);
+
+    const loans = await this.prisma.loan.findMany({
+      where: {
+        maturityDate: { not: null, gte: now, lte: in60 },
+      },
+      include: { project: { select: { id: true, name: true } } },
+    });
+
+    for (const loan of loans) {
+      if (!loan.maturityDate) continue;
+      try {
+        await this.notifications.notifyLoanMaturity({
+          id: loan.id,
+          lender: loan.lender,
+          maturityDate: loan.maturityDate,
+          projectId: loan.projectId,
+          project: { name: loan.project.name },
+        });
+      } catch (err) {
+        this.logger.warn(`Loan maturity notify failed for ${loan.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Checked ${loans.length} maturing loans`);
+  }
+
+  private async checkBudgetVariances() {
+    const projects = await this.prisma.project.findMany({
+      where: { status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+      select: { id: true, name: true },
+    });
+
+    for (const project of projects) {
+      try {
+        const [budgets, actuals] = await Promise.all([
+          this.prisma.budgetLine.aggregate({ where: { projectId: project.id }, _sum: { baselineAmt: true } }),
+          this.prisma.actual.aggregate({ where: { projectId: project.id }, _sum: { amount: true } }),
+        ]);
+
+        const totalBudget = budgets._sum.baselineAmt?.toNumber() ?? 0;
+        const totalActual = actuals._sum.amount?.toNumber() ?? 0;
+
+        if (totalBudget > 0) {
+          const variancePct = ((totalActual - totalBudget) / totalBudget) * 100;
+          if (variancePct > 10) {
+            await this.notifications.notifyBudgetVariance(project.id, project.name, variancePct);
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`Budget variance check failed for project ${project.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Checked budget variances for ${projects.length} projects`);
+  }
+}

@@ -1,0 +1,1334 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import api from '../lib/api';
+
+// ---- Dashboard ----
+export function useDashboard() {
+  return useQuery({
+    queryKey: ['dashboard'],
+    queryFn: () => api.get('/projects/dashboard').then((r) => r.data),
+  });
+}
+
+// ---- Projects ----
+export function useProjects(params?: {
+  status?: string;
+  phase?: string;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
+}) {
+  return useQuery({
+    queryKey: ['projects', params],
+    queryFn: () => api.get('/projects', { params }).then((r) => r.data),
+  });
+}
+
+export function useProjectMembers(projectId: string) {
+  return useQuery({
+    queryKey: ['project-members', projectId],
+    queryFn: () => api.get(`/projects/${projectId}/members`).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useAddProjectMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, data }: { projectId: string; data: { userId: string; role?: string } }) =>
+      api.post(`/projects/${projectId}/members`, data).then((r) => r.data),
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['project-members', v.projectId] }),
+  });
+}
+
+export function useRemoveProjectMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, userId }: { projectId: string; userId: string }) =>
+      api.delete(`/projects/${projectId}/members/${userId}`).then((r) => r.data),
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['project-members', v.projectId] }),
+  });
+}
+
+export function useProject(id: string) {
+  return useQuery({
+    queryKey: ['project', id],
+    queryFn: () => api.get(`/projects/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+// ---- Financial Summary ----
+export function useFinancialSummary(projectId: string) {
+  return useQuery({
+    queryKey: ['financials', projectId],
+    queryFn: () => api.get('/budgets/summary', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+// ---- Budget Lines ----
+export function useBudgetLines(projectId: string) {
+  return useQuery({
+    queryKey: ['budgets', projectId],
+    queryFn: () => api.get('/budgets', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateBudget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/budgets', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+export function useUpdateBudget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/budgets/${id}`, data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+export function useDeleteBudget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/budgets/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+// ---- Milestones ----
+export function useMilestones(projectId: string) {
+  return useQuery({
+    queryKey: ['milestones', projectId],
+    queryFn: () => api.get('/milestones', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useUpdateMilestone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/milestones/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones'] }),
+  });
+}
+
+export function useCreateMilestone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/milestones', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones'] }),
+  });
+}
+
+export function useDeleteMilestone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/milestones/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones'] }),
+  });
+}
+
+// ---- Units ----
+export function useUnits(projectId: string) {
+  return useQuery({
+    queryKey: ['units', projectId],
+    queryFn: () => api.get('/units', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useInventory(filters?: {
+  status?: string;
+  unitType?: string;
+  projectId?: string;
+  search?: string;
+}) {
+  return useQuery({
+    queryKey: ['inventory', filters],
+    queryFn: () => api.get('/units/inventory', { params: filters }).then((r) => r.data),
+  });
+}
+
+export function useUnit(id: string) {
+  return useQuery({
+    queryKey: ['unit', id],
+    queryFn: () => api.get(`/units/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+// ---- Unit Comments ----
+export function useUnitComments(unitId: string) {
+  return useQuery({
+    queryKey: ['comments', 'unit', unitId],
+    queryFn: () => api.get('/comments', { params: { unitId } }).then((r) => r.data),
+    enabled: !!unitId,
+  });
+}
+
+export function useProjectComments(projectId: string) {
+  return useQuery({
+    queryKey: ['comments', 'project', projectId],
+    queryFn: () => api.get('/comments', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useRecentComments(limit = 20) {
+  return useQuery({
+    queryKey: ['comments-recent', limit],
+    queryFn: () => api.get('/comments/recent', { params: { limit } }).then((r) => r.data),
+  });
+}
+
+export function useCreateComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { unitId?: string; projectId?: string; content: string; commentType?: string }) =>
+      api.post('/comments', data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      if (vars.unitId) qc.invalidateQueries({ queryKey: ['comments', 'unit', vars.unitId] });
+      if (vars.projectId) qc.invalidateQueries({ queryKey: ['comments', 'project', vars.projectId] });
+      qc.invalidateQueries({ queryKey: ['comments-recent'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+export function useDeleteComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, source }: { id: string; source: 'unit' | 'project' }) =>
+      api.delete(`/comments/${source}/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['comments'] });
+      qc.invalidateQueries({ queryKey: ['comments-recent'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+// ---- Monthly Lease Income ----
+export function useMonthlyLeaseIncome(projectId: string) {
+  return useQuery({
+    queryKey: ['lease-income', projectId],
+    queryFn: () => api.get('/units/lease-income', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+// ---- Leases ----
+export function useLeases(projectId: string) {
+  return useQuery({
+    queryKey: ['leases', projectId],
+    queryFn: () => api.get('/leases', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useRentRoll(projectId: string) {
+  return useQuery({
+    queryKey: ['rent-roll', projectId],
+    queryFn: () => api.get('/leases/rent-roll', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateLease() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/leases', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['leases'] });
+      qc.invalidateQueries({ queryKey: ['rent-roll'] });
+    },
+  });
+}
+
+export function useUpdateLease() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/leases/${id}`, data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['leases'] });
+      qc.invalidateQueries({ queryKey: ['rent-roll'] });
+    },
+  });
+}
+
+export function useDeleteLease() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/leases/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['leases'] });
+      qc.invalidateQueries({ queryKey: ['rent-roll'] });
+    },
+  });
+}
+
+// ---- Sales ----
+export function useSalesPipeline(projectId: string) {
+  return useQuery({
+    queryKey: ['sales', projectId],
+    queryFn: () => api.get('/sales/pipeline', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateSale() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/sales', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+export function useUpdateSale() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/sales/${id}`, data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+export function useDeleteSale() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/sales/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+// ---- Loans ----
+export function useLoans(projectId: string) {
+  return useQuery({
+    queryKey: ['loans', projectId],
+    queryFn: () => api.get('/loans', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useMonthlyPayments(projectId: string) {
+  return useQuery({
+    queryKey: ['monthly-payments', projectId],
+    queryFn: () => api.get('/loans/monthly-payments', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+// ---- Commitments ----
+export function useCommitments(projectId: string) {
+  return useQuery({
+    queryKey: ['commitments', projectId],
+    queryFn: () => api.get('/commitments', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateCommitment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/commitments', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['commitments'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+export function useUpdateCommitment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/commitments/${id}`, data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['commitments'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+export function useDeleteCommitment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/commitments/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['commitments'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+// ---- KPI ----
+export function useKpiHistory(projectId: string) {
+  return useQuery({
+    queryKey: ['kpi', projectId],
+    queryFn: () => api.get('/kpi/history', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+// ---- Users (Admin) ----
+export function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.get('/users').then((r) => r.data),
+  });
+}
+
+export function useUpdateUserRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) =>
+      api.patch(`/users/${id}/role`, { role }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useToggleUserActive() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.patch(`/users/${id}/status`, { isActive }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+// ---- Audit ----
+export function useAuditLog(params?: { action?: string; entity?: string; limit?: number }) {
+  return useQuery({
+    queryKey: ['audit', params],
+    queryFn: () => api.get('/audit', { params }).then((r) => r.data),
+  });
+}
+
+// ---- Project Mutations ----
+export function useCreateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/projects', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useUpdateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/projects/${id}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['project', vars.id] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useDeleteProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/projects/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+// ---- Unit Mutations ----
+export function useCreateUnit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/units', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['units'] }),
+  });
+}
+
+export function useUpdateUnit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/units/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['units'] }),
+  });
+}
+
+export function useUpdateUnitStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      api.patch(`/units/${id}/status`, { status }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['units'] }),
+  });
+}
+
+export function useDeleteUnit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: string | { id: string; force?: boolean }) => {
+      const params = typeof input === 'string' ? { id: input } : input;
+      const url = `/units/${params.id}${params.force ? '?force=true' : ''}`;
+      return api.delete(url).then((r) => r.data);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['units'] }),
+  });
+}
+
+// ---- Building Queries ----
+export function useBuildings(projectId: string) {
+  return useQuery({
+    queryKey: ['buildings', projectId],
+    queryFn: () => api.get('/buildings', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateBuilding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/buildings', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['buildings'] }),
+  });
+}
+
+export function useUpdateBuilding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/buildings/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['buildings'] }),
+  });
+}
+
+export function useDeleteBuilding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: string | { id: string; force?: boolean }) => {
+      const params = typeof input === 'string' ? { id: input } : input;
+      const url = `/buildings/${params.id}${params.force ? '?force=true' : ''}`;
+      return api.delete(url).then((r) => r.data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['buildings'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+// ---- User Mutations ----
+export function useCreateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/users', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { name?: string; email?: string } }) =>
+      api.put(`/users/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/users/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+// ---- Roles ----
+export function useRoleCounts() {
+  return useQuery({
+    queryKey: ['roles', 'counts'],
+    queryFn: () => api.get('/users/roles').then((r) => r.data),
+  });
+}
+
+export function useRoleDefinitions() {
+  return useQuery({
+    queryKey: ['roles', 'definitions'],
+    queryFn: () => api.get('/users/roles/definitions').then((r) => r.data),
+  });
+}
+
+// ---- Reports ----
+export function usePortfolioReport() {
+  return useQuery({
+    queryKey: ['report-portfolio'],
+    queryFn: () => api.get('/reports/portfolio').then((r) => r.data),
+  });
+}
+
+export function useSalesReport() {
+  return useQuery({
+    queryKey: ['report-sales'],
+    queryFn: () => api.get('/reports/sales-summary').then((r) => r.data),
+  });
+}
+
+export function useRevenueReport() {
+  return useQuery({
+    queryKey: ['report-revenue'],
+    queryFn: () => api.get('/reports/revenue').then((r) => r.data),
+  });
+}
+
+export function useDebtReport() {
+  return useQuery({
+    queryKey: ['report-debt'],
+    queryFn: () => api.get('/reports/debt').then((r) => r.data),
+  });
+}
+
+export function useUnitSalesReport() {
+  return useQuery({
+    queryKey: ['report-unit-sales'],
+    queryFn: () => api.get('/reports/unit-sales').then((r) => r.data),
+  });
+}
+
+// ---- MFA ----
+export function useMfaSetup() {
+  return useMutation({
+    mutationFn: () => api.post('/auth/mfa/setup').then((r) => r.data),
+  });
+}
+
+export function useMfaEnable() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.post('/auth/mfa/enable', { token }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useMfaVerify() {
+  return useMutation({
+    mutationFn: (token: string) => api.post('/auth/mfa/verify', { token }).then((r) => r.data),
+  });
+}
+
+// ---- Notifications ----
+export function useNotifications(limit = 20) {
+  return useQuery({
+    queryKey: ['notifications', limit],
+    queryFn: () => api.get('/notifications', { params: { limit } }).then((r) => r.data),
+    refetchInterval: 30000, // poll every 30s
+  });
+}
+
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids?: string[]) => api.post('/notifications/read', { ids }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+}
+
+export function useNotificationPreferences() {
+  return useQuery({
+    queryKey: ['notification-prefs'],
+    queryFn: () => api.get('/notifications/preferences').then((r) => r.data),
+  });
+}
+
+export function useUpdateNotificationPreference() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ type, enabled }: { type: string; enabled: boolean }) =>
+      api.put('/notifications/preferences', { type, enabled }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notification-prefs'] }),
+  });
+}
+
+// ---- Leads ----
+export function useLeads(params?: { projectId?: string; status?: string; source?: string }) {
+  return useQuery({
+    queryKey: ['leads', params],
+    queryFn: () => api.get('/leads', { params }).then((r) => r.data),
+  });
+}
+
+export function useLead(id: string) {
+  return useQuery({
+    queryKey: ['lead', id],
+    queryFn: () => api.get(`/leads/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useLeadActivities(leadId: string) {
+  return useQuery({
+    queryKey: ['lead-activities', leadId],
+    queryFn: () => api.get(`/leads/${leadId}/activities`).then((r) => r.data),
+    enabled: !!leadId,
+  });
+}
+
+export function useCreateLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/leads', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
+export function useUpdateLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/leads/${id}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      qc.invalidateQueries({ queryKey: ['lead', vars.id] });
+    },
+  });
+}
+
+export function useDeleteLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/leads/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
+export function useAddLeadActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leadId, data }: { leadId: string; data: Record<string, unknown> }) =>
+      api.post(`/leads/${leadId}/activities`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['lead-activities', vars.leadId] });
+      qc.invalidateQueries({ queryKey: ['lead', vars.leadId] });
+    },
+  });
+}
+
+export function useConvertLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, unitId, saleData }: { id: string; unitId: string; saleData: Record<string, unknown> }) =>
+      api.post(`/leads/${id}/convert`, { unitId, ...saleData }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      qc.invalidateQueries({ queryKey: ['sales'] });
+    },
+  });
+}
+
+// ---- Role-Based Dashboards ----
+export function useFounderDashboard() {
+  return useQuery({
+    queryKey: ['dashboard', 'founder'],
+    queryFn: () => api.get('/dashboard/founder').then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useConstructionDashboard() {
+  return useQuery({
+    queryKey: ['dashboard', 'construction'],
+    queryFn: () => api.get('/dashboard/construction').then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useSalesDashboard() {
+  return useQuery({
+    queryKey: ['dashboard', 'sales'],
+    queryFn: () => api.get('/dashboard/sales').then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+// ---- QuickBooks ----
+export function useQBStatus() {
+  return useQuery({
+    queryKey: ['qb-status'],
+    queryFn: () => api.get('/quickbooks/status').then((r) => r.data),
+  });
+}
+
+export function useQBSync() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post('/quickbooks/sync').then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['qb-status'] });
+      qc.invalidateQueries({ queryKey: ['financials'] });
+    },
+  });
+}
+
+// ---- Cash Flow ----
+export function useCashFlow(projectId: string) {
+  return useQuery({
+    queryKey: ['cashflow', projectId],
+    queryFn: () => api.get('/cashflow', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCashFlowForecast(projectId: string) {
+  return useQuery({
+    queryKey: ['cashflow-forecast', projectId],
+    queryFn: () => api.get('/cashflow/forecast', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateCashFlowEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/cashflow', data).then((r) => r.data),
+    onSuccess: (_r, v: any) => {
+      qc.invalidateQueries({ queryKey: ['cashflow', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['cashflow-forecast', v.projectId] });
+    },
+  });
+}
+
+export function useDeleteCashFlowEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string; projectId: string }) =>
+      api.delete(`/cashflow/${id}`).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['cashflow', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['cashflow-forecast', v.projectId] });
+    },
+  });
+}
+
+// ---- Draw Management ----
+export function useProjectDraws(projectId: string) {
+  return useQuery({
+    queryKey: ['draws', projectId],
+    queryFn: () => api.get('/loans/draws', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateDraw() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ loanId, ...data }: { loanId: string; projectId: string;[k: string]: unknown }) =>
+      api.post(`/loans/${loanId}/draws`, data).then((r) => r.data),
+    onSuccess: (_r, v: any) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
+  });
+}
+
+export function useUpdateDrawStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id, status, approvedAmount, rejectionReason,
+    }: {
+      id: string;
+      status: string;
+      projectId: string;
+      approvedAmount?: number;
+      rejectionReason?: string;
+    }) =>
+      api.patch(`/loans/draws/${id}/status`, { status, approvedAmount, rejectionReason }).then((r) => r.data),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
+  });
+}
+
+export function useDeleteDraw() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string; projectId: string }) =>
+      api.delete(`/loans/draws/${id}`).then((r) => r.data),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
+  });
+}
+
+// ---- Draw Schedule ----
+export function useDrawSchedule(loanId: string) {
+  return useQuery({
+    queryKey: ['draw-schedule', loanId],
+    queryFn: () => api.get(`/loans/${loanId}/schedule`).then((r) => r.data),
+    enabled: !!loanId,
+  });
+}
+
+export function useUpsertDrawScheduleLine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ loanId, ...data }: {
+      loanId: string;
+      drawNumber: number;
+      plannedAmount: number;
+      plannedDate: string;
+      description?: string;
+    }) => api.post(`/loans/${loanId}/schedule`, data).then((r) => r.data),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draw-schedule', v.loanId] }),
+  });
+}
+
+export function useDeleteDrawScheduleLine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, loanId }: { id: string; loanId: string }) =>
+      api.delete(`/loans/schedule/${id}`).then((r) => r.data),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draw-schedule', v.loanId] }),
+  });
+}
+
+// ---- Vendors ----
+export function useVendors() {
+  return useQuery({
+    queryKey: ['vendors'],
+    queryFn: () => api.get('/vendors').then((r) => r.data),
+  });
+}
+
+export function useCreateVendor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/vendors', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vendors'] }),
+  });
+}
+
+export function useUpdateVendor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string;[k: string]: unknown }) =>
+      api.put(`/vendors/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vendors'] }),
+  });
+}
+
+// ---- Contracts ----
+export function useContracts(projectId: string) {
+  return useQuery({
+    queryKey: ['contracts', projectId],
+    queryFn: () => api.get('/contracts', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useContractSummary(projectId: string) {
+  return useQuery({
+    queryKey: ['contracts-summary', projectId],
+    queryFn: () => api.get('/contracts/summary', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+export function useCreateContract() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/contracts', data).then((r) => r.data),
+    onSuccess: (_r, v: any) => {
+      qc.invalidateQueries({ queryKey: ['contracts', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['contracts-summary', v.projectId] });
+    },
+  });
+}
+
+export function useUpdateContract() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string; projectId: string;[k: string]: unknown }) =>
+      api.put(`/contracts/${id}`, data).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['contracts', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['contracts-summary', v.projectId] });
+    },
+  });
+}
+
+export function useDeleteContract() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, projectId }: { id: string; projectId: string }) =>
+      api.delete(`/contracts/${id}`).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['contracts', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['contracts-summary', v.projectId] });
+    },
+  });
+}
+
+export function useAddChangeOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ contractId, ...data }: { contractId: string; projectId: string;[k: string]: unknown }) =>
+      api.post(`/contracts/${contractId}/change-orders`, data).then((r) => r.data),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['contracts', v.projectId] }),
+  });
+}
+
+export function useApproveChangeOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, projectId }: { id: string; status: string; projectId: string }) =>
+      api.patch(`/contracts/change-orders/${id}/status`, { status }).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['contracts', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['contracts-summary', v.projectId] });
+    },
+  });
+}
+
+export function useAddContractPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ contractId, ...data }: { contractId: string; projectId: string;[k: string]: unknown }) =>
+      api.post(`/contracts/${contractId}/payments`, data).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['contracts', v.projectId] });
+      qc.invalidateQueries({ queryKey: ['contracts-summary', v.projectId] });
+    },
+  });
+}
+
+// ---- Documents ----
+export function useDocuments(params: { projectId?: string; unitId?: string }) {
+  return useQuery({
+    queryKey: ['documents', params],
+    queryFn: () => api.get('/documents', { params }).then((r) => r.data),
+    enabled: !!(params.projectId || params.unitId),
+  });
+}
+
+export function useUploadDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (formData: FormData) =>
+      api.post('/documents', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+export function useDeleteDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/documents/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+// ---- Investors ----
+export function useInvestors() {
+  return useQuery({
+    queryKey: ['investors'],
+    queryFn: () => api.get('/investors').then((r) => r.data),
+  });
+}
+
+export function useInvestor(id: string) {
+  return useQuery({
+    queryKey: ['investor', id],
+    queryFn: () => api.get(`/investors/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useInvestorSummary() {
+  return useQuery({
+    queryKey: ['investor-summary'],
+    queryFn: () => api.get('/investors/summary').then((r) => r.data),
+  });
+}
+
+export function useCreateInvestor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/investors', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['investors'] });
+      qc.invalidateQueries({ queryKey: ['investor-summary'] });
+    },
+  });
+}
+
+export function useUpdateInvestor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string;[k: string]: unknown }) =>
+      api.put(`/investors/${id}`, data).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['investors'] });
+      qc.invalidateQueries({ queryKey: ['investor', v.id] });
+    },
+  });
+}
+
+export function useAddPosition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ investorId, ...data }: { investorId: string;[k: string]: unknown }) =>
+      api.post(`/investors/${investorId}/positions`, data).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['investor', v.investorId] });
+      qc.invalidateQueries({ queryKey: ['investors'] });
+    },
+  });
+}
+
+export function useCreateCapitalCall() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/investors/capital-calls', data).then((r) => r.data),
+    onSuccess: (_r, v: any) => {
+      qc.invalidateQueries({ queryKey: ['investor', v.investorId] });
+      qc.invalidateQueries({ queryKey: ['investors'] });
+    },
+  });
+}
+
+export function useMarkCapitalCallPaid() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string; investorId: string }) =>
+      api.patch(`/investors/capital-calls/${id}/paid`).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['investor', v.investorId] });
+      qc.invalidateQueries({ queryKey: ['investors'] });
+    },
+  });
+}
+
+export function useCreateDistribution() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/investors/distributions', data).then((r) => r.data),
+    onSuccess: (_r, v: any) => {
+      qc.invalidateQueries({ queryKey: ['investor', v.investorId] });
+      qc.invalidateQueries({ queryKey: ['investors'] });
+      qc.invalidateQueries({ queryKey: ['investor-summary'] });
+    },
+  });
+}
+
+// ---- Tasks ----
+export function useTasks(params?: {
+  projectId?: string;
+  buildingId?: string;
+  unitId?: string;
+  assignedTo?: string;
+  status?: string;
+  priority?: string;
+}) {
+  return useQuery({
+    queryKey: ['tasks', params],
+    queryFn: () => api.get('/tasks', { params }).then((r) => r.data),
+  });
+}
+
+export function useTask(id: string) {
+  return useQuery({
+    queryKey: ['task', id],
+    queryFn: () => api.get(`/tasks/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useCreateTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/tasks', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+  });
+}
+
+export function useUpdateTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/tasks/${id}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['task', vars.id] });
+    },
+  });
+}
+
+export function useDeleteTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/tasks/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+  });
+}
+
+export function useTaskComments(taskId: string) {
+  return useQuery({
+    queryKey: ['task-comments', taskId],
+    queryFn: () => api.get(`/tasks/${taskId}/comments`).then((r) => r.data),
+    enabled: !!taskId,
+  });
+}
+
+export function useCreateTaskComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, content }: { taskId: string; content: string }) =>
+      api.post(`/tasks/${taskId}/comments`, { content }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-comments', vars.taskId] });
+      qc.invalidateQueries({ queryKey: ['task', vars.taskId] });
+    },
+  });
+}
+
+export function useDeleteTaskComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, commentId }: { taskId: string; commentId: string }) =>
+      api.delete(`/tasks/${taskId}/comments/${commentId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-comments', vars.taskId] });
+      qc.invalidateQueries({ queryKey: ['task', vars.taskId] });
+    },
+  });
+}
+
+export function useUploadTaskAttachment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, formData }: { taskId: string; formData: FormData }) =>
+      api.post(`/tasks/${taskId}/attachments`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task', vars.taskId] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+}
+
+export function useDeleteTaskAttachment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, attachmentId }: { taskId: string; attachmentId: string }) =>
+      api.delete(`/tasks/${taskId}/attachments/${attachmentId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task', vars.taskId] });
+    },
+  });
+}
+
+// ---- Organizations ----
+
+export function useOrganizations() {
+  return useQuery({
+    queryKey: ['organizations'],
+    queryFn: () => api.get('/organizations').then((r) => r.data),
+  });
+}
+
+export function useOrganization(id: string) {
+  return useQuery({
+    queryKey: ['organizations', id],
+    queryFn: () => api.get(`/organizations/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useCreateOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/organizations', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
+  });
+}
+
+export function useUpdateOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string } & Record<string, unknown>) =>
+      api.put(`/organizations/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
+  });
+}
+
+export function useDeactivateOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.patch(`/organizations/${id}/deactivate`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
+  });
+}
+
+export function useAddOrgMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orgId, ...data }: { orgId: string; userId: string; orgRole: string }) =>
+      api.post(`/organizations/${orgId}/members`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['organizations'] });
+      qc.invalidateQueries({ queryKey: ['organizations', vars.orgId] });
+    },
+  });
+}
+
+export function useRemoveOrgMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orgId, userId }: { orgId: string; userId: string }) =>
+      api.delete(`/organizations/${orgId}/members/${userId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['organizations'] });
+      qc.invalidateQueries({ queryKey: ['organizations', vars.orgId] });
+    },
+  });
+}
