@@ -11,6 +11,7 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { authenticator } from 'otplib';
 import * as QRCode from 'qrcode';
+import * as bcrypt from 'bcrypt';
 import { ROLE_PERMISSIONS, UserRole } from '@prime-tracker/shared';
 import { randomBytes } from 'crypto';
 
@@ -36,6 +37,57 @@ export class AuthService {
     private encryption: EncryptionService,
     private audit: AuditService,
   ) {}
+
+  async hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, 12);
+  }
+
+  async loginWithPassword(email: string, password: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    if (!user || !user.passwordHash) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (!user.isActive) {
+      throw new ForbiddenException('Account is deactivated');
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+
+    await this.audit.log({
+      userId: user.id,
+      action: 'LOGIN',
+      entity: 'User',
+      entityId: user.id,
+      metadata: { provider: 'password' },
+    });
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role as UserRole, false);
+    const permissions = ROLE_PERMISSIONS[user.role as UserRole] || [];
+
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        role: user.role,
+        permissions,
+        mfaEnabled: user.mfaEnabled,
+        mfaVerified: false,
+      },
+    };
+  }
 
   async validateGoogleUser(profile: GoogleProfile): Promise<TokenPair> {
     const allowedDomain = this.config.get('GOOGLE_ALLOWED_DOMAIN');

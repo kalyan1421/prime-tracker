@@ -5,18 +5,14 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ROLE_PERMISSIONS, UserRole } from '@prime-tracker/shared';
 
-// Supabase JWT payload (HS256, signed with project's JWT secret).
-// Standard claims: sub (Supabase user UUID), email, role ('authenticated'),
-// aud ('authenticated'), exp, iat, iss.
-interface SupabaseJwtPayload {
+interface JwtPayload {
   sub: string;
   email?: string;
-  aud?: string;
   role?: string;
+  permissions?: string[];
+  mfaVerified?: boolean;
   exp?: number;
   iat?: number;
-  user_metadata?: Record<string, any>;
-  app_metadata?: Record<string, any>;
 }
 
 @Injectable()
@@ -28,12 +24,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: config.getOrThrow('SUPABASE_JWT_SECRET'),
+      secretOrKey: config.getOrThrow('JWT_ACCESS_SECRET'),
       algorithms: ['HS256'],
     });
   }
 
-  async validate(payload: SupabaseJwtPayload) {
+  async validate(payload: JwtPayload) {
     if (!payload.email) {
       throw new UnauthorizedException('Token missing email claim');
     }

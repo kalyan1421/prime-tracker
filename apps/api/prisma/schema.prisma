@@ -8,8 +8,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ---- Auth & RBAC ----
@@ -22,6 +23,7 @@ model User {
   googleId      String?   @unique
   role          UserRole  @default(VIEWER)
   isActive      Boolean   @default(true)
+  passwordHash  String?
   mfaEnabled    Boolean   @default(false)
   mfaSecret     String?   // encrypted TOTP secret
   lastLoginAt   DateTime?
@@ -49,6 +51,12 @@ model User {
   orgMemberships          OrgMembership[]    @relation("OrgMember")
   managedMembers          OrgMembership[]    @relation("ManagedBy")
   projectMemberships      ProjectMember[]
+  // New relations from Slices 1, 5, 7, 8
+  milestonePhotos         MilestonePhoto[]   @relation("MilestonePhotoUploader")
+  budgetRevisionsCreated  BudgetRevision[]   @relation("BudgetRevCreator")
+  budgetRevisionsApproved BudgetRevision[]   @relation("BudgetRevApprover")
+  drawApprovals           DrawApproval[]     @relation("DrawApprovalActor")
+  drawDocuments           DrawDocument[]     @relation("DrawDocUploader")
 
   @@map("users")
 }
@@ -101,6 +109,7 @@ model Organization {
 
   memberships OrgMembership[]
   projects    Project[]
+  settings    OrgSettings?
 
   @@map("organizations")
 }
@@ -139,6 +148,7 @@ model Project {
   targetEnd    DateTime?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?     // soft-delete: archived rows excluded from default reads
   // tenantId  String?
   orgId        String?
   org          Organization? @relation(fields: [orgId], references: [id])
@@ -165,6 +175,8 @@ model Project {
   members        ProjectMember[]
 
   @@index([orgId])
+  @@index([status, phase])
+  @@index([deletedAt])
   @@map("projects")
 }
 
@@ -216,13 +228,20 @@ model Building {
   totalSqft    Int?
   stories      Int?
   buildingType BuildingType?
+  // Building-level phase: a project may have Building A in CONSTRUCTION and Building B in LEASE_UP.
+  // Project.phase is computed = max(buildings.phase) — see ProjectPhaseService.
+  phase        ProjectPhase  @default(PRE_DEVELOPMENT)
+  coverPhotoPath String?     // optional cover photo (Supabase storage path)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?     // soft-delete
 
   units       Unit[]
   tasks       Task[]
 
   @@index([projectId])
+  @@index([phase])
+  @@index([deletedAt])
   @@map("buildings")
 }
 
@@ -238,8 +257,12 @@ model Unit {
   askingPrice Decimal?   @db.Decimal(14, 2) // for sale units
   primeOwned  Boolean    @default(false)
   notes       String?
+  // Time-on-market tracking: set when status flips to AVAILABLE, cleared on any other status.
+  // Read-only from app code — UnitsService maintains this in update().
+  availableSince DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?  // soft-delete: preserves financial history
 
   leases      Lease[]
   sales       Sale[]
@@ -250,6 +273,9 @@ model Unit {
 
   @@unique([buildingId, unitNumber])
   @@index([buildingId])
+  @@index([status, deletedAt])
+  @@index([status, availableSince])
+  @@index([deletedAt])
   @@map("units")
 }
 
@@ -340,11 +366,37 @@ model Milestone {
   ownerId     String?
   owner       User?           @relation("MilestoneOwner", fields: [ownerId], references: [id])
   sortOrder   Int             @default(0)
+  // Dependency: this milestone cannot start until dependsOn is COMPLETED.
+  // Cycle prevention is enforced in MilestonesService.setDependency().
+  dependsOnId String?
+  dependsOn   Milestone?      @relation("MilestoneDeps", fields: [dependsOnId], references: [id], onDelete: SetNull)
+  dependents  Milestone[]     @relation("MilestoneDeps")
+  // Link to a draw schedule entry — completing this milestone auto-drafts a DrawRequest.
+  linkedDrawScheduleId String?
+  linkedDrawSchedule   DrawSchedule? @relation(fields: [linkedDrawScheduleId], references: [id])
+  photos      MilestonePhoto[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   @@index([projectId, phase])
+  @@index([dependsOnId])
+  @@index([linkedDrawScheduleId])
   @@map("milestones")
+}
+
+// Photo evidence for a milestone — attached by PM on-site, surfaced to lender via draw package.
+model MilestonePhoto {
+  id           String    @id @default(cuid())
+  milestoneId  String
+  milestone    Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  storagePath  String    // Supabase Storage key
+  caption      String?
+  uploadedById String
+  uploadedBy   User      @relation("MilestonePhotoUploader", fields: [uploadedById], references: [id])
+  uploadedAt   DateTime  @default(now())
+
+  @@index([milestoneId])
+  @@map("milestone_photos")
 }
 
 enum MilestoneStatus {
@@ -363,14 +415,53 @@ model BudgetLine {
   project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   category    BudgetCategory
   description String
+  // baselineAmt is the original (revision 1) amount, kept here for fast reads.
+  // revisedAmt mirrors the *latest* BudgetRevision.amount for fast reads.
+  // Source of truth for history is the BudgetRevision table.
   baselineAmt Decimal        @db.Decimal(14, 2)
   revisedAmt  Decimal?       @db.Decimal(14, 2)
   notes       String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?      // soft-delete
+
+  revisions   BudgetRevision[]
 
   @@index([projectId, category])
+  @@index([deletedAt])
   @@map("budget_lines")
+}
+
+// Each edit to a budget line creates a BudgetRevision. revision #1 is the baseline.
+// BudgetLine.revisedAmt always equals the latest revision's amount.
+// Append-only: revisions are never updated or deleted.
+model BudgetRevision {
+  id             String   @id @default(cuid())
+  budgetLineId   String
+  budgetLine     BudgetLine @relation(fields: [budgetLineId], references: [id], onDelete: Cascade)
+  revisionNumber Int      // 1 = baseline, 2+ = subsequent revisions
+  amount         Decimal  @db.Decimal(14, 2)
+  reason         String   // required free-text justification
+  changeReason   BudgetChangeReason
+  createdById    String
+  createdBy      User     @relation("BudgetRevCreator", fields: [createdById], references: [id])
+  approvedById   String?
+  approvedBy     User?    @relation("BudgetRevApprover", fields: [approvedById], references: [id])
+  approvedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  @@unique([budgetLineId, revisionNumber])
+  @@index([budgetLineId])
+  @@map("budget_revisions")
+}
+
+enum BudgetChangeReason {
+  SCOPE_ADD          // we're adding scope
+  COST_INCREASE      // same scope, vendor raised price
+  REALLOCATION       // shifted from another category
+  ESTIMATE_REFINED   // better information now
+  CHANGE_ORDER       // formal CO from vendor
+  OTHER
 }
 
 enum BudgetCategory {
@@ -451,12 +542,15 @@ model Loan {
   encryptedFields String?   // JSON blob of encrypted sensitive data
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime? // soft-delete: required for compliance/audit
 
   drawRequests    DrawRequest[]
   drawSchedules   DrawSchedule[]
 
   @@index([projectId])
   @@index([unitId])
+  @@index([deletedAt])
+  @@index([maturityDate])
   @@map("loans")
 }
 
@@ -489,11 +583,17 @@ model DrawRequest {
   createdBy       User?      @relation("DrawCreator", fields: [createdById], references: [id])
   approvedById    String?
   approvedBy      User?      @relation("DrawApprover", fields: [approvedById], references: [id])
+  // Slice 8 additions
+  expectedFundingDate DateTime?  // PM's best estimate; cron escalates if overshot
+  submittedToLenderAt DateTime?  // when finance forwarded to construction lender
+  approvals       DrawApproval[]
+  documents       DrawDocument[]
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
   @@unique([loanId, drawNumber])
   @@index([projectId])
+  @@index([status, expectedFundingDate])
   @@map("draw_requests")
 }
 
@@ -503,6 +603,63 @@ enum DrawStatus {
   APPROVED
   FUNDED
   REJECTED
+  CANCELLED
+}
+
+// One row per workflow action (approve/reject/return) on a draw.
+// Append-only audit trail of the multi-party approval chain.
+model DrawApproval {
+  id            String   @id @default(cuid())
+  drawRequestId String
+  drawRequest   DrawRequest @relation(fields: [drawRequestId], references: [id], onDelete: Cascade)
+  step          DrawApprovalStep
+  action        DrawApprovalAction
+  actorId       String
+  actor         User     @relation("DrawApprovalActor", fields: [actorId], references: [id])
+  comment       String?
+  createdAt     DateTime @default(now())
+
+  @@index([drawRequestId, step])
+  @@map("draw_approvals")
+}
+
+enum DrawApprovalStep {
+  INTERNAL_FOUNDER  // founder sign-off
+  INTERNAL_FINANCE  // finance review
+  LENDER_SUBMITTED  // sent to construction lender
+  LENDER_FUNDED     // lender wired funds
+}
+
+enum DrawApprovalAction {
+  APPROVED
+  REJECTED
+  RETURNED_FOR_INFO
+}
+
+// Files attached to a draw — lien waivers, inspection reports, etc.
+// Drives the "missing documents" red-flag UI.
+model DrawDocument {
+  id            String   @id @default(cuid())
+  drawRequestId String
+  drawRequest   DrawRequest @relation(fields: [drawRequestId], references: [id], onDelete: Cascade)
+  documentType  DrawDocType
+  storagePath   String   // Supabase Storage key
+  filename      String
+  uploadedById  String
+  uploadedBy    User     @relation("DrawDocUploader", fields: [uploadedById], references: [id])
+  uploadedAt    DateTime @default(now())
+
+  @@index([drawRequestId, documentType])
+  @@map("draw_documents")
+}
+
+enum DrawDocType {
+  LIEN_WAIVER
+  INSPECTION_REPORT
+  SWORN_STATEMENT
+  VENDOR_INVOICE
+  CHANGE_ORDER
+  OTHER
 }
 
 model DrawSchedule {
@@ -515,6 +672,8 @@ model DrawSchedule {
   description   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  linkedMilestones Milestone[]
 
   @@unique([loanId, drawNumber])
   @@index([loanId])
@@ -537,14 +696,32 @@ model Sale {
   contractDate DateTime?
   closingDate  DateTime?
   notes        String?
+  // Slice 6: Pipeline upgrade
+  lastActivityAt    DateTime?       // bump on update or comment; powers activity-drought alerts
+  expectedCloseDate DateTime?       // for weighted forecast time-bucketing
+  lostReason        LostReason?     // required when status -> CANCELLED
+  lostReasonNote    String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
+  deletedAt    DateTime?  // soft-delete
 
   convertedLead Lead?
 
   @@index([projectId])
   @@index([unitId])
+  @@index([status, deletedAt])
+  @@index([status, lastActivityAt])
+  @@index([deletedAt])
   @@map("sales")
+}
+
+enum LostReason {
+  PRICE_TOO_HIGH
+  FINANCING_FELL_THROUGH
+  CHOSE_COMPETITOR
+  TIMING_OFF
+  NO_RESPONSE
+  OTHER
 }
 
 enum SaleStatus {
@@ -575,8 +752,11 @@ model Lease {
   notes          String?
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
+  deletedAt      DateTime?   // soft-delete
 
   @@index([unitId])
+  @@index([status, leaseEnd])
+  @@index([deletedAt])
   @@map("leases")
 }
 
@@ -913,6 +1093,7 @@ model Document {
   unit         Unit?       @relation(fields: [unitId], references: [id], onDelete: Cascade)
   fileName     String
   fileUrl      String
+  storagePath  String?
   fileSize     Int?
   mimeType     String?
   category     DocCategory @default(GENERAL)
@@ -1098,3 +1279,22 @@ model TaskAttachment {
   @@map("task_attachments")
 }
 
+
+// Per-org configuration for thresholds and probabilities used by alerts and forecasts.
+// Single row per org; created on org creation, lazily defaulted in code if missing.
+model OrgSettings {
+  orgId                   String       @id
+  org                     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  // Sale stage probabilities — JSON map of SaleStatus → probability (0..1)
+  // Example: { "PROSPECT": 0.10, "LOI_SIGNED": 0.35, "UNDER_CONTRACT": 0.75, "CLOSED": 1.0 }
+  saleStageProbabilities  Json         @default("{\"PROSPECT\":0.10,\"LOI_SIGNED\":0.35,\"UNDER_CONTRACT\":0.75,\"CLOSED\":1.0,\"CANCELLED\":0.0}")
+  unitStaleDaysThreshold  Int          @default(90)   // unit AVAILABLE longer than this -> stale alert
+  budgetVarianceAlertPct  Decimal      @default(10) @db.Decimal(5, 2)  // actuals+commitments > budget*(1+pct/100)
+  saleStageAgeAlertDays   Int          @default(30)   // sale in same stage longer than this -> flag
+  saleActivityDroughtDays Int          @default(14)   // no activity for N days -> flag
+  drawFundingExpectedDays Int          @default(14)   // default expected funding window
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  @@map("org_settings")
+}

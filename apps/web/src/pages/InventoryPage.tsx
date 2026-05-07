@@ -6,6 +6,7 @@ import {
 import { FiSearch, FiFilter, FiPackage, FiExternalLink } from 'react-icons/fi';
 import { useInventory, useProjects } from '../hooks/useApi';
 import { StatCard, StatusBadge, LoadingState, fmt, fmtDate } from '../components/ui';
+import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
@@ -54,10 +55,10 @@ export default function InventoryPage() {
   const hasFilters = search || statusFilter || typeFilter || projectFilter;
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center gap-2">
             <FiPackage className="text-primary" />
             Unit Inventory
           </h1>
@@ -95,8 +96,8 @@ export default function InventoryPage() {
       {/* Filters */}
       <Card shadow="sm" className="mb-4">
         <CardBody>
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="flex-1 min-w-48">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex gap-3 items-end">
+            <div className="w-full lg:flex-1 lg:min-w-48">
               <Input
                 size="sm"
                 placeholder="Search units, buildings, projects…"
@@ -108,7 +109,7 @@ export default function InventoryPage() {
             <Select
               size="sm"
               placeholder="All Statuses"
-              className="w-44"
+              className="w-full sm:w-44"
               selectedKeys={statusFilter ? [statusFilter] : []}
               onSelectionChange={(keys) => setStatusFilter(Array.from(keys)[0] as string || '')}
             >
@@ -119,7 +120,7 @@ export default function InventoryPage() {
             <Select
               size="sm"
               placeholder="All Types"
-              className="w-44"
+              className="w-full sm:w-44"
               selectedKeys={typeFilter ? [typeFilter] : []}
               onSelectionChange={(keys) => setTypeFilter(Array.from(keys)[0] as string || '')}
             >
@@ -130,7 +131,7 @@ export default function InventoryPage() {
             <Select
               size="sm"
               placeholder="All Projects"
-              className="w-52"
+              className="w-full sm:w-52"
               selectedKeys={projectFilter ? [projectFilter] : []}
               onSelectionChange={(keys) => setProjectFilter(Array.from(keys)[0] as string || '')}
             >
@@ -156,7 +157,7 @@ export default function InventoryPage() {
       ) : (
         <Card shadow="sm">
           <CardBody className="p-0">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[900px]">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Unit</th>
@@ -203,7 +204,15 @@ export default function InventoryPage() {
                       <td className="py-2 px-3 text-gray-600">{u.sqft ? u.sqft.toLocaleString() : '—'}</td>
                       <td className="py-2 px-3">{u.askingRent ? `$${fmt(u.askingRent)}/mo` : '—'}</td>
                       <td className="py-2 px-3">{u.askingPrice ? `$${fmt(u.askingPrice)}` : '—'}</td>
-                      <td className="py-2 px-3"><StatusBadge status={u.status} /></td>
+                      <td className="py-2 px-3">
+                        <div className="flex flex-col gap-1">
+                          <StatusBadge status={u.status} />
+                          {/* Slice 4: time-on-market shown only for AVAILABLE units */}
+                          {u.status === 'AVAILABLE' && u.availableSince && (
+                            <TimeOnMarketBar availableSince={u.availableSince} />
+                          )}
+                        </div>
+                      </td>
                       <td className="py-2 px-3 text-xs text-gray-600">
                         {activeLease ? (
                           <div>
@@ -231,7 +240,7 @@ export default function InventoryPage() {
                   );
                 })}
               </tbody>
-            </table>
+            </table></div>
           </CardBody>
         </Card>
       )}

@@ -1,4 +1,7 @@
-import { Card, CardHeader, CardBody, Tabs, Tab } from '@heroui/react';
+import { useRef } from 'react';
+import { Button, Card, CardHeader, CardBody, Tabs, Tab } from '@heroui/react';
+import { useReactToPrint } from 'react-to-print';
+import { FiDownload } from 'react-icons/fi';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
@@ -52,7 +55,7 @@ function PortfolioTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -83,7 +86,7 @@ function PortfolioTab() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -108,7 +111,7 @@ function SalesTab() {
         <StatCard label="Avg Days to Close" value={`${d.kpis.avgDaysToClose}`} helpText="days" colorScheme="purple" variant="revenue" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <Card shadow="sm">
           <CardHeader className="pb-0">
             <p className="font-semibold text-sm text-gray-600">Deals by Stage</p>
@@ -151,7 +154,7 @@ function SalesTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Unit</th>
@@ -179,7 +182,7 @@ function SalesTab() {
                   <tr><td colSpan={7} className="text-center py-4 text-gray-400">No available units</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -228,7 +231,7 @@ function RevenueTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant</th>
@@ -256,7 +259,7 @@ function RevenueTab() {
                   <tr><td colSpan={7} className="text-center py-4 text-gray-400">No leases expiring in the next 12 months</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -306,7 +309,7 @@ function DebtTab() {
           </CardHeader>
           <CardBody className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -332,7 +335,7 @@ function DebtTab() {
                     <tr><td colSpan={6} className="text-center py-4 text-gray-400">No loans</td></tr>
                   )}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -343,7 +346,7 @@ function DebtTab() {
           </CardHeader>
           <CardBody className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -369,7 +372,7 @@ function DebtTab() {
                     <tr><td colSpan={5} className="text-center py-4 text-gray-400">No upcoming maturities</td></tr>
                   )}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -396,6 +399,8 @@ const REPORT_TAB_ROLES: Record<string, string[]> = {
 export default function ReportsPage() {
   const { user } = useAuthStore();
   const role = user?.role || '';
+  const printRef = useRef<HTMLDivElement>(null);
+  const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Reports' });
 
   const visibleTabs = Object.keys(REPORT_TAB_ROLES).filter((key) =>
     REPORT_TAB_ROLES[key].includes(role)
@@ -423,22 +428,34 @@ export default function ReportsPage() {
   if (visibleTabs.length === 1) {
     return (
       <div>
-        <h1 className="text-2xl font-bold mb-6">Reports</h1>
-        {renderTab(visibleTabs[0])}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
+          <h1 className="text-2xl font-bold">Reports</h1>
+          <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
+            Download PDF
+          </Button>
+        </div>
+        <div ref={printRef}>{renderTab(visibleTabs[0])}</div>
       </div>
     );
   }
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Reports</h1>
-      <Tabs color="primary" variant="underlined">
-        {visibleTabs.map((key) => (
-          <Tab key={key} title={REPORT_TAB_TITLES[key]}>
-            {renderTab(key)}
-          </Tab>
-        ))}
-      </Tabs>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
+        <h1 className="text-2xl font-bold">Reports</h1>
+        <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
+          Download PDF
+        </Button>
+      </div>
+      <div ref={printRef}>
+        <Tabs color="primary" variant="underlined" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
+          {visibleTabs.map((key) => (
+            <Tab key={key} title={REPORT_TAB_TITLES[key]}>
+              {renderTab(key)}
+            </Tab>
+          ))}
+        </Tabs>
+      </div>
     </div>
   );
 }

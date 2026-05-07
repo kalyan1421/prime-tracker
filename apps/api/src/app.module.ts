@@ -1,8 +1,12 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
+import { CacheModule } from './common/cache/cache.module';
+import { EventBusModule } from './common/events/event-bus.module';
+import { HealthModule } from './common/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ProjectsModule } from './modules/projects/projects.module';
@@ -30,15 +34,24 @@ import { DocumentsModule } from './modules/documents/documents.module';
 import { InvestorsModule } from './modules/investors/investors.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
+import { ProjectHealthModule } from './modules/health/health.module';
+import { DrawsModule } from './modules/draws/draws.module';
+import { ExceptionsModule } from './modules/exceptions/exceptions.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRoot([{
-      ttl: 60000,
-      limit: 100,
-    }]),
+    // Tiered throttling: short-burst (10/sec), medium (60/min), long (1k/15min).
+    // The tightest matching limit applies. Override per route with @Throttle().
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1000, limit: 10 },
+      { name: 'medium', ttl: 60_000, limit: 100 },
+      { name: 'long', ttl: 900_000, limit: 1000 },
+    ]),
     ScheduleModule.forRoot(),
+    CacheModule,
+    EventBusModule,
+    HealthModule,
     PrismaModule,
     AuthModule,
     UsersModule,
@@ -67,6 +80,14 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
     InvestorsModule,
     TasksModule,
     OrganizationsModule,
+    ProjectHealthModule,
+    DrawsModule,
+    ExceptionsModule,
+  ],
+  providers: [
+    // Enforces ThrottlerModule limits across every controller.
+    // Without this, the module is loaded but doesn't actually apply limits.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule { }

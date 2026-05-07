@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useReactToPrint } from 'react-to-print';
 import { Card, CardHeader, CardBody, Tabs, Tab, Button, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Select, SelectItem, Switch, Textarea, useDisclosure, addToast } from '@heroui/react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, AreaChart, Area, CartesianGrid,
 } from 'recharts';
-import { FiPlus, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
 import { usePortfolioReport, useDebtReport, useSalesReport, useRevenueReport, useUnitSalesReport, useProjects, useCashFlowForecast, useCreateCashFlowEntry, useDeleteCashFlowEntry } from '../hooks/useApi';
 import { StatCard, StatusBadge, LoadingState, ErrorState, EmptyState, fmt, fmtDate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
@@ -18,7 +19,7 @@ function PortfolioPLTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Investment" value={fmt(d.kpis.totalInvestment)} colorScheme="brand" variant="construction" />
         <StatCard label="Total Revenue" value={fmt(d.kpis.totalRevenue)} colorScheme="green" variant="revenue" />
         <StatCard label="Overall ROI" value={`${d.kpis.overallROI}%`} trend={d.kpis.overallROI >= 0 ? 'increase' : 'decrease'} colorScheme={d.kpis.overallROI >= 0 ? 'green' : 'red'} />
@@ -47,7 +48,7 @@ function PortfolioPLTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -72,7 +73,7 @@ function PortfolioPLTab() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -89,7 +90,7 @@ function DebtFinancingTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Principal" value={fmt(d.kpis.totalPrincipal)} colorScheme="brand" variant="construction" />
         <StatCard label="Total Balance" value={fmt(d.kpis.totalBalance)} colorScheme="orange" variant="construction" />
         <StatCard label="Weighted Avg Rate" value={`${d.kpis.weightedAvgRate}%`} colorScheme="purple" variant="construction" />
@@ -119,7 +120,7 @@ function DebtFinancingTab() {
           </CardHeader>
           <CardBody className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -141,7 +142,7 @@ function DebtFinancingTab() {
                     <tr><td colSpan={4} className="text-center py-4 text-gray-400">No loans</td></tr>
                   )}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -151,7 +152,7 @@ function DebtFinancingTab() {
           </CardHeader>
           <CardBody className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -175,7 +176,7 @@ function DebtFinancingTab() {
                     <tr><td colSpan={4} className="text-center py-4 text-gray-400">No upcoming maturities</td></tr>
                   )}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -193,7 +194,7 @@ function ConstructionCostTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Investment" value={fmt(d.kpis.totalInvestment)} colorScheme="brand" variant="construction" />
         <StatCard label="Total Actuals" value={fmt(d.kpis.totalActuals ?? 0)} colorScheme="orange" variant="construction" />
         <StatCard
@@ -234,7 +235,7 @@ function RevenueCashFlowTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Monthly Rent" value={fmt(d.kpis.totalMonthlyRent)} colorScheme="brand" variant="revenue" />
         <StatCard label="Annual Rent" value={fmt(d.kpis.totalAnnualRent)} colorScheme="green" variant="revenue" />
         <StatCard label="Active Leases" value={`${d.kpis.activeLeaseCount}`} colorScheme="orange" variant="revenue" />
@@ -263,7 +264,7 @@ function RevenueCashFlowTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant</th>
@@ -289,7 +290,7 @@ function RevenueCashFlowTab() {
                   <tr><td colSpan={6} className="text-center py-4 text-gray-400">No leases expiring in the next 12 months</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -306,7 +307,7 @@ function UnitSalesReportTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard
           label="Total Portfolio Value"
           value={fmt(d.kpis.totalPortfolioValue)}
@@ -366,7 +367,7 @@ function UnitSalesReportTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Name</th>
@@ -420,7 +421,7 @@ function UnitSalesReportTab() {
                   <tr><td colSpan={7} className="text-center py-6 text-gray-400">No unit data available</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -482,7 +483,7 @@ function CashFlowTab() {
 
       {projectId && !isLoading && (
         <>
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard label="Total Inflows" value={fmt(summary.totalInflows || 0)} variant="revenue" />
             <StatCard label="Total Outflows" value={fmt(summary.totalOutflows || 0)} variant="construction" />
             <StatCard label="Net Cash Flow" value={fmt(summary.netCashFlow || 0)} variant={summary.netCashFlow >= 0 ? 'revenue' : 'construction'} />
@@ -514,7 +515,7 @@ function CashFlowTab() {
             <Card shadow="sm">
               <CardHeader><span className="font-semibold text-sm">Monthly Detail</span></CardHeader>
               <CardBody className="p-0">
-                <table className="w-full text-sm">
+                <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                   <thead className="bg-gray-50 border-b">
                     <tr>
                       {['Month', 'Inflows', 'Outflows', 'Net', 'Cumulative', 'Type'].map((h) => (
@@ -534,14 +535,14 @@ function CashFlowTab() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </CardBody>
             </Card>
           )}
         </>
       )}
 
-      <Modal isOpen={isOpen} onClose={onClose} size="md">
+      <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" size="md">
         <ModalContent>
           <ModalHeader>Add Cash Flow Entry</ModalHeader>
           <ModalBody className="space-y-3">
@@ -574,6 +575,8 @@ function CashFlowTab() {
 export default function FounderReportsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
+  const printRef = useRef<HTMLDivElement>(null);
+  const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Founder Reports' });
 
   useEffect(() => {
     if (!user?.role) return;
@@ -586,27 +589,34 @@ export default function FounderReportsPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Founder Reports</h1>
-      <Tabs color="primary" variant="underlined">
-        <Tab key="portfolio" title="Portfolio P&L">
-          <PortfolioPLTab />
-        </Tab>
-        <Tab key="debt" title="Debt & Financing">
-          <DebtFinancingTab />
-        </Tab>
-        <Tab key="construction" title="Construction Cost">
-          <ConstructionCostTab />
-        </Tab>
-        <Tab key="revenue" title="Revenue & Cash Flow">
-          <RevenueCashFlowTab />
-        </Tab>
-        <Tab key="unit-sales" title="Unit Sales Value">
-          <UnitSalesReportTab />
-        </Tab>
-        <Tab key="cashflow" title="Cash Flow">
-          <CashFlowTab />
-        </Tab>
-      </Tabs>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
+        <h1 className="text-2xl font-bold">Founder Reports</h1>
+        <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
+          Download PDF
+        </Button>
+      </div>
+      <div ref={printRef}>
+        <Tabs color="primary" variant="underlined" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
+          <Tab key="portfolio" title="Portfolio P&L">
+            <PortfolioPLTab />
+          </Tab>
+          <Tab key="debt" title="Debt & Financing">
+            <DebtFinancingTab />
+          </Tab>
+          <Tab key="construction" title="Construction Cost">
+            <ConstructionCostTab />
+          </Tab>
+          <Tab key="revenue" title="Revenue & Cash Flow">
+            <RevenueCashFlowTab />
+          </Tab>
+          <Tab key="unit-sales" title="Unit Sales Value">
+            <UnitSalesReportTab />
+          </Tab>
+          <Tab key="cashflow" title="Cash Flow">
+            <CashFlowTab />
+          </Tab>
+        </Tabs>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { SalesService } from './sales.service';
+import { SalesForecastService } from './sales-forecast.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
@@ -15,7 +16,18 @@ import { UserRole } from '@prisma/client';
 @UseInterceptors(AuditInterceptor)
 @Controller('sales')
 export class SalesController {
-  constructor(private service: SalesService) {}
+  constructor(
+    private service: SalesService,
+    private forecast: SalesForecastService,
+  ) {}
+
+  /** GET /api/sales/forecast?projectId=:id — probability-weighted pipeline forecast */
+  @Get('forecast')
+  @RequirePermissions('sales:view')
+  @ApiOperation({ summary: 'Probability-weighted pipeline forecast for a project' })
+  getForecast(@Query('projectId') projectId: string) {
+    return this.forecast.forProject(projectId);
+  }
 
   @Get()
   @RequirePermissions('sales:view')

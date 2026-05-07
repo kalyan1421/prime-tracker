@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import { CreateCommitmentDto, UpdateCommitmentDto } from './dto/create-commitment.dto';
 
 @ApiTags('Commitments')
 @ApiBearerAuth()
@@ -27,12 +28,12 @@ export class CommitmentsController {
   @Post()
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Create commitment' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateCommitmentDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Update commitment (track paidToDate changes)' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateCommitmentDto) { return this.service.update(id, body); }
 
   @Delete(':id')
   @RequirePermissions('financial:edit')

@@ -9,7 +9,8 @@ import {
 } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { useState, useMemo, useCallback } from 'react';
-import { useProjects, useCreateProject, useUpdateProject, useDeleteProject } from '../hooks/useApi';
+import { useProjects, useCreateProject, useUpdateProject, useDeleteProject, useProjectHealthBulk } from '../hooks/useApi';
+import { HealthScoreRing } from '../components/HealthScoreRing';
 import { StatusBadge, PhaseProgress, ErrorState, fmt } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
@@ -53,21 +54,36 @@ function BudgetHealthBar({ budget, actuals }: { budget: number; actuals: number 
   );
 }
 
-function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete }: {
+function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
   p: any; onEdit: (p: any) => void; onDelete: (id: string) => void;
   canEdit: boolean; canDelete: boolean;
+  health?: { score: number; breakdown: Record<string, { score: number; reason: string }> };
 }) {
   const navigate = useNavigate();
   const showActions = canEdit || canDelete;
+  const breakdown = health?.breakdown
+    ? Object.entries(health.breakdown).map(([k, v]) => ({
+        label: k.charAt(0).toUpperCase() + k.slice(1),
+        value: `${v.score} · ${v.reason}`,
+      }))
+    : undefined;
   return (
     <Card shadow="sm" className="cursor-pointer hover:shadow-md transition-shadow duration-150">
       <CardBody onClick={() => navigate(`/projects/${p.id}`)}>
-        <div className="flex justify-between items-start mb-2">
-          <div className="flex-1 min-w-0 pr-2">
-            <p className="font-semibold text-sm text-gray-900 truncate">{p.name}</p>
-            <div className="flex items-center gap-1 mt-0.5">
-              <FiMapPin className="text-gray-400 text-[11px] shrink-0" />
-              <span className="text-[11px] text-gray-500 truncate">{p.location}</span>
+        <div className="flex justify-between items-start mb-2 gap-2">
+          <div className="flex items-start gap-2 flex-1 min-w-0">
+            {/* Slice 2: Health score ring — at-a-glance triage. */}
+            {health && (
+              <div onClick={(e) => e.stopPropagation()} className="shrink-0 mt-0.5">
+                <HealthScoreRing score={health.score} size="sm" breakdown={breakdown} />
+              </div>
+            )}
+            <div className="flex-1 min-w-0 pr-2">
+              <p className="font-semibold text-sm text-gray-900 truncate">{p.name}</p>
+              <div className="flex items-center gap-1 mt-0.5">
+                <FiMapPin className="text-gray-400 text-[11px] shrink-0" />
+                <span className="text-[11px] text-gray-500 truncate">{p.location}</span>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -213,6 +229,7 @@ export default function ProjectsPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [sortBy, setSortBy] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [showArchived, setShowArchived] = useState(false);
 
   // Debounce search
   const handleSearch = useCallback((val: string) => {
@@ -222,18 +239,19 @@ export default function ProjectsPage() {
   }, []);
 
   const queryParams = useMemo(() => {
-    const p: Record<string, string> = {};
+    const p: Record<string, string | boolean> = {};
     if (statusFilter) p.status = statusFilter;
     if (phaseFilter) p.phase = phaseFilter;
     if (typeFilter) p.projectType = typeFilter;
     if (debouncedSearch) p.search = debouncedSearch;
+    if (showArchived) p.archived = true;  // Slice 2: include soft-deleted
     if (sortBy) {
       const [by, order] = sortBy.split(':');
       p.sortBy = by;
       p.sortOrder = order || 'asc';
     }
-    return Object.keys(p).length ? p : undefined;
-  }, [statusFilter, phaseFilter, typeFilter, debouncedSearch, sortBy]);
+    return Object.keys(p).length ? (p as any) : undefined;
+  }, [statusFilter, phaseFilter, typeFilter, debouncedSearch, sortBy, showArchived]);
 
   const { data, isLoading, error } = useProjects(queryParams);
   const createProject = useCreateProject();
@@ -340,6 +358,10 @@ export default function ProjectsPage() {
   };
 
   const projects = (data as any[]) || [];
+  // Slice 2 — fetch health scores for all visible projects in one request.
+  // Bulk hook is keyed on the sorted ID list, so it stays cached as long as the
+  // set of projects doesn't change.
+  const { data: healthMap = {} } = useProjectHealthBulk(projects.map((p) => p.id));
   const hasFilters = !!(statusFilter || phaseFilter || typeFilter || debouncedSearch);
 
   return (
@@ -418,6 +440,16 @@ export default function ProjectsPage() {
           <SelectItem key="createdAt:asc" startContent={<FiArrowUp className="text-xs" />}>Oldest first</SelectItem>
           <SelectItem key="phase:asc" startContent={<FiArrowUp className="text-xs" />}>Phase</SelectItem>
         </Select>
+        {/* Slice 2: archive toggle — surfaces soft-deleted projects */}
+        <Button
+          size="sm"
+          variant={showArchived ? 'solid' : 'flat'}
+          color={showArchived ? 'warning' : 'default'}
+          onPress={() => setShowArchived((v) => !v)}
+          className="self-start sm:self-auto"
+        >
+          {showArchived ? '✓ Showing Archived' : 'Show Archived'}
+        </Button>
         <div className="flex rounded-lg border border-gray-200 overflow-hidden ml-auto">
           <Tooltip content="Grid view">
             <button
@@ -497,6 +529,7 @@ export default function ProjectsPage() {
               onDelete={openDelete}
               canEdit={canEdit}
               canDelete={canDelete}
+              health={healthMap[p.id]}
             />
           ))}
         </div>
@@ -505,7 +538,7 @@ export default function ProjectsPage() {
       {/* List view */}
       {!isLoading && !error && viewMode === 'list' && projects.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
-          <table className="w-full min-w-[800px]">
+          <div className="responsive-table-wrap"><table className="w-full min-w-[800px]">
             <thead>
               <tr className="border-b border-gray-100 text-left">
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Project</th>
@@ -529,7 +562,7 @@ export default function ProjectsPage() {
                 />
               ))}
             </tbody>
-          </table>
+          </table></div>
         </div>
       )}
 

@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardHeader, CardBody, Progress } from '@heroui/react';
+import { Card, CardHeader, CardBody, Progress, Chip, Button } from '@heroui/react';
 import {
   PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -13,6 +13,90 @@ const PHASE_COLORS: Record<string, string> = {
   PRE_DEVELOPMENT: '#805AD5', PERMITTING: '#DD6B20', CONSTRUCTION: '#3182CE',
   LEASE_UP: '#319795', STABILIZED: '#38A169', SOLD_REFI: '#00B5D8',
 };
+
+const OVERDUE_LIMIT = 5;
+
+function overdueLabel(dueDate: string | null): string {
+  if (!dueDate) return 'Overdue';
+  const days = Math.floor((Date.now() - new Date(dueDate).getTime()) / 86_400_000);
+  if (days <= 0) return 'Due today';
+  if (days === 1) return '1 day late';
+  if (days < 7) return `${days} days late`;
+  if (days < 30) return `${Math.floor(days / 7)}w late`;
+  return `${Math.floor(days / 30)}mo late`;
+}
+
+function OverdueMilestonesCard({ milestones, navigate }: { milestones: any[]; navigate: (path: string) => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? milestones : milestones.slice(0, OVERDUE_LIMIT);
+  const hasMore = milestones.length > OVERDUE_LIMIT;
+
+  return (
+    <Card shadow="sm">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2">
+            <FiTrendingUp className="text-amber-600" />
+            <p className="font-semibold text-sm text-gray-600">Overdue Milestones</p>
+          </div>
+          {milestones.length > 0 && (
+            <Chip size="sm" color="danger" variant="flat">{milestones.length}</Chip>
+          )}
+        </div>
+      </CardHeader>
+      <CardBody className="pt-0">
+        {milestones.length === 0 ? (
+          <p className="text-sm text-gray-400 py-4 text-center">No overdue milestones</p>
+        ) : (
+          <>
+            <div className="overflow-auto">
+              <div className="responsive-table-wrap">
+                <table className="w-full text-sm min-w-[560px]">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
+                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Needs Attention</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map((m: any) => (
+                      <tr
+                        key={m.id}
+                        className="border-b border-gray-50 cursor-pointer hover:bg-amber-50"
+                        onClick={() => navigate(`/projects/${m.projectId}/milestones`)}
+                      >
+                        <td className="py-2 px-2 font-medium text-amber-700 max-w-[180px] truncate">{m.title}</td>
+                        <td className="py-2 px-2 text-xs text-gray-500">{m.projectName}</td>
+                        <td className="py-2 px-2">
+                          <Chip size="sm" color="danger" variant="flat" className="text-xs">
+                            {overdueLabel(m.dueDate)}
+                          </Chip>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {hasMore && (
+              <div className="mt-3 flex justify-center">
+                <Button
+                  size="sm"
+                  variant="light"
+                  color="warning"
+                  onPress={() => setShowAll((v) => !v)}
+                >
+                  {showAll ? 'Show less' : `See all ${milestones.length} overdue milestones`}
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
 
 export default function ConstructionDashboardPage() {
   const { user } = useAuthStore();
@@ -57,7 +141,7 @@ export default function ConstructionDashboardPage() {
       </h1>
 
       {/* Zone A — Summary Stat Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Active Projects" value={String(d.activeProjectCount)} variant="construction" colorScheme="brand" />
         <StatCard
           label="Overdue Milestones"
@@ -76,7 +160,7 @@ export default function ConstructionDashboardPage() {
           <p className="font-semibold text-sm text-amber-700">Construction Financials</p>
         </CardHeader>
         <CardBody className="pt-0">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <StatCard
               label="Total Budget Allocated"
               value={fmt(d.totalBudget)}
@@ -117,7 +201,7 @@ export default function ConstructionDashboardPage() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -164,52 +248,15 @@ export default function ConstructionDashboardPage() {
                   <tr><td colSpan={6} className="text-center py-6 text-gray-400">No active projects</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
 
       {/* Zone C — Action Items */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         {/* Overdue Milestones */}
-        <Card shadow="sm">
-          <CardHeader className="pb-2">
-            <div className="flex items-center gap-2">
-              <FiTrendingUp className="text-amber-600" />
-              <p className="font-semibold text-sm text-gray-600">Overdue Milestones</p>
-            </div>
-          </CardHeader>
-          <CardBody className="pt-0">
-            {(d.recentMilestones || []).filter((m: any) => m.status === 'OVERDUE').length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">No overdue milestones</p>
-            ) : (
-              <div className="overflow-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100">
-                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
-                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
-                      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Due</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(d.recentMilestones as any[]).filter((m: any) => m.status === 'OVERDUE').map((m: any) => (
-                      <tr
-                        key={m.id}
-                        className="border-b border-gray-50 cursor-pointer hover:bg-amber-50"
-                        onClick={() => navigate(`/projects/${m.projectId}/milestones`)}
-                      >
-                        <td className="py-2 px-2 font-medium text-amber-700">{m.title}</td>
-                        <td className="py-2 px-2 text-xs text-gray-500">{m.projectName}</td>
-                        <td className="py-2 px-2 text-xs text-red-600">{fmtDate(m.dueDate)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardBody>
-        </Card>
+        <OverdueMilestonesCard milestones={(d.recentMilestones || []).filter((m: any) => m.status === 'OVERDUE')} navigate={navigate} />
 
         {/* Draw Requests */}
         <Card shadow="sm">
@@ -240,7 +287,7 @@ export default function ConstructionDashboardPage() {
       </div>
 
       {/* Zone D — Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <Card shadow="sm">
           <CardHeader className="pb-0">
             <p className="font-semibold text-sm text-gray-600">Projects by Phase</p>
@@ -274,7 +321,7 @@ export default function ConstructionDashboardPage() {
               <p className="text-sm text-gray-400 py-4 text-center">No recent activity</p>
             ) : (
               <div className="overflow-auto max-h-[200px]">
-                <table className="w-full text-sm">
+                <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                   <thead>
                     <tr className="border-b border-gray-100">
                       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
@@ -297,7 +344,7 @@ export default function ConstructionDashboardPage() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </div>
             )}
           </CardBody>

@@ -1,12 +1,38 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CacheService } from '../../common/cache/cache.service';
+
+// 60 seconds gives users a short staleness window without coupling every
+// CRUD service to the dashboard cache. Event handlers (DrawEventHandlers)
+// invalidate explicitly on the high-impact writes (drawRequest.funded etc.).
+// For everything else (project edits, lease changes), a 60s wait is acceptable
+// and avoids the architectural cost of wiring invalidate() into 6 services.
+const DASHBOARD_TTL = 60;
+const DASHBOARD_TAG = 'dashboard';
 
 @Injectable()
 export class DashboardService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private cache: CacheService) {}
 
-  // ---- Founder Dashboard ----
+  /**
+   * Call from any write path that affects dashboard aggregates
+   * (project/unit/budget/actual/loan changes). Invalidates all 4 dashboards atomically.
+   */
+  invalidate() {
+    this.cache.invalidateTag(DASHBOARD_TAG);
+  }
+
+  // ---- Founder Dashboard (cached) ----
   async getFounderDashboard() {
+    return this.cache.wrap(
+      'dashboard:founder',
+      DASHBOARD_TTL,
+      () => this.computeFounderDashboard(),
+      { tags: [DASHBOARD_TAG] },
+    );
+  }
+
+  private async computeFounderDashboard() {
     const projects = await this.prisma.project.findMany({
       where: { status: { not: 'CANCELLED' } },
       include: {
@@ -186,6 +212,15 @@ export class DashboardService {
 
   // ---- Construction Dashboard ----
   async getConstructionDashboard(role: string) {
+    return this.cache.wrap(
+      `dashboard:construction:${role}`,
+      DASHBOARD_TTL,
+      () => this.computeConstructionDashboard(role),
+      { tags: [DASHBOARD_TAG] },
+    );
+  }
+
+  private async computeConstructionDashboard(role: string) {
     const isPM = role === 'PROJECT_MANAGER';
 
     const projects = await this.prisma.project.findMany({
@@ -290,6 +325,15 @@ export class DashboardService {
 
   // ---- Sales Dashboard ----
   async getSalesDashboard() {
+    return this.cache.wrap(
+      'dashboard:sales',
+      DASHBOARD_TTL,
+      () => this.computeSalesDashboard(),
+      { tags: [DASHBOARD_TAG] },
+    );
+  }
+
+  private async computeSalesDashboard() {
     const projects = await this.prisma.project.findMany({
       where: { status: { not: 'CANCELLED' } },
       include: {
@@ -418,6 +462,139 @@ export class DashboardService {
       monthlyLeaseIncome,
       recentSalesActivity,
       unitsByProject,
+    };
+  }
+
+  // ---- Finance Dashboard ----
+  async getFinanceDashboard() {
+    return this.cache.wrap(
+      'dashboard:finance',
+      DASHBOARD_TTL,
+      () => this.computeFinanceDashboard(),
+      { tags: [DASHBOARD_TAG] },
+    );
+  }
+
+  private async computeFinanceDashboard() {
+    const projects = await this.prisma.project.findMany({
+      where: { status: { not: 'CANCELLED' } },
+      include: {
+        budgetLines: true,
+        actuals: true,
+        loans: { include: { drawRequests: true } },
+        commitments: true,
+      },
+    });
+
+    let totalBudget = 0;
+    let totalActuals = 0;
+    let totalLoanPrincipal = 0;
+    let totalMonthlyPayment = 0;
+    let totalPendingDraws = 0;
+    let totalPendingDrawAmt = 0;
+
+    const budgetByCategory: Record<string, number> = {};
+    const actualsByCategory: Record<string, number> = {};
+
+    const projectSummaries = projects.map((p) => {
+      const budget = p.budgetLines.reduce((s, b) => s + Number(b.revisedAmt ?? b.baselineAmt), 0);
+      const actuals = p.actuals.reduce((s, a) => s + Number(a.amount), 0);
+      const variance = budget - actuals;
+      const variancePct = budget > 0 ? (variance / budget) * 100 : 0;
+      const committed = p.commitments.reduce((s, c) => s + Number(c.contractAmt), 0);
+
+      totalBudget += budget;
+      totalActuals += actuals;
+
+      for (const bl of p.budgetLines) {
+        const cat = bl.category;
+        budgetByCategory[cat] = (budgetByCategory[cat] || 0) + Number(bl.revisedAmt ?? bl.baselineAmt);
+      }
+      for (const a of p.actuals) {
+        const cat = a.category;
+        actualsByCategory[cat] = (actualsByCategory[cat] || 0) + Number(a.amount);
+      }
+
+      let loanPrincipal = 0;
+      let monthlyPayment = 0;
+      let pendingDraws = 0;
+      let pendingDrawAmt = 0;
+      const loansNearMaturity: any[] = [];
+
+      for (const loan of p.loans) {
+        loanPrincipal += Number(loan.principalAmt);
+        monthlyPayment += Number(loan.monthlyPayment ?? 0);
+        totalLoanPrincipal += Number(loan.principalAmt);
+        totalMonthlyPayment += Number(loan.monthlyPayment ?? 0);
+
+        const pending = loan.drawRequests.filter((d) => d.status === 'SUBMITTED');
+        const pendingAmount = pending.reduce((s, d) => s + Number(d.amount), 0);
+        pendingDraws += pending.length;
+        pendingDrawAmt += pendingAmount;
+        totalPendingDraws += pending.length;
+        totalPendingDrawAmt += pendingAmount;
+
+        if (loan.maturityDate) {
+          const daysToMaturity = Math.ceil(
+            (new Date(loan.maturityDate).getTime() - Date.now()) / 86400000,
+          );
+          if (daysToMaturity <= 90) {
+            loansNearMaturity.push({
+              id: loan.id,
+              lender: loan.lender,
+              type: loan.loanType,
+              principal: Number(loan.principalAmt),
+              maturityDate: loan.maturityDate,
+              daysToMaturity,
+            });
+          }
+        }
+      }
+
+      return {
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        phase: p.phase,
+        budget,
+        actuals,
+        variance,
+        variancePct,
+        committed,
+        budgetSpentPct: budget > 0 ? actuals / budget : 0,
+        loanPrincipal,
+        monthlyPayment,
+        pendingDraws,
+        pendingDrawAmt,
+        loansNearMaturity,
+      };
+    });
+
+    const budgetVariance = totalBudget - totalActuals;
+    const budgetUtilPct = totalBudget > 0 ? (totalActuals / totalBudget) * 100 : 0;
+
+    const budgetCategoryChart = Object.entries(budgetByCategory).map(([category, budget]) => ({
+      category: category.replace(/_/g, ' '),
+      budget,
+      actuals: actualsByCategory[category] || 0,
+    }));
+
+    const loansNearMaturity = projectSummaries
+      .flatMap((p) => p.loansNearMaturity.map((l) => ({ ...l, projectName: p.name, projectId: p.id })))
+      .sort((a, b) => a.daysToMaturity - b.daysToMaturity);
+
+    return {
+      totalBudget,
+      totalActuals,
+      budgetVariance,
+      budgetUtilPct,
+      totalLoanPrincipal,
+      totalMonthlyPayment,
+      totalPendingDraws,
+      totalPendingDrawAmt,
+      projectSummaries: projectSummaries.sort((a, b) => Math.abs(a.variancePct) - Math.abs(b.variancePct)).reverse(),
+      budgetCategoryChart,
+      loansNearMaturity,
     };
   }
 }

@@ -3,24 +3,18 @@ import {
   UseGuards, UseInterceptors, Request, UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import { UploadDocumentDto } from './dto/upload-document.dto';
 import { Response } from 'express';
-import * as path from 'path';
 
-const multerStorage = diskStorage({
-  destination: './uploads',
-  filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + extname(file.originalname));
-  },
-});
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 @ApiTags('Documents')
 @ApiBearerAuth()
@@ -28,7 +22,24 @@ const multerStorage = diskStorage({
 @UseInterceptors(AuditInterceptor)
 @Controller('documents')
 export class DocumentsController {
-  constructor(private service: DocumentsService) {}
+  constructor(private service: DocumentsService, private storage: StorageService) {}
+
+  /**
+   * POST /api/documents/presigned-upload
+   * Returns an URL the browser PUTs the file to directly. Avoids proxying
+   * large files through the API. Caller persists the storagePath in their
+   * own table (DrawDocument, MilestonePhoto, etc.) on success.
+   */
+  @Post('presigned-upload')
+  @RequirePermissions('document:upload')
+  @ApiOperation({ summary: 'Issue a presigned Supabase upload URL for client-direct upload' })
+  presignedUpload(@Body() body: { filename: string; projectId?: string; projectName?: string; category?: string }) {
+    return this.storage.createPresignedUpload(body.filename, {
+      projectId: body.projectId,
+      projectName: body.projectName,
+      category: body.category,
+    });
+  }
 
   @Get()
   @RequirePermissions('document:view')
@@ -41,11 +52,11 @@ export class DocumentsController {
   @Post()
   @RequirePermissions('document:upload')
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload a document' })
-  @UseInterceptors(FileInterceptor('file', { storage: multerStorage }))
+  @ApiOperation({ summary: 'Upload a document to Supabase Storage' })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } }))
   upload(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: any,
+    @Body() body: UploadDocumentDto,
     @Request() req: any,
   ) {
     return this.service.create(file, body, req.user.sub);
@@ -60,14 +71,9 @@ export class DocumentsController {
 
   @Get(':id/download')
   @RequirePermissions('document:view')
-  @ApiOperation({ summary: 'Download a document file' })
+  @ApiOperation({ summary: 'Get a signed download URL for a document' })
   async download(@Param('id') id: string, @Res() res: Response) {
-    const doc = await this.service.getFilePath(id);
-    if (!doc) {
-      res.status(404).json({ message: 'Document not found' });
-      return;
-    }
-    const filePath = path.join(process.cwd(), 'uploads', path.basename(doc.fileUrl));
-    res.download(filePath, doc.fileName);
+    const { url } = await this.service.getDownloadUrl(id);
+    res.redirect(url);
   }
 }

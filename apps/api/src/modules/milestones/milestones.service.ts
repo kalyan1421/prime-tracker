@@ -1,21 +1,41 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { EventBus } from '../../common/events/event-bus.service';
+import { MilestoneDepsService } from './milestone-deps.service';
 
 @Injectable()
 export class MilestonesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private bus: EventBus,
+    private deps: MilestoneDepsService,
+  ) {}
 
   async findByProject(projectId: string) {
     return this.prisma.milestone.findMany({
       where: { projectId },
-      include: { owner: { select: { id: true, name: true } } },
+      include: {
+        owner: { select: { id: true, name: true } },
+        dependsOn: { select: { id: true, title: true, status: true } },
+        photos: { orderBy: { uploadedAt: 'desc' }, take: 5 },
+        _count: { select: { photos: true, dependents: true } },
+      },
       orderBy: { sortOrder: 'asc' },
     });
   }
 
   async findById(id: string) {
-    const m = await this.prisma.milestone.findUnique({ where: { id }, include: { owner: true } });
+    const m = await this.prisma.milestone.findUnique({
+      where: { id },
+      include: {
+        owner: true,
+        dependsOn: { select: { id: true, title: true, status: true, dueDate: true } },
+        dependents: { select: { id: true, title: true, status: true, dueDate: true } },
+        photos: { include: { uploadedBy: { select: { id: true, name: true } } }, orderBy: { uploadedAt: 'desc' } },
+        linkedDrawSchedule: true,
+      },
+    });
     if (!m) throw new NotFoundException('Milestone not found');
     return m;
   }
@@ -26,11 +46,40 @@ export class MilestonesService {
 
   async update(id: string, data: Prisma.MilestoneUncheckedUpdateInput) {
     const existing = await this.findById(id);
-    // Only auto-set completedAt on first completion — never overwrite an existing timestamp
+    const wasCompleted = existing.status === 'COMPLETED';
+
+    // Auto-stamp completedAt the first time a milestone is marked COMPLETED.
     if (data.status === 'COMPLETED' && !existing.completedAt && !data.completedAt) {
       data.completedAt = new Date();
     }
-    return this.prisma.milestone.update({ where: { id }, data });
+
+    // Slippage detection: a non-completed milestone whose due date moves later
+    // should propagate the delta to its dependents.
+    let daysSlipped = 0;
+    if (data.dueDate && existing.status !== 'COMPLETED') {
+      const newDate = new Date(data.dueDate as Date);
+      const oldDate = existing.dueDate;
+      daysSlipped = Math.floor(
+        (newDate.getTime() - oldDate.getTime()) / (1000 * 60 * 60 * 24),
+      );
+    }
+
+    const updated = await this.prisma.milestone.update({ where: { id }, data });
+
+    // Fire-and-forget post-write side effects — wrapped in setImmediate via EventBus
+    if (data.status === 'COMPLETED' && !wasCompleted) {
+      this.bus.emit({
+        type: 'milestone.completed',
+        milestoneId: id,
+        projectId: existing.projectId,
+        completedAt: updated.completedAt ?? new Date(),
+      });
+    }
+    if (daysSlipped > 0) {
+      // Fire and forget — don't block the response
+      this.deps.propagateSlippage(id, daysSlipped).catch(() => {});
+    }
+    return updated;
   }
 
   async delete(id: string) {

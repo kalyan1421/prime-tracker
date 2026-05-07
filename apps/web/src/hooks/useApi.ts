@@ -16,10 +16,39 @@ export function useProjects(params?: {
   search?: string;
   sortBy?: string;
   sortOrder?: string;
+  archived?: boolean;
 }) {
   return useQuery({
     queryKey: ['projects', params],
     queryFn: () => api.get('/projects', { params }).then((r) => r.data),
+  });
+}
+
+// Slice 2 — Project Health Scores (bulk for the projects list)
+export function useProjectHealthBulk(projectIds: string[]) {
+  const idsCsv = [...projectIds].sort().join(',');
+  return useQuery({
+    queryKey: ['project-health-bulk', idsCsv],
+    queryFn: () =>
+      api.get('/projects/health/bulk', { params: { ids: idsCsv } }).then((r) => r.data as Record<
+        string,
+        { score: number; breakdown: Record<string, { score: number; reason: string }> }
+      >),
+    enabled: idsCsv.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useProjectHealth(projectId: string) {
+  return useQuery({
+    queryKey: ['project-health', projectId],
+    queryFn: () =>
+      api.get(`/projects/${projectId}/health`).then((r) => r.data as {
+        score: number;
+        breakdown: Record<string, { score: number; reason: string }>;
+      }),
+    enabled: !!projectId,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -772,6 +801,14 @@ export function useFounderDashboard() {
   });
 }
 
+export function useFinanceDashboard() {
+  return useQuery({
+    queryKey: ['dashboard', 'finance'],
+    queryFn: () => api.get('/dashboard/finance').then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useConstructionDashboard() {
   return useQuery({
     queryKey: ['dashboard', 'construction'],
@@ -1330,5 +1367,249 @@ export function useRemoveOrgMember() {
       qc.invalidateQueries({ queryKey: ['organizations'] });
       qc.invalidateQueries({ queryKey: ['organizations', vars.orgId] });
     },
+  });
+}
+
+// ─────────── Slice 5: Budget Revisions ───────────
+export function useBudgetRevisions(budgetLineId: string | undefined) {
+  return useQuery({
+    queryKey: ['budget-revisions', budgetLineId],
+    queryFn: () => api.get(`/budgets/${budgetLineId}/revisions`).then((r) => r.data),
+    enabled: !!budgetLineId,
+  });
+}
+export function useCreateBudgetRevision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ budgetLineId, ...data }: {
+      budgetLineId: string; amount: number; reason: string;
+      changeReason: 'SCOPE_ADD' | 'COST_INCREASE' | 'REALLOCATION' | 'ESTIMATE_REFINED' | 'CHANGE_ORDER' | 'OTHER';
+    }) => api.post(`/budgets/${budgetLineId}/revisions`, data).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['budget-revisions', v.budgetLineId] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      qc.invalidateQueries({ queryKey: ['project-health'] });
+      qc.invalidateQueries({ queryKey: ['project-health-bulk'] });
+    },
+  });
+}
+export function useApproveBudgetRevision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (revisionId: string) =>
+      api.post(`/budgets/revisions/${revisionId}/approve`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['budget-revisions'] }),
+  });
+}
+
+// ─────────── Slice 6: Sales forecast ───────────
+export function useSalesForecast(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['sales-forecast', projectId],
+    queryFn: () => api.get('/sales/forecast', { params: { projectId } }).then((r) => r.data as {
+      totalPipelineValue: number;
+      weightedForecast: number;
+      byStage: Array<{ stage: string; count: number; value: number; weighted: number; probability: number }>;
+      closedYtd: number;
+    }),
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+}
+
+// ─────────── Slice 7: Milestone deps ───────────
+export function useSetMilestoneDependency() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, dependsOnId }: { id: string; dependsOnId: string | null }) =>
+      api.patch(`/milestones/${id}/depends-on`, { dependsOnId }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones'] }),
+  });
+}
+export function useMilestoneCanStart(milestoneId: string | undefined) {
+  return useQuery({
+    queryKey: ['milestone-can-start', milestoneId],
+    queryFn: () => api.get(`/milestones/${milestoneId}/can-start`).then((r) => r.data as { allowed: boolean; reason?: string }),
+    enabled: !!milestoneId,
+  });
+}
+
+// ─────────── Slice 8: Draws workflow ───────────
+export function useDraw(drawId: string | undefined) {
+  return useQuery({
+    queryKey: ['draw', drawId],
+    queryFn: () => api.get(`/draws/${drawId}`).then((r) => r.data),
+    enabled: !!drawId,
+  });
+}
+export function useDrawChecklist(drawId: string | undefined) {
+  return useQuery({
+    queryKey: ['draw-checklist', drawId],
+    queryFn: () => api.get(`/draws/${drawId}/checklist`).then((r) => r.data as Array<{
+      type: string; required: boolean; uploaded: number;
+    }>),
+    enabled: !!drawId,
+  });
+}
+function drawAction(action: string) {
+  return ({ id, ...body }: { id: string; comment?: string; reason?: string; fundedAt?: string }) =>
+    api.post(`/draws/${id}/${action}`, body).then((r) => r.data);
+}
+export function useDrawWorkflow() {
+  const qc = useQueryClient();
+  const inv = (id: string) => {
+    qc.invalidateQueries({ queryKey: ['draw', id] });
+    qc.invalidateQueries({ queryKey: ['draw-checklist', id] });
+    qc.invalidateQueries({ queryKey: ['draws'] });
+    qc.invalidateQueries({ queryKey: ['project-health'] });
+    qc.invalidateQueries({ queryKey: ['dashboard'] });
+  };
+  return {
+    submit:          useMutation({ mutationFn: drawAction('submit'),           onSuccess: (_d, v) => inv(v.id) }),
+    approveInternal: useMutation({ mutationFn: drawAction('approve-internal'), onSuccess: (_d, v) => inv(v.id) }),
+    submitToLender:  useMutation({ mutationFn: drawAction('submit-to-lender'), onSuccess: (_d, v) => inv(v.id) }),
+    markFunded:      useMutation({ mutationFn: drawAction('mark-funded'),      onSuccess: (_d, v) => inv(v.id) }),
+    reject:          useMutation({ mutationFn: drawAction('reject'),           onSuccess: (_d, v) => inv(v.id) }),
+    cancel:          useMutation({ mutationFn: drawAction('cancel'),           onSuccess: (_d, v) => inv(v.id) }),
+  };
+}
+export function useAttachDrawDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ drawId, ...data }: {
+      drawId: string;
+      documentType: 'LIEN_WAIVER' | 'INSPECTION_REPORT' | 'SWORN_STATEMENT' | 'VENDOR_INVOICE' | 'CHANGE_ORDER' | 'OTHER';
+      storagePath: string;
+      filename: string;
+    }) => api.post(`/draws/${drawId}/documents`, data).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['draw', v.drawId] });
+      qc.invalidateQueries({ queryKey: ['draw-checklist', v.drawId] });
+    },
+  });
+}
+export function useRemoveDrawDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (documentId: string) =>
+      api.delete(`/draws/documents/${documentId}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['draw'] });
+      qc.invalidateQueries({ queryKey: ['draw-checklist'] });
+    },
+  });
+}
+
+// Actuals (POSTed expenses) — for variance computation
+export function useActuals(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['actuals', projectId],
+    queryFn: () => api.get('/actuals', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+// ─────────── Presigned Supabase upload ───────────
+// Two-step upload: (1) get URL from API, (2) PUT file to Supabase directly.
+// Returns a thin client wrapper that does both.
+export function usePresignedUpload() {
+  return useMutation({
+    mutationFn: async ({ file, projectId, projectName, category }: {
+      file: File; projectId?: string; projectName?: string; category?: string;
+    }) => {
+      const { data } = await api.post<{ uploadUrl: string; storagePath: string; token: string }>(
+        '/documents/presigned-upload',
+        { filename: file.name, projectId, projectName, category },
+      );
+      // Upload directly to Supabase Storage. The token is passed via header.
+      const res = await fetch(data.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      return { storagePath: data.storagePath, filename: file.name };
+    },
+  });
+}
+
+// ─────────── Exception Feed ───────────
+export function useExceptions(projectId?: string) {
+  return useQuery({
+    queryKey: ['exceptions', projectId ?? 'portfolio'],
+    queryFn: () => api.get('/exceptions', { params: projectId ? { projectId } : {} }).then((r) => r.data as Array<{
+      id: string;
+      severity: 'critical' | 'warning' | 'info';
+      category: string;
+      title: string;
+      detail?: string;
+      meta?: string;
+      href?: string;
+      createdAt?: string;
+    }>),
+    staleTime: 60_000,
+  });
+}
+
+// ─────────── Milestone Photos ───────────
+export function useMilestonePhotos(milestoneId: string | undefined) {
+  return useQuery({
+    queryKey: ['milestone-photos', milestoneId],
+    queryFn: () => api.get(`/milestones/${milestoneId}/photos`).then((r) => r.data),
+    enabled: !!milestoneId,
+  });
+}
+export function useAttachMilestonePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ milestoneId, ...body }: { milestoneId: string; storagePath: string; caption?: string }) =>
+      api.post(`/milestones/${milestoneId}/photos`, body).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['milestone-photos', v.milestoneId] });
+      qc.invalidateQueries({ queryKey: ['milestones'] });
+    },
+  });
+}
+export function useDeleteMilestonePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (photoId: string) =>
+      api.delete(`/milestones/photos/${photoId}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['milestone-photos'] });
+      qc.invalidateQueries({ queryKey: ['milestones'] });
+    },
+  });
+}
+
+/**
+ * Aggregate draw schedule across every loan on a project — for the milestone
+ * "Linked Draw" picker. Returns a flat list of { id, label, loanId } per
+ * schedule line.
+ */
+export function useProjectDrawSchedules(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['project-draw-schedules', projectId],
+    queryFn: async () => {
+      // 1. Fetch loans for the project
+      const { data: loans } = await api.get('/loans', { params: { projectId } });
+      const loanList = (loans as any[]) || [];
+      // 2. Fetch each loan's schedule in parallel
+      const schedules = await Promise.all(
+        loanList.map(async (l: any) => {
+          const { data } = await api.get(`/loans/${l.id}/schedule`);
+          return ((data as any[]) || []).map((s) => ({
+            id: s.id,
+            drawNumber: s.drawNumber,
+            plannedAmount: Number(s.plannedAmount),
+            plannedDate: s.plannedDate,
+            loanId: l.id,
+            loanLabel: l.lender || l.loanType,
+          }));
+        }),
+      );
+      return schedules.flat();
+    },
+    enabled: !!projectId,
   });
 }

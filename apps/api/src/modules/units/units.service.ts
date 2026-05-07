@@ -103,12 +103,15 @@ export class UnitsService {
       );
     }
 
+    // If created as AVAILABLE (default), start the time-on-market clock now
+    const status = input.status ?? 'AVAILABLE';
     return this.prisma.unit.create({
       data: {
         buildingId: input.buildingId,
         unitNumber: input.unitNumber,
         unitType: input.unitType as any,
-        status: input.status,
+        status,
+        availableSince: status === 'AVAILABLE' ? new Date() : null,
         sqft: input.sqft,
         askingRent: input.askingRent,
         askingPrice: input.askingPrice,
@@ -168,9 +171,22 @@ export class UnitsService {
       this.assertValidStatusTransition(unit.status as UnitStatus, input.status, userRole);
     }
 
+    // Time-on-market: maintain `availableSince` automatically.
+    //   When a unit flips TO   AVAILABLE → set availableSince = now
+    //   When a unit flips FROM AVAILABLE → clear availableSince
+    // The Founder/Sales pages can then sort/highlight units by how long they've sat.
+    const data: Record<string, unknown> = { ...input };
+    if (input.status && input.status !== unit.status) {
+      if (input.status === 'AVAILABLE' && unit.status !== 'AVAILABLE') {
+        data.availableSince = new Date();
+      } else if (input.status !== 'AVAILABLE' && unit.status === 'AVAILABLE') {
+        data.availableSince = null;
+      }
+    }
+
     return this.prisma.unit.update({
       where: { id },
-      data: input as any,
+      data: data as any,
       include: { building: { select: { id: true, name: true } } },
     });
   }

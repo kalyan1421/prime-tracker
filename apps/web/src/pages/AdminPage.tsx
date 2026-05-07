@@ -19,9 +19,9 @@ import { useAuthStore } from '../store/authStore';
 export default function AdminPage() {
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Administration</h1>
+      <h1 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Administration</h1>
 
-      <Tabs color="primary" size="sm">
+      <Tabs color="primary" size="sm" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
         <Tab key="users" title={<div className="flex items-center gap-1"><FiUsers /><span>Users</span></div>}>
           <UsersPanel />
         </Tab>
@@ -206,7 +206,7 @@ function UsersPanel() {
           </CardHeader>
           <CardBody className="pt-2">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">User</th>
@@ -282,7 +282,7 @@ function UsersPanel() {
                     </tr>
                   )}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -408,7 +408,7 @@ function UsersPanel() {
       )}
 
       {/* Create User Modal */}
-      <Modal isOpen={isCreateOpen} onClose={onCreateClose}>
+      <Modal isOpen={isCreateOpen} onClose={onCreateClose} scrollBehavior="inside">
         <ModalContent>
           <ModalHeader>Add User</ModalHeader>
           <ModalBody>
@@ -458,7 +458,7 @@ function UsersPanel() {
       </Modal>
 
       {/* Edit Modal */}
-      <Modal isOpen={isEditOpen} onClose={onEditClose}>
+      <Modal isOpen={isEditOpen} onClose={onEditClose} scrollBehavior="inside">
         <ModalContent>
           <ModalHeader>Edit User</ModalHeader>
           <ModalBody>
@@ -495,7 +495,7 @@ function UsersPanel() {
       </Modal>
 
       {/* Delete Confirm Modal */}
-      <Modal isOpen={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)}>
+      <Modal isOpen={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} scrollBehavior="inside">
         <ModalContent>
           <ModalHeader>Delete User</ModalHeader>
           <ModalBody>
@@ -558,7 +558,7 @@ function IntegrationsPanel() {
         </CardHeader>
         <CardBody className="pt-0">
           {qb?.connected ? (
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <p className="text-xs text-gray-500">Company</p>
                 <p className="text-sm font-medium">{qb.companyName || '\u2014'}</p>
@@ -625,7 +625,7 @@ function AuditPanel() {
       <Card shadow="sm">
         <CardBody className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Timestamp</th>
@@ -652,7 +652,7 @@ function AuditPanel() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -983,7 +983,7 @@ function OrganizationsPanel() {
       </div>
 
       {/* Create/Edit Organization Modal */}
-      <Modal isOpen={isOrgModalOpen} onClose={onOrgModalClose}>
+      <Modal isOpen={isOrgModalOpen} onClose={onOrgModalClose} scrollBehavior="inside">
         <ModalContent>
           <ModalHeader>{editingOrgId ? 'Edit Organization' : 'Create Organization'}</ModalHeader>
           <ModalBody>
@@ -1031,7 +1031,7 @@ function OrganizationsPanel() {
       </Modal>
 
       {/* Add Member Modal */}
-      <Modal isOpen={isMemberModalOpen} onClose={onMemberModalClose}>
+      <Modal isOpen={isMemberModalOpen} onClose={onMemberModalClose} scrollBehavior="inside">
         <ModalContent>
           <ModalHeader>Add Member</ModalHeader>
           <ModalBody>
@@ -1153,7 +1153,7 @@ function RolesPanel() {
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
                     {CATEGORY_LABELS[cat] || cat}
                   </h3>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     {catRoles.map((r: any) => (
                       <Card
                         key={r.role}
@@ -1266,7 +1266,7 @@ function RolesPanel() {
         <Card shadow="sm">
           <CardBody className="p-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <div className="responsive-table-wrap"><table className="w-full text-xs min-w-[480px]">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50">
                     <th className="text-left py-2 px-3 font-semibold text-gray-500 uppercase sticky left-0 bg-gray-50 min-w-[180px]">
@@ -1317,7 +1317,7 @@ function RolesPanel() {
                     </React.Fragment>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>

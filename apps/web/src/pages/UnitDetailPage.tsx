@@ -16,6 +16,8 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   FINANCIAL: 'bg-green-100 text-green-700',
 };
 import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { CommentChip, type CommentType } from '../components/CommentChip';
+import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;
@@ -93,17 +95,21 @@ export default function UnitDetailPage() {
       </button>
 
       {/* Header */}
-      <div className="flex justify-between items-start mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Unit {u.unitNumber}</h1>
-          <p className="text-sm text-gray-500 mt-1">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-4 sm:mb-6">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold">Unit {u.unitNumber}</h1>
+          <p className="text-sm text-gray-500 mt-1 break-words">
             {u.building?.name}
             {u.building?.project?.name && <> &middot; {u.building.project.name}</>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <StatusBadge status={u.unitType} />
           <StatusBadge status={u.status} />
+          {/* Slice 4: time-on-market shown only for AVAILABLE units */}
+          {u.status === 'AVAILABLE' && u.availableSince && (
+            <TimeOnMarketBar availableSince={u.availableSince} />
+          )}
           {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime Owned</Chip>}
           <Button size="sm" variant="flat" color="primary" startContent={<FiEdit2 />} onPress={openEdit}>
             Edit
@@ -112,11 +118,11 @@ export default function UnitDetailPage() {
       </div>
 
       {/* Edit Modal */}
-      <Modal isOpen={isOpen} onClose={onClose} size="lg">
+      <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" size="lg">
         <ModalContent>
           <ModalHeader>Edit Unit {u.unitNumber}</ModalHeader>
           <ModalBody>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input
                 label="Unit Number"
                 value={form.unitNumber ?? ''}
@@ -191,7 +197,7 @@ export default function UnitDetailPage() {
       </Modal>
 
       {/* Info Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
         <StatCard label="Size" value={u.sqft ? `${u.sqft.toLocaleString()} sqft` : '\u2014'} />
         <StatCard label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} />
         <StatCard label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
@@ -335,9 +341,7 @@ function InlineComments({ unitId }: { unitId: string }) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-semibold">{c.user?.name}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${COMMENT_TYPE_COLORS[c.commentType] || ''}`}>
-                    {c.commentType}
-                  </span>
+                  <CommentChip type={c.commentType as CommentType} size="sm" />
                   <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
                   <Button
                     size="sm"
@@ -356,10 +360,10 @@ function InlineComments({ unitId }: { unitId: string }) {
           ))}
         </div>
       )}
-      <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-2">
         <Select
           size="sm"
-          className="w-[140px]"
+          className="w-full sm:w-[140px]"
           selectedKeys={[commentType]}
           onSelectionChange={(keys) => { const v = Array.from(keys)[0] as string; if (v) setCommentType(v); }}
         >
@@ -375,7 +379,7 @@ function InlineComments({ unitId }: { unitId: string }) {
           className="flex-1"
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
         />
-        <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending}>
+        <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending} className="self-start sm:self-auto">
           <FiSend />
         </Button>
       </div>

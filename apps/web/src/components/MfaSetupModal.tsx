@@ -58,7 +58,7 @@ export default function MfaSetupModal({ isOpen, onClose }: Props) {
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} size="md" isDismissable={false}>
+    <Modal isOpen={isOpen} onClose={handleClose} scrollBehavior="inside" size="md" isDismissable={false}>
       <ModalContent>
         {step === 'intro' && (
           <>

@@ -165,7 +165,7 @@ export default function DashboardPage() {
       {/* FOUNDER: Two-column layout */}
       {isFounder && (
         <>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
             {constructionBudgetCard}
             {cashFlowCard}
           </div>
@@ -214,7 +214,7 @@ export default function DashboardPage() {
       )}
 
       {/* Charts — all roles */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <Card shadow="sm">
           <CardHeader className="pb-0">
             <p className="font-semibold text-sm text-gray-600">Projects by Phase</p>
@@ -253,7 +253,7 @@ export default function DashboardPage() {
 
       {/* Alerts & Milestones */}
       {showAlerts && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
           <Card shadow="sm">
             <CardHeader className="pb-2">
               <div className="flex items-center gap-2">
@@ -299,7 +299,7 @@ export default function DashboardPage() {
                   <p className="text-sm text-gray-400 py-4 text-center">No upcoming milestones</p>
                 ) : (
                   <div className="overflow-auto">
-                    <table className="w-full text-sm">
+                    <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                       <thead>
                         <tr className="border-b border-gray-100">
                           <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
@@ -318,7 +318,7 @@ export default function DashboardPage() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   </div>
                 )}
               </CardBody>

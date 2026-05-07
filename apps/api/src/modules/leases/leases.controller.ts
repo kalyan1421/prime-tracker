@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import { CreateLeaseDto, UpdateLeaseDto } from './dto/create-lease.dto';
 
 @ApiTags('Leases')
 @ApiBearerAuth()
@@ -32,12 +33,12 @@ export class LeasesController {
   @Post()
   @RequirePermissions('lease:edit')
   @ApiOperation({ summary: 'Create lease' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateLeaseDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('lease:edit')
   @ApiOperation({ summary: 'Update lease' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateLeaseDto) { return this.service.update(id, body); }
 
   @Delete(':id')
   @RequirePermissions('lease:edit')

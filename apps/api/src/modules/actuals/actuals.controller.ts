@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import { CreateActualDto, UpdateActualDto } from './dto/create-actual.dto';
 
 @ApiTags('Actuals')
 @ApiBearerAuth()
@@ -27,10 +28,10 @@ export class ActualsController {
   @Post()
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Create manual actual entry' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateActualDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Update actual (map unmapped to project/category)' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateActualDto) { return this.service.update(id, body); }
 }

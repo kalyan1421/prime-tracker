@@ -44,15 +44,15 @@ export default function InvestorsPage() {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4 sm:mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Investors</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Investors</h1>
           <p className="text-sm text-gray-500 mt-0.5">Equity positions, capital calls, and distributions</p>
         </div>
-        <Button color="primary" startContent={<FiPlus />} onPress={onOpen}>Add Investor</Button>
+        <Button color="primary" startContent={<FiPlus />} onPress={onOpen} className="self-start sm:self-auto">Add Investor</Button>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Investors" value={String(s?.totalInvestors || 0)} />
         <StatCard label="Total Committed" value={fmt(s?.totalCommitted || 0)} variant="construction" />
         <StatCard label="Total Called" value={fmt(s?.totalCalled || 0)} variant="revenue" />
@@ -67,7 +67,7 @@ export default function InvestorsPage() {
           {list.length === 0 ? (
             <div className="p-6"><EmptyState message="No investors yet" /></div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead className="bg-gray-50 border-b">
                 <tr>
                   {['Name', 'Entity', '# Projects', 'Committed', 'Called', 'Distributions', ''].map((h) => (
@@ -92,12 +92,12 @@ export default function InvestorsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </CardBody>
       </Card>
 
-      <Modal isOpen={isOpen} onClose={onClose} size="md">
+      <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" size="md">
         <ModalContent>
           <ModalHeader>Add Investor</ModalHeader>
           <ModalBody className="space-y-3">

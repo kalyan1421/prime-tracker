@@ -97,7 +97,10 @@ export class LoansService {
         select: { drawNumber: true },
       });
       const drawNumber = (last?.drawNumber ?? 0) + 1;
-      const requestedAmt = data.requestedAmount ?? data.amount ?? 0;
+      const requestedAmt = Number(data.requestedAmount ?? data.amount ?? 0);
+      if (!Number.isFinite(requestedAmt) || requestedAmt <= 0) {
+        throw new BadRequestException('requestedAmount must be greater than 0');
+      }
 
       return tx.drawRequest.create({
         data: {
@@ -106,7 +109,7 @@ export class LoansService {
           drawNumber,
           amount: requestedAmt,
           requestedAmount: requestedAmt,
-          requestDate: new Date(),
+          requestDate: data.requestDate ? new Date(data.requestDate) : new Date(),
           status: DrawStatus.DRAFT,
           notes: data.notes,
           createdById: userId,
@@ -115,6 +118,16 @@ export class LoansService {
     });
   }
 
+  /**
+   * @deprecated Workflow transitions live in DrawsService (state machine in
+   * draws/draw-state-machine.ts). This method is kept ONLY for backwards
+   * compatibility with the legacy /loans/draws/:id/status endpoint while UIs
+   * migrate to the new /draws/:id/* routes (submit, approve-internal, mark-funded, etc.).
+   *
+   * Validation here is intentionally minimal — the new state machine enforces
+   * required-document gates, fires events, and writes the audit trail. Don't
+   * extend this method; deprecate it instead.
+   */
   async updateDrawStatus(
     id: string,
     status: DrawStatus,
@@ -125,18 +138,6 @@ export class LoansService {
     const draw = await this.prisma.drawRequest.findUnique({ where: { id } });
     if (!draw) throw new NotFoundException('Draw request not found');
 
-    const transitions: Record<DrawStatus, DrawStatus[]> = {
-      DRAFT: [DrawStatus.SUBMITTED, DrawStatus.REJECTED],
-      SUBMITTED: [DrawStatus.APPROVED, DrawStatus.REJECTED],
-      APPROVED: [DrawStatus.FUNDED, DrawStatus.REJECTED],
-      FUNDED: [],
-      REJECTED: [],
-    };
-
-    const currentStatus = draw.status as DrawStatus;
-    if (!transitions[currentStatus]?.includes(status)) {
-      throw new BadRequestException(`Cannot transition from ${currentStatus} to ${status}`);
-    }
     if (status === DrawStatus.REJECTED && !rejectionReason) {
       throw new BadRequestException('rejectionReason is required when rejecting a draw');
     }

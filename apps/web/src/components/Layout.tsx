@@ -6,9 +6,9 @@ import {
 import {
   FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield,
   FiMenu, FiPieChart, FiBell, FiUsers, FiCheck, FiTarget, FiBriefcase,
-  FiCheckSquare, FiPackage,
+  FiCheckSquare, FiPackage, FiX,
 } from 'react-icons/fi';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { useDisclosure } from '@heroui/react';
 import api from '../lib/api';
@@ -49,7 +49,7 @@ function NotificationPanel() {
   const unread = notifications.filter((n: any) => !n.readAt);
 
   return (
-    <div className="w-[340px]">
+    <div className="w-[min(340px,90vw)]">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
         <p className="font-semibold text-sm text-gray-700">Notifications</p>
         {unread.length > 0 && (
@@ -61,7 +61,7 @@ function NotificationPanel() {
           </button>
         )}
       </div>
-      <div className="max-h-[380px] overflow-auto">
+      <div className="max-h-[60vh] sm:max-h-[380px] overflow-auto">
         {notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-gray-400">
             <FiBell className="text-2xl mb-2" />
@@ -104,7 +104,26 @@ function NotificationPanel() {
   );
 }
 
-function Sidebar({ collapsed }: { collapsed: boolean }) {
+/**
+ * Sidebar.
+ *
+ * Two modes:
+ *   - Desktop (lg+): inline 60px (collapsed) or 220px (expanded). Persists across navigation.
+ *   - Mobile (<lg):  off-canvas drawer; hidden by default. Tapping the hamburger slides
+ *                    it in with a backdrop. Tapping a nav item or backdrop closes it.
+ *
+ * Why off-canvas: on a 375px screen, even a 60px sidebar takes 16% of the width and
+ * shrinks the content area to a point where 2-column grids barely fit.
+ */
+function Sidebar({
+  collapsed,
+  mobileOpen,
+  onMobileClose,
+}: {
+  collapsed: boolean;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
+}) {
   const { hasPermission, user } = useAuthStore();
   const role = user?.role ?? '';
   const dashPath = getDashPath(role);
@@ -115,63 +134,144 @@ function Sidebar({ collapsed }: { collapsed: boolean }) {
     path: item.path ?? (item.pathKey === 'dashboard' ? dashPath : item.pathKey === 'reports' ? reportsPath : '/'),
   }));
 
-  return (
-    <nav
-      className={`${collapsed ? 'w-[60px]' : 'w-[220px]'} min-h-screen bg-white border-r border-gray-200 transition-all duration-200 overflow-hidden pt-4 relative`}
-    >
-      <div className={`${collapsed ? 'px-2 justify-center' : 'px-4 justify-start'} flex items-center mb-8`}>
-        {collapsed ? (
-          <img src="/logomark-blue.png" alt="Prime Developers" className="h-8 w-8 object-contain shrink-0" />
-        ) : (
-          <img src="/logo-full-blue.png" alt="Prime Developers" className="h-10 object-contain" />
+  // Lock body scroll while the mobile drawer is open
+  useEffect(() => {
+    if (mobileOpen) {
+      const orig = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = orig; };
+    }
+  }, [mobileOpen]);
+
+  const navList = (
+    <div className="flex flex-col gap-1 px-2">
+      {navItems.map((item) => {
+        if (item.permission && !hasPermission(item.permission)) return null;
+        if (item.roles && !item.roles.includes(role)) return null;
+        const Icon = item.icon;
+        const isDashItem = item.pathKey === 'dashboard';
+        const isReportsItem = item.pathKey === 'reports';
+        return (
+          <Tooltip key={item.path} content={collapsed ? item.label : ''} placement="right" isDisabled={!collapsed}>
+            <NavLink
+              to={item.path}
+              end={!isDashItem && !isReportsItem}
+              onClick={onMobileClose}
+              className={({ isActive }) => {
+                const active = isActive
+                  || (isDashItem && (window.location.pathname.startsWith('/dashboard') || window.location.pathname === '/'))
+                  || (isReportsItem && window.location.pathname.startsWith('/reports'));
+                return `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors min-h-[44px] ${active
+                    ? 'bg-blue-50 text-blue-600 font-semibold'
+                    : 'text-gray-600 hover:bg-gray-100 active:bg-gray-200'
+                  }`;
+              }}
+            >
+              <Icon className="text-lg shrink-0" />
+              {!collapsed && <span className="whitespace-nowrap">{item.label}</span>}
+            </NavLink>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+
+  const userFooter = !collapsed && user && (
+    <div className="absolute bottom-4 left-0 right-0 px-4">
+      <hr className="mb-3 border-gray-200" />
+      <div className="flex items-center gap-2 flex-wrap">
+        <Chip size="sm" variant="flat" color="primary">{user.role.replace('_', ' ')}</Chip>
+        {user.mfaEnabled && (
+          <Tooltip content="MFA enabled">
+            <span><FiShield className="text-green-500 text-xs" /></span>
+          </Tooltip>
         )}
       </div>
+    </div>
+  );
 
-      <div className="flex flex-col gap-1 px-2">
-        {navItems.map((item) => {
-          if (item.permission && !hasPermission(item.permission)) return null;
-          if (item.roles && !item.roles.includes(role)) return null;
-          const Icon = item.icon;
-          // Dashboard item: match any /dashboard/* or root /
-          const isDashItem = item.pathKey === 'dashboard';
-          const isReportsItem = item.pathKey === 'reports';
-          return (
-            <Tooltip key={item.path} content={collapsed ? item.label : ''} placement="right" isDisabled={!collapsed}>
-              <NavLink
-                to={item.path}
-                end={!isDashItem && !isReportsItem}
-                className={({ isActive }) => {
-                  const active = isActive
-                    || (isDashItem && (window.location.pathname.startsWith('/dashboard') || window.location.pathname === '/'))
-                    || (isReportsItem && window.location.pathname.startsWith('/reports'));
-                  return `flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${active
-                      ? 'bg-blue-50 text-blue-600 font-semibold'
-                      : 'text-gray-600 hover:bg-gray-100'
-                    }`;
-                }}
-              >
-                <Icon className="text-lg shrink-0" />
-                {!collapsed && <span className="whitespace-nowrap">{item.label}</span>}
-              </NavLink>
-            </Tooltip>
-          );
-        })}
-      </div>
-
-      {!collapsed && user && (
-        <div className="absolute bottom-4 left-0 right-0 px-4">
-          <hr className="mb-3 border-gray-200" />
-          <div className="flex items-center gap-2">
-            <Chip size="sm" variant="flat" color="primary">{user.role.replace('_', ' ')}</Chip>
-            {user.mfaEnabled && (
-              <Tooltip content="MFA enabled">
-                <span><FiShield className="text-green-500 text-xs" /></span>
-              </Tooltip>
-            )}
-          </div>
+  return (
+    <>
+      {/* Desktop sidebar — inline, persistent */}
+      <nav
+        className={`${collapsed ? 'w-[60px]' : 'w-[220px]'} hidden lg:block min-h-screen bg-white border-r border-gray-200 transition-all duration-200 overflow-hidden pt-4 relative shrink-0`}
+      >
+        <div className={`${collapsed ? 'px-2 justify-center' : 'px-4 justify-start'} flex items-center mb-8`}>
+          {collapsed ? (
+            <img src="/logomark-blue.png" alt="Prime Developers" className="h-8 w-8 object-contain shrink-0" />
+          ) : (
+            <img src="/logo-full-blue.png" alt="Prime Developers" className="h-10 object-contain" />
+          )}
         </div>
-      )}
-    </nav>
+        {navList}
+        {userFooter}
+      </nav>
+
+      {/* Mobile drawer — off-canvas with backdrop */}
+      <div
+        className={`lg:hidden fixed inset-0 z-50 transition-opacity ${mobileOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        aria-hidden={!mobileOpen}
+      >
+        {/* Backdrop */}
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={onMobileClose}
+          className="absolute inset-0 bg-black/40"
+        />
+        {/* Drawer panel */}
+        <aside
+          className={`absolute left-0 top-0 h-full w-[260px] max-w-[80vw] bg-white shadow-xl flex flex-col transition-transform ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
+          style={{ paddingTop: 'env(safe-area-inset-top)' }}
+        >
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <img src="/logo-full-blue.png" alt="Prime Developers" className="h-9 object-contain" />
+            <Button isIconOnly variant="light" size="sm" onPress={onMobileClose} aria-label="Close menu">
+              <FiX />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto py-3">
+            <div className="flex flex-col gap-1 px-2">
+              {navItems.map((item) => {
+                if (item.permission && !hasPermission(item.permission)) return null;
+                if (item.roles && !item.roles.includes(role)) return null;
+                const Icon = item.icon;
+                const isDashItem = item.pathKey === 'dashboard';
+                const isReportsItem = item.pathKey === 'reports';
+                return (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    end={!isDashItem && !isReportsItem}
+                    onClick={onMobileClose}
+                    className={({ isActive }) => {
+                      const active = isActive
+                        || (isDashItem && (window.location.pathname.startsWith('/dashboard') || window.location.pathname === '/'))
+                        || (isReportsItem && window.location.pathname.startsWith('/reports'));
+                      return `flex items-center gap-3 px-4 py-3 rounded-md text-sm font-medium transition-colors min-h-[48px] ${active
+                          ? 'bg-blue-50 text-blue-600 font-semibold'
+                          : 'text-gray-700 hover:bg-gray-100 active:bg-gray-200'
+                        }`;
+                    }}
+                  >
+                    <Icon className="text-lg shrink-0" />
+                    <span>{item.label}</span>
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+          {user && (
+            <div className="px-4 py-3 border-t border-gray-100" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Chip size="sm" variant="flat" color="primary">{user.role.replace('_', ' ')}</Chip>
+                {user.mfaEnabled && <FiShield className="text-green-500 text-xs" aria-label="MFA enabled" />}
+              </div>
+            </div>
+          )}
+        </aside>
+      </div>
+    </>
   );
 }
 
@@ -193,19 +293,25 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   };
 
   return (
-    <header className="h-14 bg-white border-b border-gray-200 flex items-center px-4 justify-between">
-      <Button
-        isIconOnly
-        variant="light"
-        size="sm"
-        onPress={onToggleSidebar}
-        aria-label="Toggle sidebar"
-      >
-        <FiMenu />
-      </Button>
-
+    <header
+      className="h-14 bg-white border-b border-gray-200 flex items-center px-3 sm:px-4 justify-between sticky top-0 z-30"
+      style={{ paddingTop: 'env(safe-area-inset-top)' }}
+    >
       <div className="flex items-center gap-2">
-        {/* Bell notification icon */}
+        <Button
+          isIconOnly
+          variant="light"
+          size="sm"
+          onPress={onToggleSidebar}
+          aria-label="Toggle navigation menu"
+        >
+          <FiMenu />
+        </Button>
+        {/* Logo on mobile only — hidden on lg where the sidebar shows it */}
+        <img src="/logomark-blue.png" alt="Prime Developers" className="h-7 w-7 object-contain lg:hidden" />
+      </div>
+
+      <div className="flex items-center gap-1 sm:gap-2">
         <Popover placement="bottom-end" offset={8}>
           <PopoverTrigger>
             <Button isIconOnly variant="light" size="sm" aria-label="Notifications">
@@ -224,18 +330,17 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           </PopoverContent>
         </Popover>
 
-        {/* User dropdown */}
-        <Dropdown>
+        <Dropdown placement="bottom-end">
           <DropdownTrigger>
-            <button className="flex items-center gap-2 cursor-pointer outline-none">
+            <button className="flex items-center gap-2 cursor-pointer outline-none px-1 py-1 rounded-md hover:bg-gray-50 min-h-[40px]">
               <Avatar size="sm" name={user?.name} src={user?.avatarUrl} />
-              <span className="text-sm font-medium hidden md:block">{user?.name}</span>
+              <span className="text-sm font-medium hidden md:block max-w-[120px] truncate">{user?.name}</span>
               {user?.mfaEnabled && (
                 <Tooltip content="MFA enabled">
-                  <span><FiShield className="text-green-500 text-xs" /></span>
+                  <span className="hidden sm:inline"><FiShield className="text-green-500 text-xs" /></span>
                 </Tooltip>
               )}
-              <FiChevronDown size={14} />
+              <FiChevronDown size={14} className="hidden sm:inline" />
             </button>
           </DropdownTrigger>
           <DropdownMenu aria-label="User menu">
@@ -260,7 +365,6 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   );
 }
 
-// MFA Prompt Banner for FINANCE/FOUNDER roles not yet enrolled
 function MfaBanner() {
   const { user } = useAuthStore();
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -270,18 +374,16 @@ function MfaBanner() {
 
   return (
     <>
-      <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm text-amber-700">
-          <FiShield className="shrink-0" />
+      <div className="bg-amber-50 border-b border-amber-200 px-4 sm:px-6 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex items-start gap-2 text-sm text-amber-700">
+          <FiShield className="shrink-0 mt-0.5" />
           <span>
-            <strong>Recommended:</strong> Enable two-factor authentication to protect your {user?.role?.replace('_', ' ')} account.
+            <strong>Recommended:</strong> Enable two-factor auth to protect your {user?.role?.replace('_', ' ')} account.
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" color="warning" variant="flat" onPress={onOpen}>
-            Set Up Now
-          </Button>
-        </div>
+        <Button size="sm" color="warning" variant="flat" onPress={onOpen} className="self-start sm:self-auto">
+          Set Up Now
+        </Button>
       </div>
       <MfaSetupModal isOpen={isOpen} onClose={onClose} />
     </>
@@ -289,15 +391,35 @@ function MfaBanner() {
 }
 
 export default function Layout() {
+  // Desktop collapse state (only matters at lg+)
   const [collapsed, setCollapsed] = useState(false);
+  // Mobile drawer state (only matters below lg)
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const handleToggle = () => {
+    // The hamburger does double duty: toggles desktop sidebar, opens mobile drawer.
+    // matchMedia is the source of truth — relying on innerWidth misses zoom changes.
+    if (window.matchMedia('(min-width: 1024px)').matches) {
+      setCollapsed((c) => !c);
+    } else {
+      setMobileOpen(true);
+    }
+  };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar collapsed={collapsed} />
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <TopBar onToggleSidebar={() => setCollapsed((c) => !c)} />
+    <div className="flex min-h-[100dvh]">
+      <Sidebar
+        collapsed={collapsed}
+        mobileOpen={mobileOpen}
+        onMobileClose={() => setMobileOpen(false)}
+      />
+      <div className="flex flex-col flex-1 min-w-0">
+        <TopBar onToggleSidebar={handleToggle} />
         <MfaBanner />
-        <main className="flex-1 overflow-auto p-6 bg-gray-50">
+        <main
+          className="flex-1 overflow-auto p-4 md:p-6 bg-gray-50"
+          style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1rem)' }}
+        >
           <Outlet />
         </main>
       </div>

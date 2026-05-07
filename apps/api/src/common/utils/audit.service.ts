@@ -53,7 +53,9 @@ export class AuditService {
     startDate?: Date;
     endDate?: Date;
   }) {
-    const { page = 1, limit = 50, userId, entity, action, startDate, endDate } = params;
+    const page = Math.max(1, Number(params.page) || 1);
+    const limit = Math.max(1, Number(params.limit) || 50);
+    const { userId, entity, action, startDate, endDate } = params;
 
     const where: Record<string, unknown> = {};
     if (userId) where.userId = userId;

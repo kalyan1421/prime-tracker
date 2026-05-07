@@ -40,18 +40,18 @@ export class ProjectsController {
     return this.projectsService.findAll(query);
   }
 
-  @Get(':id')
-  @RequirePermissions('project:view')
-  @ApiOperation({ summary: 'Get project by ID with all relations' })
-  findById(@Param('id') id: string) {
-    return this.projectsService.findById(id);
-  }
-
   @Get('slug/:slug')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Get project by slug' })
   findBySlug(@Param('slug') slug: string) {
     return this.projectsService.findBySlug(slug);
+  }
+
+  @Get(':id')
+  @RequirePermissions('project:view')
+  @ApiOperation({ summary: 'Get project by ID with all relations' })
+  findById(@Param('id') id: string) {
+    return this.projectsService.findById(id);
   }
 
   @Post()

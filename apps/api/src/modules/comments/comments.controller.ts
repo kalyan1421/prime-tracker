@@ -1,11 +1,11 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseInterceptors, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { CommentsService } from './comments.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
-import { CommentType } from '@prisma/client';
+import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
 
 @ApiTags('Comments')
 @ApiBearerAuth()
@@ -38,16 +38,16 @@ export class CommentsController {
   @RequirePermissions('unit:view')
   @ApiOperation({ summary: 'Create comment on a unit or project' })
   create(
-    @Body() body: { unitId?: string; projectId?: string; content: string; commentType?: CommentType },
+    @Body() body: CreateCommentDto,
     @CurrentUser('sub') userId: string,
   ) {
+    if (!body.unitId && !body.projectId) {
+      throw new BadRequestException('Must provide unitId or projectId');
+    }
     if (body.unitId) {
       return this.service.createUnitComment(body.unitId, userId, body.content, body.commentType);
     }
-    if (body.projectId) {
-      return this.service.createProjectComment(body.projectId, userId, body.content, body.commentType);
-    }
-    return { error: 'Must provide unitId or projectId' };
+    return this.service.createProjectComment(body.projectId!, userId, body.content, body.commentType);
   }
 
   @Put('unit/:id')
@@ -55,7 +55,7 @@ export class CommentsController {
   @ApiOperation({ summary: 'Update own unit comment' })
   updateUnit(
     @Param('id') id: string,
-    @Body() body: { content: string },
+    @Body() body: UpdateCommentDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.updateUnitComment(id, userId, body.content);
@@ -66,7 +66,7 @@ export class CommentsController {
   @ApiOperation({ summary: 'Update own project comment' })
   updateProject(
     @Param('id') id: string,
-    @Body() body: { content: string },
+    @Body() body: UpdateCommentDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.updateProjectComment(id, userId, body.content);

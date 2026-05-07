@@ -118,23 +118,23 @@ export default function InvestorDetailPage() {
         All Investors
       </button>
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold">{inv.name}</h1>
+      <div className="mb-4 sm:mb-6">
+        <h1 className="text-xl sm:text-2xl font-bold break-words">{inv.name}</h1>
         {inv.entityName && <p className="text-gray-500 text-sm mt-0.5">{inv.entityName}</p>}
-        <div className="flex gap-4 text-sm text-gray-500 mt-1">
-          {inv.email && <span>{inv.email}</span>}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 mt-1">
+          {inv.email && <span className="break-all">{inv.email}</span>}
           {inv.phone && <span>{inv.phone}</span>}
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Committed" value={fmt(totalCommitted)} variant="construction" />
         <StatCard label="Total Called" value={fmt(totalCalled)} variant="revenue" />
         <StatCard label="Pending Calls" value={fmt(pendingCalls)} variant="neutral" />
         <StatCard label="Distributions" value={fmt(totalDist)} />
       </div>
 
-      <Tabs color="primary" size="sm">
+      <Tabs color="primary" size="sm" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
         {/* Overview */}
         <Tab key="overview" title="Overview">
           <div className="pt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -145,7 +145,7 @@ export default function InvestorDetailPage() {
               </CardHeader>
               <CardBody className="p-0">
                 {positions.length === 0 ? <div className="p-4"><EmptyState message="No positions yet" /></div> : (
-                  <table className="w-full text-sm">
+                  <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                     <thead className="bg-gray-50 border-b">
                       <tr>
                         {['Project', 'Ownership %', 'Committed', 'Called'].map((h) => (
@@ -163,7 +163,7 @@ export default function InvestorDetailPage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
                 )}
               </CardBody>
             </Card>
@@ -195,7 +195,7 @@ export default function InvestorDetailPage() {
             <Card shadow="sm">
               <CardBody className="p-0">
                 {capitalCalls.length === 0 ? <div className="p-6"><EmptyState message="No capital calls" /></div> : (
-                  <table className="w-full text-sm">
+                  <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                     <thead className="bg-gray-50 border-b">
                       <tr>
                         {['Project', 'Amount', 'Due Date', 'Paid Date', 'Status', 'Action'].map((h) => (
@@ -221,7 +221,7 @@ export default function InvestorDetailPage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
                 )}
               </CardBody>
             </Card>
@@ -255,7 +255,7 @@ export default function InvestorDetailPage() {
             <Card shadow="sm">
               <CardBody className="p-0">
                 {distributions.length === 0 ? <div className="p-6"><EmptyState message="No distributions yet" /></div> : (
-                  <table className="w-full text-sm">
+                  <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                     <thead className="bg-gray-50 border-b">
                       <tr>
                         {['Project', 'Amount', 'Date', 'Type', 'Notes'].map((h) => (
@@ -274,7 +274,7 @@ export default function InvestorDetailPage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
                 )}
               </CardBody>
             </Card>
@@ -283,7 +283,7 @@ export default function InvestorDetailPage() {
       </Tabs>
 
       {/* Add Position Modal */}
-      <Modal isOpen={isPosOpen} onClose={onPosClose} size="md">
+      <Modal isOpen={isPosOpen} onClose={onPosClose} scrollBehavior="inside" size="md">
         <ModalContent>
           <ModalHeader>Add Equity Position</ModalHeader>
           <ModalBody className="space-y-3">
@@ -301,7 +301,7 @@ export default function InvestorDetailPage() {
       </Modal>
 
       {/* New Capital Call Modal */}
-      <Modal isOpen={isCallOpen} onClose={onCallClose} size="md">
+      <Modal isOpen={isCallOpen} onClose={onCallClose} scrollBehavior="inside" size="md">
         <ModalContent>
           <ModalHeader>New Capital Call</ModalHeader>
           <ModalBody className="space-y-3">
@@ -320,7 +320,7 @@ export default function InvestorDetailPage() {
       </Modal>
 
       {/* Record Distribution Modal */}
-      <Modal isOpen={isDistOpen} onClose={onDistClose} size="md">
+      <Modal isOpen={isDistOpen} onClose={onDistClose} scrollBehavior="inside" size="md">
         <ModalContent>
           <ModalHeader>Record Distribution</ModalHeader>
           <ModalBody className="space-y-3">

@@ -19,4 +19,39 @@
 
 body {
   background-color: var(--color-gray-50, #f9fafb);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Prevent iOS auto-zoom on input focus by ensuring inputs are at least 16px */
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 16px;
+  }
+}
+
+/* Tables that must scroll horizontally on mobile.
+   Wrap as: <div class="responsive-table-wrap"><table>...</table></div>
+   Negative margin lets the table bleed to screen edges instead of being
+   clamped by the page's gutter, giving a few extra pixels of column room. */
+.responsive-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+@media (max-width: 768px) {
+  .responsive-table-wrap {
+    margin-left: -1rem;
+    margin-right: -1rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+
+/* Horizontal scroll strips (tab bars) hide their scrollbar while staying scrollable. */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }

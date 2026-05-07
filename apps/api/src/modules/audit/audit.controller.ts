@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { AuditService } from '../../common/utils/audit.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -16,8 +16,8 @@ export class AuditController {
   @RequirePermissions('audit:view')
   @ApiOperation({ summary: 'List audit events (filter: action, entity, userId, dateRange)' })
   findAll(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
     @Query('userId') userId?: string,
     @Query('entity') entity?: string,
     @Query('action') action?: string,

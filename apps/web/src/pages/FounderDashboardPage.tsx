@@ -5,9 +5,11 @@ import {
   PieChart, Pie, Cell, Legend, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { FiAlertTriangle, FiTrendingUp, FiMessageSquare } from 'react-icons/fi';
-import { useFounderDashboard, useRecentComments } from '../hooks/useApi';
+import { useFounderDashboard, useRecentComments, useExceptions } from '../hooks/useApi';
 import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
+import { CommentChip, type CommentType } from '../components/CommentChip';
+import { ExceptionFeed } from '../components/ExceptionFeed';
 
 const COMMENT_TYPE_COLORS: Record<string, string> = {
   MARKETING: 'bg-purple-100 text-purple-700',
@@ -70,10 +72,10 @@ export default function FounderDashboardPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Founder Dashboard</h1>
+      <h1 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Founder Dashboard</h1>
 
       {/* Zone A — Portfolio Health Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
         <StatCard label="Total Projects" value={String(d.totalProjects)} helpText={`${d.activeProjects} active`} variant="neutral" colorScheme="gray" />
         <StatCard label="Active Projects" value={String(d.activeProjects)} variant="neutral" colorScheme="brand" />
         <StatCard label="Budget Utilization" value={`${budgetUtilPct}%`} helpText={`${variancePct}% remaining`} variant="construction" colorScheme="orange" />
@@ -82,7 +84,7 @@ export default function FounderDashboardPage() {
       </div>
 
       {/* Zone B — Split Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         {/* Left: Construction Financials */}
         <Card shadow="sm">
           <CardHeader className="pb-2">
@@ -122,7 +124,7 @@ export default function FounderDashboardPage() {
       </div>
 
       {/* Zone C — Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <Card shadow="sm">
           <CardHeader className="pb-0">
             <p className="font-semibold text-sm text-gray-600">Projects by Phase</p>
@@ -168,7 +170,7 @@ export default function FounderDashboardPage() {
       </div>
 
       {/* Zone D — Activity Feed */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         {/* Overdue Milestones */}
         <Card shadow="sm">
           <CardHeader className="pb-2">
@@ -182,7 +184,7 @@ export default function FounderDashboardPage() {
               <p className="text-sm text-gray-400 py-4 text-center">No overdue milestones</p>
             ) : (
               <div className="overflow-auto">
-                <table className="w-full text-sm">
+                <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                   <thead>
                     <tr className="border-b border-gray-100">
                       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
@@ -203,44 +205,14 @@ export default function FounderDashboardPage() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </div>
             )}
           </CardBody>
         </Card>
 
-        {/* Alerts */}
-        <Card shadow="sm">
-          <CardHeader className="pb-2">
-            <div className="flex items-center gap-2">
-              <FiAlertTriangle className="text-orange-500" />
-              <p className="font-semibold text-sm text-gray-600">Alerts</p>
-            </div>
-          </CardHeader>
-          <CardBody className="pt-0">
-            {(d.alerts || []).length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">No active alerts</p>
-            ) : (
-              <div className="max-h-[250px] overflow-auto">
-                {(d.alerts as any[]).map((a: any) => (
-                  <div
-                    key={a.id}
-                    className={`p-3 mb-2 rounded-md border-l-4 flex items-center justify-between ${
-                      ALERT_BG[a.severity] || 'bg-gray-50 border-l-gray-400'
-                    } ${a.projectId ? 'cursor-pointer hover:opacity-80' : ''}`}
-                    onClick={() => a.projectId && navigate(`/projects/${a.projectId}`)}
-                  >
-                    <div>
-                      <p className="text-sm font-medium">{a.message}</p>
-                      <p className="text-xs text-gray-500">{fmtDate(a.createdAt)}</p>
-                    </div>
-                    <StatusBadge status={a.severity} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardBody>
-        </Card>
+        {/* Slice 9: portfolio-wide exception feed (replaces single-source alerts) */}
+        <PortfolioExceptions onItemClick={(item) => item.href && navigate(item.href)} />
       </div>
       {/* Zone E — Unsold Units Sales Value by Project / Building */}
       {(d.unsoldByProjectBuilding || []).length > 0 && (
@@ -250,7 +222,7 @@ export default function FounderDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Project / Building</th>
@@ -310,7 +282,7 @@ export default function FounderDashboardPage() {
                     <td className="py-2 px-3 text-right text-blue-700">{fmt(d.underContractValue)}</td>
                   </tr>
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -365,9 +337,7 @@ export default function FounderDashboardPage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-xs font-semibold">{c.user?.name}</span>
-                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${COMMENT_TYPE_COLORS[t]}`}>
-                                  {COMMENT_TYPE_LABELS[t]}
-                                </span>
+                                <CommentChip type={t as CommentType} size="sm" />
                                 <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
                               </div>
                               <p className="text-sm text-gray-700 break-words">{c.content}</p>
@@ -389,5 +359,17 @@ export default function FounderDashboardPage() {
         );
       })()}
     </div>
+  );
+}
+
+/** Wraps the ExceptionFeed component with the portfolio-scoped data fetch. */
+function PortfolioExceptions({ onItemClick }: { onItemClick?: (item: any) => void }) {
+  const { data: items = [] } = useExceptions();
+  return (
+    <ExceptionFeed
+      items={items.map((i) => ({ ...i, severity: i.severity as 'critical' | 'warning' | 'info' }))}
+      onItemClick={onItemClick}
+      emptyText="No exceptions — portfolio is clear."
+    />
   );
 }

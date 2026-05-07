@@ -6,5 +6,6 @@ import { AuditService } from '../../common/utils/audit.service';
 @Module({
   controllers: [DashboardController],
   providers: [DashboardService, AuditService],
+  exports: [DashboardService],
 })
 export class DashboardModule {}

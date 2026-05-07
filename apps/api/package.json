@@ -12,10 +12,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma": "prisma",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "ts-node prisma/seed.ts"
+    "db:seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts"
   },
   "prisma": {
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^10.0.0",
@@ -30,8 +30,10 @@
     "@nestjs/throttler": "^5.1.0",
     "@prime-tracker/shared": "workspace:*",
     "@prisma/client": "^5.8.0",
+    "@supabase/supabase-js": "^2.105.2",
     "@types/multer": "^2.0.0",
     "@types/nodemailer": "^7.0.11",
+    "bcrypt": "^6.0.0",
     "bullmq": "^5.1.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
@@ -46,18 +48,21 @@
     "passport-jwt": "^4.0.1",
     "qrcode": "^1.5.3",
     "reflect-metadata": "^0.2.1",
-    "rxjs": "^7.8.0"
+    "rxjs": "^7.8.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.3.0",
     "@nestjs/schematics": "^10.1.0",
     "@nestjs/testing": "^10.3.0",
+    "@types/bcrypt": "^6.0.0",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.0",
     "@types/node": "^20.10.0",
     "@types/passport-google-oauth20": "^2.0.14",
     "@types/passport-jwt": "^4.0.1",
     "@types/qrcode": "^1.5.5",
+    "@types/uuid": "^11.0.0",
     "exceljs": "^4.4.0",
     "jest": "^29.7.0",
     "prisma": "^5.8.0",

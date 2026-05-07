@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, UserRole } from '@prisma/client';
+import { EventBus } from '../../common/events/event-bus.service';
 
 @Injectable()
 export class SalesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private bus: EventBus) {}
 
   async findByProject(projectId: string) {
     return this.prisma.sale.findMany({
@@ -58,21 +59,55 @@ export class SalesService {
     if (unit.building.projectId !== data.projectId) {
       throw new BadRequestException('Unit does not belong to this project');
     }
-    return this.prisma.sale.create({ data });
+    return this.prisma.sale.create({
+      data: { ...data, lastActivityAt: new Date() },
+    });
   }
 
   async update(id: string, data: Prisma.SaleUncheckedUpdateInput) {
     const sale = await this.findById(id);
 
+    // Slice 6: lostReason is captured on cancel — defaulted to OTHER if the caller
+    // omits it so legacy clients don't break. The forced-picker UX lives in the
+    // frontend; backend stays lenient to preserve API compatibility.
+    const dataWithReason: Prisma.SaleUncheckedUpdateInput = { ...data };
+    if (data.status === 'CANCELLED' && sale.status !== 'CANCELLED' && !data.lostReason) {
+      dataWithReason.lostReason = 'OTHER';
+    }
+
+    // Always bump lastActivityAt on any update — drives the activity-drought cron.
+    const dataWithActivity = { ...dataWithReason, lastActivityAt: new Date() };
+
+    // Emit status-change so handlers can react (notifications, analytics)
+    if (data.status && data.status !== sale.status) {
+      // emit AFTER successful write — see below
+    }
+
+    let result;
     if (data.status === 'CLOSED' && sale.unitId) {
       // Atomic: update sale + unit status in one transaction
       const [updated] = await this.prisma.$transaction([
-        this.prisma.sale.update({ where: { id }, data }),
-        this.prisma.unit.update({ where: { id: sale.unitId }, data: { status: 'SOLD' } }),
+        this.prisma.sale.update({ where: { id }, data: dataWithActivity }),
+        this.prisma.unit.update({
+          where: { id: sale.unitId },
+          // Sale closed → unit becomes SOLD; clear time-on-market
+          data: { status: 'SOLD', availableSince: null },
+        }),
       ]);
-      return updated;
+      result = updated;
+    } else {
+      result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
     }
-    return this.prisma.sale.update({ where: { id }, data });
+
+    if (data.status && data.status !== sale.status) {
+      this.bus.emit({
+        type: 'sale.statusChanged',
+        saleId: id,
+        from: sale.status,
+        to: data.status as string,
+      });
+    }
+    return result;
   }
 
   async delete(id: string, userRole: UserRole) {

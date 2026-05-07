@@ -6,7 +6,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { MfaGuard } from '../../common/guards/mfa.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, RequireMfa } from '../../common/decorators/index';
-import { DrawStatus } from '@prisma/client';
+import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawStatusDto, UpsertDrawScheduleDto } from './dto/create-loan.dto';
 
 @ApiTags('Loans')
 @ApiBearerAuth()
@@ -28,22 +28,17 @@ export class LoansController {
   @ApiOperation({ summary: 'List loans by project (decrypted)' })
   findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
 
-  @Get(':id')
-  @RequirePermissions('loan:view')
-  @ApiOperation({ summary: 'Get loan by ID (decrypted)' })
-  findById(@Param('id') id: string) { return this.service.findById(id); }
-
   @Post()
   @RequirePermissions('loan:edit')
   @RequireMfa()
   @ApiOperation({ summary: 'Create loan with encrypted fields (MFA required)' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateLoanDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('loan:edit')
   @RequireMfa()
   @ApiOperation({ summary: 'Update loan, re-encrypts sensitive fields (MFA required)' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateLoanDto) { return this.service.update(id, body); }
 
   // ---- Draw Management ----
 
@@ -54,10 +49,15 @@ export class LoansController {
     return this.service.findDrawsByProject(projectId);
   }
 
+  @Get(':id')
+  @RequirePermissions('loan:view')
+  @ApiOperation({ summary: 'Get loan by ID (decrypted)' })
+  findById(@Param('id') id: string) { return this.service.findById(id); }
+
   @Post(':loanId/draws')
   @RequirePermissions('draw:edit')
   @ApiOperation({ summary: 'Create a draw request for a loan' })
-  createDraw(@Param('loanId') loanId: string, @Body() body: any, @Request() req: any) {
+  createDraw(@Param('loanId') loanId: string, @Body() body: CreateDrawDto, @Request() req: any) {
     return this.service.createDraw(loanId, body, req.user.sub);
   }
 
@@ -66,7 +66,7 @@ export class LoansController {
   @ApiOperation({ summary: 'Advance draw request status (include approvedAmount on APPROVED, rejectionReason on REJECTED)' })
   updateDrawStatus(
     @Param('id') id: string,
-    @Body() body: { status: DrawStatus; approvedAmount?: number; rejectionReason?: string },
+    @Body() body: UpdateDrawStatusDto,
     @Request() req: any,
   ) {
     return this.service.updateDrawStatus(id, body.status, req.user.sub, body.approvedAmount, body.rejectionReason);
@@ -93,7 +93,7 @@ export class LoansController {
   @ApiOperation({ summary: 'Upsert a draw schedule line (create or update by drawNumber)' })
   upsertDrawScheduleLine(
     @Param('loanId') loanId: string,
-    @Body() body: { drawNumber: number; plannedAmount: number; plannedDate: string; description?: string },
+    @Body() body: UpsertDrawScheduleDto,
   ) {
     return this.service.upsertDrawScheduleLine(loanId, body);
   }

@@ -1,6 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardHeader, CardBody, Tabs, Tab } from '@heroui/react';
+import { useReactToPrint } from 'react-to-print';
+import { Card, CardHeader, CardBody, Tabs, Tab, Button } from '@heroui/react';
+import { FiDownload } from 'react-icons/fi';
 import { useQueries } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -19,7 +21,7 @@ function BudgetCostTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Budget" value={fmt(d.kpis.totalInvestment)} colorScheme="brand" variant="construction" />
         <StatCard label="Total Actuals" value={fmt(d.kpis.totalActuals ?? 0)} colorScheme="orange" variant="construction" />
         <StatCard
@@ -55,7 +57,7 @@ function BudgetCostTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -87,7 +89,7 @@ function BudgetCostTab() {
                   );
                 })}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -133,7 +135,7 @@ function MilestoneScheduleTab() {
               <p className="text-sm text-gray-400 py-2">No milestones</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                   <thead>
                     <tr className="border-b border-gray-200">
                       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
@@ -150,7 +152,7 @@ function MilestoneScheduleTab() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </div>
             )}
           </CardBody>
@@ -210,7 +212,7 @@ function DrawRequestsTab() {
                   <p className="text-xs text-gray-400 ml-4">No draw requests</p>
                 ) : (
                   <div className="overflow-x-auto ml-4">
-                    <table className="w-full text-sm">
+                    <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                       <thead>
                         <tr className="border-b border-gray-100">
                           <th className="text-left py-1 px-2 text-xs font-semibold text-gray-400 uppercase">Amount</th>
@@ -229,7 +231,7 @@ function DrawRequestsTab() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   </div>
                 )}
               </div>
@@ -244,6 +246,8 @@ function DrawRequestsTab() {
 export default function ConstructionReportsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
+  const printRef = useRef<HTMLDivElement>(null);
+  const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Construction Reports' });
 
   useEffect(() => {
     if (!user?.role) return;
@@ -256,18 +260,25 @@ export default function ConstructionReportsPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Construction Reports</h1>
-      <Tabs color="primary" variant="underlined">
-        <Tab key="budget" title="Budget & Cost">
-          <BudgetCostTab />
-        </Tab>
-        <Tab key="milestones" title="Milestone & Schedule">
-          <MilestoneScheduleTab />
-        </Tab>
-        <Tab key="draws" title="Draw Requests">
-          <DrawRequestsTab />
-        </Tab>
-      </Tabs>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
+        <h1 className="text-2xl font-bold">Construction Reports</h1>
+        <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
+          Download PDF
+        </Button>
+      </div>
+      <div ref={printRef}>
+        <Tabs color="primary" variant="underlined" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
+          <Tab key="budget" title="Budget & Cost">
+            <BudgetCostTab />
+          </Tab>
+          <Tab key="milestones" title="Milestone & Schedule">
+            <MilestoneScheduleTab />
+          </Tab>
+          <Tab key="draws" title="Draw Requests">
+            <DrawRequestsTab />
+          </Tab>
+        </Tabs>
+      </div>
     </div>
   );
 }

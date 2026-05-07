@@ -26,6 +26,15 @@ export class AuthController {
     private config: ConfigService,
   ) {}
 
+  @Post('login')
+  @SetMetadata('isPublic', true)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Login with email and password' })
+  async login(@Body() body: { email: string; password: string }) {
+    return this.authService.loginWithPassword(body.email, body.password);
+  }
+
   @Get('google')
   @SetMetadata('isPublic', true)
   @UseGuards(AuthGuard('google'))

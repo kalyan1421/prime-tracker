@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import Layout from './components/Layout';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
@@ -14,6 +15,7 @@ import SettingsPage from './pages/SettingsPage';
 import FounderDashboardPage from './pages/FounderDashboardPage';
 import ConstructionDashboardPage from './pages/ConstructionDashboardPage';
 import SalesDashboardPage from './pages/SalesDashboardPage';
+import FinanceDashboardPage from './pages/FinanceDashboardPage';
 import FounderReportsPage from './pages/FounderReportsPage';
 import ConstructionReportsPage from './pages/ConstructionReportsPage';
 import SalesReportsPage from './pages/SalesReportsPage';
@@ -26,7 +28,8 @@ function ProtectedRoute({ children, permission }: { children: React.ReactNode; p
   const { isAuthenticated, hasPermission } = useAuthStore();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (permission && !hasPermission(permission)) return <Navigate to="/" replace />;
-  return <>{children}</>;
+  // Per-route error boundary so one broken page doesn't blank the app shell
+  return <ErrorBoundary section="page">{children}</ErrorBoundary>;
 }
 
 function RootRedirect() {
@@ -35,6 +38,8 @@ function RootRedirect() {
   if (['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE'].includes(role)) return <Navigate to="/dashboard/founder" replace />;
   if (['CONSTRUCTION', 'PROJECT_MANAGER'].includes(role)) return <Navigate to="/dashboard/construction" replace />;
   if (['SALES', 'MARKETING'].includes(role)) return <Navigate to="/dashboard/sales" replace />;
+  if (['FINANCE', 'ACCOUNTING', 'AR_AP'].includes(role)) return <Navigate to="/dashboard/finance" replace />;
+  if (role === 'LEGAL') return <Navigate to="/projects" replace />;
   return <DashboardPage />;
 }
 
@@ -64,6 +69,7 @@ export default function App() {
         <Route path="dashboard/founder" element={<FounderDashboardPage />} />
         <Route path="dashboard/construction" element={<ConstructionDashboardPage />} />
         <Route path="dashboard/sales" element={<SalesDashboardPage />} />
+        <Route path="dashboard/finance" element={<FinanceDashboardPage />} />
         <Route path="reports/founder" element={<FounderReportsPage />} />
         <Route path="reports/construction" element={<ConstructionReportsPage />} />
         <Route path="reports/sales" element={<SalesReportsPage />} />

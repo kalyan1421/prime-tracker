@@ -35,4 +35,11 @@ export class DashboardController {
     if (!['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'].includes(role)) throw new ForbiddenException();
     return this.service.getSalesDashboard();
   }
+
+  @Get('finance')
+  @RequirePermissions('financial:view')
+  getFinance(@CurrentUser('role') role: string) {
+    if (!['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP'].includes(role)) throw new ForbiddenException();
+    return this.service.getFinanceDashboard();
+  }
 }

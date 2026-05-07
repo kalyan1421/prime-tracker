@@ -70,7 +70,7 @@ export default function SalesDashboardPage() {
           </div>
         </CardHeader>
         <CardBody className="pt-0">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <StatCard
               label="Total Sold Units Value"
               value={fmt(d.closedSalesRevenue)}
@@ -104,7 +104,7 @@ export default function SalesDashboardPage() {
       </Card>
 
       {/* Zone B — Pipeline Funnel + Inventory */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <Card shadow="sm">
           <CardHeader className="pb-0">
             <div className="flex items-center gap-2">
@@ -140,14 +140,14 @@ export default function SalesDashboardPage() {
       </div>
 
       {/* Zone C — Revenue by Project + Unit Inventory by Project */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
         <Card shadow="sm">
           <CardHeader className="pb-2">
             <p className="font-semibold text-sm text-gray-600">Revenue by Project</p>
           </CardHeader>
           <CardBody className="pt-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -175,7 +175,7 @@ export default function SalesDashboardPage() {
                     <tr><td colSpan={5} className="text-center py-4 text-gray-400">No projects</td></tr>
                   )}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           </CardBody>
         </Card>
@@ -215,7 +215,7 @@ export default function SalesDashboardPage() {
             <p className="text-sm text-gray-400 py-4 text-center">No recent activity</p>
           ) : (
             <div className="overflow-auto">
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-100">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
@@ -242,7 +242,7 @@ export default function SalesDashboardPage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           )}
         </CardBody>

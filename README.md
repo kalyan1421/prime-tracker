@@ -31,9 +31,9 @@ Monorepo structure with:
 ## ▶️ Run Locally
 
 ```bash
-pnpm install
-docker compose up -d
-pnpm dev
+cd apps/api && pnpm run start:dev
+
+cd apps/web && pnpm run dev
 ```
 
 ## 📌 Roadmap

@@ -453,23 +453,333 @@ async function main() {
     }
   }
 
-  // ---- Summary ----
-  const counts = await Promise.all([
-    prisma.budgetLine.count(),
-    prisma.actual.count(),
-    prisma.commitment.count(),
-    prisma.loan.count(),
-    prisma.lease.count(),
-    prisma.sale.count(),
-  ]);
+  // ============================================================
+  // MILESTONES (per project, all phases)
+  // ============================================================
+  console.log('\n🏁 Seeding milestones...');
+  await prisma.milestone.deleteMany();
 
-  console.log('\n✅ Financial data seeded!');
-  console.log(`   📊 Budget lines: ${counts[0]}`);
-  console.log(`   💸 Actuals: ${counts[1]}`);
-  console.log(`   📝 Commitments: ${counts[2]}`);
-  console.log(`   🏦 Loans: ${counts[3]}`);
-  console.log(`   📋 Leases: ${counts[4]}`);
-  console.log(`   🤝 Sales: ${counts[5]}`);
+  const MILESTONE_TEMPLATES = [
+    { title: 'Land Acquisition Closed', phase: 'PRE_DEVELOPMENT' as const, offsetMonths: -24, durationDays: 0 },
+    { title: 'Schematic Design Complete', phase: 'PRE_DEVELOPMENT' as const, offsetMonths: -22, durationDays: 0 },
+    { title: 'Building Permits Submitted', phase: 'PERMITTING' as const, offsetMonths: -20, durationDays: 0 },
+    { title: 'Building Permits Approved', phase: 'PERMITTING' as const, offsetMonths: -17, durationDays: 0 },
+    { title: 'GC Contract Executed', phase: 'CONSTRUCTION' as const, offsetMonths: -16, durationDays: 0 },
+    { title: 'Site Work & Demo Complete', phase: 'CONSTRUCTION' as const, offsetMonths: -14, durationDays: 0 },
+    { title: 'Foundation Poured', phase: 'CONSTRUCTION' as const, offsetMonths: -12, durationDays: 0 },
+    { title: 'Structural Steel / Frame Complete', phase: 'CONSTRUCTION' as const, offsetMonths: -9, durationDays: 0 },
+    { title: 'MEP Rough-In Complete', phase: 'CONSTRUCTION' as const, offsetMonths: -7, durationDays: 0 },
+    { title: 'Roof & Envelope Closed', phase: 'CONSTRUCTION' as const, offsetMonths: -5, durationDays: 0 },
+    { title: 'Certificate of Occupancy', phase: 'LEASE_UP' as const, offsetMonths: -3, durationDays: 0 },
+    { title: 'Grand Opening / First Tenants', phase: 'LEASE_UP' as const, offsetMonths: -2, durationDays: 0 },
+    { title: '80% Occupancy Achieved', phase: 'STABILIZED' as const, offsetMonths: 3, durationDays: 0 },
+    { title: 'Stabilization / Refinance', phase: 'STABILIZED' as const, offsetMonths: 8, durationDays: 0 },
+  ];
+
+  const phaseSpendMap: Record<string, number> = {
+    PRE_DEVELOPMENT: 0.0,
+    PERMITTING: 0.10,
+    CONSTRUCTION: 0.55,
+    LEASE_UP: 0.85,
+    STABILIZED: 1.0,
+    SOLD_REFI: 1.0,
+  };
+
+  const allProjectsForMilestones = await prisma.project.findMany({ select: { id: true, slug: true, phase: true } });
+  for (const proj of allProjectsForMilestones) {
+    const profile = profiles.find((p) => p.slug === proj.slug);
+    const spendPct = profile?.spendPct ?? 0.5;
+    const phaseOrder = ['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'];
+    const currentPhaseIdx = phaseOrder.indexOf(proj.phase);
+
+    for (let i = 0; i < MILESTONE_TEMPLATES.length; i++) {
+      const tpl = MILESTONE_TEMPLATES[i];
+      const dueDate = new Date();
+      dueDate.setMonth(dueDate.getMonth() + tpl.offsetMonths);
+
+      const tplPhaseIdx = phaseOrder.indexOf(tpl.phase);
+      let status: 'COMPLETED' | 'IN_PROGRESS' | 'NOT_STARTED' | 'OVERDUE';
+      let completedAt: Date | null = null;
+
+      if (tplPhaseIdx < currentPhaseIdx) {
+        status = 'COMPLETED';
+        completedAt = new Date(dueDate.getTime() + randomBetween(-5, 10) * 86400000);
+      } else if (tplPhaseIdx === currentPhaseIdx) {
+        // Some in-progress, some overdue
+        const halfway = i >= Math.floor(MILESTONE_TEMPLATES.length * spendPct);
+        status = halfway ? 'NOT_STARTED' : dueDate < new Date() ? 'OVERDUE' : 'IN_PROGRESS';
+      } else {
+        status = 'NOT_STARTED';
+      }
+
+      await prisma.milestone.create({
+        data: {
+          projectId: proj.id,
+          title: tpl.title,
+          phase: tpl.phase,
+          dueDate,
+          completedAt,
+          status,
+          sortOrder: i,
+        },
+      });
+    }
+    console.log(`   ✅ ${proj.slug}: ${MILESTONE_TEMPLATES.length} milestones`);
+  }
+
+  // ============================================================
+  // VENDORS + CONTRACTS
+  // ============================================================
+  console.log('\n🏗️  Seeding vendors & contracts...');
+  await prisma.contractPayment.deleteMany();
+  await prisma.changeOrder.deleteMany();
+  await prisma.contract.deleteMany();
+  await prisma.vendor.deleteMany();
+
+  const VENDOR_DATA = [
+    { name: 'Hensel Phelps Construction', trade: 'General Contractor', contactName: 'Mike Torres', email: 'mtorres@henselphelps.com', phone: '214-555-0101' },
+    { name: 'Rogers-O\'Brien Construction', trade: 'General Contractor', contactName: 'Dave Kim', email: 'dkim@rogersobrien.com', phone: '972-555-0102' },
+    { name: 'Manhattan Construction', trade: 'General Contractor', contactName: 'Sarah Lee', email: 'slee@manhattanconstruction.com', phone: '469-555-0103' },
+    { name: 'Kimley-Horn', trade: 'Civil Engineering', contactName: 'Chris Patel', email: 'cpatel@kimley-horn.com', phone: '214-555-0201' },
+    { name: 'Pacheco Koch', trade: 'Civil Engineering', contactName: 'Lisa Nguyen', email: 'lnguyen@pachecock.com', phone: '972-555-0202' },
+    { name: 'Halff Associates', trade: 'Engineering', contactName: 'Tom Garcia', email: 'tgarcia@halff.com', phone: '817-555-0203' },
+    { name: 'TDIndustries', trade: 'MEP / HVAC', contactName: 'James Wu', email: 'jwu@tdindustries.com', phone: '214-555-0301' },
+    { name: 'Summit Commercial Roofing', trade: 'Roofing', contactName: 'Bob Smith', email: 'bsmith@summitroofing.com', phone: '972-555-0401' },
+    { name: 'Studio Outside Landscape', trade: 'Landscaping', contactName: 'Amy Chen', email: 'achen@studiooutside.com', phone: '512-555-0501' },
+    { name: 'BGE Inc', trade: 'Environmental', contactName: 'Sam Johnson', email: 'sjohnson@bgeinc.com', phone: '713-555-0601' },
+    { name: 'Adolfson & Peterson', trade: 'General Contractor', contactName: 'Ryan Park', email: 'rpark@a-p.com', phone: '469-555-0104' },
+    { name: 'JE Dunn Construction', trade: 'General Contractor', contactName: 'Maria Lopez', email: 'mlopez@jedunn.com', phone: '214-555-0105' },
+  ];
+
+  const vendorRecords = [];
+  for (const v of VENDOR_DATA) {
+    vendorRecords.push(await prisma.vendor.create({ data: v }));
+  }
+  console.log(`   🏢 ${vendorRecords.length} vendors created`);
+
+  const allProjectsForContracts = await prisma.project.findMany({ select: { id: true, slug: true } });
+  let totalContracts = 0;
+
+  for (const proj of allProjectsForContracts) {
+    const profile = profiles.find((p) => p.slug === proj.slug);
+    if (!profile) continue;
+    const totalBudget = profile.budgetMultiplier * 1_000_000;
+
+    // GC contract (biggest)
+    const gcVendors = vendorRecords.filter((v) => v.trade === 'General Contractor');
+    const gcVendor = gcVendors[Math.floor(Math.random() * gcVendors.length)];
+    const gcOriginal = Math.round(totalBudget * 0.45 * 0.9);
+    const gcCurrent = Math.round(gcOriginal * (1 + Math.random() * 0.08));
+    const gcStatus = profile.spendPct > 0.9 ? 'COMPLETED' : 'ACTIVE';
+    const gcStart = randomDate(monthsAgo(20), monthsAgo(15));
+
+    const gcContract = await prisma.contract.create({
+      data: {
+        projectId: proj.id,
+        vendorId: gcVendor.id,
+        description: 'General Construction Contract — Shell & Core',
+        originalAmount: gcOriginal,
+        currentAmount: gcCurrent,
+        status: gcStatus as any,
+        startDate: gcStart,
+        endDate: gcStatus === 'COMPLETED' ? randomDate(monthsAgo(6), monthsAgo(1)) : monthsFromNow(6),
+      },
+    });
+
+    // Change orders on GC contract
+    const coCount = randomBetween(1, 4);
+    for (let co = 1; co <= coCount; co++) {
+      const coAmt = randomBetween(15000, 120000);
+      await prisma.changeOrder.create({
+        data: {
+          contractId: gcContract.id,
+          number: co,
+          description: ['Owner-directed scope addition', 'Site condition unforeseen', 'Value engineering credit', 'Material substitution'][co % 4],
+          amount: co === 3 ? -coAmt : coAmt,
+          status: co < coCount ? 'APPROVED' : 'PENDING',
+          approvedAt: co < coCount ? randomDate(monthsAgo(10), monthsAgo(1)) : null,
+        },
+      });
+    }
+
+    // Contract payments
+    const paidAmt = Math.round(gcOriginal * Math.min(profile.spendPct, 0.95));
+    const paymentCount = randomBetween(4, 8);
+    for (let pay = 0; pay < paymentCount; pay++) {
+      await prisma.contractPayment.create({
+        data: {
+          contractId: gcContract.id,
+          amount: Math.round((paidAmt / paymentCount) * (0.8 + Math.random() * 0.4)),
+          paidDate: randomDate(monthsAgo(18), monthsAgo(1)),
+          notes: pay === 0 ? 'Mobilization payment' : `Progress billing #${pay + 1}`,
+        },
+      });
+    }
+
+    // Engineering / MEP contracts
+    const engVendors = vendorRecords.filter((v) => v.trade !== 'General Contractor');
+    const contractsToAdd = Math.min(randomBetween(2, 4), engVendors.length);
+    for (let e = 0; e < contractsToAdd; e++) {
+      const ev = engVendors[e];
+      const amt = randomBetween(80000, 500000);
+      await prisma.contract.create({
+        data: {
+          projectId: proj.id,
+          vendorId: ev.id,
+          description: `${ev.trade} — ${proj.slug.replace(/-/g, ' ').toUpperCase()}`,
+          originalAmount: amt,
+          currentAmount: amt,
+          status: profile.spendPct > 0.8 ? 'COMPLETED' : 'ACTIVE',
+          startDate: randomDate(monthsAgo(18), monthsAgo(12)),
+          endDate: monthsFromNow(randomBetween(1, 12)),
+        },
+      });
+    }
+    totalContracts += 1 + contractsToAdd;
+    console.log(`   📋 ${proj.slug}: ${1 + contractsToAdd} contracts`);
+  }
+
+  // ============================================================
+  // LEADS
+  // ============================================================
+  console.log('\n🎯 Seeding leads...');
+  await prisma.leadActivity.deleteMany();
+  await prisma.lead.deleteMany();
+
+  const adminUser = await prisma.user.findFirst({ where: { role: 'FOUNDER' } });
+  const salesUserRecord = await prisma.user.findFirst({ where: { role: 'SALES' } });
+  if (!adminUser) throw new Error('No founder user found — run seed.ts first');
+
+  const LEAD_NAMES = [
+    'Priya Sharma', 'Raj Patel', 'Anita Reddy', 'Suresh Nair', 'Deepa Mehta',
+    'Vikram Singh', 'Kavya Iyer', 'Arjun Gupta', 'Neha Joshi', 'Rahul Verma',
+    'Sunita Kapoor', 'Arun Kumar', 'Pooja Agarwal', 'Mohan Das', 'Lakshmi Devi',
+    'John Mathews', 'Mary Thomas', 'David Sam', 'Anand Raj', 'Geeta Rao',
+  ];
+
+  const LEAD_SOURCES: Array<'WEBSITE' | 'SOCIAL_MEDIA' | 'REFERRAL' | 'COLD_CALL' | 'WALK_IN' | 'SIGNAGE' | 'BROKER'> =
+    ['WEBSITE', 'REFERRAL', 'SIGNAGE', 'BROKER', 'WALK_IN', 'SOCIAL_MEDIA', 'COLD_CALL'];
+
+  const LEAD_STATUSES: Array<'NEW' | 'CONTACTED' | 'QUALIFIED' | 'PROPOSAL_SENT' | 'NEGOTIATING' | 'LOST'> =
+    ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATING', 'LOST'];
+
+  const allProjectsForLeads = await prisma.project.findMany({ select: { id: true, slug: true } });
+  let totalLeads = 0;
+
+  for (const proj of allProjectsForLeads) {
+    const profile = profiles.find((p) => p.slug === proj.slug);
+    const leadCount = randomBetween(4, 8);
+    for (let i = 0; i < leadCount; i++) {
+      const name = LEAD_NAMES[(totalLeads + i) % LEAD_NAMES.length];
+      const firstName = name.split(' ')[0];
+      const status = LEAD_STATUSES[randomBetween(0, LEAD_STATUSES.length - 1)];
+      const budget = profile ? Math.round(profile.salePricePerSqft * randomBetween(1200, 3000)) : 500000;
+
+      const lead = await prisma.lead.create({
+        data: {
+          projectId: proj.id,
+          name,
+          email: `${firstName.toLowerCase()}${i + 1}@gmail.com`,
+          phone: `214-555-${String(1000 + totalLeads + i).slice(1)}`,
+          source: LEAD_SOURCES[randomBetween(0, LEAD_SOURCES.length - 1)],
+          status,
+          budget,
+          unitInterest: `${randomBetween(1000, 3000)} SF ${['retail', 'office', 'flex', 'medical'][randomBetween(0, 3)]} unit`,
+          notes: `Interested in ${proj.slug.replace(/-/g, ' ')} project. ${status === 'QUALIFIED' ? 'Pre-qualified buyer.' : ''}`,
+          createdBy: adminUser.id,
+          assignedTo: salesUserRecord?.id ?? adminUser.id,
+        },
+      });
+
+      // Add 1-3 activities per lead
+      const actCount = randomBetween(1, 3);
+      const ACT_TYPES: Array<'CALL' | 'EMAIL' | 'MEETING' | 'SITE_VISIT' | 'FOLLOW_UP'> = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP'];
+      for (let a = 0; a < actCount; a++) {
+        await prisma.leadActivity.create({
+          data: {
+            leadId: lead.id,
+            type: ACT_TYPES[randomBetween(0, ACT_TYPES.length - 1)],
+            note: ['Initial inquiry call — very interested', 'Sent brochure and pricing sheet', 'Site tour completed, liked unit layout', 'Follow-up email sent', 'Discussed financing options'][randomBetween(0, 4)],
+            createdBy: salesUserRecord?.id ?? adminUser.id,
+          },
+        });
+      }
+    }
+    totalLeads += leadCount;
+    console.log(`   🎯 ${proj.slug}: ${leadCount} leads`);
+  }
+
+  // ============================================================
+  // TASKS
+  // ============================================================
+  console.log('\n✅ Seeding tasks...');
+  await prisma.taskComment.deleteMany();
+  await prisma.task.deleteMany();
+
+  const TASK_TEMPLATES = [
+    { title: 'Review and approve draw request #{{n}}', priority: 'HIGH', status: 'TODO' },
+    { title: 'Follow up with lender on extension', priority: 'URGENT', status: 'IN_PROGRESS' },
+    { title: 'Update construction schedule', priority: 'MEDIUM', status: 'TODO' },
+    { title: 'Collect COIs from subcontractors', priority: 'HIGH', status: 'IN_PROGRESS' },
+    { title: 'Prepare monthly owner\'s report', priority: 'MEDIUM', status: 'DONE' },
+    { title: 'Schedule inspections for C.O.', priority: 'HIGH', status: 'TODO' },
+    { title: 'Review lease abstracts', priority: 'MEDIUM', status: 'TODO' },
+    { title: 'Coordinate punch list walkthrough', priority: 'HIGH', status: 'IN_PROGRESS' },
+    { title: 'Update investor portal with Q2 data', priority: 'MEDIUM', status: 'TODO' },
+    { title: 'Renew builder\'s risk insurance', priority: 'URGENT', status: 'TODO' },
+  ];
+
+  const pmUserRecord = await prisma.user.findFirst({ where: { role: 'PROJECT_MANAGER' } });
+  const allProjectsForTasks = await prisma.project.findMany({ select: { id: true, slug: true } });
+  let totalTasks = 0;
+
+  for (const proj of allProjectsForTasks) {
+    const taskCount = randomBetween(4, 6);
+    for (let i = 0; i < taskCount; i++) {
+      const tpl = TASK_TEMPLATES[i % TASK_TEMPLATES.length];
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + randomBetween(-7, 30));
+      await prisma.task.create({
+        data: {
+          projectId: proj.id,
+          title: tpl.title.replace('{{n}}', String(i + 1)),
+          status: tpl.status as any,
+          priority: tpl.priority as any,
+          dueDate,
+          assignedTo: pmUserRecord?.id ?? adminUser.id,
+          createdBy: adminUser.id,
+        },
+      });
+    }
+    totalTasks += taskCount;
+    console.log(`   ✅ ${proj.slug}: ${taskCount} tasks`);
+  }
+
+  // ---- Summary ----
+  const bLines = await prisma.budgetLine.count();
+  const acts = await prisma.actual.count();
+  const comms = await prisma.commitment.count();
+  const loans = await prisma.loan.count();
+  const leases = await prisma.lease.count();
+  const sales = await prisma.sale.count();
+  const milestones = await prisma.milestone.count();
+  const vendors = await prisma.vendor.count();
+  const contracts = await prisma.contract.count();
+  const leads = await prisma.lead.count();
+  const tasks = await prisma.task.count();
+
+  console.log('\n✅ All data seeded!');
+  console.log(`   📊 Budget lines: ${bLines}`);
+  console.log(`   💸 Actuals: ${acts}`);
+  console.log(`   📝 Commitments: ${comms}`);
+  console.log(`   🏦 Loans: ${loans}`);
+  console.log(`   📋 Leases: ${leases}`);
+  console.log(`   🤝 Sales: ${sales}`);
+  console.log(`   🏁 Milestones: ${milestones}`);
+  console.log(`   🏢 Vendors: ${vendors}`);
+  console.log(`   📄 Contracts: ${contracts}`);
+  console.log(`   🎯 Leads: ${leads}`);
+  console.log(`   ✅ Tasks: ${tasks}`);
 }
 
 main()

@@ -92,13 +92,13 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
         : null;
 
     return (
-        <div className="flex gap-0 h-full min-h-screen" style={{ background: 'none' }}>
+        <div className="flex flex-col lg:flex-row gap-0 h-full min-h-[100dvh]" style={{ background: 'none' }}>
             {/* Main list */}
-            <div className={`flex flex-col flex-1 min-w-0 transition-all ${selectedTaskId ? 'pr-0' : ''}`}>
+            <div className={`flex flex-col flex-1 min-w-0 transition-all ${selectedTaskId ? 'lg:pr-0' : ''}`}>
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
                     <div>
-                        <h1 className="text-2xl font-bold text-gray-900">Tasks</h1>
+                        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Tasks</h1>
                         <p className="text-sm text-gray-500 mt-0.5">
                             {filteredTasks.length} task{filteredTasks.length !== 1 ? 's' : ''}
                             {filterProject || filterStatus || filterPriority ? ' (filtered)' : ''}
@@ -109,19 +109,20 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         startContent={<FiPlus />}
                         onPress={onCreateOpen}
                         id="new-task-btn"
+                        className="self-start sm:self-auto"
                     >
                         New Task
                     </Button>
                 </div>
 
                 {/* Filter bar */}
-                <div className="flex flex-wrap gap-3 mb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:flex gap-3 mb-5">
                     <Input
                         placeholder="Search tasks…"
                         startContent={<FiSearch className="text-gray-400" />}
                         value={search}
                         onValueChange={setSearch}
-                        className="w-56"
+                        className="w-full sm:w-56"
                         size="sm"
                         id="task-search"
                     />
@@ -130,7 +131,7 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                             placeholder="All Projects"
                             selectedKeys={filterProject ? [filterProject] : []}
                             onSelectionChange={(keys) => setFilterProject(Array.from(keys)[0] as string ?? '')}
-                            className="w-44"
+                            className="w-full sm:w-44"
                             size="sm"
                             id="filter-project"
                         >
@@ -143,7 +144,7 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         placeholder="Any Status"
                         selectedKeys={filterStatus ? [filterStatus] : []}
                         onSelectionChange={(keys) => setFilterStatus(Array.from(keys)[0] as string ?? '')}
-                        className="w-40"
+                        className="w-full sm:w-40"
                         size="sm"
                         id="filter-status"
                     >
@@ -155,7 +156,7 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         placeholder="Any Priority"
                         selectedKeys={filterPriority ? [filterPriority] : []}
                         onSelectionChange={(keys) => setFilterPriority(Array.from(keys)[0] as string ?? '')}
-                        className="w-40"
+                        className="w-full sm:w-40"
                         size="sm"
                         id="filter-priority"
                     >
@@ -167,7 +168,7 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         placeholder="Any Assignee"
                         selectedKeys={filterAssignee ? [filterAssignee] : []}
                         onSelectionChange={(keys) => setFilterAssignee(Array.from(keys)[0] as string ?? '')}
-                        className="w-44"
+                        className="w-full sm:w-44"
                         size="sm"
                         id="filter-assignee"
                     >
@@ -224,7 +225,7 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
 
             {/* Side panel */}
             {selectedTaskId && (
-                <div className="w-[440px] shrink-0 ml-6 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 120px)', position: 'sticky', top: '24px' }}>
+                <div className="w-full lg:w-[440px] lg:shrink-0 lg:ml-6 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden flex flex-col mt-4 lg:mt-0 lg:sticky lg:top-6 lg:max-h-[calc(100vh_-_120px)]">
                     <TaskSidePanel
                         taskId={selectedTaskId}
                         onClose={() => setSelectedTaskId(null)}
@@ -265,7 +266,7 @@ function TaskRow({
     return (
         <div
             onClick={onSelect}
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm ${isSelected
+            className={`flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-all hover:shadow-sm ${isSelected
                 ? 'border-blue-300 bg-blue-50/60 shadow-sm'
                 : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/50'
                 }`}
@@ -283,36 +284,29 @@ function TaskRow({
                 <p className={`text-sm font-medium truncate ${task.status === 'DONE' ? 'line-through text-gray-400' : 'text-gray-900'}`}>
                     {task.title}
                 </p>
-                <div className="flex items-center gap-3 mt-0.5">
+                <div className="flex items-center gap-2 sm:gap-3 mt-0.5 flex-wrap">
                     {task.project && (
                         <span className="text-xs text-gray-400 truncate max-w-[120px]">{task.project.name}</span>
                     )}
                     {task.building && (
-                        <span className="text-xs text-gray-400 truncate">· {task.building.name}</span>
+                        <span className="text-xs text-gray-400 truncate">{task.building.name}</span>
                     )}
                     {task.unit && (
-                        <span className="text-xs text-gray-400 truncate">· Unit {task.unit.unitNumber}</span>
+                        <span className="text-xs text-gray-400 truncate">Unit {task.unit.unitNumber}</span>
                     )}
                 </div>
             </div>
 
-            {/* Priority */}
-            <div className="shrink-0">
+            <div className="flex w-full sm:w-auto items-center gap-3 flex-wrap sm:flex-nowrap">
                 <Chip size="sm" color={priorityColor(task.priority) as any} variant="dot" className="text-xs">
                     {task.priority}
                 </Chip>
-            </div>
-
-            {/* Due date */}
-            <div className="shrink-0 flex items-center gap-1 text-xs min-w-[90px]">
-                <FiCalendar className={overdue ? 'text-red-500' : 'text-gray-400'} />
-                <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>
-                    {fmtDate(task.dueDate)}
-                </span>
-            </div>
-
-            {/* Assignee */}
-            <div className="shrink-0">
+                <div className="flex items-center gap-1 text-xs">
+                    <FiCalendar className={overdue ? 'text-red-500' : 'text-gray-400'} />
+                    <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                        {fmtDate(task.dueDate)}
+                    </span>
+                </div>
                 {task.assignedUser ? (
                     <Tooltip content={task.assignedUser.name}>
                         <Avatar size="sm" name={task.assignedUser.name} src={task.assignedUser.avatarUrl} className="w-6 h-6 text-xs" />
@@ -322,19 +316,17 @@ function TaskRow({
                         <FiUser className="text-gray-400 text-xs" />
                     </div>
                 )}
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                    {task._count?.comments > 0 && (
+                        <span className="flex items-center gap-0.5"><FiMessageSquare />{task._count.comments}</span>
+                    )}
+                    {task._count?.attachments > 0 && (
+                        <span className="flex items-center gap-0.5"><FiPaperclip />{task._count.attachments}</span>
+                    )}
+                </div>
             </div>
 
-            {/* Counters */}
-            <div className="shrink-0 flex items-center gap-2 text-xs text-gray-400">
-                {task._count?.comments > 0 && (
-                    <span className="flex items-center gap-0.5"><FiMessageSquare />{task._count.comments}</span>
-                )}
-                {task._count?.attachments > 0 && (
-                    <span className="flex items-center gap-0.5"><FiPaperclip />{task._count.attachments}</span>
-                )}
-            </div>
-
-            <FiChevronRight className="text-gray-300 shrink-0" />
+            <FiChevronRight className="hidden sm:block text-gray-300 shrink-0" />
         </div>
     );
 }
@@ -530,7 +522,7 @@ function TaskSidePanel({
                             minRows={2}
                             id="edit-task-desc"
                         />
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <Select
                                 label="Status"
                                 selectedKeys={editForm.status ? [editForm.status] : []}
@@ -550,7 +542,7 @@ function TaskSidePanel({
                                 {PRIORITY_OPTIONS.map((p) => <SelectItem key={p}>{p}</SelectItem>)}
                             </Select>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <Input
                                 type="date"
                                 label="Due Date"
@@ -579,7 +571,7 @@ function TaskSidePanel({
                         {task.description && (
                             <p className="text-sm text-gray-600 whitespace-pre-wrap">{task.description}</p>
                         )}
-                        <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                             <div className="flex flex-col gap-0.5">
                                 <span className="text-xs text-gray-400 uppercase tracking-wide">Priority</span>
                                 <Chip size="sm" color={priorityColor(task.priority) as any} variant="flat">
@@ -879,7 +871,7 @@ function CreateTaskModal({
                         minRows={2}
                         id="new-task-desc"
                     />
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <Select
                             label="Project"
                             isRequired
@@ -905,7 +897,7 @@ function CreateTaskModal({
                             {(buildings as any[]).map((b: any) => <SelectItem key={b.id}>{b.name}</SelectItem>)}
                         </Select>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <Select
                             label="Unit (optional)"
                             selectedKeys={form.unitId ? [form.unitId] : []}
@@ -926,7 +918,7 @@ function CreateTaskModal({
                             {users.map((u: any) => <SelectItem key={u.id}>{u.name}</SelectItem>)}
                         </Select>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         <Select
                             label="Priority"
                             selectedKeys={[form.priority]}

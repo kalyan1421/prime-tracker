@@ -163,7 +163,7 @@ function ConvertToSaleModal({ isOpen, onClose, lead }: { isOpen: boolean; onClos
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md">
+    <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" size="md">
       <ModalContent>
         <ModalHeader>Convert Lead to Sale</ModalHeader>
         <ModalBody>
@@ -211,7 +211,7 @@ function LeadDetailPanel({ lead }: { lead: any }) {
         </Chip>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-sm">
         {lead.email && (
           <div className="flex items-center gap-1.5 text-gray-600">
             <FiMail className="shrink-0" />
@@ -235,12 +235,12 @@ function LeadDetailPanel({ lead }: { lead: any }) {
           </div>
         )}
         {lead.unitInterest && (
-          <div className="text-xs text-gray-500 col-span-2">
+          <div className="text-xs text-gray-500 sm:col-span-2">
             <span className="font-medium">Interest:</span> {lead.unitInterest}
           </div>
         )}
         {lead.assignedUser && (
-          <div className="text-xs text-gray-500 col-span-2 flex items-center gap-1.5">
+          <div className="text-xs text-gray-500 sm:col-span-2 flex items-center gap-1.5">
             <span className="font-medium">Assigned:</span>
             <Avatar size="sm" name={lead.assignedUser.name} src={lead.assignedUser.avatarUrl} className="w-4 h-4" />
             {lead.assignedUser.name}
@@ -334,13 +334,13 @@ function LeadFormModal({
   const isPending = createLead.isPending || updateLead.isPending;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" size="lg">
       <ModalContent>
         <ModalHeader>{isEdit ? 'Edit Lead' : 'New Lead'}</ModalHeader>
         <ModalBody>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {!defaultProjectId && (
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <Select
                   size="sm"
                   label="Project *"
@@ -383,7 +383,7 @@ function LeadFormModal({
               placeholder="e.g. 2BR, Unit 4A"
               value={form.unitInterest}
               onChange={(e) => set('unitInterest', e.target.value)}
-              className="col-span-2"
+              className="sm:col-span-2"
             />
             <Textarea
               size="sm"
@@ -391,7 +391,7 @@ function LeadFormModal({
               value={form.notes}
               onChange={(e) => set('notes', e.target.value)}
               minRows={2}
-              className="col-span-2"
+              className="sm:col-span-2"
             />
           </div>
         </ModalBody>
@@ -449,10 +449,10 @@ export default function LeadsPage() {
   const leadsArr = (leads as any[]) || [];
 
   return (
-    <div className="flex gap-6 h-full">
+    <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 h-full">
       {/* Lead list */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <div className="flex items-center gap-2">
             <FiTarget className="text-xl text-blue-600" />
             <h1 className="text-xl font-bold text-gray-800">Leads</h1>
@@ -460,13 +460,13 @@ export default function LeadsPage() {
               <Chip size="sm" variant="flat">{leadsArr.length}</Chip>
             )}
           </div>
-          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNew}>
+          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNew} className="self-start sm:self-auto">
             New Lead
           </Button>
         </div>
 
         {/* Filters */}
-        <div className="flex gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <Input
             size="sm"
             placeholder="Search name, email, phone..."
@@ -573,7 +573,7 @@ export default function LeadsPage() {
 
       {/* Detail panel */}
       {selectedLead && (
-        <div className="w-[380px] shrink-0">
+        <div className="w-full lg:w-[380px] lg:shrink-0">
           <Card shadow="sm" className="h-full">
             <CardBody className="overflow-auto">
               <LeadDetailPanel lead={selectedLead} />

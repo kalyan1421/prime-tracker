@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Card, CardBody, CardHeader, Button, Tabs, Tab, Progress, Chip, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import {
-  useProject, useFinancialSummary, useMilestones, useUnits, useLeases,
+  useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCommitments, useBuildings,
   useBudgetLines,
   useUpdateProject,
@@ -30,8 +30,170 @@ import {
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
   useDocuments, useUploadDocument, useDeleteDocument,
   useUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
+  useProjectHealth, useSalesForecast, useExceptions,
+  useSetMilestoneDependency, useMilestonePhotos, useAttachMilestonePhoto, useDeleteMilestonePhoto,
+  usePresignedUpload, useProjectDrawSchedules,
 } from '../hooks/useApi';
 import { TasksPageInner } from './TasksPage';
+import { HealthScoreRing } from '../components/HealthScoreRing';
+import { VarianceBar } from '../components/VarianceBar';
+import { ProbabilityChip } from '../components/ProbabilityChip';
+import { PhaseChip } from '../components/PhaseChip';
+import { DrawDetailModal } from '../components/DrawDetailModal';
+import { BudgetRevisionHistory } from '../components/BudgetRevisionHistory';
+import { CommentChip, type CommentType } from '../components/CommentChip';
+import { ExceptionFeed } from '../components/ExceptionFeed';
+
+/** Project-scoped exception feed used at the top of the Overview tab. */
+function ProjectExceptions({ projectId }: { projectId: string }) {
+  const { data: items = [] } = useExceptions(projectId);
+  const navigate = useNavigate();
+  if (items.length === 0) return null; // hide if nothing to show — saves vertical space
+  return (
+    <ExceptionFeed
+      items={items.map((i) => ({ ...i, severity: i.severity as 'critical' | 'warning' | 'info' }))}
+      onItemClick={(item) => item.href && navigate(item.href)}
+    />
+  );
+}
+
+/**
+ * Slice 1: Building cover photo uploader.
+ * Same presigned-upload pattern as milestone photos — but only one photo per
+ * building, stored as `coverPhotoPath` on the Building row itself (no separate
+ * table). Pass the current path in; receives the new path via onChange.
+ */
+function BuildingCoverPhotoUploader({
+  storagePath,
+  onChange,
+}: {
+  storagePath: string;
+  onChange: (path: string) => void;
+}) {
+  const presigned = usePresignedUpload();
+  const fileRef = React.useRef<HTMLInputElement | null>(null);
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const { storagePath: path } = await presigned.mutateAsync({ file, category: 'buildings' });
+      onChange(path);
+      addToast({ title: `Uploaded ${file.name}`, color: 'success' });
+    } catch (err: any) {
+      addToast({ title: err?.message || 'Upload failed', color: 'danger' });
+    }
+  };
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-gray-700 mb-1.5">Cover photo</p>
+      <div className="flex items-center gap-3">
+        {storagePath ? (
+          <div className="relative w-32 h-20 rounded border border-gray-200 overflow-hidden bg-gray-100">
+            <img
+              src={`${supabaseUrl}/storage/v1/object/public/documents/${storagePath}`}
+              alt=""
+              className="w-full h-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
+            />
+          </div>
+        ) : (
+          <div className="w-32 h-20 rounded border border-dashed border-gray-300 flex items-center justify-center text-xs text-gray-400">
+            No photo
+          </div>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <Button
+            size="sm" variant="flat"
+            onPress={() => fileRef.current?.click()}
+            isLoading={presigned.isPending}
+            startContent={<FiPlus className="text-xs" />}
+          >
+            {storagePath ? 'Replace' : 'Upload'}
+          </Button>
+          {storagePath && (
+            <Button size="sm" variant="light" color="danger" onPress={() => onChange('')}>
+              Remove
+            </Button>
+          )}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Slice 7: Milestone photo strip.
+ * Inline thumbnails with a "+ Upload" button. Uses presigned URLs so the file
+ * lands directly in Supabase — the API only stores the metadata row.
+ */
+function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
+  const { data: photos = [] } = useMilestonePhotos(milestoneId);
+  const attach = useAttachMilestonePhoto();
+  const remove = useDeleteMilestonePhoto();
+  const presigned = usePresignedUpload();
+  const fileRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const { storagePath } = await presigned.mutateAsync({ file, category: 'milestones' });
+      await attach.mutateAsync({ milestoneId, storagePath });
+      addToast({ title: `Uploaded ${file.name}`, color: 'success' });
+    } catch (err: any) {
+      addToast({ title: err?.message || 'Upload failed', color: 'danger' });
+    }
+  };
+
+  const list = photos as Array<{ id: string; storagePath: string; uploadedBy?: { name: string } }>;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Photos</p>
+        <Button
+          size="sm" variant="flat"
+          onPress={() => fileRef.current?.click()}
+          isLoading={presigned.isPending || attach.isPending}
+          startContent={<FiPlus className="text-xs" />}
+        >
+          Upload
+        </Button>
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+      </div>
+      {list.length === 0 ? (
+        <p className="text-xs text-gray-400">No photos yet — useful for inspector / lender packages.</p>
+      ) : (
+        <div className="flex gap-2 flex-wrap">
+          {list.map((p) => (
+            <div key={p.id} className="relative group rounded border border-gray-200 overflow-hidden w-24 h-24 bg-gray-100">
+              <img
+                src={`${import.meta.env.VITE_SUPABASE_URL || ''}/storage/v1/object/public/documents/${p.storagePath}`}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
+              />
+              <button
+                type="button"
+                aria-label="Remove photo"
+                onClick={() => remove.mutate(p.id)}
+                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <FiTrash2 className="text-xs text-red-500" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
   PermissionGate, fmt, fmtPct, fmtDate,
@@ -86,11 +248,18 @@ export default function ProjectDetailPage() {
   const { user } = useAuthStore();
   const role = user?.role || '';
   const { data: project, isLoading, error } = useProject(id!);
+  const { data: health } = useProjectHealth(id ?? '');
 
   if (isLoading) return <LoadingState />;
   if (error || !project) return <ErrorState />;
 
   const p = project as any;
+  const healthBreakdown = health?.breakdown
+    ? Object.entries(health.breakdown).map(([k, v]) => ({
+        label: k.charAt(0).toUpperCase() + k.slice(1),
+        value: `${v.score} · ${v.reason}`,
+      }))
+    : undefined;
 
   const visibleTabs = TAB_MAP.filter((t) => (TAB_ROLES[t] ?? ALL_ROLES).includes(role));
   const requestedTab = tab || 'overview';
@@ -106,49 +275,72 @@ export default function ProjectDetailPage() {
         All Projects
       </button>
 
-      <div className="flex justify-between items-start mb-2">
-        <div>
-          <h1 className="text-2xl font-bold">{p.name}</h1>
-          <div className="flex items-center gap-4 mt-1">
-            <div className="flex items-center gap-1">
-              <FiMapPin className="text-gray-400 text-xs" />
-              <span className="text-sm text-gray-500">{p.address}, {p.city}, {p.state}</span>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-2">
+        <div className="flex items-start gap-3 min-w-0">
+          {/* Slice 2: project health ring next to title */}
+          {health && (
+            <div className="shrink-0 mt-1">
+              <HealthScoreRing score={health.score} size="lg" breakdown={healthBreakdown} />
             </div>
-            {p.acreage && <span className="text-sm text-gray-500">{p.acreage} acres</span>}
+          )}
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold break-words">{p.name}</h1>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
+              {p.location?.trim() && (
+                <div className="flex items-center gap-1 min-w-0">
+                  <FiMapPin className="text-gray-400 text-xs shrink-0" />
+                  <span className="text-sm text-gray-500 truncate">{p.location}</span>
+                </div>
+              )}
+              {p.acreage && <span className="text-sm text-gray-500">{p.acreage} acres</span>}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <StatusBadge status={p.status} />
           <StatusBadge status={p.phase} />
         </div>
       </div>
 
-      <div className="mb-6 max-w-[400px]">
+      <div className="mb-4 sm:mb-6 max-w-full sm:max-w-[400px]">
         <PhaseProgress current={p.phase} />
       </div>
 
-      <Tabs
-        selectedKey={activeTab}
-        onSelectionChange={(key) => navigate(`/projects/${id}/${key as string}`, { replace: true })}
-        color="primary"
-        size="sm"
-      >
-        {visibleTabs.map((tabKey) => (
-          <Tab key={tabKey} title={TAB_TITLE_MAP[tabKey]}>
-            {tabKey === 'overview' && <OverviewTab project={p} />}
-            {tabKey === 'construction' && <ConstructionTab projectId={id!} />}
-            {tabKey === 'revenue' && <RevenueTab projectId={id!} />}
-            {tabKey === 'units' && <UnitsTab projectId={id!} role={role} />}
-            {tabKey === 'milestones' && <MilestonesTab projectId={id!} />}
-            {tabKey === 'leads' && <ProjectLeadsTab projectId={id!} />}
-            {tabKey === 'draws' && <DrawsTab projectId={id!} />}
-            {tabKey === 'vendors' && <VendorsTab projectId={id!} role={role} />}
-            {tabKey === 'documents' && <DocumentsTab projectId={id!} />}
-            {tabKey === 'tasks' && <TasksPageInner projectId={id!} />}
-            {tabKey === 'comments' && <ProjectCommentsTab projectId={id!} />}
-          </Tab>
-        ))}
-      </Tabs>
+      {/* Scrollable tab bar — extends to screen edges on mobile */}
+      <div className="relative -mx-4 sm:mx-0 mb-4">
+        <div className="flex overflow-x-auto scrollbar-none border-b border-gray-200 px-4 sm:px-0">
+          {visibleTabs.map((tabKey) => (
+            <button
+              key={tabKey}
+              onClick={() => navigate(`/projects/${id}/${tabKey}`, { replace: true })}
+              className={`shrink-0 px-3 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+                activeTab === tabKey
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {TAB_TITLE_MAP[tabKey]}
+            </button>
+          ))}
+        </div>
+        {/* Fade hint that more tabs exist to the right */}
+        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent sm:hidden" />
+      </div>
+
+      {/* Tab content */}
+      <div>
+        {activeTab === 'overview' && <OverviewTab project={p} />}
+        {activeTab === 'construction' && <ConstructionTab projectId={id!} />}
+        {activeTab === 'revenue' && <RevenueTab projectId={id!} />}
+        {activeTab === 'units' && <UnitsTab projectId={id!} role={role} />}
+        {activeTab === 'milestones' && <MilestonesTab projectId={id!} />}
+        {activeTab === 'leads' && <ProjectLeadsTab projectId={id!} />}
+        {activeTab === 'draws' && <DrawsTab projectId={id!} />}
+        {activeTab === 'vendors' && <VendorsTab projectId={id!} role={role} />}
+        {activeTab === 'documents' && <DocumentsTab projectId={id!} />}
+        {activeTab === 'tasks' && <TasksPageInner projectId={id!} />}
+        {activeTab === 'comments' && <ProjectCommentsTab projectId={id!} />}
+      </div>
     </div>
   );
 }
@@ -423,6 +615,9 @@ function OverviewTab({ project: p }: { project: any }) {
 
   return (
     <div className="space-y-5 mt-4">
+      {/* Slice 9: project-scoped exception feed at top of Overview */}
+      <ProjectExceptions projectId={p.id} />
+
       {/* Row 1: Details + Financial Snapshot */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Project Details */}
@@ -462,7 +657,7 @@ function OverviewTab({ project: p }: { project: any }) {
             <p className="font-semibold text-sm text-gray-700">Financial Snapshot</p>
           </CardHeader>
           <CardBody>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Budget</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(totalBudget)}</p>
@@ -527,10 +722,10 @@ function OverviewTab({ project: p }: { project: any }) {
         <ModalContent>
           <ModalHeader className="border-b border-gray-100">Edit Project</ModalHeader>
           <ModalBody className="py-5">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input size="sm" label="Name" isRequired value={form.name} onChange={set('name')} />
               <Input size="sm" label="Location" value={form.location} onChange={set('location')} />
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <Textarea size="sm" label="Description" value={form.description} onChange={set('description')} minRows={2} />
               </div>
               <Input size="sm" label="Address" value={form.address} onChange={set('address')} />
@@ -614,6 +809,35 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   const { data: monthlyPaymentsData } = useMonthlyPayments(projectId);
   const { data: loans } = useLoans(projectId);
   const { data: budgetData } = useBudgetLines(projectId);
+  const { data: actualsData } = useActuals(projectId);
+
+  // Slice 5: per-line variance — sum actuals + commitments by category, then
+  // divide proportionally across lines in that category by their share of budget.
+  const varianceByLine = useMemo(() => {
+    const categoryActuals: Record<string, number> = {};
+    const categoryCommits: Record<string, number> = {};
+    const categoryBudgetSum: Record<string, number> = {};
+    for (const a of (actualsData as any[]) || []) {
+      categoryActuals[a.category] = (categoryActuals[a.category] ?? 0) + Number(a.amount ?? 0);
+    }
+    for (const c of (commitments as any[]) || []) {
+      categoryCommits[c.category] = (categoryCommits[c.category] ?? 0) + Number(c.contractAmt ?? 0);
+    }
+    for (const b of (budgetData as any[]) || []) {
+      categoryBudgetSum[b.category] = (categoryBudgetSum[b.category] ?? 0) + Number(b.revisedAmt ?? b.baselineAmt ?? 0);
+    }
+    const out: Record<string, { actuals: number; committed: number }> = {};
+    for (const b of (budgetData as any[]) || []) {
+      const lineBudget = Number(b.revisedAmt ?? b.baselineAmt ?? 0);
+      const catBudget = categoryBudgetSum[b.category] || 1;
+      const share = lineBudget / catBudget;
+      out[b.id] = {
+        actuals: (categoryActuals[b.category] ?? 0) * share,
+        committed: (categoryCommits[b.category] ?? 0) * share,
+      };
+    }
+    return out;
+  }, [actualsData, commitments, budgetData]);
 
   const createBudget = useCreateBudget();
   const updateBudget = useUpdateBudget();
@@ -887,13 +1111,14 @@ function FinancialsTab({ projectId }: { projectId: string }) {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[700px]">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[700px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Description</th>
                     <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Baseline</th>
                     <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Revised</th>
+                    <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase w-[160px]">Spend vs Budget</th>
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Notes</th>
                     {canEditBudget && (
                       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
@@ -901,12 +1126,18 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {budgetLines.map((b: any) => (
+                  {budgetLines.map((b: any) => {
+                    const lineBudget = Number(b.revisedAmt ?? b.baselineAmt ?? 0);
+                    const v = varianceByLine[b.id] ?? { actuals: 0, committed: 0 };
+                    return (
                     <tr key={b.id} className="border-b border-gray-50">
                       <td className="py-2 px-2">{(b.category || '').replace(/_/g, ' ')}</td>
                       <td className="py-2 px-2">{b.description}</td>
                       <td className="py-2 px-2 text-right tabular-nums">{fmt(b.baselineAmt)}</td>
                       <td className="py-2 px-2 text-right tabular-nums">{b.revisedAmt != null ? fmt(b.revisedAmt) : '\u2014'}</td>
+                      <td className="py-2 px-2">
+                        <VarianceBar budget={lineBudget} actuals={v.actuals} committed={v.committed} />
+                      </td>
                       <td className="py-2 px-2">{b.notes || '\u2014'}</td>
                       {canEditBudget && (
                         <td className="py-2 px-2">
@@ -921,9 +1152,10 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                         </td>
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           )}
         </CardBody>
@@ -936,7 +1168,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         </CardHeader>
         <CardBody>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
@@ -974,7 +1206,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                   );
                 })}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -987,7 +1219,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
               <p className="font-semibold text-sm text-gray-600">Loans</p>
             </CardHeader>
             <CardBody>
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Type</th>
@@ -1014,7 +1246,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </CardBody>
           </Card>
         )}
@@ -1030,7 +1262,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                 <StatCard label="Monthly Debt Service" value={fmt((monthlyPaymentsData as any).total)} colorScheme="red" variant="construction" />
                 <StatCard label="Annual Debt Service" value={fmt((monthlyPaymentsData as any).annualTotal)} colorScheme="orange" variant="construction" />
               </div>
-              <table className="w-full text-sm">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Loan Type</th>
@@ -1049,7 +1281,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </CardBody>
           </Card>
         )}
@@ -1067,7 +1299,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
           {commitmentList.length === 0 ? (
             <EmptyState title="No commitments" />
           ) : (
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Vendor</th>
@@ -1097,7 +1329,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </CardBody>
       </Card>
@@ -1150,6 +1382,13 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                 />
               </div>
             </div>
+
+            {/* Slice 5: revision history (read-only) — shown only when editing existing line */}
+            {budgetEditId && (
+              <div className="mt-5 border-t border-gray-100 pt-4">
+                <BudgetRevisionHistory budgetLineId={budgetEditId} />
+              </div>
+            )}
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={onBudgetFormClose}>Cancel</Button>
@@ -1193,7 +1432,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>{commitEditId ? 'Edit Commitment' : 'Add Commitment'}</ModalHeader>
           <ModalBody>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input size="sm" label="Vendor" isRequired value={commitForm.vendor} onChange={setCommit('vendor')} />
               <Input size="sm" label="Description" isRequired value={commitForm.description} onChange={setCommit('description')} />
               <Select
@@ -1290,9 +1529,7 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-semibold">{c.user?.name}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${COMMENT_TYPE_COLORS[c.commentType] || ''}`}>
-                    {c.commentType}
-                  </span>
+                  <CommentChip type={c.commentType as CommentType} size="sm" />
                   <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
                   <Button
                     size="sm"
@@ -1311,10 +1548,10 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
           ))}
         </div>
       )}
-      <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-2">
         <Select
           size="sm"
-          className="w-[140px]"
+          className="w-full sm:w-[140px]"
           selectedKeys={[commentType]}
           onSelectionChange={(keys) => { const v = Array.from(keys)[0] as string; if (v) setCommentType(v); }}
         >
@@ -1713,14 +1950,14 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         </div>
       )}
 
-      <div className="flex justify-between items-center mb-4 gap-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 gap-3 sm:gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <p className="font-semibold text-sm text-gray-600">{filteredUnits.length} units</p>
           {buildings.length > 1 && (
             <Select
               size="sm"
               label="Filter by Building"
-              className="w-[200px]"
+              className="w-full sm:w-[200px]"
               selectedKeys={filterBuildingId ? [filterBuildingId] : []}
               onSelectionChange={(keys) => {
                 const val = Array.from(keys)[0] as string;
@@ -1768,10 +2005,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
               </CardHeader>
               <CardBody className="pt-2">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                     <thead>{unitTableHeaders}</thead>
                     <tbody>{bUnits.map(renderUnitRow)}</tbody>
-                  </table>
+                  </table></div>
                 </div>
               </CardBody>
             </Card>
@@ -1999,7 +2236,8 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
 // ---- Milestones Tab ----
 const EMPTY_MILESTONE = {
   title: '', description: '', phase: 'CONSTRUCTION', dueDate: '',
-  status: 'NOT_STARTED', sortOrder: '0', ownerId: '',
+  status: 'NOT_STARTED', sortOrder: '0', ownerId: '', dependsOnId: '',
+  linkedDrawScheduleId: '',
 };
 
 const MILESTONE_STATUS_COLOR: Record<string, string> = {
@@ -2013,9 +2251,11 @@ const MILESTONE_STATUS_COLOR: Record<string, string> = {
 function MilestonesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useMilestones(projectId);
   const { data: usersData } = useUsers();
+  const { data: drawSchedules = [] } = useProjectDrawSchedules(projectId);
   const createMilestone = useCreateMilestone();
   const updateMilestone = useUpdateMilestone();
   const deleteMilestone = useDeleteMilestone();
+  const setDependency = useSetMilestoneDependency();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
@@ -2038,6 +2278,8 @@ function MilestonesTab({ projectId }: { projectId: string }) {
       status: m.status || 'NOT_STARTED',
       sortOrder: m.sortOrder?.toString() || '0',
       ownerId: m.ownerId || '',
+      dependsOnId: m.dependsOnId || '',
+      linkedDrawScheduleId: m.linkedDrawScheduleId || '',
     });
     onFormOpen();
   };
@@ -2054,9 +2296,16 @@ function MilestonesTab({ projectId }: { projectId: string }) {
         status: form.status,
         sortOrder: form.sortOrder ? parseInt(form.sortOrder) : 0,
         ownerId: form.ownerId || undefined,
+        // Slice 9: when this milestone is marked COMPLETED, the wire-up handler
+        // auto-drafts a DrawRequest from the schedule line. Empty string clears.
+        linkedDrawScheduleId: form.linkedDrawScheduleId || null,
       };
       if (editId) {
         await updateMilestone.mutateAsync({ id: editId, data: payload });
+        // Slice 7: dependency is set via a separate route to allow cycle validation.
+        // Always send when editing — the server compares to existing and is a no-op
+        // if unchanged. Empty string means "clear the dependency".
+        await setDependency.mutateAsync({ id: editId, dependsOnId: form.dependsOnId || null });
         addToast({ title: 'Milestone updated', color: 'success' });
       } else {
         await createMilestone.mutateAsync(payload);
@@ -2169,7 +2418,7 @@ function MilestonesTab({ projectId }: { projectId: string }) {
           </CardBody>
         </Card>
       ) : (
-        <table className="w-full text-sm">
+        <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
           <thead>
             <tr className="border-b border-gray-200">
               <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Milestone</th>
@@ -2182,9 +2431,30 @@ function MilestonesTab({ projectId }: { projectId: string }) {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((m: any) => (
+            {sorted.map((m: any) => {
+              // Slice 7: blocked-by indicator
+              const blockedBy = m.dependsOn && m.dependsOn.status !== 'COMPLETED' ? m.dependsOn : null;
+              // Days late = days past due for non-completed milestones
+              const daysLate = m.status !== 'COMPLETED' && m.dueDate
+                ? Math.floor((Date.now() - new Date(m.dueDate).getTime()) / 86_400_000)
+                : 0;
+              return (
               <tr key={m.id} className={`border-b border-gray-50 ${m.status === 'OVERDUE' ? 'bg-red-50' : ''}`}>
-                <td className="py-2 px-2 font-medium">{m.title}</td>
+                <td className="py-2 px-2 font-medium">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span>{m.title}</span>
+                    {blockedBy && (
+                      <Chip size="sm" variant="flat" className="bg-orange-100 text-orange-700 text-[10px]">
+                        ⛔ blocked by "{blockedBy.title}"
+                      </Chip>
+                    )}
+                    {(m._count?.photos ?? 0) > 0 && (
+                      <Chip size="sm" variant="flat" className="bg-blue-50 text-blue-600 text-[10px]">
+                        📷 {m._count.photos}
+                      </Chip>
+                    )}
+                  </div>
+                </td>
                 <td className="py-2 px-2">
                   {m.owner ? (
                     <div className="flex items-center gap-1">
@@ -2195,9 +2465,14 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                 </td>
                 <td className="py-2 px-2"><StatusBadge status={m.phase} /></td>
                 <td className="py-2 px-2">
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-wrap">
                     <FiCalendar className="text-gray-400 text-xs" />
                     <span>{fmtDate(m.dueDate)}</span>
+                    {daysLate > 0 && (
+                      <Chip size="sm" variant="flat" className="bg-red-100 text-red-700 text-[10px]">
+                        +{daysLate}d
+                      </Chip>
+                    )}
                   </div>
                 </td>
                 <td className="py-2 px-2">{fmtDate(m.completedAt || m.completedDate)}</td>
@@ -2209,9 +2484,10 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
-        </table>
+        </table></div>
       )}
 
       {/* Create / Edit Milestone Modal */}
@@ -2219,7 +2495,7 @@ function MilestonesTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>{editId ? 'Edit Milestone' : 'Add Milestone'}</ModalHeader>
           <ModalBody>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input size="sm" label="Title" isRequired value={form.title} onChange={set('title')} />
               <Input size="sm" label="Description" value={form.description} onChange={set('description')} />
               <Select
@@ -2264,7 +2540,62 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                 ))}
               </Select>
               <Input size="sm" label="Sort Order" type="number" value={form.sortOrder} onChange={set('sortOrder')} />
+
+              {/* Slice 7: dependency picker — choose another milestone in same project */}
+              <Select
+                size="sm"
+                label="Depends on (blocks until complete)"
+                selectedKeys={form.dependsOnId ? [form.dependsOnId] : []}
+                onSelectionChange={(keys) => {
+                  const val = Array.from(keys)[0] as string;
+                  setForm((f) => ({ ...f, dependsOnId: val || '' }));
+                }}
+                description="Cannot start until the chosen milestone is COMPLETED"
+              >
+                <>
+                  <SelectItem key="">— None —</SelectItem>
+                  {((data as any[]) || [])
+                    .filter((m: any) => m.id !== editId)
+                    .map((m: any) => (
+                      <SelectItem key={m.id}>{m.title}</SelectItem>
+                    ))}
+                </>
+              </Select>
+
+              {/* Slice 9: link to a draw schedule line. On COMPLETED, the
+                  wire-up handler auto-drafts a DrawRequest with the right amount. */}
+              <Select
+                size="sm"
+                label="Linked draw (auto-drafts on completion)"
+                selectedKeys={form.linkedDrawScheduleId ? [form.linkedDrawScheduleId] : []}
+                onSelectionChange={(keys) => {
+                  const val = Array.from(keys)[0] as string;
+                  setForm((f) => ({ ...f, linkedDrawScheduleId: val || '' }));
+                }}
+                description={
+                  drawSchedules.length === 0
+                    ? 'Define a draw schedule on a loan first'
+                    : 'Marking complete creates a DRAFT draw request'
+                }
+                isDisabled={drawSchedules.length === 0}
+              >
+                <>
+                  <SelectItem key="">— None —</SelectItem>
+                  {drawSchedules.map((s) => (
+                    <SelectItem key={s.id}>
+                      {s.loanLabel} #{s.drawNumber} — ${Number(s.plannedAmount).toLocaleString()}
+                    </SelectItem>
+                  ))}
+                </>
+              </Select>
             </div>
+
+            {/* Slice 7: photo strip — only when editing existing milestone */}
+            {editId && (
+              <div className="mt-5 border-t border-gray-100 pt-4">
+                <MilestonePhotoStrip milestoneId={editId} />
+              </div>
+            )}
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={onFormClose}>Cancel</Button>
@@ -2406,7 +2737,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
       ) : (
         <Card shadow="sm">
           <CardBody>
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant</th>
@@ -2438,7 +2769,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </CardBody>
         </Card>
       )}
@@ -2448,7 +2779,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>{editId ? 'Edit Lease' : 'Add Lease'}</ModalHeader>
           <ModalBody>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
                 size="sm"
                 label="Unit"
@@ -2484,7 +2815,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
                   <SelectItem key={v}>{v}</SelectItem>
                 ))}
               </Select>
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
               </div>
             </div>
@@ -2517,10 +2848,21 @@ function LeasesTab({ projectId }: { projectId: string }) {
 const EMPTY_SALE = {
   unitId: '', buyer: '', salePrice: '', depositAmt: '', status: 'PROSPECT',
   loiDate: '', contractDate: '', closingDate: '', notes: '',
+  lostReason: '', lostReasonNote: '', expectedCloseDate: '',
 };
+
+const LOST_REASONS = [
+  { key: 'PRICE_TOO_HIGH', label: 'Price too high' },
+  { key: 'FINANCING_FELL_THROUGH', label: 'Financing fell through' },
+  { key: 'CHOSE_COMPETITOR', label: 'Chose a competitor' },
+  { key: 'TIMING_OFF', label: 'Timing off' },
+  { key: 'NO_RESPONSE', label: 'No response / went cold' },
+  { key: 'OTHER', label: 'Other' },
+];
 
 function SalesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useSalesPipeline(projectId);
+  const { data: forecast } = useSalesForecast(projectId);
   const { data: unitsData } = useUnits(projectId);
   const createSale = useCreateSale();
   const updateSale = useUpdateSale();
@@ -2558,6 +2900,12 @@ function SalesTab({ projectId }: { projectId: string }) {
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
 
   const handleSave = async () => {
+    // Slice 6: forced lost-reason picker — frontend insists before submit so the
+    // user understands the audit captures *why* deals die.
+    if (form.status === 'CANCELLED' && !form.lostReason) {
+      addToast({ title: 'Pick a reason — why was this deal lost?', color: 'warning' });
+      return;
+    }
     try {
       const payload: Record<string, unknown> = {
         projectId,
@@ -2569,7 +2917,10 @@ function SalesTab({ projectId }: { projectId: string }) {
         loiDate: form.loiDate ? new Date(form.loiDate).toISOString() : undefined,
         contractDate: form.contractDate ? new Date(form.contractDate).toISOString() : undefined,
         closingDate: form.closingDate ? new Date(form.closingDate).toISOString() : undefined,
+        expectedCloseDate: form.expectedCloseDate ? new Date(form.expectedCloseDate).toISOString() : undefined,
         notes: form.notes || undefined,
+        lostReason: form.status === 'CANCELLED' ? form.lostReason : undefined,
+        lostReasonNote: form.status === 'CANCELLED' ? (form.lostReasonNote || undefined) : undefined,
       };
       if (editId) {
         await updateSale.mutateAsync({ id: editId, data: payload });
@@ -2624,9 +2975,16 @@ function SalesTab({ projectId }: { projectId: string }) {
     <div className="mt-4">
       {/* Velocity metrics */}
       {allSales.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-5">
           <StatCard label="Total Pipeline" value={fmt(pipeline?.totalPipelineValue || 0)} colorScheme="brand" variant="revenue" />
-          <StatCard label="Closed Revenue" value={fmt(pipeline?.closedRevenue || 0)} colorScheme="green" variant="revenue" />
+          {/* Slice 6: weighted forecast \u2014 what you actually pitch to lenders */}
+          <StatCard
+            label="Weighted Forecast"
+            value={fmt(forecast?.weightedForecast || 0)}
+            helpText="Probability-adjusted"
+            colorScheme="blue"
+            variant="revenue"
+          />
           <StatCard label="Avg Days to Close" value={pipeline?.avgDaysToClose != null ? `${pipeline.avgDaysToClose}d` : '\u2014'} colorScheme="gray" variant="neutral" />
           <StatCard label="Total Deals" value={String(allSales.length)} colorScheme="gray" variant="neutral" />
         </div>
@@ -2649,9 +3007,13 @@ function SalesTab({ projectId }: { projectId: string }) {
             const colValue = sales.reduce((s: number, x: any) => s + Number(x.salePrice || 0), 0);
             return (
               <div key={stage} className={`rounded-lg border-2 border-t-4 ${STAGE_TOP_COLOR[stage]} ${STAGE_BG[stage]} p-3 min-h-[100px]`}>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-2 gap-1 flex-wrap">
                   <StatusBadge status={stage} />
-                  <span className="text-xs text-gray-500 font-medium">{sales.length}</span>
+                  <div className="flex items-center gap-1">
+                    {/* Slice 6: probability chip on column header */}
+                    <ProbabilityChip stage={stage} size="sm" />
+                    <span className="text-xs text-gray-500 font-medium">{sales.length}</span>
+                  </div>
                 </div>
                 {colValue > 0 && (
                   <p className="text-xs text-gray-500 mb-2 font-mono">{fmt(colValue)}</p>
@@ -2686,7 +3048,7 @@ function SalesTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>{editId ? 'Edit Sale' : 'Add Sale'}</ModalHeader>
           <ModalBody>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
                 size="sm"
                 label="Unit"
@@ -2720,7 +3082,31 @@ function SalesTab({ projectId }: { projectId: string }) {
               <Input size="sm" label="LOI Date" type="date" value={form.loiDate} onChange={set('loiDate')} />
               <Input size="sm" label="Contract Date" type="date" value={form.contractDate} onChange={set('contractDate')} />
               <Input size="sm" label="Closing Date" type="date" value={form.closingDate} onChange={set('closingDate')} />
-              <div className="col-span-2">
+              <Input size="sm" label="Expected Close" type="date" value={form.expectedCloseDate} onChange={set('expectedCloseDate')} />
+
+              {/* Slice 6: lost-reason picker — only shown when cancelling */}
+              {form.status === 'CANCELLED' && (
+                <>
+                  <Select
+                    size="sm"
+                    label="Why lost?"
+                    isRequired
+                    description="Captured for the lost-deal heatmap"
+                    selectedKeys={form.lostReason ? [form.lostReason] : []}
+                    onSelectionChange={(keys) => {
+                      const val = Array.from(keys)[0] as string;
+                      if (val) setForm((f) => ({ ...f, lostReason: val }));
+                    }}
+                  >
+                    {LOST_REASONS.map((r) => (
+                      <SelectItem key={r.key}>{r.label}</SelectItem>
+                    ))}
+                  </Select>
+                  <Input size="sm" label="Reason note (optional)" value={form.lostReasonNote} onChange={set('lostReasonNote')} />
+                </>
+              )}
+
+              <div className="sm:col-span-2">
                 <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
               </div>
             </div>
@@ -2750,7 +3136,7 @@ function SalesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Buildings Tab ----
-const EMPTY_BUILDING = { name: '', totalSqft: '', stories: '', buildingType: '' };
+const EMPTY_BUILDING = { name: '', totalSqft: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
 
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
@@ -2784,6 +3170,8 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       totalSqft: b.totalSqft?.toString() || '',
       stories: b.stories?.toString() || '',
       buildingType: b.buildingType || '',
+      phase: b.phase || 'PRE_DEVELOPMENT',
+      coverPhotoPath: b.coverPhotoPath || '',
     });
     setFormErrors({});
     onFormOpen();
@@ -2827,6 +3215,8 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         totalSqft: form.totalSqft ? parseFloat(form.totalSqft) : undefined,
         stories: form.stories ? parseInt(form.stories) : undefined,
         buildingType: form.buildingType.trim() || undefined,
+        phase: form.phase || undefined,
+        coverPhotoPath: form.coverPhotoPath || null,
       };
       if (editId) {
         // Don't send projectId on update (the API DTO omits it)
@@ -2888,7 +3278,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               <CardBody className="space-y-2">
                 <Skeleton className="h-4 w-2/3 rounded" />
                 <Skeleton className="h-3 w-1/3 rounded" />
-                <div className="grid grid-cols-3 gap-2 pt-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-3">
                   <Skeleton className="h-6 rounded" />
                   <Skeleton className="h-6 rounded" />
                   <Skeleton className="h-6 rounded" />
@@ -2917,12 +3307,27 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {buildings.map((b: any) => (
             <Card key={b.id} shadow="sm">
+              {/* Slice 1: cover photo — bleeds to card edges as visual identity */}
+              {b.coverPhotoPath && (
+                <div className="w-full h-28 bg-gray-100 overflow-hidden">
+                  <img
+                    src={`${import.meta.env.VITE_SUPABASE_URL || ''}/storage/v1/object/public/documents/${b.coverPhotoPath}`}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
+                  />
+                </div>
+              )}
               <CardHeader className="pb-0 flex justify-between items-start">
                 <div className="flex-1 min-w-0 pr-2">
                   <p className="font-semibold text-sm truncate">{b.name}</p>
-                  {b.buildingType && (
-                    <p className="text-xs text-gray-400 mt-0.5 truncate">{b.buildingType}</p>
-                  )}
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {b.buildingType && (
+                      <span className="text-xs text-gray-400 truncate">{b.buildingType}</span>
+                    )}
+                    {/* Slice 3: building-level phase chip */}
+                    {b.phase && <PhaseChip phase={b.phase} size="sm" />}
+                  </div>
                 </div>
                 {canEdit && (
                   <div className="flex gap-1 shrink-0">
@@ -2936,7 +3341,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                 )}
               </CardHeader>
               <CardBody className="pt-2">
-                <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm">
                   <div>
                     <p className="text-xs text-gray-400">Units</p>
                     <p className="font-medium">{b._count?.units ?? b.units?.length ?? 0}</p>
@@ -2995,6 +3400,30 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                 value={form.stories} onChange={set('stories')}
                 isInvalid={!!formErrors.stories} errorMessage={formErrors.stories}
               />
+              {/* Slice 3: building-level phase — Project.phase is derived from max of buildings */}
+              <div className="sm:col-span-2">
+                <Select
+                  size="sm" label="Phase"
+                  description="Project phase is automatically the most-advanced building"
+                  selectedKeys={form.phase ? [form.phase] : []}
+                  onSelectionChange={(k) => {
+                    const val = Array.from(k)[0] as string;
+                    if (val) setForm((f) => ({ ...f, phase: val }));
+                  }}
+                >
+                  {['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'].map((v) => (
+                    <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                  ))}
+                </Select>
+              </div>
+
+              {/* Slice 1: cover photo — visual identity for the building card */}
+              <div className="sm:col-span-2">
+                <BuildingCoverPhotoUploader
+                  storagePath={form.coverPhotoPath}
+                  onChange={(path) => setForm((f) => ({ ...f, coverPhotoPath: path }))}
+                />
+              </div>
             </div>
           </ModalBody>
           <ModalFooter>
@@ -3245,7 +3674,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
           <ModalContent>
             <ModalHeader>{editLead ? 'Edit Lead' : 'New Lead'}</ModalHeader>
             <ModalBody>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input size="sm" label="Name" value={form.name} onChange={(e) => setF('name', e.target.value)} />
                 <Input size="sm" label="Email" type="email" value={form.email} onChange={(e) => setF('email', e.target.value)} />
                 <Input size="sm" label="Phone" value={form.phone} onChange={(e) => setF('phone', e.target.value)} />
@@ -3256,8 +3685,8 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => setF('status', Array.from(k)[0] as string)}>
                   {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>)}
                 </Select>
-                <Input size="sm" label="Unit Interest" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="col-span-2" />
-                <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="col-span-2" />
+                <Input size="sm" label="Unit Interest" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
+                <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="sm:col-span-2" />
               </div>
             </ModalBody>
             <ModalFooter>
@@ -3272,7 +3701,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
 
       {/* Activity panel */}
       {selectedLead && (
-        <div className="w-[320px] shrink-0">
+        <div className="w-full lg:w-[320px] lg:shrink-0">
           <Card shadow="sm">
             <CardHeader className="pb-0">
               <div>
@@ -3423,9 +3852,7 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold">{c.user?.name}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${COMMENT_TYPE_COLORS[c.commentType] || ''}`}>
-                        {c.commentType}
-                      </span>
+                      <CommentChip type={c.commentType as CommentType} size="sm" />
                       <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
                       <Button
                         size="sm"
@@ -3451,10 +3878,10 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
       <Card shadow="sm">
         <CardBody>
           <p className="text-xs font-semibold text-gray-500 uppercase mb-3">Add Comment</p>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <Select
               size="sm"
-              className="w-[150px]"
+              className="w-full sm:w-[150px]"
               selectedKeys={[commentType]}
               onSelectionChange={(keys) => { const v = Array.from(keys)[0] as string; if (v) setCommentType(v); }}
             >
@@ -3513,6 +3940,8 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const [approvedAmount, setApprovedAmount] = useState('');
   const [rejectDraw, setRejectDraw] = useState<any>(null);
   const [rejectionReason, setRejectionReason] = useState('');
+  // Slice 8 — detail modal with stepper + checklist + workflow buttons
+  const [detailDrawId, setDetailDrawId] = useState<string | null>(null);
 
   const set = (f: string) => (e: any) => setForm((p) => ({ ...p, [f]: e.target.value }));
 
@@ -3575,7 +4004,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4 pt-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard label="Total Draws" value={totalDraws.toString()} />
         <StatCard label="Funded Total" value={fmt(funded)} variant="construction" />
         <StatCard label="Pending" value={fmt(pending)} variant="neutral" />
@@ -3590,7 +4019,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
           {drawList.length === 0 ? (
             <div className="p-6"><EmptyState message="No draw requests yet" /></div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead className="bg-gray-50 border-b">
                 <tr>
                   {['#', 'Loan', 'Requested', 'Approved', 'Status', 'Rejection Reason', 'Date', 'Actions'].map((h) => (
@@ -3600,7 +4029,11 @@ function DrawsTab({ projectId }: { projectId: string }) {
               </thead>
               <tbody>
                 {drawList.map((d: any) => (
-                  <tr key={d.id} className="border-b last:border-0 hover:bg-gray-50">
+                  <tr
+                    key={d.id}
+                    className="border-b last:border-0 hover:bg-gray-50 cursor-pointer"
+                    onClick={() => setDetailDrawId(d.id)}
+                  >
                     <td className="px-4 py-3 text-gray-500">#{d.drawNumber}</td>
                     <td className="px-4 py-3">{d.loan?.lender || d.loan?.loanType || '—'}</td>
                     <td className="px-4 py-3 font-mono">{fmt(Number(d.requestedAmount || d.amount || 0))}</td>
@@ -3612,18 +4045,11 @@ function DrawsTab({ projectId }: { projectId: string }) {
                       {d.rejectionReason || '—'}
                     </td>
                     <td className="px-4 py-3 text-gray-500">{fmtDate(d.requestDate)}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex gap-1">
-                        {NEXT_DRAW_STATUS[d.status] && (
-                          <Button size="sm" variant="flat" color="primary" onPress={() => openAdvance(d)}>
-                            → {NEXT_DRAW_STATUS[d.status]}
-                          </Button>
-                        )}
-                        {['DRAFT', 'SUBMITTED', 'APPROVED'].includes(d.status) && (
-                          <Button size="sm" variant="flat" color="danger" onPress={() => openReject(d)}>
-                            Reject
-                          </Button>
-                        )}
+                        <Button size="sm" variant="flat" onPress={() => setDetailDrawId(d.id)}>
+                          Open
+                        </Button>
                         {d.status === 'DRAFT' && (
                           <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(d)}>
                             <FiTrash2 />
@@ -3634,7 +4060,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </CardBody>
       </Card>
@@ -3711,6 +4137,14 @@ function DrawsTab({ projectId }: { projectId: string }) {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* Slice 8: rich detail modal — stepper + checklist + workflow buttons */}
+      <DrawDetailModal
+        drawId={detailDrawId}
+        isOpen={!!detailDrawId}
+        onClose={() => setDetailDrawId(null)}
+        projectId={projectId}
+      />
     </div>
   );
 }
@@ -3783,7 +4217,7 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
 
   return (
     <div className="space-y-4 pt-4">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Original Value" value={fmt(s?.totalOriginal || 0)} />
         <StatCard label="Current (w/ COs)" value={fmt(s?.totalCurrent || 0)} variant="construction" />
         <StatCard label="Paid to Date" value={fmt(s?.totalPaid || 0)} variant="revenue" />
@@ -3843,7 +4277,7 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
                         {(c.changeOrders || []).length > 0 && (
                           <div>
                             <p className="text-xs font-semibold text-gray-500 mb-1">Change Orders</p>
-                            <table className="w-full text-xs">
+                            <div className="responsive-table-wrap"><table className="w-full text-xs min-w-[480px]">
                               <thead><tr className="text-gray-400">
                                 <th className="text-left py-1">#</th><th className="text-left py-1">Description</th>
                                 <th className="text-right py-1">Amount</th><th className="text-left py-1 pl-2">Status</th>
@@ -3869,13 +4303,13 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
                                   </tr>
                                 ))}
                               </tbody>
-                            </table>
+                            </table></div>
                           </div>
                         )}
                         {(c.payments || []).length > 0 && (
                           <div>
                             <p className="text-xs font-semibold text-gray-500 mb-1">Payments</p>
-                            <table className="w-full text-xs">
+                            <div className="responsive-table-wrap"><table className="w-full text-xs min-w-[480px]">
                               <thead><tr className="text-gray-400">
                                 <th className="text-left py-1">Date</th><th className="text-right py-1">Amount</th><th className="text-left py-1 pl-2">Notes</th>
                               </tr></thead>
@@ -3888,7 +4322,7 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
                                   </tr>
                                 ))}
                               </tbody>
-                            </table>
+                            </table></div>
                           </div>
                         )}
                       </div>
@@ -3914,7 +4348,7 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
             <Select label="Status" selectedKeys={[form.status]} onSelectionChange={(k) => setForm((p) => ({ ...p, status: Array.from(k)[0] as string }))}>
               {['DRAFT', 'ACTIVE', 'COMPLETED', 'TERMINATED'].map((s) => <SelectItem key={s}>{s}</SelectItem>)}
             </Select>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input label="Start Date" type="date" value={form.startDate} onChange={set('startDate')} />
               <Input label="End Date" type="date" value={form.endDate} onChange={set('endDate')} />
             </div>

@@ -1,6 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardHeader, CardBody, Tabs, Tab } from '@heroui/react';
+import { useReactToPrint } from 'react-to-print';
+import { Card, CardHeader, CardBody, Tabs, Tab, Button } from '@heroui/react';
+import { FiDownload } from 'react-icons/fi';
 import { useQueries } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -19,7 +21,7 @@ function SalesPerformanceTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Pipeline" value={fmt(d.kpis.totalPipeline)} colorScheme="brand" variant="revenue" />
         <StatCard label="Closed Value" value={fmt(d.kpis.closedValue)} colorScheme="green" variant="revenue" />
         <StatCard label="Conversion Rate" value={`${d.kpis.conversionRate}%`} colorScheme="orange" variant="revenue" />
@@ -66,7 +68,7 @@ function SalesPerformanceTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Unit</th>
@@ -90,7 +92,7 @@ function SalesPerformanceTab() {
                   <tr><td colSpan={5} className="text-center py-4 text-gray-400">No available units</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -174,7 +176,7 @@ function UnitInventoryTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
@@ -197,7 +199,7 @@ function UnitInventoryTab() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -223,7 +225,7 @@ function RevenueProjectionTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Under Contract Value" value={fmt(underContractValue)} helpText="Expected to close" variant="revenue" colorScheme="brand" />
         <StatCard label="Monthly Lease Income" value={fmt(monthlyLeaseIncome)} helpText="Current run rate" variant="revenue" colorScheme="green" />
         <StatCard label="Annual Lease Income" value={fmt(annualLeaseIncome)} helpText="Current run rate" variant="revenue" colorScheme="teal" />
@@ -254,7 +256,7 @@ function RevenueProjectionTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant</th>
@@ -276,7 +278,7 @@ function RevenueProjectionTab() {
                   <tr><td colSpan={4} className="text-center py-4 text-gray-400">No leases expiring soon</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -316,7 +318,7 @@ function LeadMarketingTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Leads" value={String(leads.length)} variant="marketing" colorScheme="purple" />
         <StatCard label="Active Leads" value={String(active)} variant="marketing" colorScheme="brand" />
         <StatCard label="Converted" value={String(converted)} variant="revenue" colorScheme="green" />
@@ -366,7 +368,7 @@ function LeadMarketingTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Name</th>
@@ -390,7 +392,7 @@ function LeadMarketingTab() {
                   <tr><td colSpan={5} className="text-center py-4 text-gray-400">No leads</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -407,7 +409,7 @@ function UnitSalesReportTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard
           label="Total Portfolio Value"
           value={fmt(d.kpis.totalPortfolioValue)}
@@ -467,7 +469,7 @@ function UnitSalesReportTab() {
         </CardHeader>
         <CardBody className="pt-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Name</th>
@@ -521,7 +523,7 @@ function UnitSalesReportTab() {
                   <tr><td colSpan={7} className="text-center py-6 text-gray-400">No unit data available</td></tr>
                 )}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </CardBody>
       </Card>
@@ -532,6 +534,8 @@ function UnitSalesReportTab() {
 export default function SalesReportsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
+  const printRef = useRef<HTMLDivElement>(null);
+  const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Sales Reports' });
 
   useEffect(() => {
     if (!user?.role) return;
@@ -544,24 +548,31 @@ export default function SalesReportsPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Sales Reports</h1>
-      <Tabs color="primary" variant="underlined">
-        <Tab key="sales" title="Sales Performance">
-          <SalesPerformanceTab />
-        </Tab>
-        <Tab key="inventory" title="Unit Inventory">
-          <UnitInventoryTab />
-        </Tab>
-        <Tab key="revenue" title="Revenue Projection">
-          <RevenueProjectionTab />
-        </Tab>
-        <Tab key="leads" title="Lead & Marketing">
-          <LeadMarketingTab />
-        </Tab>
-        <Tab key="unit-sales" title="Unit Sales Value">
-          <UnitSalesReportTab />
-        </Tab>
-      </Tabs>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
+        <h1 className="text-2xl font-bold">Sales Reports</h1>
+        <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
+          Download PDF
+        </Button>
+      </div>
+      <div ref={printRef}>
+        <Tabs color="primary" variant="underlined" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
+          <Tab key="sales" title="Sales Performance">
+            <SalesPerformanceTab />
+          </Tab>
+          <Tab key="inventory" title="Unit Inventory">
+            <UnitInventoryTab />
+          </Tab>
+          <Tab key="revenue" title="Revenue Projection">
+            <RevenueProjectionTab />
+          </Tab>
+          <Tab key="leads" title="Lead & Marketing">
+            <LeadMarketingTab />
+          </Tab>
+          <Tab key="unit-sales" title="Unit Sales Value">
+            <UnitSalesReportTab />
+          </Tab>
+        </Tabs>
+      </div>
     </div>
   );
 }

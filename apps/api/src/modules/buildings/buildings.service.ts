@@ -2,17 +2,20 @@ import {
   Injectable, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { BuildingType } from '@prisma/client';
+import { BuildingType, ProjectPhase } from '@prisma/client';
+import { ProjectPhaseService } from './project-phase.service';
 
 @Injectable()
 export class BuildingsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private projectPhase: ProjectPhaseService,
+  ) {}
 
   async findByProject(projectId: string) {
     if (!projectId) {
       throw new BadRequestException('projectId query parameter is required');
     }
-    // Verify project exists — surfaces 404 instead of silently returning [].
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { id: true },
@@ -45,8 +48,9 @@ export class BuildingsService {
     totalSqft?: number;
     stories?: number;
     buildingType?: BuildingType;
+    phase?: ProjectPhase;
+    coverPhotoPath?: string;
   }) {
-    // Verify project exists before creating — better than letting Prisma throw a generic FK error.
     const project = await this.prisma.project.findUnique({
       where: { id: input.projectId },
       select: { id: true, status: true },
@@ -56,10 +60,13 @@ export class BuildingsService {
       throw new ConflictException('Cannot add buildings to an archived project');
     }
 
-    return this.prisma.building.create({
+    const building = await this.prisma.building.create({
       data: input,
       include: { _count: { select: { units: true } } },
     });
+    // Recompute project phase since a new building changes the max
+    await this.projectPhase.recompute(input.projectId);
+    return building;
   }
 
   async update(id: string, input: {
@@ -67,13 +74,20 @@ export class BuildingsService {
     totalSqft?: number;
     stories?: number;
     buildingType?: BuildingType;
+    phase?: ProjectPhase;
+    coverPhotoPath?: string;
   }) {
-    await this.findById(id);
-    return this.prisma.building.update({
+    const existing = await this.findById(id);
+    const updated = await this.prisma.building.update({
       where: { id },
       data: input,
       include: { _count: { select: { units: true } } },
     });
+    // If phase changed, project phase may shift up or down
+    if (input.phase && input.phase !== existing.phase) {
+      await this.projectPhase.recompute(existing.projectId);
+    }
+    return updated;
   }
 
   async delete(id: string, force = false) {
@@ -87,6 +101,8 @@ export class BuildingsService {
       );
     }
 
-    return this.prisma.building.delete({ where: { id } });
+    const result = await this.prisma.building.delete({ where: { id } });
+    await this.projectPhase.recompute(building.projectId);
+    return result;
   }
 }

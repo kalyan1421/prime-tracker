@@ -1,215 +1,151 @@
-import { Button } from '@heroui/react';
-import { FiBarChart2 } from 'react-icons/fi';
+import { useState } from 'react';
+import { Button, Input } from '@heroui/react';
+import { FiLock, FiMail, FiEye, FiEyeOff } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import api from '../lib/api';
 
-const ROLE_DEFS: { role: string; label: string; description: string; color: 'danger' | 'primary' | 'success' | 'secondary' | 'warning' | 'default'; permissions: string[] }[] = [
-  {
-    role: 'SUPER_ADMIN', label: 'Super Admin', description: 'Full system access + config',
-    color: 'danger',
-    permissions: [
-      'project:view', 'project:create', 'project:edit', 'project:delete',
-      'financial:view', 'financial:edit', 'financial:export', 'loan:view', 'loan:edit',
-      'budget:view', 'budget:edit', 'actual:view', 'actual:edit',
-      'sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'lead:view', 'lead:edit',
-      'building:view', 'building:edit', 'unit:view', 'unit:edit',
-      'milestone:view', 'milestone:edit',
-      'draw:view', 'draw:edit', 'draw:approve',
-      'vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve',
-      'document:view', 'document:upload', 'document:delete',
-      'comment:view', 'comment:edit',
-      'investor:view', 'investor:manage',
-      'report:portfolio', 'report:sales', 'report:revenue', 'report:debt',
-      'user:manage', 'role:manage', 'audit:view', 'quickbooks:manage', 'system:config', 'org:manage',
-    ],
-  },
-  {
-    role: 'FOUNDER', label: 'Founder', description: 'Full business access',
-    color: 'primary',
-    permissions: [
-      'project:view', 'project:create', 'project:edit', 'project:delete',
-      'financial:view', 'financial:edit', 'financial:export', 'loan:view', 'loan:edit',
-      'budget:view', 'budget:edit', 'actual:view', 'actual:edit',
-      'sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'lead:view', 'lead:edit',
-      'building:view', 'building:edit', 'unit:view', 'unit:edit',
-      'milestone:view', 'milestone:edit',
-      'draw:view', 'draw:edit', 'draw:approve',
-      'vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve',
-      'document:view', 'document:upload', 'document:delete',
-      'comment:view', 'comment:edit',
-      'investor:view', 'investor:manage',
-      'report:portfolio', 'report:sales', 'report:revenue', 'report:debt',
-      'user:manage', 'role:manage', 'audit:view', 'quickbooks:manage', 'org:manage',
-    ],
-  },
-  {
-    role: 'EXECUTIVE', label: 'Executive', description: 'Read all + financial approvals',
-    color: 'primary',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'financial:view', 'financial:edit', 'financial:export',
-      'loan:view', 'budget:view', 'actual:view',
-      'draw:view', 'draw:approve', 'sales:view', 'lease:view', 'lead:view',
-      'milestone:view', 'vendor:view', 'contract:view', 'payment:approve',
-      'document:view', 'investor:view',
-      'comment:view', 'comment:edit', 'audit:view',
-      'report:portfolio', 'report:sales', 'report:revenue', 'report:debt',
-    ],
-  },
-  {
-    role: 'FINANCE', label: 'Finance', description: 'Financials, loans, investors',
-    color: 'success',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'financial:view', 'financial:edit', 'financial:export',
-      'loan:view', 'loan:edit', 'budget:view', 'budget:edit', 'actual:view', 'actual:edit',
-      'draw:view', 'draw:edit', 'draw:approve',
-      'sales:view', 'lease:view', 'milestone:view',
-      'vendor:view', 'vendor:edit', 'contract:view', 'payment:approve',
-      'document:view', 'document:upload',
-      'investor:view', 'investor:manage',
-      'comment:view', 'comment:edit', 'quickbooks:manage',
-      'report:portfolio', 'report:revenue', 'report:debt',
-    ],
-  },
-  {
-    role: 'ACCOUNTING', label: 'Accounting', description: 'Budgets, actuals, QB sync',
-    color: 'success',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'financial:view', 'financial:edit', 'financial:export',
-      'loan:view', 'budget:view', 'budget:edit', 'actual:view', 'actual:edit',
-      'draw:view', 'vendor:view', 'contract:view',
-      'document:view', 'document:upload',
-      'comment:view', 'comment:edit', 'quickbooks:manage', 'report:portfolio',
-    ],
-  },
-  {
-    role: 'AR_AP', label: 'AR/AP', description: 'Draws, payments, actuals',
-    color: 'success',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'financial:view', 'budget:view', 'actual:view', 'actual:edit',
-      'draw:view', 'draw:edit', 'vendor:view', 'contract:view', 'payment:approve',
-      'document:view', 'comment:view',
-    ],
-  },
-  {
-    role: 'PROJECT_MANAGER', label: 'Project Manager', description: 'Projects, buildings, vendors',
-    color: 'secondary',
-    permissions: [
-      'project:view', 'project:create', 'project:edit',
-      'building:view', 'building:edit', 'unit:view', 'unit:edit',
-      'financial:view', 'budget:view', 'actual:view',
-      'draw:view', 'draw:edit', 'sales:view', 'lease:view',
-      'milestone:view', 'milestone:edit',
-      'vendor:view', 'vendor:edit', 'contract:view', 'contract:edit',
-      'document:view', 'document:upload',
-      'comment:view', 'comment:edit', 'report:portfolio',
-    ],
-  },
-  {
-    role: 'CONSTRUCTION', label: 'Construction', description: 'Milestones, documents',
-    color: 'warning',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'financial:view', 'budget:view', 'draw:view',
-      'milestone:view', 'milestone:edit', 'vendor:view',
-      'document:view', 'document:upload',
-      'comment:view', 'comment:edit',
-    ],
-  },
-  {
-    role: 'SALES', label: 'Sales', description: 'Pipeline, leads, leases',
-    color: 'warning',
-    permissions: [
-      'project:view', 'building:view', 'unit:view', 'unit:edit',
-      'sales:view', 'sales:edit', 'lease:view', 'lease:edit',
-      'lead:view', 'lead:edit',
-      'document:view', 'document:upload',
-      'comment:view', 'comment:edit',
-      'report:sales', 'report:revenue',
-    ],
-  },
-  {
-    role: 'MARKETING', label: 'Marketing', description: 'Leads, marketing docs',
-    color: 'secondary',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'lead:view', 'lead:edit',
-      'document:view', 'document:upload',
-      'comment:view', 'comment:edit', 'report:sales',
-    ],
-  },
-  {
-    role: 'LEGAL', label: 'Legal', description: 'Contracts, leases, docs',
-    color: 'default',
-    permissions: [
-      'project:view', 'building:view', 'unit:view',
-      'financial:view', 'loan:view', 'sales:view', 'lease:view',
-      'vendor:view', 'contract:view',
-      'document:view', 'document:upload',
-      'comment:view', 'comment:edit',
-    ],
-  },
-  {
-    role: 'VIEWER', label: 'Viewer', description: 'Read-only access',
-    color: 'default',
-    permissions: [
-      'project:view', 'building:view', 'unit:view', 'milestone:view', 'comment:view',
-    ],
-  },
+const DEV_ACCOUNTS = [
+  { label: 'Super Admin',     email: 'superadmin@prime.dev',  color: 'danger'    as const },
+  { label: 'Founder',         email: 'founder@prime.dev',     color: 'primary'   as const },
+  { label: 'Executive',       email: 'executive@prime.dev',   color: 'primary'   as const },
+  { label: 'Finance',         email: 'finance@prime.dev',     color: 'success'   as const },
+  { label: 'Accounting',      email: 'accounting@prime.dev',  color: 'success'   as const },
+  { label: 'AR/AP',           email: 'arap@prime.dev',        color: 'success'   as const },
+  { label: 'Project Manager', email: 'pm@prime.dev',          color: 'secondary' as const },
+  { label: 'Construction',    email: 'construction@prime.dev',color: 'warning'   as const },
+  { label: 'Sales',           email: 'sales@prime.dev',       color: 'warning'   as const },
+  { label: 'Marketing',       email: 'marketing@prime.dev',   color: 'secondary' as const },
+  { label: 'Legal',           email: 'legal@prime.dev',       color: 'default'   as const },
+  { label: 'Viewer',          email: 'viewer@prime.dev',      color: 'default'   as const },
 ];
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { setAuth } = useAuthStore();
 
-  const handleRoleLogin = (rd: (typeof ROLE_DEFS)[number]) => {
-    setAuth(
-      {
-        id: `demo-user-${rd.role.toLowerCase()}`,
-        name: `Demo ${rd.label}`,
-        email: `demo-${rd.role.toLowerCase()}@primedevelopers.com`,
-        role: rd.role,
-        permissions: rd.permissions,
-        mfaEnabled: false,
-        mfaVerified: false,
-      },
-      `demo-${rd.role}`,
-      `demo-refresh-${rd.role}`,
-    );
-    navigate('/', { replace: true });
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) { setError('Email and password are required'); return; }
+    setError('');
+    setLoading(true);
+    try {
+      const { data } = await api.post('/auth/login', { email, password });
+      setAuth(data.user, data.accessToken, data.refreshToken);
+      navigate('/', { replace: true });
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Invalid email or password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const quickLogin = async (devEmail: string) => {
+    setEmail(devEmail);
+    setPassword('Prime@123');
+    setError('');
+    setLoading(true);
+    try {
+      const { data } = await api.post('/auth/login', { email: devEmail, password: 'Prime@123' });
+      setAuth(data.user, data.accessToken, data.refreshToken);
+      navigate('/', { replace: true });
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="bg-white p-10 rounded-xl shadow-lg max-w-[640px] w-full">
-        <div className="flex flex-col items-center gap-6">
-          <FiBarChart2 className="text-blue-600 text-4xl" />
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-gray-800">Prime Tracker</h1>
-            <p className="text-sm text-gray-500 mt-1">Dev Login — select a role to continue</p>
-          </div>
+    <div className="min-h-[100dvh] bg-gray-50 flex items-center justify-center p-4 sm:p-6">
+      <div className="bg-white rounded-2xl shadow-lg w-full max-w-[480px] overflow-hidden">
+        {/* Header */}
+        <div className="bg-blue-600 px-6 py-6 sm:px-8 sm:py-8 text-white text-center">
+          <img src="/logo-full-white.png" alt="Prime Tracker" className="h-9 sm:h-10 mx-auto mb-3" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          <h1 className="text-lg sm:text-xl font-bold">Prime Tracker</h1>
+          <p className="text-blue-200 text-xs sm:text-sm mt-1">Internal Project Management Platform</p>
+        </div>
 
-          <div className="w-full grid grid-cols-3 gap-3">
-            {ROLE_DEFS.map((rd) => (
-              <Button
-                key={rd.role}
-                color={rd.color}
-                variant="flat"
-                className="flex flex-col h-auto py-3 px-4 items-start"
-                onPress={() => handleRoleLogin(rd)}
-              >
-                <span className="font-semibold text-sm">{rd.label}</span>
-                <span className="text-xs opacity-70 font-normal line-clamp-1">{rd.description}</span>
-              </Button>
-            ))}
-          </div>
+        {/* Form */}
+        <div className="px-5 py-6 sm:px-8 sm:py-8">
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            <Input
+              type="email"
+              label="Email"
+              placeholder="you@prime.dev"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              startContent={<FiMail className="text-gray-400 flex-shrink-0" />}
+              variant="bordered"
+              autoComplete="email"
+            />
+            <Input
+              type={showPassword ? 'text' : 'password'}
+              label="Password"
+              placeholder="Enter your password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              startContent={<FiLock className="text-gray-400 flex-shrink-0" />}
+              endContent={
+                <button type="button" onClick={() => setShowPassword((v) => !v)} className="text-gray-400 hover:text-gray-600">
+                  {showPassword ? <FiEyeOff /> : <FiEye />}
+                </button>
+              }
+              variant="bordered"
+              autoComplete="current-password"
+            />
 
-          <p className="text-xs text-gray-400 text-center">
-            The Prime Developer · Internal Dev Dashboard
-          </p>
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-2.5">
+                {error}
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              color="primary"
+              size="lg"
+              className="w-full font-semibold mt-1"
+              isLoading={loading}
+            >
+              Sign In
+            </Button>
+          </form>
+
+          {/* Dev Quick Login */}
+          <div className="mt-8">
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-center text-xs text-gray-400">
+                <span className="bg-white px-3">Dev Quick Login — all use password: Prime@123</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4">
+              {DEV_ACCOUNTS.map((a) => (
+                <Button
+                  key={a.email}
+                  size="sm"
+                  color={a.color}
+                  variant="flat"
+                  className="flex flex-col h-auto py-2 px-2 items-start text-left"
+                  onPress={() => quickLogin(a.email)}
+                  isDisabled={loading}
+                >
+                  <span className="font-semibold text-xs leading-tight">{a.label}</span>
+                  <span className="text-[10px] opacity-60 font-normal truncate w-full">{a.email}</span>
+                </Button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
