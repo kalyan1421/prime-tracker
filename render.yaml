@@ -1,0 +1,76 @@
+services:
+  - type: web
+    name: prime-tracker-api
+    runtime: node
+    plan: starter        # $7/mo — no cold starts; upgrade to standard for more RAM
+    region: oregon       # pick closest to your users
+    rootDir: .           # MUST be repo root so pnpm workspace + lockfile are visible
+
+    buildCommand: |
+      npm install -g pnpm &&
+      pnpm install --frozen-lockfile &&
+      pnpm --filter @prime-tracker/shared build &&
+      pnpm --filter @prime-tracker/api exec prisma generate &&
+      pnpm --filter @prime-tracker/api build
+
+    startCommand: node apps/api/dist/main
+
+    # Runs after build, before traffic shifts to the new instance.
+    # prisma migrate deploy is idempotent — safe on every deploy.
+    preDeployCommand: cd apps/api && npx prisma migrate deploy
+
+    healthCheckPath: /api/health   # uses the no-auth liveness probe
+
+    autoDeploy: true               # redeploy on every push to main
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_PORT
+        value: 3001
+      # ── Set these in the Render dashboard (not here) ──────────────────────
+      - key: DATABASE_URL          # Supabase pooler  (port 6543)
+        sync: false
+      - key: DIRECT_URL            # Supabase direct  (port 5432, migrations only)
+        sync: false
+      - key: JWT_ACCESS_SECRET     # openssl rand -hex 64
+        sync: false
+      - key: JWT_REFRESH_SECRET    # openssl rand -hex 64
+        sync: false
+      - key: ENCRYPTION_KEY        # openssl rand -hex 32
+        sync: false
+      - key: FRONTEND_URL          # https://prime-constructions.web.app
+        sync: false
+      - key: CORS_ORIGINS          # https://prime-constructions.web.app
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL   # https://<render-url>/api/auth/google/callback
+        sync: false
+      - key: GOOGLE_ALLOWED_DOMAIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: REDIS_URL             # auto-set by Render Redis — link in dashboard
+        fromService:
+          name: prime-tracker-redis
+          type: redis
+          property: connectionString
+      - key: DEMO_MODE
+        value: false
+      - key: JWT_ACCESS_EXPIRY
+        value: 15m
+      - key: JWT_REFRESH_EXPIRY
+        value: 7d
+
+  - type: redis
+    name: prime-tracker-redis
+    plan: free           # 25 MB — enough for BullMQ queues; upgrade if queue grows
+    region: oregon
+    maxmemoryPolicy: allkeys-lru

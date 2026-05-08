@@ -1,0 +1,16 @@
+
+=== Deploying to 'prime-constructions'...
+
+i  deploying hosting
+i  hosting[prime-constructions]: beginning deploy...
+i  hosting[prime-constructions]: found 11 files in apps/web/dist
+✔  hosting[prime-constructions]: file upload complete
+i  hosting[prime-constructions]: finalizing version...
+✔  hosting[prime-constructions]: version finalized
+i  hosting[prime-constructions]: releasing new version...
+✔  hosting[prime-constructions]: release complete
+
+✔  Deploy complete!
+
+Project Console: https://console.firebase.google.com/project/prime-constructions/overview
+Hosting URL: https://prime-constructions.web.app

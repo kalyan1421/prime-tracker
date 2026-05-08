@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { DashboardService } from '../dashboard/dashboard.service';
-import { ProjectHealthService } from '../health/project-health.service';
+import { ProjectHealthService } from '../project-health/project-health.service';
 
 /**
  * Cross-feature event handlers — the wires connecting our 7 features.

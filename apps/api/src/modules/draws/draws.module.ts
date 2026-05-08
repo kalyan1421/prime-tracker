@@ -4,7 +4,7 @@ import { DrawsController } from './draws.controller';
 import { DrawFundingOverdueCron } from './draw-funding-overdue.cron';
 import { DrawEventHandlers } from './draw-event-handlers.service';
 import { DashboardModule } from '../dashboard/dashboard.module';
-import { ProjectHealthModule } from '../health/health.module';
+import { ProjectHealthModule } from '../project-health/project-health.module';
 import { AuditService } from '../../common/utils/audit.service';
 
 /**

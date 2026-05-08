@@ -34,7 +34,7 @@ import { DocumentsModule } from './modules/documents/documents.module';
 import { InvestorsModule } from './modules/investors/investors.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
-import { ProjectHealthModule } from './modules/health/health.module';
+import { ProjectHealthModule } from './modules/project-health/project-health.module';
 import { DrawsModule } from './modules/draws/draws.module';
 import { ExceptionsModule } from './modules/exceptions/exceptions.module';
 
