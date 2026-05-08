@@ -384,6 +384,7 @@ export default function ProjectsPage() {
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2 mb-5 p-3 bg-white rounded-xl border border-gray-200 shadow-sm">
         <Input
+          aria-label="Search projects"
           size="sm"
           className="w-full sm:w-52"
           placeholder="Search projects…"
@@ -394,6 +395,7 @@ export default function ProjectsPage() {
           onClear={() => { setSearch(''); setDebouncedSearch(''); }}
         />
         <Select
+          aria-label="Filter by status"
           size="sm"
           className="w-full sm:w-36"
           placeholder="All statuses"
@@ -406,6 +408,7 @@ export default function ProjectsPage() {
           <SelectItem key="CANCELLED">Archived</SelectItem>
         </Select>
         <Select
+          aria-label="Filter by phase"
           size="sm"
           className="w-full sm:w-44"
           placeholder="All phases"
@@ -417,6 +420,7 @@ export default function ProjectsPage() {
           ))}
         </Select>
         <Select
+          aria-label="Filter by type"
           size="sm"
           className="w-full sm:w-40"
           placeholder="All types"
@@ -428,6 +432,7 @@ export default function ProjectsPage() {
           ))}
         </Select>
         <Select
+          aria-label="Sort projects"
           size="sm"
           className="w-full sm:w-40"
           placeholder="Sort by"

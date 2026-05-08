@@ -73,7 +73,7 @@ function BuildingCoverPhotoUploader({
 }) {
   const presigned = usePresignedUpload();
   const fileRef = React.useRef<HTMLInputElement | null>(null);
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://dxkqrwxixjyzxhtxdkht.supabase.co';
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -613,9 +613,6 @@ function OverviewTab({ project: p }: { project: any }) {
 
   return (
     <div className="space-y-5 mt-4">
-      {/* Slice 9: project-scoped exception feed at top of Overview */}
-      <ProjectExceptions projectId={p.id} />
-
       {/* Row 1: Details + Financial Snapshot */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Project Details */}
@@ -714,6 +711,9 @@ function OverviewTab({ project: p }: { project: any }) {
 
       {/* Row 3: Team Members */}
       <TeamMembersCard projectId={p.id} />
+
+      {/* Slice 9: project-scoped exception feed at bottom of Overview */}
+      <ProjectExceptions projectId={p.id} />
 
       {/* Edit Project Modal */}
       <Modal isOpen={isOpen} onClose={onClose} size="lg" scrollBehavior="inside">
@@ -3309,7 +3309,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               {b.coverPhotoPath && (
                 <div className="w-full h-28 bg-gray-100 overflow-hidden">
                   <img
-                    src={`${import.meta.env.VITE_SUPABASE_URL || ''}/storage/v1/object/public/documents/${b.coverPhotoPath}`}
+                    src={`${import.meta.env.VITE_SUPABASE_URL || 'https://dxkqrwxixjyzxhtxdkht.supabase.co'}/storage/v1/object/public/documents/${b.coverPhotoPath}`}
                     alt=""
                     className="w-full h-full object-cover"
                     onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
@@ -4481,6 +4481,9 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                   </div>
                 </div>
                 <div className="flex gap-2 mt-3">
+                  <a href={apiAssetUrl(doc.fileUrl)} target="_blank" rel="noreferrer" className="flex-1">
+                    <Button size="sm" variant="flat" className="w-full" startContent={<FiFileText />}>View</Button>
+                  </a>
                   <a href={apiAssetUrl(doc.fileUrl)} download={doc.fileName} className="flex-1">
                     <Button size="sm" variant="flat" className="w-full" startContent={<FiDownload />}>Download</Button>
                   </a>

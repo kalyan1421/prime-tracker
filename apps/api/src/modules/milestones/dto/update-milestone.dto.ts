@@ -5,6 +5,12 @@ import {
 import { ProjectPhase, MilestoneStatus } from '@prisma/client';
 
 export class UpdateMilestoneDto {
+  @IsOptional() @IsString()
+  projectId?: string;
+
+  @IsOptional()
+  linkedDrawScheduleId?: string | null;
+
   @IsOptional() @IsString() @MaxLength(200)
   title?: string;
 

@@ -31,9 +31,14 @@ Monorepo structure with:
 ## ▶️ Run Locally
 
 ```bash
-cd apps/api && pnpm run start:dev
+# Run backend
+cd apps/api && pnpm run dev
 
+# Run frontend (in a new terminal)
 cd apps/web && pnpm run dev
+
+# Alternatively, run both in parallel from the project root:
+# pnpm run dev
 ```
 
 ## 📌 Roadmap

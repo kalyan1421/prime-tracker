@@ -8,6 +8,9 @@ export class CreateMilestoneDto {
   @IsString() @IsNotEmpty()
   projectId!: string;
 
+  @IsOptional() @IsString()
+  linkedDrawScheduleId?: string;
+
   @IsString() @IsNotEmpty() @MaxLength(200)
   title!: string;
 
