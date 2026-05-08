@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { GoogleStrategy } from './google.strategy';
 import { JwtStrategy } from './jwt.strategy';
+import { GoogleAuthGuard } from './google-auth.guard';
 import { EncryptionModule } from '../../common/encryption/encryption.module';
 import { AuditService } from '../../common/utils/audit.service';
 
@@ -22,7 +23,25 @@ import { AuditService } from '../../common/utils/audit.service';
     EncryptionModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, GoogleStrategy, JwtStrategy, AuditService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    GoogleAuthGuard,
+    {
+      provide: GoogleStrategy,
+      useFactory: (config: ConfigService) => {
+        const isConfigured = Boolean(
+          config.get<string>('GOOGLE_CLIENT_ID') &&
+          config.get<string>('GOOGLE_CLIENT_SECRET') &&
+          config.get<string>('GOOGLE_CALLBACK_URL'),
+        );
+
+        return isConfigured ? new GoogleStrategy(config) : null;
+      },
+      inject: [ConfigService],
+    },
+    AuditService,
+  ],
   exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

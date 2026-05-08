@@ -9,7 +9,6 @@ import {
   HttpCode,
   SetMetadata,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
@@ -17,6 +16,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/index';
 import { ConfigService } from '@nestjs/config';
+import { GoogleAuthGuard } from './google-auth.guard';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -37,7 +37,7 @@ export class AuthController {
 
   @Get('google')
   @SetMetadata('isPublic', true)
-  @UseGuards(AuthGuard('google'))
+  @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Initiate Google SSO login' })
   googleLogin() {
     // Passport redirects to Google
@@ -45,7 +45,7 @@ export class AuthController {
 
   @Get('google/callback')
   @SetMetadata('isPublic', true)
-  @UseGuards(AuthGuard('google'))
+  @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Google SSO callback' })
   async googleCallback(@Req() req: Request, @Res() res: Response) {
     const profile = req.user as {
