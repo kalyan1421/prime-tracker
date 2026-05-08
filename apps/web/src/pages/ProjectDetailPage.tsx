@@ -257,9 +257,9 @@ export default function ProjectDetailPage() {
   const p = project as any;
   const healthBreakdown = health?.breakdown
     ? Object.entries(health.breakdown).map(([k, v]) => ({
-        label: k.charAt(0).toUpperCase() + k.slice(1),
-        value: `${v.score} · ${v.reason}`,
-      }))
+      label: k.charAt(0).toUpperCase() + k.slice(1),
+      value: `${v.score} · ${v.reason}`,
+    }))
     : undefined;
 
   const visibleTabs = TAB_MAP.filter((t) => (TAB_ROLES[t] ?? ALL_ROLES).includes(role));
@@ -314,11 +314,10 @@ export default function ProjectDetailPage() {
             <button
               key={tabKey}
               onClick={() => navigate(`/projects/${id}/${tabKey}`, { replace: true })}
-              className={`shrink-0 px-3 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                activeTab === tabKey
+              className={`shrink-0 px-3 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${activeTab === tabKey
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
+                }`}
             >
               {TAB_TITLE_MAP[tabKey]}
             </button>
@@ -527,13 +526,12 @@ function PhaseTimeline({ current }: { current: string }) {
             )}
             {/* Circle */}
             <div
-              className={`relative z-10 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold border-2 transition-all ${
-                done
+              className={`relative z-10 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold border-2 transition-all ${done
                   ? 'bg-blue-500 border-blue-500 text-white'
                   : active
-                  ? 'bg-white border-blue-500 text-blue-600 shadow-[0_0_0_3px_rgba(0,115,230,0.15)]'
-                  : 'bg-white border-gray-300 text-gray-400'
-              }`}
+                    ? 'bg-white border-blue-500 text-blue-600 shadow-[0_0_0_3px_rgba(0,115,230,0.15)]'
+                    : 'bg-white border-gray-300 text-gray-400'
+                }`}
             >
               {done ? (
                 <FiCheck className="text-[10px]" />
@@ -543,9 +541,8 @@ function PhaseTimeline({ current }: { current: string }) {
             </div>
             {/* Label */}
             <p
-              className={`mt-1.5 text-[10px] text-center leading-tight ${
-                active ? 'text-blue-600 font-semibold' : done ? 'text-gray-500' : 'text-gray-400'
-              }`}
+              className={`mt-1.5 text-[10px] text-center leading-tight ${active ? 'text-blue-600 font-semibold' : done ? 'text-gray-500' : 'text-gray-400'
+                }`}
             >
               {step.label}
             </p>
@@ -1131,28 +1128,28 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                     const lineBudget = Number(b.revisedAmt ?? b.baselineAmt ?? 0);
                     const v = varianceByLine[b.id] ?? { actuals: 0, committed: 0 };
                     return (
-                    <tr key={b.id} className="border-b border-gray-50">
-                      <td className="py-2 px-2">{(b.category || '').replace(/_/g, ' ')}</td>
-                      <td className="py-2 px-2">{b.description}</td>
-                      <td className="py-2 px-2 text-right tabular-nums">{fmt(b.baselineAmt)}</td>
-                      <td className="py-2 px-2 text-right tabular-nums">{b.revisedAmt != null ? fmt(b.revisedAmt) : '\u2014'}</td>
-                      <td className="py-2 px-2">
-                        <VarianceBar budget={lineBudget} actuals={v.actuals} committed={v.committed} />
-                      </td>
-                      <td className="py-2 px-2">{b.notes || '\u2014'}</td>
-                      {canEditBudget && (
+                      <tr key={b.id} className="border-b border-gray-50">
+                        <td className="py-2 px-2">{(b.category || '').replace(/_/g, ' ')}</td>
+                        <td className="py-2 px-2">{b.description}</td>
+                        <td className="py-2 px-2 text-right tabular-nums">{fmt(b.baselineAmt)}</td>
+                        <td className="py-2 px-2 text-right tabular-nums">{b.revisedAmt != null ? fmt(b.revisedAmt) : '\u2014'}</td>
                         <td className="py-2 px-2">
-                          <div className="flex gap-1">
-                            <Button size="sm" variant="light" isIconOnly onPress={() => openBudgetEdit(b)} aria-label="Edit budget line">
-                              <FiEdit2 className="text-xs" />
-                            </Button>
-                            <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openBudgetDelete(b)} aria-label="Delete budget line">
-                              <FiTrash2 className="text-xs" />
-                            </Button>
-                          </div>
+                          <VarianceBar budget={lineBudget} actuals={v.actuals} committed={v.committed} />
                         </td>
-                      )}
-                    </tr>
+                        <td className="py-2 px-2">{b.notes || '\u2014'}</td>
+                        {canEditBudget && (
+                          <td className="py-2 px-2">
+                            <div className="flex gap-1">
+                              <Button size="sm" variant="light" isIconOnly onPress={() => openBudgetEdit(b)} aria-label="Edit budget line">
+                                <FiEdit2 className="text-xs" />
+                              </Button>
+                              <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openBudgetDelete(b)} aria-label="Delete budget line">
+                                <FiTrash2 className="text-xs" />
+                              </Button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -1580,12 +1577,12 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
 // SALES role uses this to filter the Status dropdown to only valid next-states.
 // SUPER_ADMIN/FOUNDER bypass this on the server, so we show all statuses for them.
 const STATUS_TRANSITIONS: Record<string, string[]> = {
-  AVAILABLE:           ['UNDER_CONTRACT', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
-  UNDER_CONTRACT:      ['AVAILABLE', 'LEASED', 'SOLD'],
-  LEASED:              ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT'],
-  OCCUPIED:            ['AVAILABLE', 'LEASED'],
-  SOLD:                ['AVAILABLE'],
-  UNDER_CONSTRUCTION:  ['AVAILABLE'],
+  AVAILABLE: ['UNDER_CONTRACT', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
+  UNDER_CONTRACT: ['AVAILABLE', 'LEASED', 'SOLD'],
+  LEASED: ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT'],
+  OCCUPIED: ['AVAILABLE', 'LEASED'],
+  SOLD: ['AVAILABLE'],
+  UNDER_CONSTRUCTION: ['AVAILABLE'],
 };
 
 function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }) {
@@ -2440,51 +2437,51 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                 ? Math.floor((Date.now() - new Date(m.dueDate).getTime()) / 86_400_000)
                 : 0;
               return (
-              <tr key={m.id} className={`border-b border-gray-50 ${m.status === 'OVERDUE' ? 'bg-red-50' : ''}`}>
-                <td className="py-2 px-2 font-medium">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span>{m.title}</span>
-                    {blockedBy && (
-                      <Chip size="sm" variant="flat" className="bg-orange-100 text-orange-700 text-[10px]">
-                        ⛔ blocked by "{blockedBy.title}"
-                      </Chip>
-                    )}
-                    {(m._count?.photos ?? 0) > 0 && (
-                      <Chip size="sm" variant="flat" className="bg-blue-50 text-blue-600 text-[10px]">
-                        📷 {m._count.photos}
-                      </Chip>
-                    )}
-                  </div>
-                </td>
-                <td className="py-2 px-2">
-                  {m.owner ? (
-                    <div className="flex items-center gap-1">
-                      <Avatar src={m.owner.avatarUrl} name={m.owner.name} size="sm" className="w-5 h-5 text-xs" />
-                      <span className="text-xs text-gray-600">{m.owner.name}</span>
+                <tr key={m.id} className={`border-b border-gray-50 ${m.status === 'OVERDUE' ? 'bg-red-50' : ''}`}>
+                  <td className="py-2 px-2 font-medium">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>{m.title}</span>
+                      {blockedBy && (
+                        <Chip size="sm" variant="flat" className="bg-orange-100 text-orange-700 text-[10px]">
+                          ⛔ blocked by "{blockedBy.title}"
+                        </Chip>
+                      )}
+                      {(m._count?.photos ?? 0) > 0 && (
+                        <Chip size="sm" variant="flat" className="bg-blue-50 text-blue-600 text-[10px]">
+                          📷 {m._count.photos}
+                        </Chip>
+                      )}
                     </div>
-                  ) : <span className="text-xs text-gray-400">—</span>}
-                </td>
-                <td className="py-2 px-2"><StatusBadge status={m.phase} /></td>
-                <td className="py-2 px-2">
-                  <div className="flex items-center gap-1 flex-wrap">
-                    <FiCalendar className="text-gray-400 text-xs" />
-                    <span>{fmtDate(m.dueDate)}</span>
-                    {daysLate > 0 && (
-                      <Chip size="sm" variant="flat" className="bg-red-100 text-red-700 text-[10px]">
-                        +{daysLate}d
-                      </Chip>
-                    )}
-                  </div>
-                </td>
-                <td className="py-2 px-2">{fmtDate(m.completedAt || m.completedDate)}</td>
-                <td className="py-2 px-2"><StatusBadge status={m.status} /></td>
-                <td className="py-2 px-2">
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(m)}><FiEdit2 className="text-xs" /></Button>
-                    <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openDelete(m.id)}><FiTrash2 className="text-xs" /></Button>
-                  </div>
-                </td>
-              </tr>
+                  </td>
+                  <td className="py-2 px-2">
+                    {m.owner ? (
+                      <div className="flex items-center gap-1">
+                        <Avatar src={m.owner.avatarUrl} name={m.owner.name} size="sm" className="w-5 h-5 text-xs" />
+                        <span className="text-xs text-gray-600">{m.owner.name}</span>
+                      </div>
+                    ) : <span className="text-xs text-gray-400">—</span>}
+                  </td>
+                  <td className="py-2 px-2"><StatusBadge status={m.phase} /></td>
+                  <td className="py-2 px-2">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <FiCalendar className="text-gray-400 text-xs" />
+                      <span>{fmtDate(m.dueDate)}</span>
+                      {daysLate > 0 && (
+                        <Chip size="sm" variant="flat" className="bg-red-100 text-red-700 text-[10px]">
+                          +{daysLate}d
+                        </Chip>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2 px-2">{fmtDate(m.completedAt || m.completedDate)}</td>
+                  <td className="py-2 px-2"><StatusBadge status={m.status} /></td>
+                  <td className="py-2 px-2">
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(m)}><FiEdit2 className="text-xs" /></Button>
+                      <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openDelete(m.id)}><FiTrash2 className="text-xs" /></Button>
+                    </div>
+                  </td>
+                </tr>
               );
             })}
           </tbody>
@@ -3496,7 +3493,7 @@ function ConstructionTab({ projectId }: { projectId: string }) {
   );
 }
 
-// ---- Revenue Tab (Sales Pipeline + Leases / Rent Roll) ----
+// ---- Revenue Tab (Sales Pipeline + Leases / Ren t Roll) ----
 function RevenueTab({ projectId }: { projectId: string }) {
   const { data: pipeline } = useSalesPipeline(projectId);
   const { data: leaseIncome } = useMonthlyLeaseIncome(projectId);
@@ -3827,10 +3824,10 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
             key={t}
             onClick={() => setFilterType(filterType === t ? '' : t)}
             className={`text-xs px-3 py-1 rounded-full font-medium border transition-colors ${filterType === t
-                ? t === 'MARKETING' ? 'bg-purple-600 text-white border-purple-600'
-                  : t === 'SALES' ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-green-600 text-white border-green-600'
-                : 'bg-white text-gray-600 border-gray-300 hover:border-gray-500'
+              ? t === 'MARKETING' ? 'bg-purple-600 text-white border-purple-600'
+                : t === 'SALES' ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-green-600 text-white border-green-600'
+              : 'bg-white text-gray-600 border-gray-300 hover:border-gray-500'
               }`}
           >
             {t} ({countByType[t]})
