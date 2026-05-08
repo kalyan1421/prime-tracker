@@ -22,4 +22,7 @@ export class CreateBuildingDto {
 
   @IsOptional() @IsEnum(ProjectPhase)
   phase?: ProjectPhase;
+
+  @IsOptional() @IsString()
+  coverPhotoPath?: string;
 }

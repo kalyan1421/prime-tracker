@@ -3214,7 +3214,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         stories: form.stories ? parseInt(form.stories) : undefined,
         buildingType: form.buildingType.trim() || undefined,
         phase: form.phase || undefined,
-        coverPhotoPath: form.coverPhotoPath || null,
+        coverPhotoPath: form.coverPhotoPath || undefined,
       };
       if (editId) {
         // Don't send projectId on update (the API DTO omits it)
