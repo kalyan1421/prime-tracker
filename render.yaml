@@ -2,17 +2,13 @@ services:
   - type: web
     name: prime-tracker-api
     runtime: node
-    plan: starter        # $7/mo — no cold starts; upgrade to standard for more RAM
-    region: oregon       # pick closest to your users
+    plan: free
+    region: singapore
     rootDir: .           # MUST be repo root so pnpm workspace + lockfile are visible
 
     buildCommand: pnpm install --frozen-lockfile && pnpm --filter @prime-tracker/shared build && pnpm --filter @prime-tracker/api build
 
     startCommand: node apps/api/dist/main
-
-    # Runs after build, before traffic shifts to the new instance.
-    # prisma migrate deploy is idempotent — safe on every deploy.
-    preDeployCommand: cd apps/api && npx prisma migrate deploy
 
     healthCheckPath: /api/health   # uses the no-auth liveness probe
 
@@ -21,8 +17,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: API_PORT
-        value: 3001
       # ── Set these in the Render dashboard (not here) ──────────────────────
       - key: DATABASE_URL          # Supabase pooler  (port 6543)
         sync: false
@@ -67,5 +61,6 @@ services:
   - type: redis
     name: prime-tracker-redis
     plan: free           # 25 MB — enough for BullMQ queues; upgrade if queue grows
-    region: oregon
+    region: singapore
+    ipAllowList: []
     maxmemoryPolicy: allkeys-lru

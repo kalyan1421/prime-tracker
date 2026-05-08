@@ -19,7 +19,7 @@ async function bootstrap() {
   });
 
   const config = app.get(ConfigService);
-  const port = config.get('API_PORT', 3001);
+  const port = Number(process.env.PORT ?? config.get('API_PORT', 3001));
   const frontendUrl = config.get('FRONTEND_URL', 'http://localhost:5173');
 
   // Security headers
@@ -71,7 +71,7 @@ async function bootstrap() {
     });
   }
 
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   console.log(`🚀 Prime Tracker API running on http://localhost:${port}`);
   console.log(`📚 Swagger: http://localhost:${port}/api/docs`);
 }
