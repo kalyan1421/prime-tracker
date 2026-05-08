@@ -15,6 +15,7 @@ import {
 } from '../hooks/useApi';
 import { StatusBadge, LoadingState, ErrorState, fmtDate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
+import { API_BASE_URL } from '../lib/api';
 
 export default function AdminPage() {
   return (
@@ -551,7 +552,7 @@ function IntegrationsPanel() {
               Sync Now
             </Button>
           ) : (
-            <Button size="sm" color="primary" as="a" href="/api/quickbooks/connect">
+            <Button size="sm" color="primary" as="a" href={`${API_BASE_URL}/api/quickbooks/connect`}>
               Connect QuickBooks
             </Button>
           )}

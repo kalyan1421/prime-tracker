@@ -17,6 +17,7 @@ import {
     useProjects, useBuildings, useUnits, useUsers,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
+import { apiAssetUrl } from '../lib/api';
 
 const STATUS_OPTIONS = ['TODO', 'IN_PROGRESS', 'DONE', 'CANCELLED'] as const;
 const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as const;
@@ -654,7 +655,7 @@ function TaskSidePanel({
                                         <span className="text-xs text-gray-400">{(att.fileSize / 1024).toFixed(0)} KB</span>
                                     )}
                                     <a
-                                        href={`http://localhost:3001${att.fileUrl}`}
+                                        href={apiAssetUrl(att.fileUrl)}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-blue-500 hover:text-blue-700"

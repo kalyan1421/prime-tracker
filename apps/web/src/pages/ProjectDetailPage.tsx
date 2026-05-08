@@ -43,6 +43,7 @@ import { DrawDetailModal } from '../components/DrawDetailModal';
 import { BudgetRevisionHistory } from '../components/BudgetRevisionHistory';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { ExceptionFeed } from '../components/ExceptionFeed';
+import { apiAssetUrl } from '../lib/api';
 
 /** Project-scoped exception feed used at the top of the Overview tab. */
 function ProjectExceptions({ projectId }: { projectId: string }) {
@@ -4483,7 +4484,7 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                   </div>
                 </div>
                 <div className="flex gap-2 mt-3">
-                  <a href={`/api${doc.fileUrl}`} download={doc.fileName} className="flex-1">
+                  <a href={apiAssetUrl(doc.fileUrl)} download={doc.fileName} className="flex-1">
                     <Button size="sm" variant="flat" className="w-full" startContent={<FiDownload />}>Download</Button>
                   </a>
                   <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)}>

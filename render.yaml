@@ -6,7 +6,7 @@ services:
     region: singapore
     rootDir: .           # MUST be repo root so pnpm workspace + lockfile are visible
 
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @prime-tracker/shared build && pnpm --filter @prime-tracker/api build
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @prime-tracker/shared build && pnpm --filter @prime-tracker/api build && DIRECT_URL=${DIRECT_URL:-$DATABASE_URL} pnpm --filter @prime-tracker/api exec prisma migrate deploy
 
     startCommand: node apps/api/dist/main
 

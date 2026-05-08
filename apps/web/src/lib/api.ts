@@ -1,10 +1,15 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../store/authStore';
 
-const BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+
+export function apiAssetUrl(pathOrUrl: string) {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return `${API_BASE_URL}${pathOrUrl}`;
+}
 
 const api = axios.create({
-  baseURL: `${BASE}/api`,
+  baseURL: `${API_BASE_URL}/api`,
   timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -52,7 +57,7 @@ api.interceptors.response.use(
       const refreshToken = useAuthStore.getState().refreshToken;
       if (!refreshToken) throw new Error('No refresh token');
 
-      const { data } = await axios.post(`${BASE}/api/auth/refresh`, { refreshToken });
+      const { data } = await axios.post(`${API_BASE_URL}/api/auth/refresh`, { refreshToken });
       const { accessToken: newAccess, refreshToken: newRefresh } = data;
       useAuthStore.getState().updateTokens(newAccess, newRefresh);
 
