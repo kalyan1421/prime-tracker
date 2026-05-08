@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
-    "prebuild": "prisma generate",
+    "prebuild": "pnpm --filter @prime-tracker/shared build && prisma generate",
     "build": "nest build",
     "start": "node dist/main",
     "start:prod": "node dist/main",
