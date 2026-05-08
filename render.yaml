@@ -6,12 +6,7 @@ services:
     region: oregon       # pick closest to your users
     rootDir: .           # MUST be repo root so pnpm workspace + lockfile are visible
 
-    buildCommand: |
-      npm install -g pnpm &&
-      pnpm install --frozen-lockfile &&
-      pnpm --filter @prime-tracker/shared build &&
-      pnpm --filter @prime-tracker/api exec prisma generate &&
-      pnpm --filter @prime-tracker/api build
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @prime-tracker/shared build && pnpm --filter @prime-tracker/api build
 
     startCommand: node apps/api/dist/main
 
