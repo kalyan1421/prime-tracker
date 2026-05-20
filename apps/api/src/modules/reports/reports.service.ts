@@ -198,7 +198,12 @@ export class ReportsService {
     const inTwelveMonths = new Date();
     inTwelveMonths.setMonth(inTwelveMonths.getMonth() + 12);
 
-    const expiringLeases = activeLeases
+    // Sprint 1: leases can now attach to a Building (no Unit). Filter to unit-leases
+    // for the per-unit expiring view + per-unit revenue rollup. Building-level lease
+    // surfaces are a separate report (deferred to Sprint 2+).
+    const unitLeases = activeLeases.filter((l): l is typeof l & { unit: NonNullable<typeof l.unit> } => l.unit !== null);
+
+    const expiringLeases = unitLeases
       .filter((l) => new Date(l.leaseEnd) >= now && new Date(l.leaseEnd) <= inTwelveMonths)
       .map((l) => {
         const daysUntilExpiry = Math.ceil((new Date(l.leaseEnd).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
@@ -223,7 +228,7 @@ export class ReportsService {
     });
 
     const revenueMap = new Map<string, { name: string; rentalIncome: number; salesRevenue: number }>();
-    for (const lease of activeLeases) {
+    for (const lease of unitLeases) {
       const pid = lease.unit.building.project.id;
       const existing = revenueMap.get(pid) || { name: lease.unit.building.project.name, rentalIncome: 0, salesRevenue: 0 };
       existing.rentalIncome += Number(lease.monthlyRent) * 12;
@@ -429,6 +434,70 @@ export class ReportsService {
       },
       projects: projectRows,
       chartData,
+    };
+  }
+
+  // ---- Vacancy Report (Sales / Founder) ----
+  //
+  // Lists every AVAILABLE unit ranked by time-on-market (oldest first). Surfaces
+  // the "stale inventory" problem the May 5 walkthrough called out — units sitting
+  // > 90 days are flagged warning, > 180 days critical. Filters: optional projectId,
+  // optional minDays floor to only show stale rows.
+  async getVacancyReport(params: { projectId?: string; minDays?: number } = {}) {
+    const where: any = { status: 'AVAILABLE', deletedAt: null };
+    if (params.projectId) {
+      where.building = { projectId: params.projectId, deletedAt: null };
+    }
+
+    const units = await this.prisma.unit.findMany({
+      where,
+      include: {
+        building: {
+          select: { id: true, name: true, project: { select: { id: true, name: true } } },
+        },
+      },
+    });
+
+    const now = Date.now();
+    const minDays = params.minDays ?? 0;
+
+    const rows = units
+      .map((u) => {
+        const since = u.availableSince ? new Date(u.availableSince).getTime() : new Date(u.createdAt).getTime();
+        const days = Math.max(0, Math.floor((now - since) / 86_400_000));
+        return {
+          unitId: u.id,
+          unitNumber: u.unitNumber,
+          unitType: u.unitType,
+          sqft: u.sqft,
+          askingRent: u.askingRent ? Number(u.askingRent) : null,
+          askingPrice: u.askingPrice ? Number(u.askingPrice) : null,
+          buildingId: u.building.id,
+          buildingName: u.building.name,
+          projectId: u.building.project.id,
+          projectName: u.building.project.name,
+          availableSince: u.availableSince ?? u.createdAt,
+          daysOnMarket: days,
+          severity: days >= 180 ? 'critical' : days >= 90 ? 'warning' : 'info',
+        };
+      })
+      .filter((r) => r.daysOnMarket >= minDays)
+      .sort((a, b) => b.daysOnMarket - a.daysOnMarket);
+
+    // Aggregates for the page header
+    const totals = rows.reduce(
+      (acc, r) => ({
+        units: acc.units + 1,
+        critical: acc.critical + (r.severity === 'critical' ? 1 : 0),
+        warning: acc.warning + (r.severity === 'warning' ? 1 : 0),
+        askingValue: acc.askingValue + (r.askingPrice ?? 0),
+      }),
+      { units: 0, critical: 0, warning: 0, askingValue: 0 },
+    );
+
+    return {
+      totals,
+      rows,
     };
   }
 

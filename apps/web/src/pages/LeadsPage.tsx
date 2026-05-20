@@ -1,15 +1,16 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Card, CardBody, Button, Input, Select, SelectItem, Chip, Avatar,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
-  Textarea, useDisclosure, addToast,
+  Textarea, Tooltip, useDisclosure, addToast,
 } from '@heroui/react';
 import {
   FiTarget, FiPlus, FiEdit2, FiTrash2, FiPhone, FiMail,
-  FiMessageSquare, FiRefreshCw, FiSearch,
+  FiMessageSquare, FiRefreshCw, FiSearch, FiClock, FiChevronRight,
+  FiHome, FiBarChart2, FiUser,
 } from 'react-icons/fi';
 import {
-  useLeads, useLeadActivities, useProjects, useUnits,
+  useLeads, useLeadActivities, useProjects, useUnits, useCampaigns,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
 } from '../hooks/useApi';
 import { LoadingState, ErrorState, EmptyState, fmtDate } from '../components/ui';
@@ -29,6 +30,29 @@ const STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'succe
   LOST: 'danger',
   DEAD: 'danger',
 };
+
+// Subtle dark-accent tokens for chips/rails. Per the redesign brief: tinted background
+// + darker text (~700) instead of saturated solid fills. Pairs all meet 4.5:1 contrast
+// on white (WCAG AA — Quick Reference §1 color-contrast).
+const STATUS_TOKEN: Record<string, { bg: string; text: string; dot: string; rail: string }> = {
+  NEW:           { bg: 'bg-slate-100',   text: 'text-slate-700',   dot: 'bg-slate-400',   rail: 'bg-slate-300' },
+  CONTACTED:     { bg: 'bg-blue-50',     text: 'text-blue-700',    dot: 'bg-blue-500',    rail: 'bg-blue-500' },
+  QUALIFIED:     { bg: 'bg-indigo-50',   text: 'text-indigo-700',  dot: 'bg-indigo-500',  rail: 'bg-indigo-500' },
+  PROPOSAL_SENT: { bg: 'bg-violet-50',   text: 'text-violet-700',  dot: 'bg-violet-500',  rail: 'bg-violet-500' },
+  NEGOTIATING:   { bg: 'bg-amber-50',    text: 'text-amber-700',   dot: 'bg-amber-500',   rail: 'bg-amber-500' },
+  CONVERTED:     { bg: 'bg-emerald-50',  text: 'text-emerald-700', dot: 'bg-emerald-500', rail: 'bg-emerald-500' },
+  LOST:          { bg: 'bg-rose-50',     text: 'text-rose-700',    dot: 'bg-rose-500',    rail: 'bg-rose-500' },
+  DEAD:          { bg: 'bg-zinc-100',    text: 'text-zinc-600',    dot: 'bg-zinc-400',    rail: 'bg-zinc-400' },
+};
+
+// "Stale" = no activity in 14+ days, and not in a terminal status (CONVERTED/LOST/DEAD).
+// The 14-day threshold is intentionally aggressive so reps notice deals going cold
+// — escalates to red at 30 days. Matches the dashboard's stale-leads list.
+function staleDays(lead: { updatedAt: string; status: string }): number | null {
+  if (['CONVERTED', 'LOST', 'DEAD'].includes(lead.status)) return null;
+  const days = Math.floor((Date.now() - new Date(lead.updatedAt).getTime()) / 86_400_000);
+  return days >= 14 ? days : null;
+}
 
 const SOURCE_LABELS: Record<string, string> = {
   WEBSITE: 'Website',
@@ -292,13 +316,35 @@ function LeadFormModal({
     phone: lead?.phone || '',
     source: lead?.source || 'WEBSITE',
     status: lead?.status || 'NEW',
+    unitId: lead?.unitId || '',
     unitInterest: lead?.unitInterest || '',
     budget: lead?.budget ? String(Number(lead.budget)) : '',
     notes: lead?.notes || '',
     assignedTo: lead?.assignedTo || '',
+    campaignId: lead?.campaignId || '',
   });
 
-  const set = (field: string, val: string) => setForm((f) => ({ ...f, [field]: val }));
+  const { data: formUnits } = useUnits(form.projectId || '');
+  // Campaign options: portfolio-wide campaigns (projectId null) + campaigns tied to
+  // this project. The picker shows both so a lead on Spur Plaza can attribute to
+  // either a Spur-specific campaign or a brand-wide Prime Developers push.
+  const { data: portfolioCampaigns } = useCampaigns({ status: 'ACTIVE' });
+  const { data: projectCampaigns } = useCampaigns(form.projectId ? { projectId: form.projectId, status: 'ACTIVE' } : undefined);
+  const campaignOptions = (() => {
+    const out: Array<{ id: string; name: string; channel: string }> = [];
+    const seen = new Set<string>();
+    for (const c of ((projectCampaigns as any[]) || [])) {
+      if (!seen.has(c.id)) { out.push(c); seen.add(c.id); }
+    }
+    for (const c of ((portfolioCampaigns as any[]) || [])) {
+      if (!c.projectId && !seen.has(c.id)) { out.push(c); seen.add(c.id); }
+    }
+    return out;
+  })();
+
+  const set = (field: string, val: string) => {
+    setForm((f) => (field === 'projectId' && val !== f.projectId ? { ...f, projectId: val, unitId: '' } : { ...f, [field]: val }));
+  };
 
   const handleSubmit = async () => {
     if (!form.projectId || !form.source) {
@@ -313,10 +359,14 @@ function LeadFormModal({
         name: form.name || undefined,
         email: form.email || undefined,
         phone: form.phone || undefined,
+        unitId: form.unitId || (isEdit ? null : undefined),
         unitInterest: form.unitInterest || undefined,
         budget: form.budget ? parseFloat(form.budget) : undefined,
         notes: form.notes || undefined,
         assignedTo: form.assignedTo || undefined,
+        // Sprint 2 — campaign attribution. Same pattern as unitId: on edit,
+        // empty-string means "clear the link"; on create, empty just omits the field.
+        campaignId: form.campaignId || (isEdit ? null : undefined),
       };
       if (isEdit) {
         await updateLead.mutateAsync({ id: lead.id, data: payload });
@@ -377,10 +427,35 @@ function LeadFormModal({
                 <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>
               ))}
             </Select>
+            <Select
+              size="sm"
+              label="Unit"
+              placeholder={form.projectId ? 'No specific unit' : 'Select a project first'}
+              selectedKeys={form.unitId ? new Set([form.unitId]) : new Set()}
+              onSelectionChange={(keys) => set('unitId', (Array.from(keys)[0] as string) || '')}
+              isDisabled={!form.projectId}
+              className="sm:col-span-2"
+            >
+              {((formUnits as any[]) || []).map((u: any) => (
+                <SelectItem key={u.id}>{u.unitNumber}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}</SelectItem>
+              ))}
+            </Select>
+            <Select
+              size="sm"
+              label="Campaign"
+              placeholder="No specific campaign"
+              selectedKeys={form.campaignId ? new Set([form.campaignId]) : new Set()}
+              onSelectionChange={(keys) => set('campaignId', (Array.from(keys)[0] as string) || '')}
+              className="sm:col-span-2"
+            >
+              {campaignOptions.map((c: any) => (
+                <SelectItem key={c.id}>{c.name} · {String(c.channel).replace('_', ' ')}</SelectItem>
+              ))}
+            </Select>
             <Input
               size="sm"
-              label="Unit Interest"
-              placeholder="e.g. 2BR, Unit 4A"
+              label="Notes on interest"
+              placeholder="e.g. 2BR preference, parking required"
               value={form.unitInterest}
               onChange={(e) => set('unitInterest', e.target.value)}
               className="sm:col-span-2"
@@ -448,53 +523,108 @@ export default function LeadsPage() {
 
   const leadsArr = (leads as any[]) || [];
 
+  // Compute pipeline counts client-side from the (already-filtered-by-search) result set.
+  // This keeps the strip in sync with the search query — searching "John" updates the
+  // funnel to "John's funnel" which is the most natural read for sales reps.
+  const pipelineCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const l of leadsArr) counts[l.status] = (counts[l.status] ?? 0) + 1;
+    return counts;
+  }, [leadsArr]);
+  const totalCount = leadsArr.length;
+
+  // Stale aggregate — shows on the strip as a small dot when any leads are stale.
+  const staleCount = useMemo(
+    () => leadsArr.filter((l: any) => staleDays(l) != null).length,
+    [leadsArr],
+  );
+
   return (
-    <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 h-full">
-      {/* Lead list */}
-      <div className="flex-1 min-w-0">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-          <div className="flex items-center gap-2">
+    <div className="flex flex-col lg:flex-row gap-4 h-full">
+      {/* ── List column ──────────────────────────────────────────────── */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2.5">
             <FiTarget className="text-xl text-blue-600" />
-            <h1 className="text-xl font-bold text-gray-800">Leads</h1>
-            {leadsArr.length > 0 && (
-              <Chip size="sm" variant="flat">{leadsArr.length}</Chip>
+            <h1 className="text-lg font-semibold text-gray-900">Leads</h1>
+            <span className="text-sm text-gray-400 tabular-nums">{totalCount}</span>
+            {staleCount > 0 && (
+              <Tooltip content={`${staleCount} lead${staleCount === 1 ? '' : 's'} with no activity in 14+ days`}>
+                <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700">
+                  <FiClock className="w-3 h-3" />
+                  <span className="tabular-nums">{staleCount}</span> stale
+                </span>
+              </Tooltip>
             )}
           </div>
-          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNew} className="self-start sm:self-auto">
+          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNew} aria-label="Create a new lead">
             New Lead
           </Button>
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        {/* Filter bar */}
+        <div className="flex items-center gap-2 mb-3">
           <Input
             size="sm"
-            placeholder="Search name, email, phone..."
+            placeholder="Search name, email, phone…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             startContent={<FiSearch className="text-gray-400" />}
-            className="max-w-xs"
+            className="max-w-sm"
             isClearable
             onClear={() => setSearch('')}
+            aria-label="Search leads"
           />
-          <Select
-            size="sm"
-            placeholder="All statuses"
-            className="max-w-[160px]"
-            selectedKeys={statusFilter ? new Set([statusFilter]) : new Set()}
-            onSelectionChange={(keys) => setStatusFilter(Array.from(keys)[0] as string || '')}
-          >
-            {LEAD_STATUSES.map((s) => (
-              <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>
-            ))}
-          </Select>
           {statusFilter && (
-            <Button size="sm" variant="light" onPress={() => setStatusFilter('')}>
-              <FiRefreshCw /> Clear
+            <Button size="sm" variant="flat" startContent={<FiRefreshCw className="w-3 h-3" />} onPress={() => setStatusFilter('')} aria-label="Clear status filter">
+              Clear status
             </Button>
           )}
         </div>
 
+        {/* Pipeline strip — clickable status pills with counts */}
+        <div className="flex items-center gap-1.5 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('')}
+            className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+              !statusFilter
+                ? 'bg-gray-900 text-white border-gray-900'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+            }`}
+            aria-pressed={!statusFilter}
+            aria-label="Show all statuses"
+          >
+            All
+            <span className="tabular-nums opacity-80">{totalCount}</span>
+          </button>
+          {LEAD_STATUSES.map((s) => {
+            const t = STATUS_TOKEN[s];
+            const count = pipelineCounts[s] ?? 0;
+            const active = statusFilter === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setStatusFilter(active ? '' : s)}
+                className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                  active
+                    ? `${t.bg} ${t.text} border-current`
+                    : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                }`}
+                aria-pressed={active}
+                aria-label={`Filter by ${s.replace('_', ' ')}, ${count} leads`}
+              >
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />
+                {s.replace('_', ' ')}
+                <span className="tabular-nums opacity-80">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* List body */}
         {isLoading && <LoadingState />}
         {error && <ErrorState message="Failed to load leads" />}
         {!isLoading && leadsArr.length === 0 && (
@@ -505,73 +635,143 @@ export default function LeadsPage() {
           />
         )}
 
-        <div className="space-y-2">
-          {leadsArr.map((lead: any) => (
-            <Card
-              key={lead.id}
-              shadow="sm"
-              isPressable
-              onPress={() => setSelectedLead(lead)}
-              className={`cursor-pointer transition-all ${selectedLead?.id === lead.id ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <CardBody className="py-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-medium text-gray-800">
-                        {lead.name || <span className="text-gray-400 italic">Unnamed</span>}
+        <div className="space-y-1.5">
+          {leadsArr.map((lead: any) => {
+            const t = STATUS_TOKEN[lead.status] ?? STATUS_TOKEN.NEW;
+            const stale = staleDays(lead);
+            const isSelected = selectedLead?.id === lead.id;
+            return (
+              <div
+                key={lead.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedLead(lead)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedLead(lead); } }}
+                aria-label={`Lead ${lead.name || 'Unnamed'}, status ${lead.status.replace('_', ' ')}`}
+                aria-pressed={isSelected}
+                className={`group relative flex items-stretch bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:shadow-sm cursor-pointer transition-all ${
+                  isSelected ? 'border-blue-400 shadow-sm' : ''
+                }`}
+              >
+                {/* Left rail — colored by status, signals selection too */}
+                <div
+                  className={`w-1 rounded-l-lg ${t.rail} ${isSelected ? 'w-1.5' : ''} transition-all`}
+                  aria-hidden="true"
+                />
+
+                <div className="flex-1 min-w-0 px-3 py-2.5">
+                  {/* Row 1: identity + status + asset/campaign attribution */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium text-gray-900 truncate max-w-[16rem]">
+                        {lead.name || <span className="text-gray-400 italic font-normal">Unnamed lead</span>}
                       </p>
-                      <Chip size="sm" color={STATUS_COLORS[lead.status] || 'default'} variant="flat" className="text-[10px]">
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${t.bg} ${t.text}`}>
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />
                         {lead.status.replace('_', ' ')}
-                      </Chip>
-                      <Chip size="sm" variant="bordered" className="text-[10px]">
-                        {SOURCE_LABELS[lead.source] || lead.source}
-                      </Chip>
-                    </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 flex-wrap">
-                      {lead.email && <span className="flex items-center gap-1"><FiMail />{lead.email}</span>}
-                      {lead.phone && <span className="flex items-center gap-1"><FiPhone />{lead.phone}</span>}
-                      {lead.project?.name && <span className="text-blue-600">{lead.project.name}</span>}
-                      {lead.budget && <span>${Number(lead.budget).toLocaleString()}</span>}
-                      {lead._count?.activities > 0 && (
-                        <span className="flex items-center gap-1">
-                          <FiMessageSquare />{lead._count.activities} activities
+                      </span>
+                      {lead.unit && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-50 text-sky-700">
+                          <FiHome className="w-2.5 h-2.5" />
+                          Unit {lead.unit.unitNumber}
                         </span>
                       )}
+                      {lead.building && !lead.unit && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700">
+                          <FiHome className="w-2.5 h-2.5" />
+                          {lead.building.name}
+                        </span>
+                      )}
+                      {lead.campaign && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700">
+                          <FiBarChart2 className="w-2.5 h-2.5" />
+                          {lead.campaign.name}
+                        </span>
+                      )}
+                      {stale != null && (
+                        <Tooltip content={`No activity in ${stale} days`}>
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            stale >= 30 ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
+                          }`}>
+                            <FiClock className="w-2.5 h-2.5" />
+                            <span className="tabular-nums">{stale}d</span>
+                          </span>
+                        </Tooltip>
+                      )}
+                    </div>
+                    {/* Actions — only visible on hover/focus to keep cards clean */}
+                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                      <Tooltip content="Edit lead">
+                        <Button
+                          isIconOnly
+                          size="sm"
+                          variant="light"
+                          aria-label="Edit lead"
+                          onPress={() => openEdit(lead)}
+                          className="min-w-8 w-8 h-8"
+                        >
+                          <FiEdit2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </Tooltip>
+                      {hasPermission('lead:delete') && (
+                        <Tooltip content="Delete lead">
+                          <Button
+                            isIconOnly
+                            size="sm"
+                            variant="light"
+                            color="danger"
+                            aria-label="Delete lead"
+                            onPress={() => handleDelete(lead.id)}
+                            className="min-w-8 w-8 h-8"
+                          >
+                            <FiTrash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <FiChevronRight className="w-4 h-4 text-gray-300 ml-0.5" aria-hidden="true" />
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {lead.assignedUser && (
-                      <Avatar size="sm" name={lead.assignedUser.name} src={lead.assignedUser.avatarUrl} className="w-6 h-6" />
+
+                  {/* Row 2: metadata — contact, source, project, budget, activity, assignee */}
+                  <div className="flex items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 flex-wrap">
+                    <span className="text-gray-400">{SOURCE_LABELS[lead.source] || lead.source}</span>
+                    {lead.email && (
+                      <span className="flex items-center gap-1 max-w-[14rem] truncate">
+                        <FiMail className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{lead.email}</span>
+                      </span>
                     )}
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      onPress={(e) => { (e as any).stopPropagation?.(); openEdit(lead); }}
-                    >
-                      <FiEdit2 />
-                    </Button>
-                    {hasPermission('unit:manage') && (
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        variant="light"
-                        color="danger"
-                        onPress={(e) => { (e as any).stopPropagation?.(); handleDelete(lead.id); }}
-                      >
-                        <FiTrash2 />
-                      </Button>
+                    {lead.phone && (
+                      <span className="flex items-center gap-1">
+                        <FiPhone className="w-3 h-3" />
+                        {lead.phone}
+                      </span>
+                    )}
+                    {lead.project?.name && <span className="text-blue-600">{lead.project.name}</span>}
+                    {lead.budget && (
+                      <span className="tabular-nums">${Number(lead.budget).toLocaleString()}</span>
+                    )}
+                    {lead._count?.activities > 0 && (
+                      <span className="flex items-center gap-1">
+                        <FiMessageSquare className="w-3 h-3" />
+                        <span className="tabular-nums">{lead._count.activities}</span>
+                      </span>
+                    )}
+                    {lead.assignedUser && (
+                      <span className="ml-auto flex items-center gap-1.5">
+                        <Avatar size="sm" name={lead.assignedUser.name} src={lead.assignedUser.avatarUrl} className="w-4 h-4 text-[8px]" />
+                        <span className="text-gray-500">{lead.assignedUser.name}</span>
+                      </span>
                     )}
                   </div>
                 </div>
-              </CardBody>
-            </Card>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Detail panel */}
+      {/* ── Detail panel ─────────────────────────────────────────────── */}
       {selectedLead && (
         <div className="w-full lg:w-[380px] lg:shrink-0">
           <Card shadow="sm" className="h-full">

@@ -8,8 +8,13 @@ export class CreateSaleDto {
   @IsString() @IsNotEmpty()
   projectId!: string;
 
-  @IsString() @IsNotEmpty()
-  unitId!: string;
+  // Sprint 1: exactly one of (unitId, buildingId) is required. Service-layer
+  // enforcement; here both are individually optional so either can be omitted.
+  @IsOptional() @IsString()
+  unitId?: string;
+
+  @IsOptional() @IsString()
+  buildingId?: string;
 
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;

@@ -152,7 +152,17 @@ export const PERMISSIONS = {
 
   // Leads
   LEAD_VIEW: 'lead:view',
+  LEAD_CREATE: 'lead:create',
   LEAD_EDIT: 'lead:edit',
+  LEAD_DELETE: 'lead:delete',
+  LEAD_CONVERT: 'lead:convert',
+
+  // Campaigns (Sprint 2 — marketing-spend attribution)
+  CAMPAIGN_VIEW: 'campaign:view',
+  CAMPAIGN_CREATE: 'campaign:create',
+  CAMPAIGN_EDIT: 'campaign:edit',
+  CAMPAIGN_SPEND: 'campaign:spend',      // record CampaignSpend ledger entries
+  CAMPAIGN_DELETE: 'campaign:delete',
 
   // Buildings & Units
   BUILDING_VIEW: 'building:view',
@@ -231,6 +241,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.SALES_VIEW,
     PERMISSIONS.LEASE_VIEW,
     PERMISSIONS.LEAD_VIEW,
+    PERMISSIONS.CAMPAIGN_VIEW,
     PERMISSIONS.MILESTONE_VIEW,
     PERMISSIONS.VENDOR_VIEW,
     PERMISSIONS.CONTRACT_VIEW,
@@ -369,7 +380,12 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.LEASE_VIEW,
     PERMISSIONS.LEASE_EDIT,
     PERMISSIONS.LEAD_VIEW,
+    PERMISSIONS.LEAD_CREATE,
     PERMISSIONS.LEAD_EDIT,
+    PERMISSIONS.LEAD_DELETE,
+    PERMISSIONS.LEAD_CONVERT,
+    // Sales sees campaigns (to know where each lead came from) but can't manage budgets.
+    PERMISSIONS.CAMPAIGN_VIEW,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
     PERMISSIONS.COMMENT_VIEW,
@@ -382,7 +398,14 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
     PERMISSIONS.LEAD_VIEW,
+    PERMISSIONS.LEAD_CREATE,
     PERMISSIONS.LEAD_EDIT,
+    // Marketing owns the campaign module — creates, edits, records spend, deletes.
+    PERMISSIONS.CAMPAIGN_VIEW,
+    PERMISSIONS.CAMPAIGN_CREATE,
+    PERMISSIONS.CAMPAIGN_EDIT,
+    PERMISSIONS.CAMPAIGN_SPEND,
+    PERMISSIONS.CAMPAIGN_DELETE,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
     PERMISSIONS.COMMENT_VIEW,
@@ -437,7 +460,8 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'buildings', label: 'Buildings & Units', permissions: ['building:view', 'building:edit', 'unit:view', 'unit:edit'] },
   { key: 'financial', label: 'Financial', permissions: ['financial:view', 'financial:edit', 'financial:export', 'budget:view', 'budget:edit', 'actual:view', 'actual:edit'] },
   { key: 'loans', label: 'Loans & Draws', permissions: ['loan:view', 'loan:edit', 'draw:view', 'draw:edit', 'draw:approve'] },
-  { key: 'sales_leasing', label: 'Sales & Leasing', permissions: ['sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'lead:view', 'lead:edit'] },
+  { key: 'sales_leasing', label: 'Sales & Leasing', permissions: ['sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'lead:view', 'lead:create', 'lead:edit', 'lead:delete', 'lead:convert'] },
+  { key: 'marketing', label: 'Marketing & Campaigns', permissions: ['campaign:view', 'campaign:create', 'campaign:edit', 'campaign:spend', 'campaign:delete'] },
   { key: 'milestones', label: 'Milestones', permissions: ['milestone:view', 'milestone:edit'] },
   { key: 'vendors', label: 'Vendors & Contracts', permissions: ['vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve'] },
   { key: 'documents', label: 'Documents', permissions: ['document:view', 'document:upload', 'document:delete'] },

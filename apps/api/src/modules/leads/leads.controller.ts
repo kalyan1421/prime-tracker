@@ -15,27 +15,37 @@ import { LeadStatus, LeadSource, LeadActivityType } from '@prisma/client';
 export class LeadsController {
   constructor(private service: LeadsService) {}
 
+  @Get('dashboard')
+  @RequirePermissions('lead:view')
+  @ApiOperation({ summary: 'Aggregated dashboard: funnel, sources, stale, recent activity, attribution health' })
+  dashboard(@Query('projectId') projectId?: string) {
+    return this.service.dashboard({ projectId });
+  }
+
   @Get()
-  @RequirePermissions('unit:view')
-  @ApiOperation({ summary: 'List leads (optionally filtered by project/status/assignee)' })
+  @RequirePermissions('lead:view')
+  @ApiOperation({ summary: 'List leads (optionally filtered by project/status/assignee/unit)' })
   findAll(
     @Query('projectId') projectId?: string,
     @Query('status') status?: LeadStatus,
     @Query('assignedTo') assignedTo?: string,
+    @Query('unitId') unitId?: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('campaignId') campaignId?: string,
     @Query('search') search?: string,
   ) {
-    return this.service.findAll({ projectId, status, assignedTo, search });
+    return this.service.findAll({ projectId, status, assignedTo, unitId, buildingId, campaignId, search });
   }
 
   @Get(':id')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('lead:view')
   @ApiOperation({ summary: 'Get a single lead with activities' })
   findOne(@Param('id') id: string) {
     return this.service.findById(id);
   }
 
   @Post()
-  @RequirePermissions('unit:view')
+  @RequirePermissions('lead:create')
   @ApiOperation({ summary: 'Create a new lead' })
   create(
     @Body() body: {
@@ -45,10 +55,18 @@ export class LeadsController {
       phone?: string;
       source: LeadSource;
       status?: LeadStatus;
+      unitId?: string;
+      buildingId?: string;
       unitInterest?: string;
       budget?: number;
       notes?: string;
       assignedTo?: string;
+      // Sprint 2 — campaign attribution
+      campaignId?: string;
+      utmSource?: string;
+      utmMedium?: string;
+      utmCampaign?: string;
+      utmContent?: string;
     },
     @CurrentUser('sub') userId: string,
   ) {
@@ -56,7 +74,7 @@ export class LeadsController {
   }
 
   @Put(':id')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('lead:edit')
   @ApiOperation({ summary: 'Update a lead' })
   update(
     @Param('id') id: string,
@@ -66,6 +84,8 @@ export class LeadsController {
       phone?: string;
       source?: LeadSource;
       status?: LeadStatus;
+      unitId?: string | null;
+      buildingId?: string | null;
       unitInterest?: string;
       budget?: number;
       notes?: string;
@@ -76,7 +96,7 @@ export class LeadsController {
   }
 
   @Delete(':id')
-  @RequirePermissions('unit:manage')
+  @RequirePermissions('lead:delete')
   @ApiOperation({ summary: 'Delete a lead' })
   delete(@Param('id') id: string) {
     return this.service.delete(id);
@@ -85,14 +105,14 @@ export class LeadsController {
   // ---- Activities ----
 
   @Get(':id/activities')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('lead:view')
   @ApiOperation({ summary: 'Get activity timeline for a lead' })
   getActivities(@Param('id') id: string) {
     return this.service.getActivities(id);
   }
 
   @Post(':id/activities')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('lead:edit')
   @ApiOperation({ summary: 'Add an activity to a lead' })
   addActivity(
     @Param('id') leadId: string,
@@ -105,7 +125,7 @@ export class LeadsController {
   // ---- Convert to Sale ----
 
   @Post(':id/convert')
-  @RequirePermissions('sale:manage')
+  @RequirePermissions('lead:convert')
   @ApiOperation({ summary: 'Convert a lead to a sale' })
   convert(
     @Param('id') leadId: string,

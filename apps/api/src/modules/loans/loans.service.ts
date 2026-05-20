@@ -11,11 +11,31 @@ export class LoansService {
   ) {}
 
   async findByProject(projectId: string) {
+    // Sprint 1: loans can be attached at either project- or building-level (per
+    // Centro Plaza's per-building construction loans). Surface both under the
+    // project view via OR(projectId match, building.projectId match).
     const loans = await this.prisma.loan.findMany({
-      where: { projectId },
+      where: {
+        OR: [
+          { projectId },
+          { building: { projectId } },
+        ],
+      },
       include: {
         drawRequests: { orderBy: { drawNumber: 'asc' } },
         unit: { select: { unitNumber: true, building: { select: { name: true } } } },
+        building: { select: { id: true, name: true } },
+      },
+    });
+    return loans.map((l) => this.decryptLoan(l));
+  }
+
+  async findByBuilding(buildingId: string) {
+    const loans = await this.prisma.loan.findMany({
+      where: { buildingId },
+      include: {
+        drawRequests: { orderBy: { drawNumber: 'asc' } },
+        building: { select: { id: true, name: true } },
       },
     });
     return loans.map((l) => this.decryptLoan(l));
@@ -31,6 +51,22 @@ export class LoansService {
   }
 
   async create(data: Prisma.LoanUncheckedCreateInput) {
+    // Sprint 1: loans must reference at least one of (projectId, buildingId).
+    // Setting both is allowed (a per-building loan that still rolls up to the project),
+    // but at least one must be present to anchor the loan in the portfolio hierarchy.
+    if (!data.projectId && !data.buildingId) {
+      throw new BadRequestException('Loan must reference at least one of projectId or buildingId');
+    }
+    // If only buildingId is set, derive projectId from the building so legacy
+    // project-scoped queries (e.g. dashboards) still find this loan without rewrites.
+    if (!data.projectId && data.buildingId) {
+      const b = await this.prisma.building.findUnique({
+        where: { id: data.buildingId as string },
+        select: { projectId: true },
+      });
+      if (!b) throw new NotFoundException('Building not found');
+      data.projectId = b.projectId;
+    }
     const encrypted = this.encryption.encryptFields(data as any, ['lender', 'principalAmt', 'interestRate', 'currentBalance']);
     return this.prisma.loan.create({ data: { ...data, encryptedFields: encrypted.encryptedFields } });
   }

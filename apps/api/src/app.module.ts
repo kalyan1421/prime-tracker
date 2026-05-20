@@ -26,6 +26,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { LeadsModule } from './modules/leads/leads.module';
+import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { CashFlowModule } from './modules/cashflow/cashflow.module';
 import { VendorsModule } from './modules/vendors/vendors.module';
@@ -72,6 +73,7 @@ import { ExceptionsModule } from './modules/exceptions/exceptions.module';
     CommentsModule,
     NotificationsModule,
     LeadsModule,
+    CampaignsModule,
     DashboardModule,
     CashFlowModule,
     VendorsModule,

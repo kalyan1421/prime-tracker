@@ -137,6 +137,10 @@ export class ExceptionsService {
       take: 20,
     });
     for (const l of expiringLeases) {
+      // Post-Sprint 1, a Lease may attach to a Building rather than a Unit
+      // (e.g. Leander Bldg 1 leased whole). Skip building-only leases from the
+      // per-unit exception view — they should be surfaced separately if needed.
+      if (!l.unit) continue;
       const days = Math.floor((l.leaseEnd.getTime() - Date.now()) / 86_400_000);
       out.push({
         id: `lease-${l.id}`,

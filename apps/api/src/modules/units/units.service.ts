@@ -9,8 +9,11 @@ import { UnitStatus, UserRole } from '@prisma/client';
 // Defines which transitions are legal. Empty array = terminal (no further moves).
 // SUPER_ADMIN/FOUNDER can override — see canOverride() below.
 const STATUS_TRANSITIONS: Record<UnitStatus, UnitStatus[]> = {
-  AVAILABLE:           ['UNDER_CONTRACT', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
+  AVAILABLE:           ['UNDER_CONTRACT', 'LEASE_PENDING', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
   UNDER_CONTRACT:      ['AVAILABLE', 'LEASED', 'SOLD'],
+  // LEASE_PENDING: signed lease, tenant not yet moved in. Can flip to LEASED (move-in)
+  // or back to AVAILABLE (deal collapsed during fit-out).
+  LEASE_PENDING:       ['LEASED', 'AVAILABLE'],
   LEASED:              ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT'],
   OCCUPIED:            ['AVAILABLE', 'LEASED'],
   SOLD:                ['AVAILABLE'],  // rare correction path
@@ -281,13 +284,19 @@ export class UnitsService {
       },
     });
 
-    const perUnit = leases.map((l) => ({
-      unitId: l.unit.id,
-      unitNumber: l.unit.unitNumber,
-      buildingName: l.unit.building.name,
-      tenantName: l.tenantName,
-      monthlyRent: Number(l.monthlyRent),
-    }));
+    // After Sprint 1, leases can attach to a Building directly (no unit). The query above
+    // already filters by `unit.building.projectId` so building-only leases are excluded
+    // here — they don't contribute to per-unit monthly income. Filter out any leftover
+    // null `unit` rows defensively before mapping.
+    const perUnit = leases
+      .filter((l): l is typeof l & { unit: NonNullable<typeof l.unit> } => l.unit !== null)
+      .map((l) => ({
+        unitId: l.unit.id,
+        unitNumber: l.unit.unitNumber,
+        buildingName: l.unit.building.name,
+        tenantName: l.tenantName,
+        monthlyRent: Number(l.monthlyRent),
+      }));
 
     const total = perUnit.reduce((sum, u) => sum + u.monthlyRent, 0);
     return { total, annualProjection: total * 12, perUnit };

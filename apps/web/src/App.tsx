@@ -11,6 +11,10 @@ import AdminPage from './pages/AdminPage';
 import ReportsPage from './pages/ReportsPage';
 import UnitDetailPage from './pages/UnitDetailPage';
 import LeadsPage from './pages/LeadsPage';
+import LeadDashboardPage from './pages/LeadDashboardPage';
+import CampaignsPage from './pages/CampaignsPage';
+import VacancyReportPage from './pages/VacancyReportPage';
+import BuildingDetailPage from './pages/BuildingDetailPage';
 import SettingsPage from './pages/SettingsPage';
 import FounderDashboardPage from './pages/FounderDashboardPage';
 import ConstructionDashboardPage from './pages/ConstructionDashboardPage';
@@ -60,9 +64,13 @@ export default function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/units/:unitId" element={<UnitDetailPage />} />
+        <Route path="projects/:id/buildings/:buildingId" element={<ProtectedRoute permission="building:view"><BuildingDetailPage /></ProtectedRoute>} />
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="leads" element={<LeadsPage />} />
+        <Route path="leads/dashboard" element={<ProtectedRoute permission="lead:view"><LeadDashboardPage /></ProtectedRoute>} />
+        <Route path="campaigns" element={<ProtectedRoute permission="campaign:view"><CampaignsPage /></ProtectedRoute>} />
+        <Route path="reports/vacancy" element={<ProtectedRoute permission="sales:view"><VacancyReportPage /></ProtectedRoute>} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="settings/notifications" element={<SettingsPage />} />

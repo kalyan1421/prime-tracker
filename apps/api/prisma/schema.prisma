@@ -16,59 +16,66 @@ datasource db {
 // ---- Auth & RBAC ----
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String
-  avatarUrl     String?
-  googleId      String?   @unique
-  role          UserRole  @default(VIEWER)
-  isActive      Boolean   @default(true)
-  passwordHash  String?
-  mfaEnabled    Boolean   @default(false)
-  mfaSecret     String?   // encrypted TOTP secret
-  lastLoginAt   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  avatarUrl    String?
+  googleId     String?   @unique
+  role         UserRole  @default(VIEWER)
+  isActive     Boolean   @default(true)
+  passwordHash String?
+  mfaEnabled   Boolean   @default(false)
+  mfaSecret    String? // encrypted TOTP secret
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   // tenantId   String?   // future multi-tenant
 
-  milestones              Milestone[]        @relation("MilestoneOwner")
+  milestones              Milestone[]              @relation("MilestoneOwner")
   auditEvents             AuditEvent[]
   sessions                RefreshToken[]
   unitComments            UnitComment[]
   projectComments         ProjectComment[]
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
-  assignedLeads           Lead[]             @relation("LeadAssignee")
-  createdLeads            Lead[]             @relation("LeadCreator")
-  leadActivities          LeadActivity[]     @relation("ActivityCreator")
-  drawRequests            DrawRequest[]      @relation("DrawCreator")
-  approvedDraws           DrawRequest[]      @relation("DrawApprover")
-  uploadedDocuments       Document[]         @relation("DocumentUploader")
-  assignedTasks           Task[]             @relation("TaskAssignee")
-  createdTasks            Task[]             @relation("TaskCreator")
+  assignedLeads           Lead[]                   @relation("LeadAssignee")
+  createdLeads            Lead[]                   @relation("LeadCreator")
+  leadActivities          LeadActivity[]           @relation("ActivityCreator")
+  drawRequests            DrawRequest[]            @relation("DrawCreator")
+  approvedDraws           DrawRequest[]            @relation("DrawApprover")
+  uploadedDocuments       Document[]               @relation("DocumentUploader")
+  assignedTasks           Task[]                   @relation("TaskAssignee")
+  createdTasks            Task[]                   @relation("TaskCreator")
   taskComments            TaskComment[]
-  taskAttachments         TaskAttachment[]   @relation("TaskAttachmentUploader")
-  orgMemberships          OrgMembership[]    @relation("OrgMember")
-  managedMembers          OrgMembership[]    @relation("ManagedBy")
+  taskAttachments         TaskAttachment[]         @relation("TaskAttachmentUploader")
+  orgMemberships          OrgMembership[]          @relation("OrgMember")
+  managedMembers          OrgMembership[]          @relation("ManagedBy")
   projectMemberships      ProjectMember[]
   // New relations from Slices 1, 5, 7, 8
-  milestonePhotos         MilestonePhoto[]   @relation("MilestonePhotoUploader")
-  budgetRevisionsCreated  BudgetRevision[]   @relation("BudgetRevCreator")
-  budgetRevisionsApproved BudgetRevision[]   @relation("BudgetRevApprover")
-  drawApprovals           DrawApproval[]     @relation("DrawApprovalActor")
-  drawDocuments           DrawDocument[]     @relation("DrawDocUploader")
+  milestonePhotos         MilestonePhoto[]         @relation("MilestonePhotoUploader")
+  budgetRevisionsCreated  BudgetRevision[]         @relation("BudgetRevCreator")
+  budgetRevisionsApproved BudgetRevision[]         @relation("BudgetRevApprover")
+  drawApprovals           DrawApproval[]           @relation("DrawApprovalActor")
+  drawDocuments           DrawDocument[]           @relation("DrawDocUploader")
+  // Document Vault Phase 1
+  uploadedDocVersions     DocumentVersion[]        @relation("VersionUploader")
+  // Document Vault Phase 2 — buyer portal
+  clientProfile           Client?                  @relation("ClientUser")
+  // Sprint 2 — Campaign attribution
+  campaignsCreated        Campaign[]               @relation("CampaignCreator")
+  campaignSpendRecorded   CampaignSpend[]          @relation("CampaignSpender")
 
   @@map("users")
 }
 
 model RefreshToken {
-  id          String   @id @default(cuid())
-  token       String   @unique
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
-  revokedAt   DateTime?
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
 
   @@index([userId])
   @@map("refresh_tokens")
@@ -87,6 +94,8 @@ enum UserRole {
   MARKETING
   LEGAL
   VIEWER
+  // Buyer portal role (Phase 2 of Document Vault rollout) — sees only their own unit
+  CLIENT
 }
 
 enum OrgRole {
@@ -100,7 +109,7 @@ model Organization {
   id          String   @id @default(cuid())
   name        String
   slug        String   @unique
-  entityType  String?  // LLC, LP, Corp
+  entityType  String? // LLC, LP, Corp
   description String?
   isDefault   Boolean  @default(false)
   isActive    Boolean  @default(true)
@@ -115,15 +124,15 @@ model Organization {
 }
 
 model OrgMembership {
-  id        String   @id @default(cuid())
+  id        String       @id @default(cuid())
   orgId     String
   org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   userId    String
-  user      User     @relation("OrgMember", fields: [userId], references: [id], onDelete: Cascade)
-  orgRole   OrgRole  @default(EMPLOYEE)
+  user      User         @relation("OrgMember", fields: [userId], references: [id], onDelete: Cascade)
+  orgRole   OrgRole      @default(EMPLOYEE)
   reportsTo String?
-  manager   User?    @relation("ManagedBy", fields: [reportsTo], references: [id])
-  joinedAt  DateTime @default(now())
+  manager   User?        @relation("ManagedBy", fields: [reportsTo], references: [id])
+  joinedAt  DateTime     @default(now())
 
   @@unique([orgId, userId])
   @@index([userId])
@@ -134,45 +143,47 @@ model OrgMembership {
 // ---- Projects ----
 
 model Project {
-  id           String        @id @default(cuid())
-  name         String
-  slug         String        @unique
-  location     String
-  address      String?
-  acreage      Decimal?      @db.Decimal(10, 3)
-  status       ProjectStatus @default(ACTIVE)
-  phase        ProjectPhase  @default(PRE_DEVELOPMENT)
-  projectType  ProjectType?
-  description  String?
-  startDate    DateTime?
-  targetEnd    DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  deletedAt    DateTime?     // soft-delete: archived rows excluded from default reads
+  id          String        @id @default(cuid())
+  name        String
+  slug        String        @unique
+  location    String
+  address     String?
+  acreage     Decimal?      @db.Decimal(10, 3)
+  status      ProjectStatus @default(ACTIVE)
+  phase       ProjectPhase  @default(PRE_DEVELOPMENT)
+  projectType ProjectType?
+  description String?
+  startDate   DateTime?
+  targetEnd   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime? // soft-delete: archived rows excluded from default reads
   // tenantId  String?
-  orgId        String?
-  org          Organization? @relation(fields: [orgId], references: [id])
+  orgId       String?
+  org         Organization? @relation(fields: [orgId], references: [id])
 
-  buildings      Building[]
-  milestones     Milestone[]
-  budgetLines    BudgetLine[]
-  commitments    Commitment[]
-  actuals        Actual[]
-  loans          Loan[]
-  sales          Sale[]
-  kpiSnapshots   KpiSnapshot[]
-  qbMappings     QBProjectMapping[]
-  comments       ProjectComment[]
-  leads          Lead[]
-  drawRequests   DrawRequest[]
+  buildings       Building[]
+  milestones      Milestone[]
+  budgetLines     BudgetLine[]
+  commitments     Commitment[]
+  actuals         Actual[]
+  loans           Loan[]
+  sales           Sale[]
+  kpiSnapshots    KpiSnapshot[]
+  qbMappings      QBProjectMapping[]
+  comments        ProjectComment[]
+  leads           Lead[]
+  drawRequests    DrawRequest[]
   cashFlowEntries CashFlowEntry[]
-  contracts      Contract[]
-  documents      Document[]
+  contracts       Contract[]
+  documents       Document[]
   equityPositions EquityPosition[]
-  capitalCalls   CapitalCall[]
-  distributions  Distribution[]
-  tasks          Task[]
-  members        ProjectMember[]
+  capitalCalls    CapitalCall[]
+  distributions   Distribution[]
+  tasks           Task[]
+  members         ProjectMember[]
+  clients         Client[]
+  campaigns       Campaign[]
 
   @@index([orgId])
   @@index([status, phase])
@@ -187,8 +198,8 @@ model ProjectMember {
   role      String   @default("TEAM_MEMBER")
   addedAt   DateTime @default(now())
 
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, userId])
   @@index([projectId])
@@ -221,23 +232,36 @@ enum ProjectType {
 // ---- Buildings & Units ----
 
 model Building {
-  id           String        @id @default(cuid())
-  projectId    String
-  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name         String
-  totalSqft    Int?
-  stories      Int?
-  buildingType BuildingType?
+  id             String        @id @default(cuid())
+  projectId      String
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  totalSqft      Int?
+  // For LOT-type buildings (raw parcels — see BuildingType.LOT), size is expressed
+  // in acres rather than square feet. Stored as Decimal(10,3) to support fractional
+  // acreage (e.g. 1.27, 8.0, 11.98 from the Rio Ranch lots).
+  acreage        Decimal?      @db.Decimal(10, 3)
+  stories        Int?
+  buildingType   BuildingType?
   // Building-level phase: a project may have Building A in CONSTRUCTION and Building B in LEASE_UP.
   // Project.phase is computed = max(buildings.phase) — see ProjectPhaseService.
-  phase        ProjectPhase  @default(PRE_DEVELOPMENT)
-  coverPhotoPath String?     // optional cover photo (Supabase storage path)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  deletedAt    DateTime?     // soft-delete
+  phase          ProjectPhase  @default(PRE_DEVELOPMENT)
+  coverPhotoPath String? // optional cover photo (Supabase storage path)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime? // soft-delete
 
-  units       Unit[]
-  tasks       Task[]
+  units     Unit[]
+  tasks     Task[]
+  documents Document[]
+  // Polymorphic back-relations: Sale/Lease/Lead/Loan can attach to a Building directly
+  // (e.g. Leander Building 1 leased as one whole asset to "22 Yards Austin") in addition to
+  // attaching to a specific Unit. Service-level validation ensures exactly one of
+  // (buildingId, unitId) is set per row — see Sprint 1 docs.
+  sales     Sale[]
+  leases    Lease[]
+  leads     Lead[]
+  loans     Loan[]
 
   @@index([projectId])
   @@index([phase])
@@ -246,30 +270,38 @@ model Building {
 }
 
 model Unit {
-  id          String     @id @default(cuid())
-  buildingId  String
-  building    Building   @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unitNumber  String
-  unitType    UnitType
-  sqft        Int?
-  status      UnitStatus @default(AVAILABLE)
-  askingRent  Decimal?   @db.Decimal(12, 2) // per sqft/month
-  askingPrice Decimal?   @db.Decimal(14, 2) // for sale units
-  primeOwned  Boolean    @default(false)
-  notes       String?
+  id             String     @id @default(cuid())
+  buildingId     String
+  building       Building   @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitNumber     String
+  unitType       UnitType
+  sqft           Int?
+  // Optional split of total sqft into floor + mezzanine. Some lease structures price
+  // these separately (e.g. Lewisville P1 mezzanine units). When both are set,
+  // `sqft` is the grand total — service code does not auto-derive to keep historical
+  // unit sizes immutable.
+  floorArea      Decimal?   @db.Decimal(10, 2)
+  mezzanineArea  Decimal?   @db.Decimal(10, 2)
+  status         UnitStatus @default(AVAILABLE)
+  askingRent     Decimal?   @db.Decimal(12, 2) // per sqft/month
+  askingPrice    Decimal?   @db.Decimal(14, 2) // for sale units
+  primeOwned     Boolean    @default(false)
+  notes          String?
   // Time-on-market tracking: set when status flips to AVAILABLE, cleared on any other status.
   // Read-only from app code — UnitsService maintains this in update().
   availableSince DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-  deletedAt   DateTime?  // soft-delete: preserves financial history
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  deletedAt      DateTime? // soft-delete: preserves financial history
 
-  leases      Lease[]
-  sales       Sale[]
-  comments    UnitComment[]
-  loans       Loan[]
-  documents   Document[]
-  tasks       Task[]
+  leases    Lease[]
+  sales     Sale[]
+  comments  UnitComment[]
+  loans     Loan[]
+  documents Document[]
+  tasks     Task[]
+  clients   Client[]
+  leads     Lead[]
 
   @@unique([buildingId, unitNumber])
   @@index([buildingId])
@@ -288,6 +320,9 @@ enum BuildingType {
   AMENITY
   RETAIL
   OFFICE
+  // Raw-land / undeveloped parcel — e.g. Rio Ranch lots (sold by acreage, no units inside).
+  // Buildings of type LOT typically have no Unit children; sale/lease attaches to the Building directly.
+  LOT
 }
 
 enum UnitType {
@@ -295,6 +330,7 @@ enum UnitType {
   MEDICAL
   FLEX
   RESIDENTIAL_LOT
+  COMMERCIAL_LOT
   OFFICE
   RESTAURANT
   EVENT_CENTER
@@ -304,6 +340,9 @@ enum UnitStatus {
   AVAILABLE
   UNDER_CONTRACT
   LEASED
+  // Lease signed but not yet active (e.g. tenant build-out in progress).
+  // Matches the "🔵 Lease Pending" status in the client's project spreadsheets.
+  LEASE_PENDING
   SOLD
   OCCUPIED
   UNDER_CONSTRUCTION
@@ -354,29 +393,29 @@ model UnitComment {
 // ---- Milestones ----
 
 model Milestone {
-  id          String          @id @default(cuid())
-  projectId   String
-  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  title       String
-  description String?
-  phase       ProjectPhase
-  dueDate     DateTime
-  completedAt DateTime?
-  status      MilestoneStatus @default(NOT_STARTED)
-  ownerId     String?
-  owner       User?           @relation("MilestoneOwner", fields: [ownerId], references: [id])
-  sortOrder   Int             @default(0)
+  id                   String           @id @default(cuid())
+  projectId            String
+  project              Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title                String
+  description          String?
+  phase                ProjectPhase
+  dueDate              DateTime
+  completedAt          DateTime?
+  status               MilestoneStatus  @default(NOT_STARTED)
+  ownerId              String?
+  owner                User?            @relation("MilestoneOwner", fields: [ownerId], references: [id])
+  sortOrder            Int              @default(0)
   // Dependency: this milestone cannot start until dependsOn is COMPLETED.
   // Cycle prevention is enforced in MilestonesService.setDependency().
-  dependsOnId String?
-  dependsOn   Milestone?      @relation("MilestoneDeps", fields: [dependsOnId], references: [id], onDelete: SetNull)
-  dependents  Milestone[]     @relation("MilestoneDeps")
+  dependsOnId          String?
+  dependsOn            Milestone?       @relation("MilestoneDeps", fields: [dependsOnId], references: [id], onDelete: SetNull)
+  dependents           Milestone[]      @relation("MilestoneDeps")
   // Link to a draw schedule entry — completing this milestone auto-drafts a DrawRequest.
   linkedDrawScheduleId String?
-  linkedDrawSchedule   DrawSchedule? @relation(fields: [linkedDrawScheduleId], references: [id])
-  photos      MilestonePhoto[]
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  linkedDrawSchedule   DrawSchedule?    @relation(fields: [linkedDrawScheduleId], references: [id])
+  photos               MilestonePhoto[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
   @@index([projectId, phase])
   @@index([dependsOnId])
@@ -389,7 +428,7 @@ model MilestonePhoto {
   id           String    @id @default(cuid())
   milestoneId  String
   milestone    Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-  storagePath  String    // Supabase Storage key
+  storagePath  String // Supabase Storage key
   caption      String?
   uploadedById String
   uploadedBy   User      @relation("MilestonePhotoUploader", fields: [uploadedById], references: [id])
@@ -423,9 +462,9 @@ model BudgetLine {
   notes       String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
-  deletedAt   DateTime?      // soft-delete
+  deletedAt   DateTime? // soft-delete
 
-  revisions   BudgetRevision[]
+  revisions BudgetRevision[]
 
   @@index([projectId, category])
   @@index([deletedAt])
@@ -436,19 +475,19 @@ model BudgetLine {
 // BudgetLine.revisedAmt always equals the latest revision's amount.
 // Append-only: revisions are never updated or deleted.
 model BudgetRevision {
-  id             String   @id @default(cuid())
+  id             String             @id @default(cuid())
   budgetLineId   String
-  budgetLine     BudgetLine @relation(fields: [budgetLineId], references: [id], onDelete: Cascade)
-  revisionNumber Int      // 1 = baseline, 2+ = subsequent revisions
-  amount         Decimal  @db.Decimal(14, 2)
-  reason         String   // required free-text justification
+  budgetLine     BudgetLine         @relation(fields: [budgetLineId], references: [id], onDelete: Cascade)
+  revisionNumber Int // 1 = baseline, 2+ = subsequent revisions
+  amount         Decimal            @db.Decimal(14, 2)
+  reason         String // required free-text justification
   changeReason   BudgetChangeReason
   createdById    String
-  createdBy      User     @relation("BudgetRevCreator", fields: [createdById], references: [id])
+  createdBy      User               @relation("BudgetRevCreator", fields: [createdById], references: [id])
   approvedById   String?
-  approvedBy     User?    @relation("BudgetRevApprover", fields: [approvedById], references: [id])
+  approvedBy     User?              @relation("BudgetRevApprover", fields: [approvedById], references: [id])
   approvedAt     DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime           @default(now())
 
   @@unique([budgetLineId, revisionNumber])
   @@index([budgetLineId])
@@ -456,11 +495,11 @@ model BudgetRevision {
 }
 
 enum BudgetChangeReason {
-  SCOPE_ADD          // we're adding scope
-  COST_INCREASE      // same scope, vendor raised price
-  REALLOCATION       // shifted from another category
-  ESTIMATE_REFINED   // better information now
-  CHANGE_ORDER       // formal CO from vendor
+  SCOPE_ADD // we're adding scope
+  COST_INCREASE // same scope, vendor raised price
+  REALLOCATION // shifted from another category
+  ESTIMATE_REFINED // better information now
+  CHANGE_ORDER // formal CO from vendor
   OTHER
 }
 
@@ -478,37 +517,37 @@ enum BudgetCategory {
 }
 
 model Commitment {
-  id           String   @id @default(cuid())
+  id           String         @id @default(cuid())
   projectId    String
-  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   vendor       String
   description  String
-  contractAmt  Decimal  @db.Decimal(14, 2)
-  paidToDate   Decimal  @default(0) @db.Decimal(14, 2)
-  retainage    Decimal  @default(0) @db.Decimal(14, 2)
+  contractAmt  Decimal        @db.Decimal(14, 2)
+  paidToDate   Decimal        @default(0) @db.Decimal(14, 2)
+  retainage    Decimal        @default(0) @db.Decimal(14, 2)
   category     BudgetCategory
   contractDate DateTime?
   notes        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
   @@index([projectId])
   @@map("commitments")
 }
 
 model Actual {
-  id            String       @id @default(cuid())
-  projectId     String
-  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  category      BudgetCategory
-  description   String
-  amount        Decimal      @db.Decimal(14, 2)
-  txnDate       DateTime
-  vendor        String?
-  qbTxnId       String?      @unique // QuickBooks transaction ID
-  qbSyncStatus  QBSyncStatus @default(PENDING)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id           String         @id @default(cuid())
+  projectId    String
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category     BudgetCategory
+  description  String
+  amount       Decimal        @db.Decimal(14, 2)
+  txnDate      DateTime
+  vendor       String?
+  qbTxnId      String?        @unique // QuickBooks transaction ID
+  qbSyncStatus QBSyncStatus   @default(PENDING)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
   @@index([projectId, category])
   @@index([qbTxnId])
@@ -526,28 +565,35 @@ enum QBSyncStatus {
 
 model Loan {
   id              String    @id @default(cuid())
-  projectId       String
-  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Loans attach at either the Project level (portfolio loan covering multiple buildings)
+  // or the Building level (per-tower construction loan — see Centro Plaza Bldgs 1 & 2,
+  // each with its own closing date, rate, and outstanding balance).
+  // Service layer requires at least one of (projectId, buildingId) to be set.
+  projectId       String?
+  project         Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  buildingId      String?
+  building        Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitId          String?
   unit            Unit?     @relation(fields: [unitId], references: [id])
   loanType        LoanType
-  lender          String    // encrypted
+  lender          String // encrypted
   principalAmt    Decimal   @db.Decimal(14, 2) // encrypted at app level
-  interestRate    Decimal   @db.Decimal(6, 4)  // encrypted at app level
+  interestRate    Decimal   @db.Decimal(6, 4) // encrypted at app level
   termMonths      Int
   maturityDate    DateTime?
   currentBalance  Decimal?  @db.Decimal(14, 2) // encrypted at app level
   monthlyPayment  Decimal?  @db.Decimal(12, 2)
   notes           String?
-  encryptedFields String?   // JSON blob of encrypted sensitive data
+  encryptedFields String? // JSON blob of encrypted sensitive data
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime? // soft-delete: required for compliance/audit
 
-  drawRequests    DrawRequest[]
-  drawSchedules   DrawSchedule[]
+  drawRequests  DrawRequest[]
+  drawSchedules DrawSchedule[]
 
   @@index([projectId])
+  @@index([buildingId])
   @@index([unitId])
   @@index([deletedAt])
   @@index([maturityDate])
@@ -563,33 +609,33 @@ enum LoanType {
 }
 
 model DrawRequest {
-  id              String     @id @default(cuid())
-  loanId          String
-  loan            Loan       @relation(fields: [loanId], references: [id], onDelete: Cascade)
-  projectId       String?
-  project         Project?   @relation(fields: [projectId], references: [id])
-  drawNumber      Int
-  amount          Decimal    @db.Decimal(14, 2)
-  requestedAmount Decimal?   @db.Decimal(14, 2)
-  approvedAmount  Decimal?   @db.Decimal(14, 2)
-  requestDate     DateTime
-  approvedAt      DateTime?
-  approvedDate    DateTime?
-  fundedAt        DateTime?
-  status          DrawStatus @default(DRAFT)
-  notes           String?
-  rejectionReason String?
-  createdById     String?
-  createdBy       User?      @relation("DrawCreator", fields: [createdById], references: [id])
-  approvedById    String?
-  approvedBy      User?      @relation("DrawApprover", fields: [approvedById], references: [id])
+  id                  String         @id @default(cuid())
+  loanId              String
+  loan                Loan           @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  projectId           String?
+  project             Project?       @relation(fields: [projectId], references: [id])
+  drawNumber          Int
+  amount              Decimal        @db.Decimal(14, 2)
+  requestedAmount     Decimal?       @db.Decimal(14, 2)
+  approvedAmount      Decimal?       @db.Decimal(14, 2)
+  requestDate         DateTime
+  approvedAt          DateTime?
+  approvedDate        DateTime?
+  fundedAt            DateTime?
+  status              DrawStatus     @default(DRAFT)
+  notes               String?
+  rejectionReason     String?
+  createdById         String?
+  createdBy           User?          @relation("DrawCreator", fields: [createdById], references: [id])
+  approvedById        String?
+  approvedBy          User?          @relation("DrawApprover", fields: [approvedById], references: [id])
   // Slice 8 additions
-  expectedFundingDate DateTime?  // PM's best estimate; cron escalates if overshot
-  submittedToLenderAt DateTime?  // when finance forwarded to construction lender
-  approvals       DrawApproval[]
-  documents       DrawDocument[]
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  expectedFundingDate DateTime? // PM's best estimate; cron escalates if overshot
+  submittedToLenderAt DateTime? // when finance forwarded to construction lender
+  approvals           DrawApproval[]
+  documents           DrawDocument[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   @@unique([loanId, drawNumber])
   @@index([projectId])
@@ -609,25 +655,25 @@ enum DrawStatus {
 // One row per workflow action (approve/reject/return) on a draw.
 // Append-only audit trail of the multi-party approval chain.
 model DrawApproval {
-  id            String   @id @default(cuid())
+  id            String             @id @default(cuid())
   drawRequestId String
-  drawRequest   DrawRequest @relation(fields: [drawRequestId], references: [id], onDelete: Cascade)
+  drawRequest   DrawRequest        @relation(fields: [drawRequestId], references: [id], onDelete: Cascade)
   step          DrawApprovalStep
   action        DrawApprovalAction
   actorId       String
-  actor         User     @relation("DrawApprovalActor", fields: [actorId], references: [id])
+  actor         User               @relation("DrawApprovalActor", fields: [actorId], references: [id])
   comment       String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime           @default(now())
 
   @@index([drawRequestId, step])
   @@map("draw_approvals")
 }
 
 enum DrawApprovalStep {
-  INTERNAL_FOUNDER  // founder sign-off
-  INTERNAL_FINANCE  // finance review
-  LENDER_SUBMITTED  // sent to construction lender
-  LENDER_FUNDED     // lender wired funds
+  INTERNAL_FOUNDER // founder sign-off
+  INTERNAL_FINANCE // finance review
+  LENDER_SUBMITTED // sent to construction lender
+  LENDER_FUNDED // lender wired funds
 }
 
 enum DrawApprovalAction {
@@ -639,15 +685,15 @@ enum DrawApprovalAction {
 // Files attached to a draw — lien waivers, inspection reports, etc.
 // Drives the "missing documents" red-flag UI.
 model DrawDocument {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   drawRequestId String
   drawRequest   DrawRequest @relation(fields: [drawRequestId], references: [id], onDelete: Cascade)
   documentType  DrawDocType
-  storagePath   String   // Supabase Storage key
+  storagePath   String // Supabase Storage key
   filename      String
   uploadedById  String
-  uploadedBy    User     @relation("DrawDocUploader", fields: [uploadedById], references: [id])
-  uploadedAt    DateTime @default(now())
+  uploadedBy    User        @relation("DrawDocUploader", fields: [uploadedById], references: [id])
+  uploadedAt    DateTime    @default(now())
 
   @@index([drawRequestId, documentType])
   @@map("draw_documents")
@@ -683,32 +729,41 @@ model DrawSchedule {
 // ---- Sales ----
 
 model Sale {
-  id           String     @id @default(cuid())
-  projectId    String
-  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  unitId       String
-  unit         Unit       @relation(fields: [unitId], references: [id])
-  buyer        String?
-  salePrice    Decimal?   @db.Decimal(14, 2)
-  depositAmt   Decimal?   @db.Decimal(14, 2)
-  status       SaleStatus @default(PROSPECT)
-  loiDate      DateTime?
-  contractDate DateTime?
-  closingDate  DateTime?
-  notes        String?
+  id                String      @id @default(cuid())
+  projectId         String
+  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
+  // Enforced at the service layer (SalesService.create/update). DB lets both be null
+  // to support data migration; queries should always include the populated side.
+  unitId            String?
+  unit              Unit?       @relation(fields: [unitId], references: [id])
+  buildingId        String?
+  building          Building?   @relation(fields: [buildingId], references: [id])
+  buyer             String?
+  salePrice         Decimal?    @db.Decimal(14, 2)
+  depositAmt        Decimal?    @db.Decimal(14, 2)
+  status            SaleStatus  @default(PROSPECT)
+  loiDate           DateTime?
+  contractDate      DateTime?
+  closingDate       DateTime?
+  notes             String?
   // Slice 6: Pipeline upgrade
-  lastActivityAt    DateTime?       // bump on update or comment; powers activity-drought alerts
-  expectedCloseDate DateTime?       // for weighted forecast time-bucketing
-  lostReason        LostReason?     // required when status -> CANCELLED
+  lastActivityAt    DateTime? // bump on update or comment; powers activity-drought alerts
+  expectedCloseDate DateTime? // for weighted forecast time-bucketing
+  lostReason        LostReason? // required when status -> CANCELLED
   lostReasonNote    String?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  deletedAt    DateTime?  // soft-delete
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime? // soft-delete
 
   convertedLead Lead?
 
+  documents Document[]
+  client    Client?
+
   @@index([projectId])
   @@index([unitId])
+  @@index([buildingId])
   @@index([status, deletedAt])
   @@index([status, lastActivityAt])
   @@index([deletedAt])
@@ -735,26 +790,37 @@ enum SaleStatus {
 // ---- Leases ----
 
 model Lease {
-  id             String      @id @default(cuid())
-  unitId         String
-  unit           Unit        @relation(fields: [unitId], references: [id])
-  tenantName     String
-  tenantContact  String?
-  monthlyRent    Decimal     @db.Decimal(12, 2)
-  rentPerSqft    Decimal?    @db.Decimal(8, 2)
-  leaseStart     DateTime
-  leaseEnd       DateTime
-  termMonths     Int
-  escalationPct  Decimal?    @db.Decimal(5, 2)
-  escalationFreq Int?        // months between escalations
-  securityDeposit Decimal?   @db.Decimal(12, 2)
-  status         LeaseStatus @default(DRAFT)
-  notes          String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  deletedAt      DateTime?   // soft-delete
+  id              String      @id @default(cuid())
+  // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
+  // Service-layer enforcement; DB allows both null only during migration.
+  unitId          String?
+  unit            Unit?       @relation(fields: [unitId], references: [id])
+  buildingId      String?
+  building        Building?   @relation(fields: [buildingId], references: [id])
+  // tenantName: legacy field — kept populated for backwards compatibility with existing
+  // queries and reporting. New rows should also populate `tenantLegalName` (the LLC /
+  // legal entity that signs the lease) and `tenantBrand` (the doing-business-as / brand
+  // name that customers see, e.g. "ABC LLC dba Cream Stone").
+  tenantName      String
+  tenantLegalName String?
+  tenantBrand     String?
+  tenantContact   String?
+  monthlyRent     Decimal     @db.Decimal(12, 2)
+  rentPerSqft     Decimal?    @db.Decimal(8, 2)
+  leaseStart      DateTime
+  leaseEnd        DateTime
+  termMonths      Int
+  escalationPct   Decimal?    @db.Decimal(5, 2)
+  escalationFreq  Int? // months between escalations
+  securityDeposit Decimal?    @db.Decimal(12, 2)
+  status          LeaseStatus @default(DRAFT)
+  notes           String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  deletedAt       DateTime? // soft-delete
 
   @@index([unitId])
+  @@index([buildingId])
   @@index([status, leaseEnd])
   @@index([deletedAt])
   @@map("leases")
@@ -765,21 +831,24 @@ enum LeaseStatus {
   ACTIVE
   EXPIRED
   TERMINATED
+  // Prime Developers itself occupies the unit/building (no third-party tenant).
+  // Lewisville Phase 1 uses this state for units retained for in-house use.
+  OWNER_OCCUPIED
 }
 
 // ---- Rent Roll Snapshot ----
 
 model RentRollSnapshot {
-  id           String   @id @default(cuid())
-  projectId    String
-  snapshotDate DateTime
-  totalUnits   Int
-  leasedUnits  Int
-  occupancyPct Decimal  @db.Decimal(5, 2)
-  grossRent    Decimal  @db.Decimal(14, 2)
-  effectiveRent Decimal @db.Decimal(14, 2)
-  data         Json     // detailed unit-level breakdown
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  projectId     String
+  snapshotDate  DateTime
+  totalUnits    Int
+  leasedUnits   Int
+  occupancyPct  Decimal  @db.Decimal(5, 2)
+  grossRent     Decimal  @db.Decimal(14, 2)
+  effectiveRent Decimal  @db.Decimal(14, 2)
+  data          Json // detailed unit-level breakdown
+  createdAt     DateTime @default(now())
 
   @@unique([projectId, snapshotDate])
   @@map("rent_roll_snapshots")
@@ -788,20 +857,20 @@ model RentRollSnapshot {
 // ---- KPI Snapshot ----
 
 model KpiSnapshot {
-  id              String   @id @default(cuid())
-  projectId       String
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  snapshotDate    DateTime
-  budgetTotal     Decimal  @db.Decimal(14, 2)
-  actualTotal     Decimal  @db.Decimal(14, 2)
-  committedTotal  Decimal  @db.Decimal(14, 2)
-  forecastTotal   Decimal  @db.Decimal(14, 2)
-  variance        Decimal  @db.Decimal(14, 2)
-  occupancyPct    Decimal? @db.Decimal(5, 2)
-  leasedSqft      Int?
-  soldUnits       Int?
-  data            Json?    // extensible KPI data
-  createdAt       DateTime @default(now())
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  snapshotDate   DateTime
+  budgetTotal    Decimal  @db.Decimal(14, 2)
+  actualTotal    Decimal  @db.Decimal(14, 2)
+  committedTotal Decimal  @db.Decimal(14, 2)
+  forecastTotal  Decimal  @db.Decimal(14, 2)
+  variance       Decimal  @db.Decimal(14, 2)
+  occupancyPct   Decimal? @db.Decimal(5, 2)
+  leasedSqft     Int?
+  soldUnits      Int?
+  data           Json? // extensible KPI data
+  createdAt      DateTime @default(now())
 
   @@unique([projectId, snapshotDate])
   @@index([projectId])
@@ -811,44 +880,44 @@ model KpiSnapshot {
 // ---- QuickBooks Integration ----
 
 model QBConnection {
-  id              String   @id @default(cuid())
-  realmId         String   @unique
-  accessToken     String   // encrypted
-  refreshToken    String   // encrypted
-  tokenExpiresAt  DateTime
-  companyName     String?
-  lastSyncAt      DateTime?
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String    @id @default(cuid())
+  realmId        String    @unique
+  accessToken    String // encrypted
+  refreshToken   String // encrypted
+  tokenExpiresAt DateTime
+  companyName    String?
+  lastSyncAt     DateTime?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@map("qb_connections")
 }
 
 model QBProjectMapping {
-  id          String   @id @default(cuid())
-  projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  qbClassId   String?
-  qbClassName String?
-  qbLocationId String?
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  qbClassId      String?
+  qbClassName    String?
+  qbLocationId   String?
   qbLocationName String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@unique([projectId])
   @@map("qb_project_mappings")
 }
 
 model QBSyncLog {
-  id           String   @id @default(cuid())
-  syncType     String   // VENDORS, ACCOUNTS, BILLS, PAYMENTS, EXPENSES
-  status       String   // STARTED, COMPLETED, FAILED
-  recordsFound Int      @default(0)
-  recordsSynced Int     @default(0)
-  errors       Json?
-  startedAt    DateTime @default(now())
-  completedAt  DateTime?
+  id            String    @id @default(cuid())
+  syncType      String // VENDORS, ACCOUNTS, BILLS, PAYMENTS, EXPENSES
+  status        String // STARTED, COMPLETED, FAILED
+  recordsFound  Int       @default(0)
+  recordsSynced Int       @default(0)
+  errors        Json?
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
 
   @@map("qb_sync_logs")
 }
@@ -889,46 +958,161 @@ enum LeadActivityType {
 }
 
 model Lead {
-  id                String      @id @default(cuid())
+  id                String     @id @default(cuid())
   projectId         String
-  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project           Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   source            LeadSource
   name              String?
   email             String?
   phone             String?
   notes             String?
-  status            LeadStatus  @default(NEW)
+  status            LeadStatus @default(NEW)
+  // Polymorphic asset link — a lead can be interested in a specific Unit OR a
+  // whole Building (e.g. an enterprise tenant inquiring about Leander Bldg 1).
+  // Service layer enforces "at most one of (unitId, buildingId)" — both can be
+  // null for project-level leads with no specific asset yet.
+  unitId            String?
+  unit              Unit?      @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  buildingId        String?
+  building          Building?  @relation(fields: [buildingId], references: [id], onDelete: SetNull)
   unitInterest      String?
-  budget            Decimal?    @db.Decimal(14, 2)
+  budget            Decimal?   @db.Decimal(14, 2)
   assignedTo        String?
-  assignedUser      User?       @relation("LeadAssignee", fields: [assignedTo], references: [id])
-  convertedToSaleId String?     @unique
-  convertedToSale   Sale?       @relation(fields: [convertedToSaleId], references: [id])
+  assignedUser      User?      @relation("LeadAssignee", fields: [assignedTo], references: [id])
+  convertedToSaleId String?    @unique
+  convertedToSale   Sale?      @relation(fields: [convertedToSaleId], references: [id])
+  // Sprint 2 — Campaign attribution:
+  //   campaignId — explicit named-campaign tag (e.g. "Spur Plaza Diwali Launch 2026")
+  //   utm*       — raw passthrough from the web form / landing-page URL; preserved
+  //                even when the campaign cannot be resolved server-side, so the
+  //                attribution can be reconstructed later if a Campaign is created
+  //                retroactively to match the utmCampaign value.
+  campaignId        String?
+  campaign          Campaign?  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  utmSource         String?
+  utmMedium         String?
+  utmCampaign       String?
+  utmContent        String?
   createdBy         String
-  createdByUser     User        @relation("LeadCreator", fields: [createdBy], references: [id])
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  createdByUser     User       @relation("LeadCreator", fields: [createdBy], references: [id])
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
-  activities        LeadActivity[]
+  activities LeadActivity[]
+  documents  Document[]
 
   @@index([projectId])
   @@index([status])
   @@index([assignedTo])
+  @@index([unitId])
+  @@index([buildingId])
+  @@index([campaignId])
   @@map("leads")
 }
 
 model LeadActivity {
-  id        String           @id @default(cuid())
-  leadId    String
-  lead      Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  type      LeadActivityType
-  note      String
-  createdBy String
-  createdByUser User         @relation("ActivityCreator", fields: [createdBy], references: [id])
-  createdAt DateTime         @default(now())
+  id            String           @id @default(cuid())
+  leadId        String
+  lead          Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type          LeadActivityType
+  note          String
+  createdBy     String
+  createdByUser User             @relation("ActivityCreator", fields: [createdBy], references: [id])
+  createdAt     DateTime         @default(now())
 
   @@index([leadId])
   @@map("lead_activities")
+}
+
+// ---- Campaigns (Sprint 2: marketing-spend attribution) ----
+//
+// A Campaign is a named marketing effort (e.g. "Spur Plaza Diwali Launch 2026")
+// that runs through one channel (Meta, Google Ads, Newspaper, Broker, …) and may
+// or may not be tied to a single project. Spend is tracked through CampaignSpend
+// ledger entries — append-only, never overwritten — so reconciliation between
+// manual entries, agency reports, and platform APIs stays auditable.
+
+enum CampaignChannel {
+  META
+  GOOGLE_ADS
+  NEWSPAPER
+  BROKER
+  EMAIL
+  SIGNAGE
+  EVENT
+  OTHER
+}
+
+enum CampaignStatus {
+  PLANNED
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+enum CampaignSpendSource {
+  MANUAL // entered by Marketing/Founder
+  META_API // future Meta Marketing API sync
+  GOOGLE_API // future Google Ads API sync
+  AGENCY_REPORT // bulk import from agency monthly statement
+}
+
+model Campaign {
+  id            String          @id @default(cuid())
+  // Cross-project campaigns (Prime Developers brand campaign) leave this null;
+  // project-specific campaigns (Spur Plaza Diwali launch) populate it.
+  projectId     String?
+  project       Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  name          String
+  channel       CampaignChannel
+  // External platform ID (Meta Ad Set ID, Google Campaign ID) — used by future
+  // API sync to match incoming spend entries back to this campaign.
+  externalId    String?
+  // Optional pre-allocated planned budget. Real spend lives in CampaignSpend.
+  plannedBudget Decimal?        @db.Decimal(14, 2)
+  status        CampaignStatus  @default(PLANNED)
+  startDate     DateTime?
+  endDate       DateTime?
+  notes         String?
+  createdBy     String
+  createdByUser User            @relation("CampaignCreator", fields: [createdBy], references: [id])
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  deletedAt     DateTime? // soft-delete preserves attribution history
+
+  spend CampaignSpend[]
+  leads Lead[]
+
+  @@index([projectId])
+  @@index([channel])
+  @@index([status])
+  @@index([externalId])
+  @@index([deletedAt])
+  @@map("campaigns")
+}
+
+model CampaignSpend {
+  id             String              @id @default(cuid())
+  campaignId     String
+  campaign       Campaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  amount         Decimal             @db.Decimal(14, 2)
+  currency       String              @default("USD")
+  spentOn        DateTime
+  source         CampaignSpendSource
+  // Vendor reference — Meta invoice ID, Google line-item ID, agency report row.
+  // Used to deduplicate spend entries when the same period is re-imported.
+  externalRef    String?
+  recordedBy     String
+  recordedByUser User                @relation("CampaignSpender", fields: [recordedBy], references: [id])
+  createdAt      DateTime            @default(now())
+
+  // Same campaign+source+externalRef must be unique to prevent double-import.
+  // External APIs sending the same row twice will hit this constraint.
+  @@unique([campaignId, source, externalRef], map: "campaign_spend_dedupe")
+  @@index([campaignId])
+  @@index([spentOn])
+  @@index([source])
+  @@map("campaign_spend")
 }
 
 // ---- Notifications ----
@@ -949,15 +1133,15 @@ enum NotificationType {
 }
 
 model Notification {
-  id         String           @id @default(cuid())
-  userId     String
-  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type       NotificationType
-  title      String
-  body       String
-  link       String?
-  readAt     DateTime?
-  createdAt  DateTime         @default(now())
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
 
   @@index([userId, readAt])
   @@index([createdAt])
@@ -1027,21 +1211,21 @@ model Vendor {
 }
 
 model Contract {
-  id             String         @id @default(cuid())
+  id             String            @id @default(cuid())
   projectId      String
-  project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   vendorId       String
-  vendor         Vendor         @relation(fields: [vendorId], references: [id])
+  vendor         Vendor            @relation(fields: [vendorId], references: [id])
   description    String
   originalAmount Float
   currentAmount  Float
-  status         ContractStatus @default(DRAFT)
+  status         ContractStatus    @default(DRAFT)
   startDate      DateTime?
   endDate        DateTime?
   changeOrders   ChangeOrder[]
   payments       ContractPayment[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
   @@index([projectId])
   @@map("contracts")
@@ -1083,27 +1267,119 @@ enum DocCategory {
   DRAWING
   PHOTO
   LEGAL
+  // Phase 1 — sales lifecycle
+  BROCHURE
+  LOI
+  DEED
+  // Phase 1 — buyer-portal categories (visible to CLIENT role when isClientVisible)
+  BOOKING_AGREEMENT
+  RECEIPT
+  NOC
+  POSSESSION_CERTIFICATE
 }
 
 model Document {
-  id           String      @id @default(cuid())
-  projectId    String?
-  project      Project?    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  unitId       String?
-  unit         Unit?       @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  fileName     String
-  fileUrl      String
-  storagePath  String?
-  fileSize     Int?
-  mimeType     String?
-  category     DocCategory @default(GENERAL)
-  uploadedById String
-  uploadedBy   User        @relation("DocumentUploader", fields: [uploadedById], references: [id])
-  createdAt    DateTime    @default(now())
+  id              String            @id @default(cuid())
+  projectId       String?
+  project         Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  buildingId      String?
+  building        Building?         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId          String?
+  unit            Unit?             @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  saleId          String?
+  sale            Sale?             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  leadId          String?
+  lead            Lead?             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  // Current-version metadata. On replace, the prior values are copied into a DocumentVersion row.
+  fileName        String
+  fileUrl         String
+  storagePath     String?
+  fileSize        Int?
+  mimeType        String?
+  // First-class link target so Sales can paste a DocuSign / Drive URL instead of uploading.
+  // Either fileUrl OR externalUrl will be populated (storagePath null when external).
+  externalUrl     String?
+  category        DocCategory       @default(GENERAL)
+  // Phase 2 portal flag. Default false — promotion is always an explicit internal action.
+  isClientVisible Boolean           @default(false)
+  versionNumber   Int               @default(1)
+  uploadedById    String
+  uploadedBy      User              @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  versions        DocumentVersion[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  deletedAt       DateTime?
+
+  @@index([projectId])
+  @@index([buildingId])
+  @@index([unitId])
+  @@index([saleId])
+  @@index([leadId])
+  @@index([category, deletedAt])
+  @@index([isClientVisible, deletedAt])
+  @@index([deletedAt])
+  @@map("documents")
+}
+
+// Archive of prior document versions. Created when a Document's file is replaced.
+model DocumentVersion {
+  id            String   @id @default(cuid())
+  documentId    String
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  versionNumber Int
+  fileName      String
+  fileUrl       String
+  storagePath   String?
+  fileSize      Int?
+  mimeType      String?
+  externalUrl   String?
+  notes         String?
+  uploadedById  String
+  uploadedBy    User     @relation("VersionUploader", fields: [uploadedById], references: [id])
+  // When this version was originally uploaded as the live document.
+  uploadedAt    DateTime
+  // When this version was superseded (i.e., archived).
+  archivedAt    DateTime @default(now())
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+// ---- Buyer / Client Portal ----
+
+enum ClientStatus {
+  ONBOARDING
+  ACTIVE
+  COMPLETED
+  TERMINATED
+}
+
+// A Client is a buyer who has been provisioned portal access after a Sale closes.
+// Created automatically by SalesService when status -> CLOSED.
+model Client {
+  id          String       @id @default(cuid())
+  userId      String       @unique
+  user        User         @relation("ClientUser", fields: [userId], references: [id], onDelete: Cascade)
+  saleId      String       @unique
+  sale        Sale         @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id])
+  unitId      String
+  unit        Unit         @relation(fields: [unitId], references: [id])
+  status      ClientStatus @default(ONBOARDING)
+  invitedAt   DateTime?
+  activatedAt DateTime?
+  notes       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
 
   @@index([projectId])
   @@index([unitId])
-  @@map("documents")
+  @@index([status, deletedAt])
+  @@index([deletedAt])
+  @@map("clients")
 }
 
 // ---- Investors ----
@@ -1115,15 +1391,15 @@ enum CapitalCallStatus {
 }
 
 model Investor {
-  id           String           @id @default(cuid())
-  name         String
-  email        String?          @unique
-  phone        String?
-  entityName   String?
-  positions    EquityPosition[]
-  capitalCalls CapitalCall[]
+  id            String           @id @default(cuid())
+  name          String
+  email         String?          @unique
+  phone         String?
+  entityName    String?
+  positions     EquityPosition[]
+  capitalCalls  CapitalCall[]
   distributions Distribution[]
-  createdAt    DateTime         @default(now())
+  createdAt     DateTime         @default(now())
 
   @@map("investors")
 }
@@ -1182,18 +1458,18 @@ model Distribution {
 // ---- Audit Log (Immutable) ----
 
 model AuditEvent {
-  id          String   @id @default(cuid())
-  userId      String?
-  user        User?    @relation(fields: [userId], references: [id])
-  action      String   // CREATE, UPDATE, DELETE, LOGIN, etc.
-  entity      String   // table/model name
-  entityId    String?
-  oldValues   Json?
-  newValues   Json?
-  ipAddress   String?
-  userAgent   String?
-  metadata    Json?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String // CREATE, UPDATE, DELETE, LOGIN, etc.
+  entity    String // table/model name
+  entityId  String?
+  oldValues Json?
+  newValues Json?
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
 
   // No updatedAt — immutable by design
   // No delete cascade — audit events are never deleted
@@ -1221,27 +1497,27 @@ enum TaskPriority {
 }
 
 model Task {
-  id           String       @id @default(cuid())
-  projectId    String
-  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  buildingId   String?
-  building     Building?    @relation(fields: [buildingId], references: [id])
-  unitId       String?
-  unit         Unit?        @relation(fields: [unitId], references: [id])
-  title        String
-  description  String?
-  status       TaskStatus   @default(TODO)
-  priority     TaskPriority @default(MEDIUM)
-  dueDate      DateTime?
-  assignedTo   String?
-  assignedUser User?        @relation("TaskAssignee", fields: [assignedTo], references: [id])
-  createdBy    String
-  createdByUser User        @relation("TaskCreator", fields: [createdBy], references: [id])
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id            String       @id @default(cuid())
+  projectId     String
+  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  buildingId    String?
+  building      Building?    @relation(fields: [buildingId], references: [id])
+  unitId        String?
+  unit          Unit?        @relation(fields: [unitId], references: [id])
+  title         String
+  description   String?
+  status        TaskStatus   @default(TODO)
+  priority      TaskPriority @default(MEDIUM)
+  dueDate       DateTime?
+  assignedTo    String?
+  assignedUser  User?        @relation("TaskAssignee", fields: [assignedTo], references: [id])
+  createdBy     String
+  createdByUser User         @relation("TaskCreator", fields: [createdBy], references: [id])
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
-  comments     TaskComment[]
-  attachments  TaskAttachment[]
+  comments    TaskComment[]
+  attachments TaskAttachment[]
 
   @@index([projectId])
   @@index([assignedTo])
@@ -1279,7 +1555,6 @@ model TaskAttachment {
   @@map("task_attachments")
 }
 
-
 // Per-org configuration for thresholds and probabilities used by alerts and forecasts.
 // Single row per org; created on org creation, lazily defaulted in code if missing.
 model OrgSettings {
@@ -1288,11 +1563,11 @@ model OrgSettings {
   // Sale stage probabilities — JSON map of SaleStatus → probability (0..1)
   // Example: { "PROSPECT": 0.10, "LOI_SIGNED": 0.35, "UNDER_CONTRACT": 0.75, "CLOSED": 1.0 }
   saleStageProbabilities  Json         @default("{\"PROSPECT\":0.10,\"LOI_SIGNED\":0.35,\"UNDER_CONTRACT\":0.75,\"CLOSED\":1.0,\"CANCELLED\":0.0}")
-  unitStaleDaysThreshold  Int          @default(90)   // unit AVAILABLE longer than this -> stale alert
-  budgetVarianceAlertPct  Decimal      @default(10) @db.Decimal(5, 2)  // actuals+commitments > budget*(1+pct/100)
-  saleStageAgeAlertDays   Int          @default(30)   // sale in same stage longer than this -> flag
-  saleActivityDroughtDays Int          @default(14)   // no activity for N days -> flag
-  drawFundingExpectedDays Int          @default(14)   // default expected funding window
+  unitStaleDaysThreshold  Int          @default(90) // unit AVAILABLE longer than this -> stale alert
+  budgetVarianceAlertPct  Decimal      @default(10) @db.Decimal(5, 2) // actuals+commitments > budget*(1+pct/100)
+  saleStageAgeAlertDays   Int          @default(30) // sale in same stage longer than this -> flag
+  saleActivityDroughtDays Int          @default(14) // no activity for N days -> flag
+  drawFundingExpectedDays Int          @default(14) // default expected funding window
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
 

@@ -102,6 +102,10 @@ export class ScheduledNotificationsService {
     });
 
     for (const lease of leases30) {
+      // Sprint 1: Lease.unitId / Lease.unit are now nullable to support building-level
+      // leases (e.g. Leander Bldg 1). Building-level lease expiry notifications need
+      // their own code path — skip those for now and keep unit-level behaviour intact.
+      if (!lease.unitId || !lease.unit) continue;
       const daysLeft = Math.ceil((lease.leaseEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
       try {
         await this.notifications.notifyLeaseExpiring(
@@ -134,6 +138,9 @@ export class ScheduledNotificationsService {
 
     for (const loan of loans) {
       if (!loan.maturityDate) continue;
+      // Sprint 1: Loan.projectId is now nullable to support per-building loans.
+      // Building-level loan maturity notifications need their own surface — defer.
+      if (!loan.projectId || !loan.project) continue;
       try {
         await this.notifications.notifyLoanMaturity({
           id: loan.id,

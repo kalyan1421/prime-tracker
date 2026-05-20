@@ -50,14 +50,35 @@ export class SalesService {
   }
 
   async create(data: Prisma.SaleUncheckedCreateInput) {
-    // Guard: unitId must belong to the same project
-    const unit = await this.prisma.unit.findUnique({
-      where: { id: data.unitId as string },
-      include: { building: { select: { projectId: true } } },
-    });
-    if (!unit) throw new NotFoundException('Unit not found');
-    if (unit.building.projectId !== data.projectId) {
-      throw new BadRequestException('Unit does not belong to this project');
+    // Sprint 1: Sales can attach to either a Unit (typical) or a Building (e.g.
+    // Leander Bldg 1 sold as one asset). Exactly one of (unitId, buildingId)
+    // must be set, and the chosen asset must live under data.projectId.
+    const unitId = data.unitId as string | undefined;
+    const buildingId = data.buildingId as string | undefined;
+    if (!unitId && !buildingId) {
+      throw new BadRequestException('Sale must reference either a unit or a building');
+    }
+    if (unitId && buildingId) {
+      throw new BadRequestException('Sale cannot reference both a unit and a building');
+    }
+    if (unitId) {
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: unitId },
+        include: { building: { select: { projectId: true } } },
+      });
+      if (!unit) throw new NotFoundException('Unit not found');
+      if (unit.building.projectId !== data.projectId) {
+        throw new BadRequestException('Unit does not belong to this project');
+      }
+    } else if (buildingId) {
+      const building = await this.prisma.building.findUnique({
+        where: { id: buildingId },
+        select: { projectId: true },
+      });
+      if (!building) throw new NotFoundException('Building not found');
+      if (building.projectId !== data.projectId) {
+        throw new BadRequestException('Building does not belong to this project');
+      }
     }
     return this.prisma.sale.create({
       data: { ...data, lastActivityAt: new Date() },

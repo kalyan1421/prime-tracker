@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import React, { useState, useMemo } from 'react';
 import {
   Card, CardBody, CardHeader, Button, Tabs, Tab, Progress, Chip, Switch,
@@ -36,6 +36,7 @@ import {
 } from '../hooks/useApi';
 import { TasksPageInner } from './TasksPage';
 import { HealthScoreRing } from '../components/HealthScoreRing';
+import { ProjectHealthHeader } from '../components/ProjectHealthHeader';
 import { VarianceBar } from '../components/VarianceBar';
 import { ProbabilityChip } from '../components/ProbabilityChip';
 import { PhaseChip } from '../components/PhaseChip';
@@ -306,6 +307,10 @@ export default function ProjectDetailPage() {
       <div className="mb-4 sm:mb-6 max-w-full sm:max-w-[400px]">
         <PhaseProgress current={p.phase} />
       </div>
+
+      {/* Sprint A — Project Health Header: budget / actuals / variance / units / leases / loans
+          + inline phase update popover. Keeps the founder's 60-second triage on one screen. */}
+      <ProjectHealthHeader project={p} />
 
       {/* Scrollable tab bar — extends to screen edges on mobile */}
       <div className="relative -mx-4 sm:mx-0 mb-4">
@@ -3318,7 +3323,13 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               )}
               <CardHeader className="pb-0 flex justify-between items-start">
                 <div className="flex-1 min-w-0 pr-2">
-                  <p className="font-semibold text-sm truncate">{b.name}</p>
+                  {/* Sprint B: building name links to the per-building dashboard */}
+                  <Link
+                    to={`/projects/${projectId}/buildings/${b.id}`}
+                    className="font-semibold text-sm truncate text-gray-900 hover:text-blue-600 hover:underline block"
+                  >
+                    {b.name}
+                  </Link>
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                     {b.buildingType && (
                       <span className="text-xs text-gray-400 truncate">{b.buildingType}</span>
@@ -3558,14 +3569,14 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
 
   const { data: activities } = useLeadActivities(selectedLead?.id || '');
 
-  const [form, setForm] = useState({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitInterest: '', budget: '', notes: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitId: '', unitInterest: '', budget: '', notes: '' });
   const setF = (f: string, v: string) => setForm((prev) => ({ ...prev, [f]: v }));
 
-  const resetForm = () => setForm({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitInterest: '', budget: '', notes: '' });
+  const resetForm = () => setForm({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitId: '', unitInterest: '', budget: '', notes: '' });
 
   const openNewForm = () => { resetForm(); setEditLead(null); setShowForm(true); };
   const openEditForm = (lead: any) => {
-    setForm({ name: lead.name || '', email: lead.email || '', phone: lead.phone || '', source: lead.source || 'WEBSITE', status: lead.status || 'NEW', unitInterest: lead.unitInterest || '', budget: lead.budget ? String(Number(lead.budget)) : '', notes: lead.notes || '' });
+    setForm({ name: lead.name || '', email: lead.email || '', phone: lead.phone || '', source: lead.source || 'WEBSITE', status: lead.status || 'NEW', unitId: lead.unitId || '', unitInterest: lead.unitInterest || '', budget: lead.budget ? String(Number(lead.budget)) : '', notes: lead.notes || '' });
     setEditLead(lead);
     setShowForm(true);
   };
@@ -3573,7 +3584,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const handleSubmitLead = async () => {
     if (!form.source) return;
     try {
-      const payload: Record<string, unknown> = { projectId, source: form.source, status: form.status, name: form.name || undefined, email: form.email || undefined, phone: form.phone || undefined, unitInterest: form.unitInterest || undefined, budget: form.budget ? parseFloat(form.budget) : undefined, notes: form.notes || undefined };
+      const payload: Record<string, unknown> = { projectId, source: form.source, status: form.status, name: form.name || undefined, email: form.email || undefined, phone: form.phone || undefined, unitId: form.unitId || (editLead ? null : undefined), unitInterest: form.unitInterest || undefined, budget: form.budget ? parseFloat(form.budget) : undefined, notes: form.notes || undefined };
       if (editLead) {
         await updateLead.mutateAsync({ id: editLead.id, data: payload });
         addToast({ title: 'Lead updated', color: 'success' });
@@ -3683,7 +3694,19 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => setF('status', Array.from(k)[0] as string)}>
                   {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>)}
                 </Select>
-                <Input size="sm" label="Unit Interest" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
+                <Select
+                  size="sm"
+                  label="Unit"
+                  placeholder="No specific unit"
+                  selectedKeys={form.unitId ? new Set([form.unitId]) : new Set()}
+                  onSelectionChange={(k) => setF('unitId', (Array.from(k)[0] as string) || '')}
+                  className="sm:col-span-2"
+                >
+                  {((projectUnits as any[]) || []).map((u: any) => (
+                    <SelectItem key={u.id}>{u.unitNumber}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}</SelectItem>
+                  ))}
+                </Select>
+                <Input size="sm" label="Notes on interest" placeholder="e.g. 2BR preference" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
                 <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="sm:col-span-2" />
               </div>
             </ModalBody>

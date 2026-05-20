@@ -551,6 +551,14 @@ export function useBuildings(projectId: string) {
   });
 }
 
+export function useBuilding(id: string) {
+  return useQuery({
+    queryKey: ['building', id],
+    queryFn: () => api.get(`/buildings/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
 export function useCreateBuilding() {
   const qc = useQueryClient();
   return useMutation({
@@ -662,6 +670,13 @@ export function useUnitSalesReport() {
   });
 }
 
+export function useVacancyReport(params?: { projectId?: string; minDays?: number }) {
+  return useQuery({
+    queryKey: ['report-vacancy', params],
+    queryFn: () => api.get('/reports/vacancy', { params }).then((r) => r.data),
+  });
+}
+
 // ---- MFA ----
 export function useMfaSetup() {
   return useMutation({
@@ -717,7 +732,14 @@ export function useUpdateNotificationPreference() {
 }
 
 // ---- Leads ----
-export function useLeads(params?: { projectId?: string; status?: string; source?: string }) {
+export function useLeadDashboard(params?: { projectId?: string }) {
+  return useQuery({
+    queryKey: ['leads', 'dashboard', params],
+    queryFn: () => api.get('/leads/dashboard', { params }).then((r) => r.data),
+  });
+}
+
+export function useLeads(params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; search?: string }) {
   return useQuery({
     queryKey: ['leads', params],
     queryFn: () => api.get('/leads', { params }).then((r) => r.data),
@@ -788,6 +810,77 @@ export function useConvertLead() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leads'] });
       qc.invalidateQueries({ queryKey: ['sales'] });
+    },
+  });
+}
+
+// ---- Campaigns (Sprint 2 — marketing-spend attribution) ----
+
+export function useCampaigns(params?: { projectId?: string; status?: string; channel?: string }) {
+  return useQuery({
+    queryKey: ['campaigns', params],
+    queryFn: () => api.get('/campaigns', { params }).then((r) => r.data),
+  });
+}
+
+export function useCampaign(id: string) {
+  return useQuery({
+    queryKey: ['campaign', id],
+    queryFn: () => api.get(`/campaigns/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useCampaignPerformance(params?: { projectId?: string; from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['campaigns', 'performance', params],
+    queryFn: () => api.get('/campaigns/performance', { params }).then((r) => r.data),
+  });
+}
+
+export function useCampaignSpendTrend(params?: { projectId?: string; monthsBack?: number }) {
+  return useQuery({
+    queryKey: ['campaigns', 'spend-trend', params],
+    queryFn: () => api.get('/campaigns/spend-trend', { params }).then((r) => r.data),
+  });
+}
+
+export function useCreateCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/campaigns', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  });
+}
+
+export function useUpdateCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/campaigns/${id}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaigns'] });
+      qc.invalidateQueries({ queryKey: ['campaign', vars.id] });
+    },
+  });
+}
+
+export function useDeleteCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/campaigns/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  });
+}
+
+export function useRecordCampaignSpend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ campaignId, data }: { campaignId: string; data: Record<string, unknown> }) =>
+      api.post(`/campaigns/${campaignId}/spend`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['campaigns'] });
+      qc.invalidateQueries({ queryKey: ['campaign', vars.campaignId] });
     },
   });
 }
@@ -1071,7 +1164,7 @@ export function useAddContractPayment() {
 }
 
 // ---- Documents ----
-export function useDocuments(params: { projectId?: string; unitId?: string }) {
+export function useDocuments(params: { projectId?: string; unitId?: string; buildingId?: string }) {
   return useQuery({
     queryKey: ['documents', params],
     queryFn: () => api.get('/documents', { params }).then((r) => r.data),

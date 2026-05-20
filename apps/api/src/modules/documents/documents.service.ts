@@ -26,6 +26,16 @@ export class DocumentsService {
     });
   }
 
+  /** Sprint B: docs attached directly to a Building (whole-building leases, building-level
+   *  contracts). Doc Vault Phase 1 already added documents.buildingId. */
+  async findByBuilding(buildingId: string) {
+    return this.prisma.document.findMany({
+      where: { buildingId },
+      include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async create(
     file: Express.Multer.File,
     metadata: { projectId?: string; unitId?: string; category?: string },

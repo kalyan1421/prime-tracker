@@ -2,11 +2,24 @@ import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsEnum, IsDateS
 import { LeaseStatus } from '@prisma/client';
 
 export class CreateLeaseDto {
-  @IsString() @IsNotEmpty()
-  unitId!: string;
+  // Sprint 1: leases are polymorphic — exactly one of (unitId, buildingId) is required.
+  // Both individually optional here; service enforces the XOR.
+  @IsOptional() @IsString()
+  unitId?: string;
+
+  @IsOptional() @IsString()
+  buildingId?: string;
 
   @IsString() @IsNotEmpty() @MaxLength(200)
   tenantName!: string;
+
+  // Tenant legal entity (signs the lease) vs brand (doing-business-as customer-facing).
+  // Examples from client data: tenantLegalName "ABC LLC" + tenantBrand "Cream Stone".
+  @IsOptional() @IsString() @MaxLength(200)
+  tenantLegalName?: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  tenantBrand?: string;
 
   @IsOptional() @IsString() @MaxLength(200)
   tenantContact?: string;
@@ -45,6 +58,12 @@ export class CreateLeaseDto {
 export class UpdateLeaseDto {
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200)
   tenantName?: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  tenantLegalName?: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  tenantBrand?: string;
 
   @IsOptional() @IsString() @MaxLength(200)
   tenantContact?: string;

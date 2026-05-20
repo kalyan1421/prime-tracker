@@ -2,8 +2,14 @@ import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsEnum, IsDateS
 import { LoanType, DrawStatus } from '@prisma/client';
 
 export class CreateLoanDto {
-  @IsString() @IsNotEmpty()
-  projectId!: string;
+  // Sprint 1: a loan attaches at project- or building-level. At least one is
+  // required; service enforces this (and back-fills projectId from the building
+  // when only buildingId is set).
+  @IsOptional() @IsString()
+  projectId?: string;
+
+  @IsOptional() @IsString()
+  buildingId?: string;
 
   @IsOptional() @IsString()
   unitId?: string;

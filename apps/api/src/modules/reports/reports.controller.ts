@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -38,4 +38,17 @@ export class ReportsController {
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Unit sales value breakdown by project and building' })
   getUnitSales() { return this.service.getUnitSalesReport(); }
+
+  @Get('vacancy')
+  @RequirePermissions('sales:view')
+  @ApiOperation({ summary: 'Vacancy report — available units ranked by time-on-market' })
+  getVacancy(
+    @Query('projectId') projectId?: string,
+    @Query('minDays') minDays?: string,
+  ) {
+    return this.service.getVacancyReport({
+      projectId,
+      minDays: minDays ? parseInt(minDays, 10) : undefined,
+    });
+  }
 }

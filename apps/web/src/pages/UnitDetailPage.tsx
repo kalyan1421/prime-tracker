@@ -4,10 +4,10 @@ import {
   Card, CardBody, CardHeader, Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2 } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit,
+  useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
 } from '../hooks/useApi';
 
 const COMMENT_TYPE_COLORS: Record<string, string> = {
@@ -284,6 +284,12 @@ export default function UnitDetailPage() {
         </Card>
       )}
 
+      {/* Leads & Activity Section */}
+      <UnitLeadsPanel unitId={unitId!} />
+
+      {/* Sprint B: Documents scoped to this unit */}
+      <UnitDocumentsPanel unitId={unitId!} />
+
       {/* Comments Section */}
       <Card shadow="sm">
         <CardHeader className="pb-2">
@@ -299,6 +305,223 @@ export default function UnitDetailPage() {
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+const LEAD_STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
+  NEW: 'default',
+  CONTACTED: 'primary',
+  QUALIFIED: 'secondary',
+  PROPOSAL_SENT: 'warning',
+  NEGOTIATING: 'warning',
+  CONVERTED: 'success',
+  LOST: 'danger',
+  DEAD: 'danger',
+};
+
+const ACTIVITY_TYPE_LABELS: Record<string, string> = {
+  CALL: 'Call',
+  EMAIL: 'Email',
+  MEETING: 'Meeting',
+  SITE_VISIT: 'Site visit',
+  FOLLOW_UP: 'Follow-up',
+  NOTE: 'Note',
+  STATUS_CHANGE: 'Status change',
+};
+
+// Sprint B — Unit Docs tab. Lists every document attached directly to this unit
+// (booking agreements, deeds, receipts, brochures, possession certificates).
+// Uses the existing /documents?unitId= endpoint; upload UI is intentionally
+// excluded here for v1 — uploads happen from the project Documents tab which
+// already has the category picker and tag flow.
+const DOC_CATEGORY_COLORS: Record<string, { bg: string; text: string }> = {
+  BROCHURE:               { bg: 'bg-blue-50',     text: 'text-blue-700' },
+  LOI:                    { bg: 'bg-indigo-50',   text: 'text-indigo-700' },
+  BOOKING_AGREEMENT:      { bg: 'bg-violet-50',   text: 'text-violet-700' },
+  DEED:                   { bg: 'bg-amber-50',    text: 'text-amber-700' },
+  RECEIPT:                { bg: 'bg-emerald-50',  text: 'text-emerald-700' },
+  NOC:                    { bg: 'bg-rose-50',     text: 'text-rose-700' },
+  POSSESSION_CERTIFICATE: { bg: 'bg-cyan-50',     text: 'text-cyan-700' },
+  LEASE_DOCS:             { bg: 'bg-sky-50',      text: 'text-sky-700' },
+  LOAN_DOCS:              { bg: 'bg-gray-100',    text: 'text-gray-700' },
+  FINANCIAL:              { bg: 'bg-emerald-50',  text: 'text-emerald-700' },
+  ARCHITECTURAL:          { bg: 'bg-purple-50',   text: 'text-purple-700' },
+  CONSTRUCTION_DOCS:      { bg: 'bg-orange-50',   text: 'text-orange-700' },
+  PERMITS:                { bg: 'bg-yellow-50',   text: 'text-yellow-700' },
+  INSURANCE:              { bg: 'bg-teal-50',     text: 'text-teal-700' },
+  OTHER:                  { bg: 'bg-zinc-100',    text: 'text-zinc-700' },
+};
+
+function UnitDocumentsPanel({ unitId }: { unitId: string }) {
+  const { data, isLoading } = useDocuments({ unitId });
+  const docs = ((data as any[]) || []);
+
+  return (
+    <Card shadow="sm">
+      <CardHeader className="pb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FiFileText className="text-violet-600" />
+          <p className="font-semibold text-sm text-gray-600">
+            Documents {docs.length > 0 && `(${docs.length})`}
+          </p>
+        </div>
+        <span className="text-xs text-gray-400">Upload from the project Docs tab</span>
+      </CardHeader>
+      <CardBody className="pt-0">
+        {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
+        {!isLoading && docs.length === 0 && (
+          <div className="text-sm text-gray-400 py-4 text-center">
+            No documents attached to this unit yet.
+          </div>
+        )}
+        {!isLoading && docs.length > 0 && (
+          <div className="space-y-1">
+            {docs.map((d: any) => {
+              const cat = d.category || 'OTHER';
+              const color = DOC_CATEGORY_COLORS[cat] ?? DOC_CATEGORY_COLORS.OTHER;
+              const sizeKb = d.fileSize ? Math.round(d.fileSize / 1024) : null;
+              return (
+                <div key={d.id} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-b-0">
+                  <FiFileText className="text-gray-400 shrink-0 w-4 h-4" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm text-gray-800 truncate">{d.fileName || d.name}</p>
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${color.bg} ${color.text}`}>
+                        {String(cat).replace(/_/g, ' ')}
+                      </span>
+                      {d.versionNumber > 1 && (
+                        <span className="text-[10px] text-gray-500">v{d.versionNumber}</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {d.uploadedBy?.name && <>by {d.uploadedBy.name} · </>}
+                      {fmtDate(d.createdAt)}
+                      {sizeKb && <> · {sizeKb < 1024 ? `${sizeKb} KB` : `${(sizeKb / 1024).toFixed(1)} MB`}</>}
+                    </p>
+                  </div>
+                  {d.fileUrl && (
+                    <a
+                      href={d.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                      aria-label={`Download ${d.fileName || d.name}`}
+                    >
+                      <FiDownload className="w-3.5 h-3.5" />
+                      Open
+                    </a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function UnitLeadsPanel({ unitId }: { unitId: string }) {
+  const { data: leads, isLoading } = useLeads({ unitId });
+  const leadsArr: any[] = Array.isArray(leads) ? leads : [];
+  const [tab, setTab] = useState<'leads' | 'activity'>('leads');
+
+  const activity = leadsArr
+    .flatMap((l) =>
+      (l.activities || []).map((a: any) => ({ ...a, leadName: l.name || 'Unnamed', leadStatus: l.status })),
+    )
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  return (
+    <Card shadow="sm">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2">
+            <FiTarget className="text-blue-600" />
+            <p className="font-semibold text-sm text-gray-600">
+              Leads {leadsArr.length > 0 && `(${leadsArr.length})`}
+            </p>
+          </div>
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant={tab === 'leads' ? 'flat' : 'light'}
+              color={tab === 'leads' ? 'primary' : 'default'}
+              onPress={() => setTab('leads')}
+            >
+              Leads
+            </Button>
+            <Button
+              size="sm"
+              variant={tab === 'activity' ? 'flat' : 'light'}
+              color={tab === 'activity' ? 'primary' : 'default'}
+              onPress={() => setTab('activity')}
+            >
+              Activity
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardBody className="pt-0">
+        {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
+        {!isLoading && leadsArr.length === 0 && (
+          <div className="text-sm text-gray-400 py-4 text-center">
+            No leads linked to this unit yet. Attach one from the Leads page or the project's Leads tab.
+          </div>
+        )}
+        {!isLoading && leadsArr.length > 0 && tab === 'leads' && (
+          <div className="space-y-2">
+            {leadsArr.map((lead) => (
+              <div key={lead.id} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-b-0">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium text-gray-800 truncate">{lead.name || <span className="text-gray-400 italic">Unnamed</span>}</p>
+                    <Chip size="sm" color={LEAD_STATUS_COLORS[lead.status] || 'default'} variant="flat" className="text-[10px]">
+                      {String(lead.status).replace('_', ' ')}
+                    </Chip>
+                    {lead.source && (
+                      <Chip size="sm" variant="bordered" className="text-[10px]">{String(lead.source).replace('_', ' ')}</Chip>
+                    )}
+                  </div>
+                  <div className="flex gap-3 mt-0.5 text-xs text-gray-500 flex-wrap">
+                    {lead.email && <span className="flex items-center gap-1"><FiMail />{lead.email}</span>}
+                    {lead.phone && <span className="flex items-center gap-1"><FiPhone />{lead.phone}</span>}
+                    {lead.budget && <span>${Number(lead.budget).toLocaleString()}</span>}
+                    {lead._count?.activities ? (
+                      <span className="flex items-center gap-1"><FiMessageSquare />{lead._count.activities}</span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="text-xs text-gray-400 shrink-0 flex items-center gap-1">
+                  <FiClock />{fmtDate(lead.updatedAt)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!isLoading && leadsArr.length > 0 && tab === 'activity' && (
+          activity.length === 0 ? (
+            <div className="text-sm text-gray-400 py-4 text-center">No activity logged yet across leads on this unit.</div>
+          ) : (
+            <div className="space-y-2">
+              {activity.map((a: any) => (
+                <div key={a.id} className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-b-0">
+                  <Chip size="sm" variant="flat" className="text-[10px] shrink-0">{ACTIVITY_TYPE_LABELS[a.type] || a.type}</Chip>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{a.note}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      <span className="font-medium">{a.leadName}</span>
+                      {a.createdByUser?.name && <> · by {a.createdByUser.name}</>}
+                      <> · {fmtDate(a.createdAt)}</>
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
