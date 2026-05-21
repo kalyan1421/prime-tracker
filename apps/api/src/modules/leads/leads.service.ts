@@ -10,17 +10,19 @@ export class LeadsService {
     projectId?: string;
     status?: LeadStatus;
     assignedTo?: string;
+    unassigned?: boolean;
     unitId?: string;
     buildingId?: string;
     campaignId?: string;
     search?: string;
   } = {}) {
-    const { projectId, status, assignedTo, unitId, buildingId, campaignId, search } = params;
+    const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, search } = params;
 
     const where: Prisma.LeadWhereInput = {};
     if (projectId) where.projectId = projectId;
     if (status) where.status = status;
-    if (assignedTo) where.assignedTo = assignedTo;
+    if (unassigned) where.assignedTo = null;
+    else if (assignedTo) where.assignedTo = assignedTo;
     if (unitId) where.unitId = unitId;
     if (buildingId) where.buildingId = buildingId;
     if (campaignId) where.campaignId = campaignId;
@@ -159,7 +161,7 @@ export class LeadsService {
     unitInterest?: string;
     budget?: number;
     notes?: string;
-    assignedTo?: string;
+    assignedTo?: string | null;
   }) {
     const existing = await this.findById(id);
     const { budget, unitId, buildingId, ...rest } = data;
