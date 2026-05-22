@@ -4,6 +4,8 @@
 i  deploying hosting
 i  hosting[prime-constructions]: beginning deploy...
 i  hosting[prime-constructions]: found 11 files in apps/web/dist
+i  hosting: uploading new files [0/7] (0%)
+i  hosting: upload complete
 ✔  hosting[prime-constructions]: file upload complete
 i  hosting[prime-constructions]: finalizing version...
 ✔  hosting[prime-constructions]: version finalized
