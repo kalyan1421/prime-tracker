@@ -39,6 +39,7 @@ import { ProjectHealthModule } from './modules/project-health/project-health.mod
 import { DrawsModule } from './modules/draws/draws.module';
 import { ExceptionsModule } from './modules/exceptions/exceptions.module';
 import { InteriorModule } from './modules/interior/interior.module';
+import { DailyLogsModule } from './modules/daily-logs/daily-logs.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { InteriorModule } from './modules/interior/interior.module';
     DrawsModule,
     ExceptionsModule,
     InteriorModule,
+    DailyLogsModule,
   ],
   providers: [
     // Enforces ThrottlerModule limits across every controller.

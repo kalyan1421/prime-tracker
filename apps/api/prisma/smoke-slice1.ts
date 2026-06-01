@@ -14,6 +14,7 @@ import { SalePaymentEventHandlers } from '../src/modules/sales/sale-payment-even
 import { ScheduledNotificationsService } from '../src/modules/notifications/scheduled-notifications.service';
 import { CashFlowService } from '../src/modules/cashflow/cashflow.service';
 import { SalesService } from '../src/modules/sales/sales.service';
+import { DailyLogsService } from '../src/modules/daily-logs/daily-logs.service';
 import { EventBus } from '../src/common/events/event-bus.service';
 
 const prisma = new PrismaClient();
@@ -43,6 +44,7 @@ async function main() {
   const notifStub = { notifyPaymentOverdue: async () => {}, notifyPaymentDueSoon: async () => {} };
   const scheduled = new ScheduledNotificationsService(prisma as any, notifStub as any);
   const sales = new SalesService(prisma as any, bus);
+  const dailyLogs = new DailyLogsService(prisma as any);
 
   const unit = await prisma.unit.findFirst({ include: { building: true } });
   if (!unit?.building) throw new Error('No seeded unit/building found — seed the DB first');
@@ -53,7 +55,7 @@ async function main() {
   let vendor = await prisma.vendor.findFirst();
   if (!vendor) vendor = await prisma.vendor.create({ data: { name: 'Smoke Subcontractor' } });
 
-  const created: { interiorId?: string; saleId?: string; discountSaleId?: string; milestoneId?: string; docIds: string[]; actualIds: string[] } = { docIds: [], actualIds: [] };
+  const created: { interiorId?: string; saleId?: string; discountSaleId?: string; milestoneId?: string; dailyLogId?: string; docIds: string[]; actualIds: string[] } = { docIds: [], actualIds: [] };
   const originalUnitAsking = unit.askingPrice;
   const originalUnitStatus = unit.status;
 
@@ -151,6 +153,15 @@ async function main() {
     const closedDisc = await prisma.sale.findUnique({ where: { id: discSale.id } });
     check(closedDisc!.status === 'CLOSED', 'approved discounted sale can now be committed (CLOSED)');
 
+    console.log('\n── Daily construction logs ──');
+    const log = await dailyLogs.create({ projectId, notes: 'Poured Building A footings; inspection passed.', authorId: user!.id, crewCount: 8, weather: 'Sunny 78F' });
+    created.dailyLogId = log.id;
+    check(log.notes.includes('footings') && log.crewCount === 8, 'daily log created with notes + crew + weather');
+    const photo = await dailyLogs.addPhoto(log.id, { storagePath: 'daily-logs/smoke/footings.jpg', caption: 'Footings' });
+    check(photo.storagePath === 'daily-logs/smoke/footings.jpg', 'photo attached by storagePath');
+    const feed = await dailyLogs.findAll({ projectId });
+    check(feed.some((l: any) => l.id === log.id && l.photos.length === 1), 'log appears in the project feed with its photo');
+
     console.log('\n── Cashflow inflows + receivables + overdue cron ──');
     const cashflow = new CashFlowService(prisma as any);
     const forecast = await cashflow.getForecast(projectId);
@@ -169,6 +180,7 @@ async function main() {
     if (created.interiorId) await prisma.interiorProject.delete({ where: { id: created.interiorId } }).catch(() => {});
     for (const id of created.actualIds) await prisma.actual.delete({ where: { id } }).catch(() => {});
     for (const id of created.docIds) await prisma.document.delete({ where: { id } }).catch(() => {});
+    if (created.dailyLogId) await prisma.dailyLog.delete({ where: { id: created.dailyLogId } }).catch(() => {});
     if (created.milestoneId) await prisma.milestone.delete({ where: { id: created.milestoneId } }).catch(() => {});
     await prisma.building.update({ where: { id: buildingId }, data: { phase: originalPhase } }).catch(() => {});
     await prisma.$disconnect();

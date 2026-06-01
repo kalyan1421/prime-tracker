@@ -194,6 +194,10 @@ export const PERMISSIONS = {
   PAYMENT_LOG: 'payment:log',               // record a (partial) sale-installment payment
   SALE_DISCOUNT_APPROVE: 'sales:approve-discount', // Founder/Co-Founder sign-off on over-threshold discounts
 
+  // Daily construction logs
+  DAILYLOG_VIEW: 'dailylog:view',
+  DAILYLOG_EDIT: 'dailylog:edit',
+
   // Documents
   DOCUMENT_VIEW: 'document:view',
   DOCUMENT_UPLOAD: 'document:upload',
@@ -266,6 +270,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_APPROVE,
     PERMISSIONS.SALE_DISCOUNT_APPROVE,
+    PERMISSIONS.DAILYLOG_VIEW,
   ],
   [UserRole.FINANCE]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -303,6 +308,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.PAYMENT_LOG,
+    PERMISSIONS.DAILYLOG_VIEW,
   ],
   [UserRole.ACCOUNTING]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -328,6 +334,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.PAYMENT_LOG,
+    PERMISSIONS.DAILYLOG_VIEW,
   ],
   [UserRole.AR_AP]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -376,6 +383,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.REPORT_PORTFOLIO,
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_EDIT,
+    PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.DAILYLOG_EDIT,
   ],
   [UserRole.CONSTRUCTION]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -392,6 +401,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.INTERIOR_VIEW,
+    PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.DAILYLOG_EDIT,
   ],
   [UserRole.SALES]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -456,6 +467,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UNIT_VIEW,
     PERMISSIONS.MILESTONE_VIEW,
     PERMISSIONS.COMMENT_VIEW,
+    PERMISSIONS.DAILYLOG_VIEW,
   ],
 };
 

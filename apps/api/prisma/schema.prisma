@@ -68,6 +68,7 @@ model User {
   interiorProjects        InteriorProject[]        @relation("InteriorPM")
   snagItems               SnagItem[]               @relation("SnagAssignee")
   discountApprovedSales   Sale[]                   @relation("SaleDiscountApprover")
+  dailyLogs               DailyLog[]               @relation("DailyLogAuthor")
 
   @@map("users")
 }
@@ -188,6 +189,7 @@ model Project {
   members         ProjectMember[]
   clients         Client[]
   campaigns       Campaign[]
+  dailyLogs       DailyLog[]
 
   @@index([orgId])
   @@index([status, phase])
@@ -267,6 +269,7 @@ model Building {
   leads            Lead[]
   loans            Loan[]
   interiorProjects InteriorProject[]
+  dailyLogs        DailyLog[]
 
   @@index([projectId])
   @@index([phase])
@@ -1802,4 +1805,44 @@ model SalePayment {
   @@index([milestoneId])
   @@index([status, effectiveDueDate])
   @@map("sale_payments")
+}
+
+// ============================================================================
+// Daily Construction Logs (Phase 4) — the client's #1 pain point.
+// A dated field log scoped to a project (and optionally a building), with photos.
+// Mobile-first capture; reuses StorageService for photo storage keys.
+// ============================================================================
+
+model DailyLog {
+  id         String    @id @default(cuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  buildingId String?
+  building   Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  logDate    DateTime // the day being logged (distinct from createdAt)
+  authorId   String
+  author     User      @relation("DailyLogAuthor", fields: [authorId], references: [id])
+  notes      String // work done / summary
+  weather    String?
+  crewCount  Int?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  photos DailyLogPhoto[]
+
+  @@index([projectId, logDate])
+  @@index([buildingId])
+  @@map("daily_logs")
+}
+
+model DailyLogPhoto {
+  id          String   @id @default(cuid())
+  dailyLogId  String
+  dailyLog    DailyLog @relation(fields: [dailyLogId], references: [id], onDelete: Cascade)
+  storagePath String // Supabase Storage key
+  caption     String?
+  uploadedAt  DateTime @default(now())
+
+  @@index([dailyLogId])
+  @@map("daily_log_photos")
 }
