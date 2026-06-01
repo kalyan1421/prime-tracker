@@ -198,6 +198,10 @@ export const PERMISSIONS = {
   DAILYLOG_VIEW: 'dailylog:view',
   DAILYLOG_EDIT: 'dailylog:edit',
 
+  // Brokers / referral tracking (internal-only)
+  BROKER_VIEW: 'broker:view',
+  BROKER_EDIT: 'broker:edit',
+
   // Documents
   DOCUMENT_VIEW: 'document:view',
   DOCUMENT_UPLOAD: 'document:upload',
@@ -271,6 +275,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_APPROVE,
     PERMISSIONS.SALE_DISCOUNT_APPROVE,
     PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.BROKER_VIEW,
   ],
   [UserRole.FINANCE]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -309,6 +314,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.PAYMENT_LOG,
     PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.BROKER_VIEW,
   ],
   [UserRole.ACCOUNTING]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -426,6 +432,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.REPORT_SALES,
     PERMISSIONS.REPORT_REVENUE,
+    PERMISSIONS.BROKER_VIEW,
+    PERMISSIONS.BROKER_EDIT,
   ],
   [UserRole.MARKETING]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -445,6 +453,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.REPORT_SALES,
+    PERMISSIONS.BROKER_VIEW,
+    PERMISSIONS.BROKER_EDIT,
   ],
   [UserRole.LEGAL]: [
     PERMISSIONS.PROJECT_VIEW,

@@ -770,6 +770,12 @@ model Sale {
   discountApprovedById String?
   discountApprovedBy   User?       @relation("SaleDiscountApprover", fields: [discountApprovedById], references: [id])
   discountApprovedAt   DateTime?
+  // Broker attribution + commission (internal-only; brokers have no login).
+  // Commission is earned/stamped when the sale CLOSES.
+  brokerId             String?
+  broker               Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  brokerCommissionPct  Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
+  brokerCommissionAmt  Decimal?    @db.Decimal(14, 2) // computed + stored on close
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
   deletedAt            DateTime? // soft-delete
@@ -788,6 +794,7 @@ model Sale {
   @@index([status, deletedAt])
   @@index([status, lastActivityAt])
   @@index([deletedAt])
+  @@index([brokerId])
   @@map("sales")
 }
 
@@ -1016,6 +1023,9 @@ model Lead {
   utmMedium         String?
   utmCampaign       String?
   utmContent        String?
+  // Broker attribution — which broker brought this lead (internal-only).
+  brokerId          String?
+  broker            Broker?    @relation(fields: [brokerId], references: [id], onDelete: SetNull)
   createdBy         String
   createdByUser     User       @relation("LeadCreator", fields: [createdBy], references: [id])
   createdAt         DateTime   @default(now())
@@ -1030,6 +1040,7 @@ model Lead {
   @@index([unitId])
   @@index([buildingId])
   @@index([campaignId])
+  @@index([brokerId])
   @@map("leads")
 }
 
@@ -1845,4 +1856,33 @@ model DailyLogPhoto {
 
   @@index([dailyLogId])
   @@map("daily_log_photos")
+}
+
+// ============================================================================
+// Broker / Referral tracking (Phase 4)
+// Internal-only — brokers have NO login. Brokers bring leads; commission is
+// earned when an attributed sale closes (flat fee OR % of sale price).
+// ============================================================================
+
+model Broker {
+  id             String    @id @default(cuid())
+  name           String
+  company        String?
+  email          String?
+  phone          String?
+  // Either a default % of sale price OR a flat fee. A sale may override the % via
+  // Sale.brokerCommissionPct. Service prefers: sale override % → commissionRate % → commissionFlat.
+  commissionRate Decimal?  @db.Decimal(5, 2)
+  commissionFlat Decimal?  @db.Decimal(14, 2)
+  notes          String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  leads Lead[]
+  sales Sale[]
+
+  @@index([isActive, deletedAt])
+  @@map("brokers")
 }

@@ -15,6 +15,7 @@ import { ScheduledNotificationsService } from '../src/modules/notifications/sche
 import { CashFlowService } from '../src/modules/cashflow/cashflow.service';
 import { SalesService } from '../src/modules/sales/sales.service';
 import { DailyLogsService } from '../src/modules/daily-logs/daily-logs.service';
+import { BrokersService } from '../src/modules/brokers/brokers.service';
 import { EventBus } from '../src/common/events/event-bus.service';
 
 const prisma = new PrismaClient();
@@ -45,6 +46,7 @@ async function main() {
   const scheduled = new ScheduledNotificationsService(prisma as any, notifStub as any);
   const sales = new SalesService(prisma as any, bus);
   const dailyLogs = new DailyLogsService(prisma as any);
+  const brokers = new BrokersService(prisma as any);
 
   const unit = await prisma.unit.findFirst({ include: { building: true } });
   if (!unit?.building) throw new Error('No seeded unit/building found — seed the DB first');
@@ -55,7 +57,7 @@ async function main() {
   let vendor = await prisma.vendor.findFirst();
   if (!vendor) vendor = await prisma.vendor.create({ data: { name: 'Smoke Subcontractor' } });
 
-  const created: { interiorId?: string; saleId?: string; discountSaleId?: string; milestoneId?: string; dailyLogId?: string; docIds: string[]; actualIds: string[] } = { docIds: [], actualIds: [] };
+  const created: { interiorId?: string; saleId?: string; discountSaleId?: string; milestoneId?: string; dailyLogId?: string; brokerId?: string; brokerSaleId?: string; docIds: string[]; actualIds: string[] } = { docIds: [], actualIds: [] };
   const originalUnitAsking = unit.askingPrice;
   const originalUnitStatus = unit.status;
 
@@ -162,6 +164,21 @@ async function main() {
     const feed = await dailyLogs.findAll({ projectId });
     check(feed.some((l: any) => l.id === log.id && l.photos.length === 1), 'log appears in the project feed with its photo');
 
+    console.log('\n── Broker commission + report ──');
+    const broker = await brokers.create({ name: 'Smoke Broker', company: 'Referral Co', commissionRate: 2 });
+    created.brokerId = broker.id;
+    // building-level sale (no unit) avoids the discount gate; broker rate 2% of 500k = 10k
+    const brSale = await prisma.sale.create({
+      data: { projectId, unitId: unit.id, buyer: 'Broker Buyer', salePrice: 500000, status: 'UNDER_CONTRACT', brokerId: broker.id, discountApprovedAt: new Date() },
+    });
+    created.brokerSaleId = brSale.id;
+    await sales.update(brSale.id, { status: 'CLOSED' } as any);
+    const brSaleClosed = await prisma.sale.findUnique({ where: { id: brSale.id } });
+    check(Number(brSaleClosed!.brokerCommissionAmt) === 10000, 'commission stamped on close = 2% × 500,000 = 10,000');
+    const report = await brokers.report();
+    const row = report.find((r: any) => r.brokerId === broker.id);
+    check(!!row && row.closedSales >= 1 && row.commissionEarned >= 10000, 'broker report shows closed sale + commission earned');
+
     console.log('\n── Cashflow inflows + receivables + overdue cron ──');
     const cashflow = new CashFlowService(prisma as any);
     const forecast = await cashflow.getForecast(projectId);
@@ -176,6 +193,8 @@ async function main() {
     // Cleanup (local dev DB) — order matters for FKs; cascades handle children.
     if (created.saleId) await prisma.sale.delete({ where: { id: created.saleId } }).catch(() => {});
     if (created.discountSaleId) await prisma.sale.delete({ where: { id: created.discountSaleId } }).catch(() => {});
+    if (created.brokerSaleId) await prisma.sale.delete({ where: { id: created.brokerSaleId } }).catch(() => {});
+    if (created.brokerId) await prisma.broker.delete({ where: { id: created.brokerId } }).catch(() => {});
     await prisma.unit.update({ where: { id: unit.id }, data: { askingPrice: originalUnitAsking, status: originalUnitStatus } }).catch(() => {});
     if (created.interiorId) await prisma.interiorProject.delete({ where: { id: created.interiorId } }).catch(() => {});
     for (const id of created.actualIds) await prisma.actual.delete({ where: { id } }).catch(() => {});

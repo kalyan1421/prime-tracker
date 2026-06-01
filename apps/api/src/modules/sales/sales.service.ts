@@ -114,6 +114,12 @@ export class SalesService {
       await this.assertDiscountApproved(sale);
     }
 
+    // Broker commission is earned when the sale CLOSES — compute + stamp the amount.
+    if (data.status === 'CLOSED' && sale.status !== 'CLOSED') {
+      const commission = await this.computeBrokerCommission(sale, data);
+      if (commission != null) dataWithActivity.brokerCommissionAmt = commission;
+    }
+
     let result;
     if (data.status === 'CLOSED' && sale.unitId) {
       // Atomic: update sale + unit status in one transaction
@@ -198,6 +204,32 @@ export class SalesService {
           `Founder/Co-Founder approval before it can be committed.`,
       );
     }
+  }
+
+  /**
+   * Commission earned by the attributed broker when the sale closes.
+   * Precedence: per-sale % override → broker default % (× salePrice) → broker flat fee.
+   * Returns undefined when there's no broker or nothing to compute.
+   */
+  private async computeBrokerCommission(
+    sale: { brokerId: string | null; salePrice: any; brokerCommissionPct: any },
+    data: Prisma.SaleUncheckedUpdateInput,
+  ): Promise<number | undefined> {
+    const brokerId = (data.brokerId as string | undefined) ?? sale.brokerId ?? undefined;
+    if (!brokerId) return undefined;
+    const broker = await this.prisma.broker.findUnique({
+      where: { id: brokerId },
+      select: { commissionRate: true, commissionFlat: true },
+    });
+    if (!broker) return undefined;
+
+    const pctRaw = (data.brokerCommissionPct as any) ?? sale.brokerCommissionPct ?? broker.commissionRate;
+    const priceRaw = (data.salePrice as any) ?? sale.salePrice;
+    const salePrice = priceRaw != null ? Number(priceRaw) : null;
+
+    if (pctRaw != null && salePrice != null) return (salePrice * Number(pctRaw)) / 100;
+    if (broker.commissionFlat != null) return Number(broker.commissionFlat);
+    return undefined;
   }
 
   private async resolveDiscountThreshold(projectId: string): Promise<number> {

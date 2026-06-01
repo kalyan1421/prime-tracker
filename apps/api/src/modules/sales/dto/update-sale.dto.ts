@@ -28,4 +28,11 @@ export class UpdateSaleDto {
 
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
+
+  // Broker attribution (internal-only). Commission amount is computed server-side on close.
+  @IsOptional() @IsString()
+  brokerId?: string;
+
+  @IsOptional() @IsNumber()
+  brokerCommissionPct?: number;
 }

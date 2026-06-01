@@ -40,6 +40,7 @@ import { DrawsModule } from './modules/draws/draws.module';
 import { ExceptionsModule } from './modules/exceptions/exceptions.module';
 import { InteriorModule } from './modules/interior/interior.module';
 import { DailyLogsModule } from './modules/daily-logs/daily-logs.module';
+import { BrokersModule } from './modules/brokers/brokers.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { DailyLogsModule } from './modules/daily-logs/daily-logs.module';
     ExceptionsModule,
     InteriorModule,
     DailyLogsModule,
+    BrokersModule,
   ],
   providers: [
     // Enforces ThrottlerModule limits across every controller.

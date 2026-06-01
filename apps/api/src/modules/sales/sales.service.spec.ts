@@ -6,6 +6,7 @@ const mockPrisma: any = {
   unit: { findUnique: jest.fn(), update: jest.fn() },
   project: { findUnique: jest.fn() },
   orgSettings: { findUnique: jest.fn() },
+  broker: { findUnique: jest.fn() },
   $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
 };
 const mockBus = { emit: jest.fn() };
@@ -138,5 +139,64 @@ describe('SalesService — discount-approval gate', () => {
         data: expect.objectContaining({ discountApprovedById: 'founder-1', discountApprovedAt: expect.any(Date) }),
       }),
     );
+  });
+});
+
+describe('SalesService — broker commission on close', () => {
+  let service: SalesService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.sale.update.mockImplementation((args: any) => Promise.resolve({ id: args.where.id }));
+  });
+
+  // building-level sale (unitId null) → skips the discount gate, exercises commission only
+  const brokerSale = (over: any = {}) => ({
+    id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: null, salePrice: 1000000,
+    brokerId: 'br1', brokerCommissionPct: null, discountApprovedAt: null, unit: null, ...over,
+  });
+
+  it('stamps commission = salePrice × broker rate on close', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale());
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 20000 }) }),
+    );
+  });
+
+  it('per-sale commission % overrides the broker default rate', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ brokerCommissionPct: 3 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 30000 }) }),
+    );
+  });
+
+  it('falls back to a flat fee when no percentage is set', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale());
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: null, commissionFlat: 5000 });
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 5000 }) }),
+    );
+  });
+
+  it('stamps no commission when the sale has no broker', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ brokerId: null }));
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    expect(data.brokerCommissionAmt).toBeUndefined();
+    expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
   });
 });
