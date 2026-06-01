@@ -2,15 +2,21 @@
 
 Complete context file. Read this before making any changes.
 
+> **Maintenance note (2026-05-30):** This file was refreshed to match the actual codebase, which had grown
+> well beyond the original doc (~38 API modules, ~24 web pages, 19 migrations, 14 user roles). Post-discovery
+> planning lives in `docs/client-discovery/` (UPDATE_PLAN, INTERIOR_MODULE_DESIGN, SALE_PAYMENT_SCHEDULE_DESIGN).
+
 ---
 
 ## What This App Is
 
 **Prime Tracker** is an internal real-estate project management platform for **Prime Developers**.
-It tracks construction projects, buildings, units, financials, sales, leases, loans, milestones, and team comments.
+It tracks construction projects, buildings, units, financials, sales, leases, loans, milestones, leads,
+campaigns, contracts/vendors, investors, documents, tasks, and team comments — with role-based dashboards.
 
-- Single-tenant today, multi-tenant ready (tenantId fields commented out in schema)
-- Used by: Founders, Finance, Project Managers, Sales, Construction teams
+- Single-tenant data today, but **multi-org is live** (`Organization` model — Prime runs US + India entities)
+- Multi-tenant (`tenantId`) still commented in schema for the future
+- Used by: Founders/Executives, Finance/Accounting/AR-AP, Project Managers, Sales, Marketing, Construction, Legal, Viewers, and (Phase 2) buyer-portal Clients
 
 ---
 
@@ -74,22 +80,29 @@ pnpm run db:studio    # prisma studio GUI
 ## Data Hierarchy
 
 ```
-Project
-  └── Buildings (1:many)
-        └── Units (1:many)
-              ├── Leases
-              ├── Sales
-              ├── Loans (optional link)
-              └── UnitComments (with CommentType)
-  ├── ProjectComments (with CommentType)
-  ├── Milestones
-  ├── BudgetLines
-  ├── Commitments
-  ├── Actuals
-  ├── Loans
-  ├── Sales
-  └── KpiSnapshots
+Organization (US / India entities)
+  └── Project
+        └── Buildings (1:many)   ← can be type LOT (raw land, acreage, no units)
+              └── Units (1:many)
+                    ├── Leases    (or attached to Building directly — polymorphic)
+                    ├── Sales     (or attached to Building directly — polymorphic)
+                    ├── Loans     (Project / Building / Unit level — polymorphic)
+                    └── UnitComments (with CommentType)
+        ├── ProjectComments (with CommentType)
+        ├── Milestones (+ dependencies, + MilestonePhotos)
+        ├── BudgetLines (+ BudgetRevisions, append-only history)
+        ├── Commitments / Contracts (+ ChangeOrders, ContractPayments) / Actuals
+        ├── Loans → DrawRequests (+ DrawApprovals, DrawDocuments) / DrawSchedules
+        ├── Sales / Leads (+ LeadActivities) / Campaigns (+ CampaignSpend)
+        ├── CashFlowEntries
+        ├── Investors → EquityPositions / CapitalCalls / Distributions
+        ├── Documents (+ DocumentVersions) — also attach to Building/Unit/Sale/Lead
+        ├── Tasks (+ TaskComments, TaskAttachments)
+        └── KpiSnapshots / RentRollSnapshots
 ```
+
+Key polymorphism: **Sale, Lease, Lead, Loan** can attach to a Unit *or* a Building (service-enforced
+"exactly one of"). Buildings have their own `phase`; `Project.phase` is computed = max(building phases).
 
 ---
 
@@ -97,37 +110,83 @@ Project
 
 File: `apps/api/prisma/schema.prisma`
 
-### Enums
+### Enums (current — verify in schema before relying)
 ```
-UserRole:      FOUNDER | FINANCE | PROJECT_MANAGER | SALES | CONSTRUCTION | VIEWER
+UserRole:      SUPER_ADMIN | FOUNDER | EXECUTIVE | FINANCE | ACCOUNTING | AR_AP |
+               PROJECT_MANAGER | CONSTRUCTION | SALES | MARKETING | LEGAL | VIEWER | CLIENT
+OrgRole:       LEAD | EMPLOYEE
 ProjectStatus: ACTIVE | ON_HOLD | COMPLETED | CANCELLED
 ProjectPhase:  PRE_DEVELOPMENT | PERMITTING | CONSTRUCTION | LEASE_UP | STABILIZED | SOLD_REFI
 ProjectType:   RESIDENTIAL | COMMERCIAL | MIXED_USE | INDUSTRIAL
-UnitType:      RETAIL | MEDICAL | FLEX | RESIDENTIAL_LOT | OFFICE | RESTAURANT | EVENT_CENTER
-UnitStatus:    AVAILABLE | UNDER_CONTRACT | LEASED | SOLD | OCCUPIED | UNDER_CONSTRUCTION
-CommentType:   MARKETING | SALES | FINANCIAL   ← added in migration 20260302134952
+BuildingType:  RESIDENTIAL | COMMERCIAL | MIXED_USE | INDUSTRIAL | PARKING | AMENITY |
+               RETAIL | OFFICE | LOT   ← LOT = raw land parcel (acreage, usually no units)
+UnitType:      RETAIL | MEDICAL | FLEX | RESIDENTIAL_LOT | COMMERCIAL_LOT | OFFICE | RESTAURANT | EVENT_CENTER
+UnitStatus:    AVAILABLE | UNDER_CONTRACT | LEASED | LEASE_PENDING | SOLD | OCCUPIED | UNDER_CONSTRUCTION
+CommentType:   MARKETING | SALES | FINANCIAL
+MilestoneStatus: NOT_STARTED | IN_PROGRESS | COMPLETED | OVERDUE | BLOCKED
 LoanType:      CONSTRUCTION | PERMANENT | BRIDGE | MEZZANINE | SBA
+DrawStatus:    DRAFT | SUBMITTED | APPROVED | FUNDED | REJECTED | CANCELLED
+DrawApprovalStep: INTERNAL_FOUNDER | INTERNAL_FINANCE | LENDER_SUBMITTED | LENDER_FUNDED
 SaleStatus:    PROSPECT | LOI_SIGNED | UNDER_CONTRACT | CLOSED | CANCELLED
-LeaseStatus:   DRAFT | ACTIVE | EXPIRED | TERMINATED
+LostReason:    PRICE_TOO_HIGH | FINANCING_FELL_THROUGH | CHOSE_COMPETITOR | TIMING_OFF | NO_RESPONSE | OTHER
+LeaseStatus:   DRAFT | ACTIVE | EXPIRED | TERMINATED | OWNER_OCCUPIED
+LeadSource:    WEBSITE | SOCIAL_MEDIA | REFERRAL | COLD_CALL | WALK_IN | SIGNAGE | EMAIL_CAMPAIGN | BROKER | OTHER
+LeadStatus:    NEW | CONTACTED | QUALIFIED | PROPOSAL_SENT | NEGOTIATING | CONVERTED | LOST | DEAD
+LeadActivityType: CALL | EMAIL | MEETING | SITE_VISIT | FOLLOW_UP | NOTE | STATUS_CHANGE
+CampaignChannel: META | GOOGLE_ADS | NEWSPAPER | BROKER | EMAIL | SIGNAGE | EVENT | OTHER
+NotificationType: MILESTONE_OVERDUE | LEASE_EXPIRING_30/_7 | LOAN_MATURITY_60 |
+                  COMMENT_FINANCIAL/_SALES/_MARKETING | DRAW_REQUEST_APPROVED/_FUNDED |
+                  BUDGET_VARIANCE | LEAD_ASSIGNED | LEAD_STATUS_CHANGED
+CashFlowType:  INFLOW | OUTFLOW
+DocCategory:   GENERAL | PERMIT | CONTRACT | FINANCIAL | DRAWING | PHOTO | LEGAL | BROCHURE |
+               LOI | DEED | BOOKING_AGREEMENT | RECEIPT | NOC | POSSESSION_CERTIFICATE
 BudgetCategory: LAND_ACQUISITION | SITE_WORK | HARD_COSTS | SOFT_COSTS | FINANCING |
                 PERMITS_FEES | CONTINGENCY | MARKETING | LEGAL | OTHER
+TaskStatus:    TODO | IN_PROGRESS | DONE | CANCELLED   ·   TaskPriority: LOW | MEDIUM | HIGH | URGENT
 ```
 
-### Key Models
-- **Project** — core entity, has `projectType` field (added early)
-- **Building** — belongs to Project, has `name`, `totalSqft`, `stories`, `buildingType`
-- **Unit** — belongs to Building (NOT directly to Project), has `primeOwned` boolean
-- **UnitComment** — belongs to Unit + User, has `commentType: CommentType`
-- **ProjectComment** — belongs to Project + User, has `commentType: CommentType`
-- **Loan** — can be linked to a Project AND optionally a Unit
+### Key Models (schema is ~1,575 lines — this is the map, not the territory)
+- **Organization / OrgMembership** — multi-entity (US + India); projects belong to an org
+- **Project** — core entity; `phase` is computed from building phases; soft-delete (`deletedAt`)
+- **Building** — type LOT supports raw-land/acreage; has own `phase`, `coverPhotoPath`
+- **Unit** — belongs to Building; `primeOwned`, `availableSince` (time-on-market), soft-delete
+- **Milestone** — `dependsOnId` (DAG, cycle-checked), `linkedDrawScheduleId`, `MilestonePhoto`s
+- **BudgetLine / BudgetRevision** — append-only revision history; `revisedAmt` mirrors latest
+- **Loan** — Project/Building/Unit polymorphic; AES-encrypted sensitive fields; `DrawRequest`/`DrawSchedule`
+- **DrawRequest** — multi-step approval (`DrawApproval`), `DrawDocument`s (lien waiver/inspection…)
+- **Sale** — Unit/Building polymorphic; `lostReason`, `expectedCloseDate`, `lastActivityAt`; auto-flips unit→SOLD on close
+- **Lead** — Unit/Building polymorphic; UTM/campaign attribution; `convertToSale`
+- **Campaign / CampaignSpend** — marketing spend + lead attribution
+- **Contract / ChangeOrder / ContractPayment / Vendor** — vendor contract tracking
+- **Investor / EquityPosition / CapitalCall / Distribution** — investor relations
+- **Document / DocumentVersion** — versioned; attaches to project/building/unit/sale/lead; `isClientVisible` (buyer portal); Supabase storage or `externalUrl`
+- **CashFlowEntry** — INFLOW/OUTFLOW for the cashflow forecast
+- **Task / TaskComment / TaskAttachment** — work tracking, per project/building
+- **AuditEvent** — immutable audit log
 
-### Migration History
+### Migration History (19 migrations — most recent last)
 ```
 20260228201401_init
 20260301214135_add_project_type
 20260302035913_add_comments_ownership_unit_loans
-20260302134952_add_comment_type_project_comments  ← most recent
+20260302134952_add_comment_type_project_comments
+20260303030247_add_leads_notifications
+20260305042323_add_tasks
+20260305162611_add_organizations
+20260314151805_add_new_user_roles
+20260502000000_add_project_members
+20260502120000_add_rls_4_modules
+20260503000000_add_building_type_draw_approver
+20260503010000_add_draw_schedule
+20260504000000_add_soft_delete_and_indexes
+20260505000000_seven_features_foundation
+20260508000000_add_document_storage_path
+20260509000000_doc_vault_phase_1
+20260520000000_add_lead_unit_link
+20260520120000_sprint1_schema_realignment
+20260520130000_sprint2_campaigns_and_attribution   ← most recent
 ```
+Always run `npx prisma migrate status` before writing a new migration.
 
 ---
 
@@ -135,25 +194,44 @@ BudgetCategory: LAND_ACQUISITION | SITE_WORK | HARD_COSTS | SOFT_COSTS | FINANCI
 
 All routes prefixed with `/api`. Auth guard on everything.
 
+~38 modules registered in `app.module.ts`. Base routes (from `@Controller(...)`):
+
 | Module | Base Route | Notes |
 |---|---|---|
-| auth | `/api/auth` | Google OAuth, JWT, refresh, MFA |
+| auth | `/api/auth` | Google OAuth, JWT, refresh, MFA (TOTP) |
 | users | `/api/users` | RBAC, role/status management |
+| organizations | `/api/organizations` | Multi-entity (US/India), memberships |
 | projects | `/api/projects` | CRUD + `/dashboard` endpoint |
-| buildings | `/api/buildings` | Full CRUD, `GET ?projectId=` |
+| project-health | `/api/project-health` | Computed health score |
+| buildings | `/api/buildings` | Full CRUD, `GET ?projectId=`; LOT support |
 | units | `/api/units` | CRUD, `GET ?projectId=`, lease-income |
-| budgets | `/api/budgets` | Budget lines, summary |
+| budgets | `/api/budgets` | Budget lines + revisions, summary |
 | actuals | `/api/actuals` | Actual spend records |
-| loans | `/api/loans` | Loans + draw requests, monthly-payments |
-| leases | `/api/leases` | Leases + rent-roll |
-| milestones | `/api/milestones` | Project milestones |
 | commitments | `/api/commitments` | Vendor commitments |
-| sales | `/api/sales` | Sales pipeline |
+| contracts | `/api/contracts` | Contracts + change orders + payments |
+| vendors | `/api/vendors` | Vendor master |
+| loans | `/api/loans` | Loans, monthly-payments |
+| draws | `/api/draws` | Draw requests + approvals + schedule + docs |
+| leases | `/api/leases` | Leases + rent-roll |
+| milestones | `/api/milestones` | Milestones + dependencies + photos |
+| sales | `/api/sales` | Sales pipeline + weighted forecast |
+| leads | `/api/leads` | Leads + activities + convert-to-sale |
+| campaigns | `/api/campaigns` | Marketing campaigns + spend + attribution |
+| cashflow | `/api/cashflow` | Cashflow forecast (inflow/outflow) |
+| investors | `/api/investors` | Equity, capital calls, distributions |
+| documents | `/api/documents` | Versioned docs, presigned upload (Supabase) |
 | comments | `/api/comments` | Unit + Project comments (see below) |
-| reports | `/api/reports` | portfolio, sales-summary, revenue, debt |
+| tasks | `/api/tasks` | Tasks + comments + attachments |
+| exceptions | `/api/exceptions` | Delay/blocker/risk feed (computed) |
+| notifications | `/api/notifications` | In-app + email; preferences; daily cron |
+| reports | `/api/reports` | portfolio, sales, revenue, debt, unit-sales, vacancy |
+| dashboard | `/api/dashboard` | Role dashboard aggregates |
 | kpi | `/api/kpi` | KPI snapshots |
 | audit | `/api/audit` | Immutable audit log |
-| quickbooks | `/api/quickbooks` | QB integration |
+| quickbooks | `/api/quickbooks` | QB OAuth + REST sync (vendors/bills/payments) — needs live creds |
+
+Also present: `common/` (cache, events EventBus, health, storage), `PrismaModule`. Several modules have
+**RLS** applied (migration `add_rls_4_modules`).
 
 ### Comments API (important — non-standard routes)
 ```
@@ -171,23 +249,40 @@ DELETE /api/comments/project/:id       delete project comment
 
 ## Frontend Structure
 
-### Pages (`apps/web/src/pages/`)
+### Pages (`apps/web/src/pages/` — ~24 pages)
 | File | Route | Notes |
 |---|---|---|
 | `LoginPage.tsx` | `/login` | Google OAuth login |
 | `AuthCallbackPage.tsx` | `/auth/callback` | OAuth callback handler |
-| `DashboardPage.tsx` | `/` | Portfolio overview, charts, recent comments |
+| `DashboardPage.tsx` | `/` | Portfolio overview (RootRedirect routes by role) |
+| `FounderDashboardPage.tsx` | `/dashboard/founder` | Role dashboard |
+| `FinanceDashboardPage.tsx` | `/dashboard/finance` | Role dashboard |
+| `SalesDashboardPage.tsx` | `/dashboard/sales` | Role dashboard |
+| `ConstructionDashboardPage.tsx` | `/dashboard/construction` | Role dashboard |
+| `LeadDashboardPage.tsx` | `/leads/dashboard` | Lead pipeline dashboard |
 | `ProjectsPage.tsx` | `/projects` | Project list with filters |
-| `ProjectDetailPage.tsx` | `/projects/:id/:tab?` | Main project view (8 tabs) |
-| `UnitDetailPage.tsx` | `/projects/:id/units/:unitId` | Unit detail with comments |
-| `ReportsPage.tsx` | `/reports` | 4 cross-project report tabs |
-| `AdminPage.tsx` | `/admin` | User management (FOUNDER only) |
+| `ProjectDetailPage.tsx` | `/projects/:id/:tab?` | Main project view (11 tabs — see below) |
+| `UnitDetailPage.tsx` | `/projects/:id/units/:unitId` | Unit detail (overview/comments/documents) |
+| `BuildingDetailPage.tsx` | `/projects/:id/buildings/:buildingId` | Building detail (perm `building:view`) |
+| `InventoryPage.tsx` | `/inventory` | Cross-project unit inventory |
+| `LeadsPage.tsx` | `/leads` | Cross-project leads |
+| `CampaignsPage.tsx` | `/campaigns` | Marketing campaigns (perm `campaign:view`) |
+| `InvestorsPage.tsx` / `InvestorDetailPage.tsx` | `/investors`, `/investors/:id` | perm `investor:view` |
+| `TasksPage.tsx` | `/tasks` | Cross-project tasks |
+| `ReportsPage.tsx` | `/reports` | Cross-project reports |
+| `FounderReportsPage.tsx` / `SalesReportsPage.tsx` / `ConstructionReportsPage.tsx` | `/reports/{founder,sales,construction}` | Role reports |
+| `VacancyReportPage.tsx` | `/reports/vacancy` | perm `sales:view` |
+| `SettingsPage.tsx` | `/settings/notifications` | Notification preferences |
+| `AdminPage.tsx` | `/admin/*` | User management (perm `user:manage`) |
 
-### ProjectDetailPage Tabs (in order)
+### ProjectDetailPage Tabs (in order — role-filtered via `TAB_ROLES`)
 ```
-overview → financials → buildings → units → milestones → leases → sales → comments
+overview → construction → revenue → units → milestones → leads → draws → vendors → documents → tasks → comments
 ```
-TAB_MAP array: `['overview', 'financials', 'buildings', 'units', 'milestones', 'leases', 'sales', 'comments']`
+TAB_MAP: `['overview','construction','revenue','units','milestones','leads','draws','vendors','documents','tasks','comments']`
+- **construction** tab = Buildings + Budget/Costs (composes `BuildingsTab` + `FinancialsTab`)
+- **revenue** tab = Sales pipeline + Leases/Rent-roll (composes `SalesTab` + `LeasesTab`)
+- Tabs are filtered per role; users only see tabs their role allows.
 
 Navigate programmatically: `navigate('/projects/:id/comments')` etc.
 
@@ -229,6 +324,9 @@ useUpdateProject()
 useCreateProject()  useDeleteProject()
 useUsers()  useUpdateUserRole()  useToggleUserActive()  useCreateUser()
 usePortfolioReport()  useSalesReport()  useRevenueReport()  useDebtReport()
+// Plus many more (draws, contracts, vendors, documents, investors, campaigns, tasks,
+// exceptions, project-health, milestone-photos, presigned-upload, etc.) — useApi.ts is
+// the single source of truth. grep there rather than trusting this list.
 ```
 
 ---
@@ -302,11 +400,12 @@ collapsed ? <img src="/logomark-blue.png" h-8 w-8 />
 
 ### Permission strings (used with `RequirePermissions` decorator and `hasPermission()`)
 ```
-unit:view      — view units and comments
-building:view  — view buildings
-building:edit  — create/edit/delete buildings
-user:manage    — admin functions (FOUNDER only)
+unit:view       building:view / building:edit     user:manage (admin)
+sales:view      lead:view                         campaign:view
+investor:view   ...and more — grep the codebase for the full set
 ```
+14 roles map to permission sets in `apps/api/src/modules/auth/`. Frontend routes gate on these
+(see `App.tsx` `<ProtectedRoute permission="...">`), and ProjectDetailPage tabs filter via `TAB_ROLES`.
 
 ### Role → Permissions mapping
 Defined in `apps/api/src/modules/auth/` (permissions guard checks JWT claims).
@@ -394,10 +493,27 @@ Frontend:
 
 ---
 
-## Things NOT Yet Built (future work)
-- QuickBooks sync (endpoints exist, integration pending QB credentials)
-- Multi-tenant support (tenantId fields commented in schema, ready to enable)
-- Push notifications / real-time updates (no WebSocket yet)
-- File attachments on comments or units
-- PDF export of reports
-- Lead → Sale convert UI (built — "Convert to Sale" button in detail panel and project Leads tab)
+## Post-Discovery Roadmap (client answered the discovery workbook — 2026-05-30)
+
+Full analysis in **`docs/client-discovery/`**:
+- `UPDATE_PLAN.md` — master gap analysis (most original "gaps" turned out already built)
+- `INTERIOR_MODULE_DESIGN.md` — converged design for the Interior/Fit-Out module (the big new build)
+- `SALE_PAYMENT_SCHEDULE_DESIGN.md` — installments tied to milestones (feeds cashflow)
+
+### Confirmed remaining work (priority order)
+1. 🔴 **Interior / Fit-Out module** (new) — InteriorProject + 7 phases + isolated TI budget + sub-contractor invoices + snagging. Same PM, per-sqft, no parallel execution before shell complete.
+2. 🔴 **Sale Payment Schedule** — `SalePayment` child of Sale, milestone-linked; build *with* Interior (TI is one installment).
+3. 🟠 **Broker model + commissions + broker report** (currently only a `BROKER` enum string).
+4. 🟠 **Unit Groups** — combine adjacent units → merge into one legal unit.
+5. 🟠 **Snagging / punch list** — delivered inside the Interior module.
+6. 🟠 **Daily construction logs with photos** — client's #1 pain point.
+7. 🟠 **BuilderTrend ↔ Bill.com PO bridge** — top manual-effort pain (kill manual PO re-entry).
+8. 🟢 WhatsApp notifications, lead stage tweaks (+POTENTIAL/+SITE_VISIT, multi-unit interest), PWA/offline.
+
+## Things NOT Yet Built / Caveats
+- **QuickBooks** — OAuth + REST sync code is real but unverified against live credentials (go-live is a task, not new build).
+- **Bill.com / BuilderTrend** integrations — not started (net-new; maps to top client pain points).
+- Multi-tenant `tenantId` — commented in schema, ready to enable (multi-**org** already live).
+- Push / real-time (WebSocket) — not built; notifications poll every 30s.
+- PDF export of reports — not built.
+- **Email notifications ARE built** (nodemailer/SMTP) — WhatsApp channel is the outstanding one.

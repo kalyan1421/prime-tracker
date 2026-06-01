@@ -1,0 +1,248 @@
+import { useState } from 'react';
+import {
+  Card, CardBody, CardHeader, Chip, Button, Input,
+  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
+} from '@heroui/react';
+import { FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiAlertTriangle } from 'react-icons/fi';
+import {
+  useInteriorProjects, useCreateInterior, useAdvanceInteriorPhase, useApproveInterior,
+  useAddSnag, useResolveSnag, useAddInteriorInvoice,
+} from '../hooks/useApi';
+import { fmt, fmtDate } from './ui';
+
+export const INTERIOR_PHASES = [
+  'DESIGN', 'CLIENT_APPROVAL', 'CITY_APPROVAL', 'PROCUREMENT', 'EXECUTION', 'SNAGGING', 'HANDOVER',
+] as const;
+
+const PHASE_LABEL: Record<string, string> = {
+  DESIGN: 'Design',
+  CLIENT_APPROVAL: 'Client Approval',
+  CITY_APPROVAL: 'City Approval',
+  PROCUREMENT: 'Procurement',
+  EXECUTION: 'Execution',
+  SNAGGING: 'Snagging',
+  HANDOVER: 'Handover',
+};
+
+const errMsg = (err: unknown, fallback: string) => {
+  const msg = (err as any)?.response?.data?.message;
+  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
+};
+
+function PhaseStepper({ current }: { current: string }) {
+  const idx = INTERIOR_PHASES.indexOf(current as any);
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {INTERIOR_PHASES.map((p, i) => (
+        <Chip
+          key={p}
+          size="sm"
+          variant={i === idx ? 'solid' : 'flat'}
+          color={i < idx ? 'success' : i === idx ? 'primary' : 'default'}
+          className={i > idx ? 'opacity-50' : ''}
+        >
+          {PHASE_LABEL[p]}
+        </Chip>
+      ))}
+    </div>
+  );
+}
+
+/** Per-unit Interior / Fit-Out panel. Drop into UnitDetailPage. */
+export function InteriorPanel({ unitId }: { unitId: string }) {
+  const { data, isLoading } = useInteriorProjects({ unitId });
+  const create = useCreateInterior();
+  const { isOpen, onOpen, onClose } = useDisclosure();
+  const [form, setForm] = useState<Record<string, string>>({ name: '', ratePerSqft: '', area: '' });
+
+  const projects: any[] = Array.isArray(data) ? data : [];
+
+  const submit = async () => {
+    if (!form.name.trim()) return addToast({ title: 'Name is required', color: 'warning' });
+    try {
+      await create.mutateAsync({
+        unitId,
+        name: form.name.trim(),
+        contractType: 'PER_SQFT',
+        ratePerSqft: form.ratePerSqft ? Number(form.ratePerSqft) : undefined,
+        area: form.area ? Number(form.area) : undefined,
+      });
+      addToast({ title: 'Interior project created', color: 'success' });
+      setForm({ name: '', ratePerSqft: '', area: '' });
+      onClose();
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to create'), color: 'danger' });
+    }
+  };
+
+  return (
+    <Card shadow="sm">
+      <CardHeader className="pb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FiHome className="text-amber-600" />
+          <p className="font-semibold text-sm text-gray-600">
+            Interior / Fit-Out {projects.length > 0 && `(${projects.length})`}
+          </p>
+        </div>
+        <Button size="sm" variant="flat" color="primary" startContent={<FiPlus />} onPress={onOpen}>
+          Start fit-out
+        </Button>
+      </CardHeader>
+      <CardBody className="pt-0 space-y-3">
+        {isLoading && <p className="text-sm text-gray-400">Loading…</p>}
+        {!isLoading && projects.length === 0 && (
+          <p className="text-sm text-gray-400">
+            No interior project yet. Fit-out is optional and starts after the shell is complete.
+          </p>
+        )}
+        {projects.map((p) => (
+          <InteriorProjectCard key={p.id} project={p} />
+        ))}
+      </CardBody>
+
+      <Modal isOpen={isOpen} onClose={onClose}>
+        <ModalContent>
+          <ModalHeader>Start interior fit-out</ModalHeader>
+          <ModalBody className="space-y-3">
+            <Input
+              label="Name" value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. Unit 204 fit-out"
+            />
+            <div className="flex gap-3">
+              <Input
+                type="number" label="Rate / sqft ($)" value={form.ratePerSqft}
+                onChange={(e) => setForm((f) => ({ ...f, ratePerSqft: e.target.value }))}
+              />
+              <Input
+                type="number" label="Area (sqft)" value={form.area}
+                onChange={(e) => setForm((f) => ({ ...f, area: e.target.value }))}
+              />
+            </div>
+            {form.ratePerSqft && form.area && (
+              <p className="text-xs text-gray-500">
+                Contract value ≈ {fmt(Number(form.ratePerSqft) * Number(form.area))}
+              </p>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="light" onPress={onClose}>Cancel</Button>
+            <Button color="primary" onPress={submit} isLoading={create.isPending}>Create</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+    </Card>
+  );
+}
+
+function InteriorProjectCard({ project }: { project: any }) {
+  const advance = useAdvanceInteriorPhase();
+  const approve = useApproveInterior();
+  const idx = INTERIOR_PHASES.indexOf(project.phase);
+  const next = idx >= 0 && idx < INTERIOR_PHASES.length - 1 ? INTERIOR_PHASES[idx + 1] : null;
+
+  const doAdvance = async () => {
+    if (!next) return;
+    try {
+      await advance.mutateAsync({ id: project.id, target: next });
+      addToast({ title: `Advanced to ${PHASE_LABEL[next]}`, color: 'success' });
+    } catch (e) {
+      // Surfaces the gate messages: shell-not-complete / missing city-approval or handover doc.
+      addToast({ title: errMsg(e, 'Cannot advance'), color: 'danger' });
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-100 p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-medium text-sm">{project.name}</p>
+          <p className="text-xs text-gray-400">
+            {project.contractType === 'PER_SQFT' && project.contractValue
+              ? `${fmt(Number(project.contractValue))} · per sqft`
+              : project.status}
+            {project.handoverAt && ` · handed over ${fmtDate(project.handoverAt)}`}
+          </p>
+        </div>
+        <Chip size="sm" color={project.status === 'COMPLETED' ? 'success' : 'primary'} variant="flat">
+          {project.status}
+        </Chip>
+      </div>
+
+      <PhaseStepper current={project.phase} />
+
+      <div className="flex flex-wrap gap-2">
+        {next && (
+          <Button
+            size="sm" color="primary" variant="flat" endContent={<FiArrowRight />}
+            isLoading={advance.isPending} onPress={doAdvance}
+          >
+            Advance to {PHASE_LABEL[next]}
+          </Button>
+        )}
+        {project.phase === 'CLIENT_APPROVAL' && (
+          <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
+            onPress={() => approve.mutate({ id: project.id, kind: 'client' })}>
+            Record client approval
+          </Button>
+        )}
+        {project.phase === 'CITY_APPROVAL' && (
+          <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
+            onPress={() => approve.mutate({ id: project.id, kind: 'city' })}>
+            Record city approval
+          </Button>
+        )}
+      </div>
+
+      <SnagList project={project} />
+      <InvoiceQuickAdd project={project} />
+    </div>
+  );
+}
+
+function SnagList({ project }: { project: any }) {
+  const add = useAddSnag();
+  const resolve = useResolveSnag();
+  const [desc, setDesc] = useState('');
+  const snags: any[] = project.snags ?? [];
+  const open = snags.filter((s) => s.status !== 'RESOLVED');
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
+        <FiAlertTriangle className="text-orange-500" /> Snags / punch list ({open.length} open)
+      </div>
+      {snags.map((s) => (
+        <div key={s.id} className="flex items-center justify-between text-xs">
+          <span className={s.status === 'RESOLVED' ? 'line-through text-gray-400' : ''}>
+            {s.description}{s.room ? ` · ${s.room}` : ''}
+          </span>
+          {s.status !== 'RESOLVED' && (
+            <Button size="sm" variant="light" color="success" onPress={() => resolve.mutate(s.id)}>
+              Resolve
+            </Button>
+          )}
+        </div>
+      ))}
+      <div className="flex gap-2">
+        <Input size="sm" placeholder="Add a snag…" value={desc} onChange={(e) => setDesc(e.target.value)} />
+        <Button
+          size="sm" variant="flat" isDisabled={!desc.trim()}
+          onPress={async () => { await add.mutateAsync({ id: project.id, data: { description: desc.trim() } }); setDesc(''); }}
+        >
+          Add
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function InvoiceQuickAdd({ project }: { project: any }) {
+  const invoices: any[] = project.invoices ?? [];
+  const spend = invoices.reduce((s, i) => s + Number(i.amount), 0);
+  return (
+    <p className="text-xs text-gray-400">
+      Sub-contractor invoices: {invoices.length} · spend {fmt(spend)}
+    </p>
+  );
+}

@@ -350,6 +350,14 @@ export function useUpdateSale() {
   });
 }
 
+export function useApproveSaleDiscount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/sales/${id}/approve-discount`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sales'] }),
+  });
+}
+
 export function useDeleteSale() {
   const qc = useQueryClient();
   return useMutation({
@@ -1704,5 +1712,182 @@ export function useProjectDrawSchedules(projectId: string | undefined) {
       return schedules.flat();
     },
     enabled: !!projectId,
+  });
+}
+
+// ============================================================================
+// Interior / Fit-Out module (Phase 1)
+// ============================================================================
+
+export function useInteriorProjects(params?: { unitId?: string; buildingId?: string; status?: string }) {
+  return useQuery({
+    queryKey: ['interior', params],
+    queryFn: () => api.get('/interior', { params }).then((r) => r.data),
+  });
+}
+
+export function useInteriorProject(id?: string) {
+  return useQuery({
+    queryKey: ['interior', 'detail', id],
+    queryFn: () => api.get(`/interior/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useInteriorPortfolio() {
+  return useQuery({
+    queryKey: ['interior', 'portfolio'],
+    queryFn: () => api.get('/interior/portfolio').then((r) => r.data),
+  });
+}
+
+function invalidateInterior(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['interior'] });
+}
+
+export function useCreateInterior() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, any>) => api.post('/interior', data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useUpdateInterior() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.patch(`/interior/${id}`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useAdvanceInteriorPhase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, target }: { id: string; target: string }) =>
+      api.post(`/interior/${id}/advance`, { target }).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useApproveInterior() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, kind }: { id: string; kind: 'client' | 'city' }) =>
+      api.post(`/interior/${id}/approve-${kind}`).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useDeleteInterior() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/interior/${id}`).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useAddInteriorScope() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.post(`/interior/${id}/scope`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useAddInteriorInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.post(`/interior/${id}/invoices`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useAddSnag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.post(`/interior/${id}/snags`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useResolveSnag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (snagId: string) => api.post(`/interior/snags/${snagId}/resolve`).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+// ============================================================================
+// Sale Payment Schedule (Phase 1)
+// ============================================================================
+
+export function useSalePayments(saleId?: string) {
+  return useQuery({
+    queryKey: ['salePayments', saleId],
+    queryFn: () => api.get(`/sales/${saleId}/payments`).then((r) => r.data),
+    enabled: !!saleId,
+  });
+}
+
+export function useReceivables(weeks = 4) {
+  return useQuery({
+    queryKey: ['receivables', weeks],
+    queryFn: () => api.get('/sales/receivables', { params: { weeks } }).then((r) => r.data),
+  });
+}
+
+function invalidatePayments(qc: ReturnType<typeof useQueryClient>, saleId?: string) {
+  qc.invalidateQueries({ queryKey: ['salePayments', saleId] });
+  qc.invalidateQueries({ queryKey: ['receivables'] });
+}
+
+export function useAddSalePayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId, data }: { saleId: string; data: Record<string, any> }) =>
+      api.post(`/sales/${saleId}/payments`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
+  });
+}
+
+export function useApplyPaymentTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId, template }: { saleId: string; template: string }) =>
+      api.post(`/sales/${saleId}/payments/from-template`, { template }).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
+  });
+}
+
+export function useUpdateSalePayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data, saleId: _s }: { id: string; data: Record<string, any>; saleId?: string }) =>
+      api.patch(`/sales/payments/${id}`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
+  });
+}
+
+export function useLogPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, amount, saleId: _s }: { id: string; amount: number; saleId?: string }) =>
+      api.post(`/sales/payments/${id}/log`, { amount }).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
+  });
+}
+
+export function useDeleteSalePayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, saleId: _s }: { id: string; saleId?: string }) =>
+      api.delete(`/sales/payments/${id}`).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
   });
 }

@@ -30,7 +30,15 @@ export type DomainEvent =
   | { type: 'drawRequest.submitted'; drawId: string; step: string }
   | { type: 'drawRequest.approved'; drawId: string; approverId: string }
   | { type: 'drawRequest.funded'; drawId: string; loanId: string; projectId: string; amount: number }
-  | { type: 'drawRequest.fundingOverdue'; drawId: string; daysOverdue: number };
+  | { type: 'drawRequest.fundingOverdue'; drawId: string; daysOverdue: number }
+  // Phase 1 — Interior / Fit-Out
+  | { type: 'interior.phaseChanged'; interiorProjectId: string; from: string; to: string }
+  | { type: 'interior.handedOver'; interiorProjectId: string; unitId?: string; at: Date }
+  | { type: 'snag.overdue'; snagId: string; interiorProjectId: string; daysOverdue: number }
+  // Phase 1 — Sale Payment Schedule
+  | { type: 'salePayment.due'; salePaymentId: string; saleId: string }
+  | { type: 'salePayment.paid'; salePaymentId: string; saleId: string; amount: number }
+  | { type: 'salePayment.overdue'; salePaymentId: string; saleId: string; daysOverdue: number };
 
 export type DomainEventType = DomainEvent['type'];
 export type DomainEventOf<T extends DomainEventType> = Extract<DomainEvent, { type: T }>;

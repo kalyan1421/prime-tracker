@@ -209,6 +209,40 @@ export class NotificationsService {
     });
   }
 
+  async notifyPaymentOverdue(p: {
+    saleId: string;
+    label: string;
+    buyer: string | null;
+    projectId: string;
+    projectName?: string;
+    daysOverdue: number;
+  }) {
+    await this.sendToRoles({
+      roles: ['SUPER_ADMIN', 'FOUNDER', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
+      type: NotificationType.PAYMENT_OVERDUE,
+      title: `Payment overdue (${p.daysOverdue}d): ${p.label}`,
+      body: `Installment "${p.label}" for ${p.buyer ?? 'a buyer'} in ${p.projectName ?? 'a project'} is ${p.daysOverdue} day(s) overdue.`,
+      link: `/projects/${p.projectId}/revenue`,
+    });
+  }
+
+  async notifyPaymentDueSoon(p: {
+    saleId: string;
+    label: string;
+    buyer: string | null;
+    projectId: string;
+    projectName?: string;
+    daysLeft: number;
+  }) {
+    await this.sendToRoles({
+      roles: ['SUPER_ADMIN', 'FOUNDER', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
+      type: NotificationType.PAYMENT_DUE_7,
+      title: `Payment due in ${p.daysLeft}d: ${p.label}`,
+      body: `Installment "${p.label}" for ${p.buyer ?? 'a buyer'} in ${p.projectName ?? 'a project'} is due in ${p.daysLeft} day(s).`,
+      link: `/projects/${p.projectId}/revenue`,
+    });
+  }
+
   // ---- Email Template ----
 
   private buildEmailHtml(params: { name: string; title: string; body: string; link?: string; baseUrl: string }) {

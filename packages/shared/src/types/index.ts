@@ -186,6 +186,14 @@ export const PERMISSIONS = {
   CONTRACT_EDIT: 'contract:edit',
   PAYMENT_APPROVE: 'payment:approve',
 
+  // Interior / Fit-Out + Sale Payment Schedule
+  INTERIOR_VIEW: 'interior:view',
+  INTERIOR_EDIT: 'interior:edit',
+  INTERIOR_APPROVE: 'interior:approve',     // client/city approval gate (Founder/Exec authority)
+  INTERIOR_FINANCE: 'interior:finance',     // log sub-contractor invoices
+  PAYMENT_LOG: 'payment:log',               // record a (partial) sale-installment payment
+  SALE_DISCOUNT_APPROVE: 'sales:approve-discount', // Founder/Co-Founder sign-off on over-threshold discounts
+
   // Documents
   DOCUMENT_VIEW: 'document:view',
   DOCUMENT_UPLOAD: 'document:upload',
@@ -255,6 +263,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.REPORT_SALES,
     PERMISSIONS.REPORT_REVENUE,
     PERMISSIONS.REPORT_DEBT,
+    PERMISSIONS.INTERIOR_VIEW,
+    PERMISSIONS.INTERIOR_APPROVE,
+    PERMISSIONS.SALE_DISCOUNT_APPROVE,
   ],
   [UserRole.FINANCE]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -289,6 +300,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.REPORT_PORTFOLIO,
     PERMISSIONS.REPORT_REVENUE,
     PERMISSIONS.REPORT_DEBT,
+    PERMISSIONS.INTERIOR_VIEW,
+    PERMISSIONS.INTERIOR_FINANCE,
+    PERMISSIONS.PAYMENT_LOG,
   ],
   [UserRole.ACCOUNTING]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -311,6 +325,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.QB_MANAGE,
     PERMISSIONS.REPORT_PORTFOLIO,
+    PERMISSIONS.INTERIOR_VIEW,
+    PERMISSIONS.INTERIOR_FINANCE,
+    PERMISSIONS.PAYMENT_LOG,
   ],
   [UserRole.AR_AP]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -327,6 +344,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PAYMENT_APPROVE,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.COMMENT_VIEW,
+    PERMISSIONS.INTERIOR_VIEW,
+    PERMISSIONS.INTERIOR_FINANCE,
+    PERMISSIONS.PAYMENT_LOG,
   ],
   [UserRole.PROJECT_MANAGER]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -354,6 +374,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.REPORT_PORTFOLIO,
+    PERMISSIONS.INTERIOR_VIEW,
+    PERMISSIONS.INTERIOR_EDIT,
   ],
   [UserRole.CONSTRUCTION]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -369,6 +391,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DOCUMENT_UPLOAD,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
+    PERMISSIONS.INTERIOR_VIEW,
   ],
   [UserRole.SALES]: [
     PERMISSIONS.PROJECT_VIEW,

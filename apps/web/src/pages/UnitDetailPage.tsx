@@ -18,6 +18,7 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
 import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
+import { InteriorPanel } from '../components/InteriorPanel';
 
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;
@@ -286,6 +287,9 @@ export default function UnitDetailPage() {
 
       {/* Leads & Activity Section */}
       <UnitLeadsPanel unitId={unitId!} />
+
+      {/* Interior / Fit-Out (Phase 1) */}
+      <InteriorPanel unitId={unitId!} />
 
       {/* Sprint B: Documents scoped to this unit */}
       <UnitDocumentsPanel unitId={unitId!} />

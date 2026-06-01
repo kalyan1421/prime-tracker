@@ -21,7 +21,79 @@ export class ScheduledNotificationsService {
       this.checkExpiringLeases(),
       this.checkLoanMaturities(),
       this.checkBudgetVariances(),
+      this.checkSalePayments(),
     ]);
+  }
+
+  /**
+   * Sale-payment installments: flip past-due → OVERDUE and notify; also warn on those
+   * due within 7 days. Coalesces effectiveDueDate (milestone-stamped) over dueDate.
+   * Public so it can be invoked directly in tests / smoke checks.
+   */
+  async checkSalePayments() {
+    const now = new Date();
+    const in7 = new Date(now);
+    in7.setDate(in7.getDate() + 7);
+
+    const candidates = await this.prisma.salePayment.findMany({
+      where: { status: { in: ['SCHEDULED', 'DUE', 'PARTIALLY_PAID'] } },
+      include: {
+        sale: { select: { id: true, buyer: true, projectId: true, project: { select: { name: true } } } },
+      },
+    });
+
+    const overdue: typeof candidates = [];
+    const dueSoon: typeof candidates = [];
+    for (const p of candidates) {
+      const due = p.effectiveDueDate ?? p.dueDate;
+      if (!due) continue;
+      if (due < now) overdue.push(p);
+      else if (due <= in7) dueSoon.push(p);
+    }
+
+    if (overdue.length > 0) {
+      await this.prisma.salePayment.updateMany({
+        where: { id: { in: overdue.map((p) => p.id) } },
+        data: { status: 'OVERDUE' },
+      });
+    }
+
+    for (const p of overdue) {
+      const due = (p.effectiveDueDate ?? p.dueDate)!;
+      const daysOverdue = Math.ceil((now.getTime() - due.getTime()) / 86_400_000);
+      try {
+        await this.notifications.notifyPaymentOverdue({
+          saleId: p.saleId,
+          label: p.label,
+          buyer: p.sale.buyer,
+          projectId: p.sale.projectId,
+          projectName: p.sale.project?.name,
+          daysOverdue,
+        });
+      } catch (err) {
+        this.logger.warn(`Payment overdue notify failed for ${p.id}: ${err}`);
+      }
+    }
+
+    for (const p of dueSoon) {
+      const due = (p.effectiveDueDate ?? p.dueDate)!;
+      const daysLeft = Math.ceil((due.getTime() - now.getTime()) / 86_400_000);
+      try {
+        await this.notifications.notifyPaymentDueSoon({
+          saleId: p.saleId,
+          label: p.label,
+          buyer: p.sale.buyer,
+          projectId: p.sale.projectId,
+          projectName: p.sale.project?.name,
+          daysLeft,
+        });
+      } catch (err) {
+        this.logger.warn(`Payment due-soon notify failed for ${p.id}: ${err}`);
+      }
+    }
+
+    this.logger.log(`Sale payments: ${overdue.length} overdue, ${dueSoon.length} due within 7d`);
+    return { overdue: overdue.length, dueSoon: dueSoon.length };
   }
 
   private async checkOverdueMilestones() {

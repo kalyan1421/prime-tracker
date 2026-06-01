@@ -65,6 +65,9 @@ export class CashFlowService {
       else m.outflows += Math.abs(entry.amount);
     }
 
+    // Fold in projected inflows from the sale-payment schedule (the real money-in dates).
+    await this.addProjectedSalePaymentInflows(projectId, monthMap);
+
     // Sort and compute cumulative
     const sorted = Array.from(monthMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
     let cumulative = 0;
@@ -81,5 +84,32 @@ export class CashFlowService {
     const burnRate = result.length > 0 ? totalOutflows / result.length : 0;
 
     return { summary: { totalInflows, totalOutflows, netCashFlow, burnRate }, monthly: result };
+  }
+
+  /**
+   * Add outstanding sale-payment installments as projected inflows, bucketed by their
+   * effective due month. This is what makes the founder's "money-in next 2/4 weeks"
+   * forecast real (SALE_PAYMENT_SCHEDULE_DESIGN §4). Paid/waived amounts are excluded.
+   */
+  private async addProjectedSalePaymentInflows(
+    projectId: string,
+    monthMap: Map<string, { inflows: number; outflows: number; isActual: boolean }>,
+  ) {
+    const payments = await this.prisma.salePayment.findMany({
+      where: {
+        sale: { projectId, deletedAt: null },
+        status: { in: ['SCHEDULED', 'DUE', 'PARTIALLY_PAID', 'OVERDUE'] },
+      },
+      select: { amount: true, paidAmount: true, dueDate: true, effectiveDueDate: true },
+    });
+    for (const p of payments) {
+      const due = p.effectiveDueDate ?? p.dueDate;
+      if (!due) continue; // milestone-triggered but not yet stamped → no date to bucket
+      const outstanding = Number(p.amount) - Number(p.paidAmount);
+      if (outstanding <= 0) continue;
+      const key = due.toISOString().slice(0, 7);
+      if (!monthMap.has(key)) monthMap.set(key, { inflows: 0, outflows: 0, isActual: false });
+      monthMap.get(key)!.inflows += outstanding;
+    }
   }
 }
