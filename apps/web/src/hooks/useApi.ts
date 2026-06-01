@@ -1949,3 +1949,50 @@ export function useRemoveDailyLogPhoto() {
     onSuccess: () => invalidateDailyLogs(qc),
   });
 }
+
+// ============================================================================
+// Brokers / referral tracking (Phase 4)
+// ============================================================================
+
+export function useBrokers(includeInactive = false) {
+  return useQuery({
+    queryKey: ['brokers', includeInactive],
+    queryFn: () => api.get('/brokers', { params: { includeInactive } }).then((r) => r.data),
+  });
+}
+
+export function useBrokerReport() {
+  return useQuery({
+    queryKey: ['brokers', 'report'],
+    queryFn: () => api.get('/brokers/report').then((r) => r.data),
+  });
+}
+
+function invalidateBrokers(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['brokers'] });
+}
+
+export function useCreateBroker() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, any>) => api.post('/brokers', data).then((r) => r.data),
+    onSuccess: () => invalidateBrokers(qc),
+  });
+}
+
+export function useUpdateBroker() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.patch(`/brokers/${id}`, data).then((r) => r.data),
+    onSuccess: () => invalidateBrokers(qc),
+  });
+}
+
+export function useDeleteBroker() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/brokers/${id}`).then((r) => r.data),
+    onSuccess: () => invalidateBrokers(qc),
+  });
+}

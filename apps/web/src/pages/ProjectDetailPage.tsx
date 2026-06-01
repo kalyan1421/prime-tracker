@@ -20,7 +20,7 @@ import {
   useCreateUnit, useUpdateUnit, useUpdateUnitStatus, useDeleteUnit,
   useCreateMilestone, useUpdateMilestone, useDeleteMilestone,
   useCreateLease, useUpdateLease, useDeleteLease,
-  useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount,
+  useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount, useBrokers,
   useCreateCommitment, useUpdateCommitment, useDeleteCommitment,
   useCreateBudget, useUpdateBudget, useDeleteBudget,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
@@ -2854,6 +2854,7 @@ const EMPTY_SALE = {
   unitId: '', buyer: '', salePrice: '', depositAmt: '', status: 'PROSPECT',
   loiDate: '', contractDate: '', closingDate: '', notes: '',
   lostReason: '', lostReasonNote: '', expectedCloseDate: '',
+  brokerId: '', brokerCommissionPct: '',
 };
 
 const LOST_REASONS = [
@@ -2873,6 +2874,8 @@ function SalesTab({ projectId }: { projectId: string }) {
   const updateSale = useUpdateSale();
   const deleteSale = useDeleteSale();
   const approveDiscount = useApproveSaleDiscount();
+  const { data: brokersData } = useBrokers();
+  const brokers = (brokersData as any[]) || [];
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
@@ -2902,6 +2905,8 @@ function SalesTab({ projectId }: { projectId: string }) {
       contractDate: s.contractDate ? s.contractDate.slice(0, 10) : '',
       closingDate: s.closingDate ? s.closingDate.slice(0, 10) : '',
       notes: s.notes || '',
+      brokerId: s.brokerId || '',
+      brokerCommissionPct: s.brokerCommissionPct != null ? String(s.brokerCommissionPct) : '',
     });
     onFormOpen();
   };
@@ -2929,6 +2934,8 @@ function SalesTab({ projectId }: { projectId: string }) {
         notes: form.notes || undefined,
         lostReason: form.status === 'CANCELLED' ? form.lostReason : undefined,
         lostReasonNote: form.status === 'CANCELLED' ? (form.lostReasonNote || undefined) : undefined,
+        brokerId: form.brokerId || undefined,
+        brokerCommissionPct: form.brokerCommissionPct ? parseFloat(form.brokerCommissionPct) : undefined,
       };
       if (editId) {
         await updateSale.mutateAsync({ id: editId, data: payload });
@@ -3133,6 +3140,25 @@ function SalesTab({ projectId }: { projectId: string }) {
               <Input size="sm" label="Contract Date" type="date" value={form.contractDate} onChange={set('contractDate')} />
               <Input size="sm" label="Closing Date" type="date" value={form.closingDate} onChange={set('closingDate')} />
               <Input size="sm" label="Expected Close" type="date" value={form.expectedCloseDate} onChange={set('expectedCloseDate')} />
+
+              {/* Phase 4: broker attribution — commission is stamped on close */}
+              <Select
+                size="sm"
+                label="Broker (optional)"
+                selectedKeys={form.brokerId ? [form.brokerId] : []}
+                onSelectionChange={(keys) => setForm((f) => ({ ...f, brokerId: (Array.from(keys)[0] as string) || '' }))}
+              >
+                {[{ id: '', name: '— none —', company: '' }, ...brokers].map((b: any) => (
+                  <SelectItem key={b.id}>{b.id ? `${b.name}${b.company ? ` · ${b.company}` : ''}` : '— none —'}</SelectItem>
+                ))}
+              </Select>
+              {form.brokerId && (
+                <Input
+                  size="sm" type="number" label="Commission % override"
+                  value={form.brokerCommissionPct} onChange={set('brokerCommissionPct')}
+                  description="Blank = broker default; stamped on close"
+                />
+              )}
 
               {/* Slice 6: lost-reason picker — only shown when cancelling */}
               {form.status === 'CANCELLED' && (

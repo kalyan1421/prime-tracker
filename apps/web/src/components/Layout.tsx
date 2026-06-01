@@ -25,6 +25,7 @@ const BASE_NAV_ITEMS = [
   { label: 'Leads', icon: FiTarget, path: '/leads', roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'] },
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
   { label: 'Investors', icon: FiBriefcase, path: '/investors', permission: 'investor:view' },
+  { label: 'Brokers', icon: FiUsers, path: '/brokers', permission: 'broker:view' },
   { label: 'Reports', icon: FiPieChart, pathKey: 'reports', roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER', 'SALES', 'MARKETING'] },
   { label: 'Admin', icon: FiUsers, path: '/admin', permission: 'user:manage' },
 ];
