@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDollarSign } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
+import { DailyLogFeed } from '../components/DailyLogFeed';
 import {
   useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCommitments, useBuildings,
@@ -3544,6 +3545,8 @@ function ConstructionTab({ projectId }: { projectId: string }) {
     <div className="mt-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-0">🏗️ Buildings</p>
       <BuildingsTab projectId={projectId} />
+      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-2">📋 Daily Logs</p>
+      <DailyLogFeed projectId={projectId} />
       <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-0">📊 Budget & Costs</p>
       <FinancialsTab projectId={projectId} />
     </div>

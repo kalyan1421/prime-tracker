@@ -1891,3 +1891,61 @@ export function useDeleteSalePayment() {
     onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
   });
 }
+
+// ============================================================================
+// Daily Construction Logs (Phase 4)
+// ============================================================================
+
+export function useDailyLogs(projectId?: string, buildingId?: string) {
+  return useQuery({
+    queryKey: ['daily-logs', projectId, buildingId ?? 'all'],
+    queryFn: () => api.get('/daily-logs', { params: { projectId, buildingId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
+function invalidateDailyLogs(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['daily-logs'] });
+}
+
+export function useCreateDailyLog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, any>) => api.post('/daily-logs', data).then((r) => r.data),
+    onSuccess: () => invalidateDailyLogs(qc),
+  });
+}
+
+export function useUpdateDailyLog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.patch(`/daily-logs/${id}`, data).then((r) => r.data),
+    onSuccess: () => invalidateDailyLogs(qc),
+  });
+}
+
+export function useDeleteDailyLog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/daily-logs/${id}`).then((r) => r.data),
+    onSuccess: () => invalidateDailyLogs(qc),
+  });
+}
+
+export function useAddDailyLogPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, storagePath, caption }: { id: string; storagePath: string; caption?: string }) =>
+      api.post(`/daily-logs/${id}/photos`, { storagePath, caption }).then((r) => r.data),
+    onSuccess: () => invalidateDailyLogs(qc),
+  });
+}
+
+export function useRemoveDailyLogPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (photoId: string) => api.delete(`/daily-logs/photos/${photoId}`).then((r) => r.data),
+    onSuccess: () => invalidateDailyLogs(qc),
+  });
+}
