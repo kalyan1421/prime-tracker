@@ -5,7 +5,7 @@ Internal real estate development dashboard for project tracking, financials, and
 Internal real estate development dashboard for project tracking, financials, and QuickBooks integration.
 
 ## 🚀 Tech Stack
-
+  
 * Backend: NestJS + Prisma + PostgreSQL
 * Frontend: React + TypeScript + Chakra UI
 * Auth: Google Workspace SSO + MFA
