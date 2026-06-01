@@ -17,6 +17,7 @@ import { SalesService } from '../src/modules/sales/sales.service';
 import { DailyLogsService } from '../src/modules/daily-logs/daily-logs.service';
 import { BrokersService } from '../src/modules/brokers/brokers.service';
 import { UnitsService } from '../src/modules/units/units.service';
+import { LeadsService } from '../src/modules/leads/leads.service';
 import { EventBus } from '../src/common/events/event-bus.service';
 
 const prisma = new PrismaClient();
@@ -49,6 +50,7 @@ async function main() {
   const dailyLogs = new DailyLogsService(prisma as any);
   const brokers = new BrokersService(prisma as any);
   const unitsSvc = new UnitsService(prisma as any);
+  const leadsSvc = new LeadsService(prisma as any);
 
   const unit = await prisma.unit.findFirst({ include: { building: true } });
   if (!unit?.building) throw new Error('No seeded unit/building found — seed the DB first');
@@ -194,6 +196,10 @@ async function main() {
     const lead = await prisma.lead.create({ data: { projectId, source: 'BROKER', name: 'Funnel Lead', status: 'SITE_VISIT', createdBy: user!.id } });
     created.leadId = lead.id;
     check(lead.status === 'SITE_VISIT', 'lead accepts the new SITE_VISIT funnel stage');
+    // Multi-unit interest / per-unit waitlist
+    await leadsSvc.addInterest(lead.id, unit.id, 'Wants this unit');
+    const waitlist = await leadsSvc.unitWaitlist(unit.id);
+    check(waitlist.some((w: any) => w.lead.id === lead.id && w.position >= 1), 'lead appears on the unit waitlist (multi-unit interest)');
 
     console.log('\n── Cashflow inflows + receivables + overdue cron ──');
     const cashflow = new CashFlowService(prisma as any);

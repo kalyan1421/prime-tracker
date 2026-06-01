@@ -37,9 +37,16 @@ export class LeadsController {
     return this.service.findAll({ projectId, status, assignedTo, unitId, buildingId, campaignId, search });
   }
 
+  @Get('waitlist')
+  @RequirePermissions('lead:view')
+  @ApiOperation({ summary: 'Per-unit waitlist — leads interested in a unit (oldest first)' })
+  waitlist(@Query('unitId') unitId: string) {
+    return this.service.unitWaitlist(unitId);
+  }
+
   @Get(':id')
   @RequirePermissions('lead:view')
-  @ApiOperation({ summary: 'Get a single lead with activities' })
+  @ApiOperation({ summary: 'Get a single lead with activities + units of interest' })
   findOne(@Param('id') id: string) {
     return this.service.findById(id);
   }
@@ -120,6 +127,22 @@ export class LeadsController {
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.addActivity(leadId, userId, body.type, body.note);
+  }
+
+  // ---- Multi-unit interest / waitlist ----
+
+  @Post(':id/interests')
+  @RequirePermissions('lead:edit')
+  @ApiOperation({ summary: 'Add a unit of interest to a lead' })
+  addInterest(@Param('id') leadId: string, @Body() body: { unitId: string; note?: string }) {
+    return this.service.addInterest(leadId, body.unitId, body.note);
+  }
+
+  @Delete('interests/:interestId')
+  @RequirePermissions('lead:edit')
+  @ApiOperation({ summary: 'Remove a unit of interest (by join-row id)' })
+  removeInterest(@Param('interestId') interestId: string) {
+    return this.service.removeInterest(interestId);
   }
 
   // ---- Convert to Sale ----

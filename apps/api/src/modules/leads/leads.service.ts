@@ -65,10 +65,62 @@ export class LeadsService {
           include: { createdByUser: { select: { id: true, name: true, avatarUrl: true } } },
           orderBy: { createdAt: 'desc' },
         },
+        unitInterests: {
+          include: { unit: { select: { id: true, unitNumber: true, buildingId: true, status: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
     if (!lead) throw new NotFoundException('Lead not found');
     return lead;
+  }
+
+  // ─────── Multi-unit interest / per-unit waitlist ───────
+
+  /** Record that a lead is interested in a unit (idempotent on lead+unit). */
+  async addInterest(leadId: string, unitId: string, note?: string) {
+    if (!unitId) throw new BadRequestException('unitId is required');
+    const [lead, unit] = await Promise.all([
+      this.prisma.lead.findUnique({ where: { id: leadId }, select: { id: true } }),
+      this.prisma.unit.findUnique({ where: { id: unitId }, select: { id: true } }),
+    ]);
+    if (!lead) throw new NotFoundException('Lead not found');
+    if (!unit) throw new NotFoundException('Unit not found');
+    return this.prisma.leadUnitInterest.upsert({
+      where: { leadId_unitId: { leadId, unitId } },
+      create: { leadId, unitId, note },
+      update: { note },
+      include: { unit: { select: { id: true, unitNumber: true, status: true } } },
+    });
+  }
+
+  /** Remove a lead↔unit interest by the join-row id. */
+  async removeInterest(interestId: string) {
+    return this.prisma.leadUnitInterest.delete({ where: { id: interestId } });
+  }
+
+  /** Waitlist / demand for a unit: every lead that has expressed interest, oldest first. */
+  async unitWaitlist(unitId: string) {
+    if (!unitId) throw new BadRequestException('unitId is required');
+    const interests = await this.prisma.leadUnitInterest.findMany({
+      where: { unitId },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        lead: {
+          select: {
+            id: true, name: true, email: true, phone: true, status: true, budget: true,
+            assignedUser: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+    return interests.map((i, idx) => ({
+      interestId: i.id,
+      position: idx + 1,
+      note: i.note,
+      addedAt: i.createdAt,
+      lead: i.lead,
+    }));
   }
 
   async create(data: {

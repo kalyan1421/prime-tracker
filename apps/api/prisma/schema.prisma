@@ -316,6 +316,7 @@ model Unit {
   clients          Client[]
   leads            Lead[]
   interiorProjects InteriorProject[]
+  interestedLeads  LeadUnitInterest[]
 
   @@unique([buildingId, unitNumber])
   @@index([buildingId])
@@ -1040,8 +1041,11 @@ model Lead {
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
-  activities LeadActivity[]
-  documents  Document[]
+  activities    LeadActivity[]
+  documents     Document[]
+  // Multi-unit interest: a lead can express interest in several units (and a unit can have
+  // a waitlist of interested leads) — in addition to the single primary unit link above.
+  unitInterests LeadUnitInterest[]
 
   @@index([projectId])
   @@index([status])
@@ -1051,6 +1055,20 @@ model Lead {
   @@index([campaignId])
   @@index([brokerId])
   @@map("leads")
+}
+
+model LeadUnitInterest {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  unitId    String
+  unit      Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([leadId, unitId])
+  @@index([unitId])
+  @@map("lead_unit_interests")
 }
 
 model LeadActivity {
