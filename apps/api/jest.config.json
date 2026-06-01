@@ -9,6 +9,6 @@
   "coverageDirectory": "../coverage",
   "testEnvironment": "node",
   "moduleNameMapper": {
-    "^@prime-tracker/shared$": "<rootDir>/../../packages/shared/src/types/index.ts"
+    "^@prime-tracker/shared$": "<rootDir>/../../../packages/shared/src/types/index.ts"
   }
 }

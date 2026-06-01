@@ -104,6 +104,16 @@ export class SalesService {
       // emit AFTER successful write — see below
     }
 
+    const cancelling = data.status === 'CANCELLED' && sale.status !== 'CANCELLED';
+
+    // Discount-approval gate: committing a sale (UNDER_CONTRACT/CLOSED) with an over-threshold
+    // discount requires Founder/Co-Founder sign-off first. Single approval (client decision).
+    const committing =
+      (data.status === 'UNDER_CONTRACT' || data.status === 'CLOSED') && data.status !== sale.status;
+    if (committing) {
+      await this.assertDiscountApproved(sale);
+    }
+
     let result;
     if (data.status === 'CLOSED' && sale.unitId) {
       // Atomic: update sale + unit status in one transaction
@@ -116,6 +126,28 @@ export class SalesService {
         }),
       ]);
       result = updated;
+    } else if (cancelling && sale.unitId) {
+      // Cancelling a sale must RELEASE the unit it was holding, or the unit stays stuck
+      // in UNDER_CONTRACT forever (backend-issue #1). Only flip a unit that was *reserved*
+      // by this sale — never override a SOLD/LEASED/OCCUPIED unit. Restart time-on-market.
+      // (Refund/penalty handling is a separate, client-defined flow — discovery item D18.)
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: sale.unitId },
+        select: { status: true },
+      });
+      const reserved = unit && ['UNDER_CONTRACT', 'LEASE_PENDING'].includes(unit.status);
+      if (reserved) {
+        const [updated] = await this.prisma.$transaction([
+          this.prisma.sale.update({ where: { id }, data: dataWithActivity }),
+          this.prisma.unit.update({
+            where: { id: sale.unitId },
+            data: { status: 'AVAILABLE', availableSince: new Date() },
+          }),
+        ]);
+        result = updated;
+      } else {
+        result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
+      }
     } else {
       result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
     }
@@ -129,6 +161,60 @@ export class SalesService {
       });
     }
     return result;
+  }
+
+  /** Founder/Co-Founder records sign-off on an over-threshold discount. */
+  async approveDiscount(id: string, userId: string) {
+    await this.findById(id); // 404 if missing
+    return this.prisma.sale.update({
+      where: { id },
+      data: { discountApprovedById: userId, discountApprovedAt: new Date() },
+    });
+  }
+
+  /** Throws if the sale carries an over-threshold, un-approved discount vs the unit's asking price. */
+  private async assertDiscountApproved(sale: {
+    projectId: string;
+    unitId: string | null;
+    salePrice: Prisma.Decimal | null;
+    discountApprovedAt: Date | null;
+  }) {
+    if (sale.discountApprovedAt) return; // already signed off
+    if (!sale.unitId || sale.salePrice == null) return; // can't compute (building-level / no price)
+
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: sale.unitId },
+      select: { askingPrice: true },
+    });
+    const asking = unit?.askingPrice != null ? Number(unit.askingPrice) : null;
+    const salePrice = Number(sale.salePrice);
+    if (!asking || asking <= 0 || salePrice >= asking) return; // no discount
+
+    const discountPct = ((asking - salePrice) / asking) * 100;
+    const threshold = await this.resolveDiscountThreshold(sale.projectId);
+    if (discountPct > threshold) {
+      throw new ForbiddenException(
+        `This sale's ${discountPct.toFixed(1)}% discount exceeds the ${threshold}% threshold and requires ` +
+          `Founder/Co-Founder approval before it can be committed.`,
+      );
+    }
+  }
+
+  private async resolveDiscountThreshold(projectId: string): Promise<number> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { orgId: true },
+    });
+    if (project?.orgId) {
+      const settings = await this.prisma.orgSettings.findUnique({
+        where: { orgId: project.orgId },
+        select: { discountApprovalThresholdPct: true },
+      });
+      if (settings?.discountApprovalThresholdPct != null) {
+        return Number(settings.discountApprovalThresholdPct);
+      }
+    }
+    return 5; // default until the org configures a threshold
   }
 
   async delete(id: string, userRole: UserRole) {

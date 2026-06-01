@@ -3,6 +3,9 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { ForbiddenException } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
+import { AuditService } from '../../common/utils/audit.service';
 
 // Mock PrismaService
 const mockPrisma = {
@@ -61,11 +64,11 @@ describe('AuthService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
-        { provide: 'PrismaService', useValue: mockPrisma },
+        { provide: PrismaService, useValue: mockPrisma },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
-        { provide: 'EncryptionService', useValue: mockEncryptionService },
-        { provide: 'AuditService', useValue: mockAuditService },
+        { provide: EncryptionService, useValue: mockEncryptionService },
+        { provide: AuditService, useValue: mockAuditService },
       ],
     }).compile();
 
@@ -132,6 +135,7 @@ describe('AuthService', () => {
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-disabled',
         email: googleProfile.email,
+        googleId: 'google-123', // already linked → skips the update branch, hits the isActive check
         isActive: false,
       });
 

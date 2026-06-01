@@ -38,6 +38,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { ProjectHealthModule } from './modules/project-health/project-health.module';
 import { DrawsModule } from './modules/draws/draws.module';
 import { ExceptionsModule } from './modules/exceptions/exceptions.module';
+import { InteriorModule } from './modules/interior/interior.module';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { ExceptionsModule } from './modules/exceptions/exceptions.module';
     ProjectHealthModule,
     DrawsModule,
     ExceptionsModule,
+    InteriorModule,
   ],
   providers: [
     // Enforces ThrottlerModule limits across every controller.

@@ -64,6 +64,10 @@ model User {
   // Sprint 2 — Campaign attribution
   campaignsCreated        Campaign[]               @relation("CampaignCreator")
   campaignSpendRecorded   CampaignSpend[]          @relation("CampaignSpender")
+  // Interior / Fit-Out + Sale Payments
+  interiorProjects        InteriorProject[]        @relation("InteriorPM")
+  snagItems               SnagItem[]               @relation("SnagAssignee")
+  discountApprovedSales   Sale[]                   @relation("SaleDiscountApprover")
 
   @@map("users")
 }
@@ -251,17 +255,18 @@ model Building {
   updatedAt      DateTime      @updatedAt
   deletedAt      DateTime? // soft-delete
 
-  units     Unit[]
-  tasks     Task[]
-  documents Document[]
+  units            Unit[]
+  tasks            Task[]
+  documents        Document[]
   // Polymorphic back-relations: Sale/Lease/Lead/Loan can attach to a Building directly
   // (e.g. Leander Building 1 leased as one whole asset to "22 Yards Austin") in addition to
   // attaching to a specific Unit. Service-level validation ensures exactly one of
   // (buildingId, unitId) is set per row — see Sprint 1 docs.
-  sales     Sale[]
-  leases    Lease[]
-  leads     Lead[]
-  loans     Loan[]
+  sales            Sale[]
+  leases           Lease[]
+  leads            Lead[]
+  loans            Loan[]
+  interiorProjects InteriorProject[]
 
   @@index([projectId])
   @@index([phase])
@@ -294,14 +299,15 @@ model Unit {
   updatedAt      DateTime   @updatedAt
   deletedAt      DateTime? // soft-delete: preserves financial history
 
-  leases    Lease[]
-  sales     Sale[]
-  comments  UnitComment[]
-  loans     Loan[]
-  documents Document[]
-  tasks     Task[]
-  clients   Client[]
-  leads     Lead[]
+  leases           Lease[]
+  sales            Sale[]
+  comments         UnitComment[]
+  loans            Loan[]
+  documents        Document[]
+  tasks            Task[]
+  clients          Client[]
+  leads            Lead[]
+  interiorProjects InteriorProject[]
 
   @@unique([buildingId, unitNumber])
   @@index([buildingId])
@@ -414,6 +420,9 @@ model Milestone {
   linkedDrawScheduleId String?
   linkedDrawSchedule   DrawSchedule?    @relation(fields: [linkedDrawScheduleId], references: [id])
   photos               MilestonePhoto[]
+  // Interior / Fit-Out + Sale Payments
+  salePayments         SalePayment[]
+  snags                SnagItem[]
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
@@ -729,37 +738,46 @@ model DrawSchedule {
 // ---- Sales ----
 
 model Sale {
-  id                String      @id @default(cuid())
-  projectId         String
-  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id                   String      @id @default(cuid())
+  projectId            String
+  project              Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
   // Enforced at the service layer (SalesService.create/update). DB lets both be null
   // to support data migration; queries should always include the populated side.
-  unitId            String?
-  unit              Unit?       @relation(fields: [unitId], references: [id])
-  buildingId        String?
-  building          Building?   @relation(fields: [buildingId], references: [id])
-  buyer             String?
-  salePrice         Decimal?    @db.Decimal(14, 2)
-  depositAmt        Decimal?    @db.Decimal(14, 2)
-  status            SaleStatus  @default(PROSPECT)
-  loiDate           DateTime?
-  contractDate      DateTime?
-  closingDate       DateTime?
-  notes             String?
+  unitId               String?
+  unit                 Unit?       @relation(fields: [unitId], references: [id])
+  buildingId           String?
+  building             Building?   @relation(fields: [buildingId], references: [id])
+  buyer                String?
+  salePrice            Decimal?    @db.Decimal(14, 2)
+  depositAmt           Decimal?    @db.Decimal(14, 2)
+  status               SaleStatus  @default(PROSPECT)
+  loiDate              DateTime?
+  contractDate         DateTime?
+  closingDate          DateTime?
+  notes                String?
   // Slice 6: Pipeline upgrade
-  lastActivityAt    DateTime? // bump on update or comment; powers activity-drought alerts
-  expectedCloseDate DateTime? // for weighted forecast time-bucketing
-  lostReason        LostReason? // required when status -> CANCELLED
-  lostReasonNote    String?
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
-  deletedAt         DateTime? // soft-delete
+  lastActivityAt       DateTime? // bump on update or comment; powers activity-drought alerts
+  expectedCloseDate    DateTime? // for weighted forecast time-bucketing
+  lostReason           LostReason? // required when status -> CANCELLED
+  lostReasonNote       String?
+  // Discount-approval gate: a sale priced below the unit's asking price by more than the
+  // org threshold needs Founder/Co-Founder sign-off before it can be committed
+  // (UNDER_CONTRACT/CLOSED). Single approval — no dual-approval (client decision).
+  discountApprovedById String?
+  discountApprovedBy   User?       @relation("SaleDiscountApprover", fields: [discountApprovedById], references: [id])
+  discountApprovedAt   DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  deletedAt            DateTime? // soft-delete
 
   convertedLead Lead?
 
-  documents Document[]
-  client    Client?
+  documents        Document[]
+  client           Client?
+  // Sale Payment Schedule (milestone-linked installments) + interior fit-out context
+  payments         SalePayment[]
+  interiorProjects InteriorProject[]
 
   @@index([projectId])
   @@index([unitId])
@@ -818,6 +836,8 @@ model Lease {
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   deletedAt       DateTime? // soft-delete
+
+  interiorProjects InteriorProject[]
 
   @@index([unitId])
   @@index([buildingId])
@@ -1130,6 +1150,12 @@ enum NotificationType {
   BUDGET_VARIANCE
   LEAD_ASSIGNED
   LEAD_STATUS_CHANGED
+  // Interior fit-out + sale-payment schedule triggers
+  INTERIOR_PHASE_CHANGED
+  INTERIOR_HANDOVER_DUE
+  SNAG_OVERDUE
+  PAYMENT_DUE_7
+  PAYMENT_OVERDUE
 }
 
 model Notification {
@@ -1198,14 +1224,15 @@ enum ChangeOrderStatus {
 }
 
 model Vendor {
-  id          String     @id @default(cuid())
-  name        String
-  contactName String?
-  email       String?
-  phone       String?
-  trade       String?
-  contracts   Contract[]
-  createdAt   DateTime   @default(now())
+  id               String            @id @default(cuid())
+  name             String
+  contactName      String?
+  email            String?
+  phone            String?
+  trade            String?
+  contracts        Contract[]
+  interiorInvoices InteriorInvoice[]
+  createdAt        DateTime          @default(now())
 
   @@map("vendors")
 }
@@ -1276,45 +1303,52 @@ enum DocCategory {
   RECEIPT
   NOC
   POSSESSION_CERTIFICATE
+  // Interior / fit-out phase gates
+  CITY_APPROVAL
+  HANDOVER_CERTIFICATE
 }
 
 model Document {
-  id              String            @id @default(cuid())
-  projectId       String?
-  project         Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  buildingId      String?
-  building        Building?         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unitId          String?
-  unit            Unit?             @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  saleId          String?
-  sale            Sale?             @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  leadId          String?
-  lead            Lead?             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id                String            @id @default(cuid())
+  projectId         String?
+  project           Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  buildingId        String?
+  building          Building?         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId            String?
+  unit              Unit?             @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  saleId            String?
+  sale              Sale?             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  leadId            String?
+  lead              Lead?             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  // Interior fit-out attachment (city-approval doc, handover certificate, etc.)
+  interiorProjectId String?
+  interiorProject   InteriorProject?  @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
   // Current-version metadata. On replace, the prior values are copied into a DocumentVersion row.
-  fileName        String
-  fileUrl         String
-  storagePath     String?
-  fileSize        Int?
-  mimeType        String?
+  fileName          String
+  fileUrl           String
+  storagePath       String?
+  fileSize          Int?
+  mimeType          String?
   // First-class link target so Sales can paste a DocuSign / Drive URL instead of uploading.
   // Either fileUrl OR externalUrl will be populated (storagePath null when external).
-  externalUrl     String?
-  category        DocCategory       @default(GENERAL)
+  externalUrl       String?
+  category          DocCategory       @default(GENERAL)
   // Phase 2 portal flag. Default false — promotion is always an explicit internal action.
-  isClientVisible Boolean           @default(false)
-  versionNumber   Int               @default(1)
-  uploadedById    String
-  uploadedBy      User              @relation("DocumentUploader", fields: [uploadedById], references: [id])
-  versions        DocumentVersion[]
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  deletedAt       DateTime?
+  isClientVisible   Boolean           @default(false)
+  versionNumber     Int               @default(1)
+  uploadedById      String
+  uploadedBy        User              @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  versions          DocumentVersion[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
 
   @@index([projectId])
   @@index([buildingId])
   @@index([unitId])
   @@index([saleId])
   @@index([leadId])
+  @@index([interiorProjectId])
   @@index([category, deletedAt])
   @@index([isClientVisible, deletedAt])
   @@index([deletedAt])
@@ -1558,18 +1592,214 @@ model TaskAttachment {
 // Per-org configuration for thresholds and probabilities used by alerts and forecasts.
 // Single row per org; created on org creation, lazily defaulted in code if missing.
 model OrgSettings {
-  orgId                   String       @id
-  org                     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId                        String       @id
+  org                          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   // Sale stage probabilities — JSON map of SaleStatus → probability (0..1)
   // Example: { "PROSPECT": 0.10, "LOI_SIGNED": 0.35, "UNDER_CONTRACT": 0.75, "CLOSED": 1.0 }
-  saleStageProbabilities  Json         @default("{\"PROSPECT\":0.10,\"LOI_SIGNED\":0.35,\"UNDER_CONTRACT\":0.75,\"CLOSED\":1.0,\"CANCELLED\":0.0}")
-  unitStaleDaysThreshold  Int          @default(90) // unit AVAILABLE longer than this -> stale alert
-  budgetVarianceAlertPct  Decimal      @default(10) @db.Decimal(5, 2) // actuals+commitments > budget*(1+pct/100)
-  saleStageAgeAlertDays   Int          @default(30) // sale in same stage longer than this -> flag
-  saleActivityDroughtDays Int          @default(14) // no activity for N days -> flag
-  drawFundingExpectedDays Int          @default(14) // default expected funding window
-  createdAt               DateTime     @default(now())
-  updatedAt               DateTime     @updatedAt
+  saleStageProbabilities       Json         @default("{\"PROSPECT\":0.10,\"LOI_SIGNED\":0.35,\"UNDER_CONTRACT\":0.75,\"CLOSED\":1.0,\"CANCELLED\":0.0}")
+  unitStaleDaysThreshold       Int          @default(90) // unit AVAILABLE longer than this -> stale alert
+  budgetVarianceAlertPct       Decimal      @default(10) @db.Decimal(5, 2) // actuals+commitments > budget*(1+pct/100)
+  saleStageAgeAlertDays        Int          @default(30) // sale in same stage longer than this -> flag
+  saleActivityDroughtDays      Int          @default(14) // no activity for N days -> flag
+  drawFundingExpectedDays      Int          @default(14) // default expected funding window
+  // Sale priced below the unit's asking price by more than this % needs Founder/Co-Founder approval.
+  discountApprovalThresholdPct Decimal      @default(5) @db.Decimal(5, 2)
+  createdAt                    DateTime     @default(now())
+  updatedAt                    DateTime     @updatedAt
 
   @@map("org_settings")
+}
+
+// ============================================================================
+// Interior / Fit-Out Module + Sale Payment Schedule
+// (Phase 1 — see docs/client-discovery/TDD_Interior_and_SalePayment.md)
+// All additive: new tables + new enums + nullable back-relations. No breaking changes.
+// ============================================================================
+
+enum InteriorPhase {
+  DESIGN
+  CLIENT_APPROVAL
+  CITY_APPROVAL
+  PROCUREMENT
+  EXECUTION
+  SNAGGING
+  HANDOVER
+}
+
+enum InteriorStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum InteriorContractType {
+  PER_SQFT // client default
+  FIXED
+  COST_PLUS
+}
+
+enum SnagStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum SalePaymentStatus {
+  SCHEDULED
+  DUE
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+enum SalePaymentTrigger {
+  ON_SIGNING
+  ON_MILESTONE
+  FIXED_DATE
+  ON_HANDOVER
+}
+
+// A post-shell interior fit-out engagement for a unit (or whole building).
+// Owns the operational work (phases, scope, sub-contractor invoices, snags).
+// The client-facing per-sqft price lives on the linked Sale as a SalePayment installment.
+model InteriorProject {
+  id                String               @id @default(cuid())
+  // Anchor — exactly one of (unitId, buildingId); service-enforced (mirrors Sale/Loan).
+  unitId            String?
+  unit              Unit?                @relation(fields: [unitId], references: [id])
+  buildingId        String?
+  building          Building?            @relation(fields: [buildingId], references: [id])
+  // Optional context links — "interior is part of the contract agreement".
+  saleId            String?
+  sale              Sale?                @relation(fields: [saleId], references: [id])
+  leaseId           String?
+  lease             Lease?               @relation(fields: [leaseId], references: [id])
+  name              String
+  status            InteriorStatus       @default(NOT_STARTED)
+  phase             InteriorPhase        @default(DESIGN)
+  pmId              String? // same PM pool — no new role
+  pm                User?                @relation("InteriorPM", fields: [pmId], references: [id])
+  contractType      InteriorContractType @default(PER_SQFT)
+  ratePerSqft       Decimal?             @db.Decimal(12, 2)
+  area              Decimal?             @db.Decimal(10, 2) // sqft used for pricing
+  contractValue     Decimal?             @db.Decimal(14, 2) // internal cost-to-build; client price is on Sale
+  encryptedFields   String? // optional AES blob (open question — currently unused)
+  packageTemplateId String?
+  startDate         DateTime?
+  targetEnd         DateTime?
+  handoverAt        DateTime?
+  // Approval audit (construction team + city)
+  clientApprovedAt  DateTime?
+  cityApprovedAt    DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  deletedAt         DateTime? // soft-delete (matches Sale/Unit/Loan)
+
+  scopeItems InteriorScopeItem[]
+  snags      SnagItem[]
+  invoices   InteriorInvoice[]
+  documents  Document[]
+
+  @@index([unitId])
+  @@index([buildingId])
+  @@index([saleId])
+  @@index([status, phase])
+  @@index([deletedAt])
+  @@map("interior_projects")
+}
+
+// BOQ / scope line item; can be seeded from a package template.
+model InteriorScopeItem {
+  id                String          @id @default(cuid())
+  interiorProjectId String
+  interiorProject   InteriorProject @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  description       String
+  category          String? // flooring | ceiling | MEP_ROUGH | MEP_FINISH | joinery
+  quantity          Decimal?        @db.Decimal(12, 2)
+  unit              String? // sqft | nos | lm
+  unitPrice         Decimal?        @db.Decimal(12, 2)
+  total             Decimal?        @db.Decimal(14, 2)
+  createdAt         DateTime        @default(now())
+
+  @@index([interiorProjectId])
+  @@map("interior_scope_items")
+}
+
+// Sub-contractor invoice for an interior project. Mirrors into an Actual (tagged
+// interiorProjectId) so the cashflow forecast + TI reporting see the outflow.
+model InteriorInvoice {
+  id                String          @id @default(cuid())
+  interiorProjectId String
+  interiorProject   InteriorProject @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  vendorId          String
+  vendor            Vendor          @relation(fields: [vendorId], references: [id])
+  amount            Decimal         @db.Decimal(14, 2)
+  invoiceNo         String?
+  invoiceDate       DateTime?
+  paidAt            DateTime?
+  status            String          @default("PENDING") // PENDING | APPROVED | PAID
+  actualId          String? // paired Actual id (set when mirrored)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([interiorProjectId])
+  @@index([vendorId])
+  @@map("interior_invoices")
+}
+
+// Punch-list item. Attaches to an interior project and (later) reusable on construction milestones.
+model SnagItem {
+  id                String           @id @default(cuid())
+  interiorProjectId String?
+  interiorProject   InteriorProject? @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  milestoneId       String?
+  milestone         Milestone?       @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  description       String
+  room              String?
+  assigneeId        String?
+  assignee          User?            @relation("SnagAssignee", fields: [assigneeId], references: [id])
+  status            SnagStatus       @default(OPEN)
+  photoPath         String? // Supabase storage key
+  dueDate           DateTime?
+  resolvedAt        DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([interiorProjectId, status])
+  @@index([milestoneId])
+  @@map("snag_items")
+}
+
+// An installment on a Sale. Supports BOTH a fixed dueDate and a milestone trigger.
+// Feeds the cashflow forecast (inflows) and powers overdue-payment alerts.
+model SalePayment {
+  id                String             @id @default(cuid())
+  saleId            String
+  sale              Sale               @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  label             String // "Deposit", "Foundation draw", "TI / interior", "Handover"
+  sequence          Int                @default(0)
+  trigger           SalePaymentTrigger @default(FIXED_DATE)
+  // Either a fixed date OR a milestone trigger (service enforces ≥1).
+  dueDate           DateTime?
+  milestoneId       String?
+  milestone         Milestone?         @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  // Stamped from milestone.completedAt when an ON_MILESTONE payment's milestone completes.
+  effectiveDueDate  DateTime?
+  amount            Decimal            @db.Decimal(14, 2)
+  percentOfPrice    Decimal?           @db.Decimal(5, 2)
+  paidAmount        Decimal            @default(0) @db.Decimal(14, 2)
+  paidAt            DateTime?
+  status            SalePaymentStatus  @default(SCHEDULED)
+  interiorProjectId String? // set when this installment is the TI / interior charge
+  notes             String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([saleId, sequence])
+  @@index([milestoneId])
+  @@index([status, effectiveDueDate])
+  @@map("sale_payments")
 }

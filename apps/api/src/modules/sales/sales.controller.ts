@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { SalesService } from './sales.service';
 import { SalesForecastService } from './sales-forecast.service';
@@ -8,7 +8,8 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
-import { UserRole } from '@prisma/client';
+import { UserRole, SalePaymentTrigger } from '@prisma/client';
+import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
 
 @ApiTags('Sales')
 @ApiBearerAuth()
@@ -19,6 +20,7 @@ export class SalesController {
   constructor(
     private service: SalesService,
     private forecast: SalesForecastService,
+    private salePayments: SalePaymentsService,
   ) {}
 
   /** GET /api/sales/forecast?projectId=:id — probability-weighted pipeline forecast */
@@ -38,6 +40,14 @@ export class SalesController {
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Sales pipeline grouped by status with velocity metrics' })
   getPipeline(@Query('projectId') projectId: string) { return this.service.getPipeline(projectId); }
+
+  /** GET /api/sales/receivables?weeks=4 — upcoming + overdue installments (cashflow inflows). */
+  @Get('receivables')
+  @RequirePermissions('interior:finance')
+  @ApiOperation({ summary: 'Upcoming + overdue sale-payment receivables (Finance widget / cashflow inflows)' })
+  receivables(@Query('weeks') weeks?: string) {
+    return this.salePayments.receivables(weeks ? Number(weeks) : 4);
+  }
 
   @Get(':id')
   @RequirePermissions('sales:view')
@@ -59,5 +69,75 @@ export class SalesController {
   @ApiOperation({ summary: 'Delete sale (CLOSED sales require Founder/SuperAdmin role)' })
   delete(@Param('id') id: string, @CurrentUser('role') userRole: UserRole) {
     return this.service.delete(id, userRole);
+  }
+
+  @Post(':id/approve-discount')
+  @RequirePermissions('sales:approve-discount')
+  @ApiOperation({ summary: 'Founder/Co-Founder sign-off on an over-threshold discount' })
+  approveDiscount(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.service.approveDiscount(id, userId);
+  }
+
+  // ─────── Sale Payment Schedule (installments) ───────
+
+  @Get(':saleId/payments')
+  @RequirePermissions('sales:view')
+  @ApiOperation({ summary: 'Installment schedule for a sale' })
+  listPayments(@Param('saleId') saleId: string) {
+    return this.salePayments.listForSale(saleId);
+  }
+
+  @Post(':saleId/payments')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({ summary: 'Add an installment (fixed-date or milestone-triggered)' })
+  addPayment(
+    @Param('saleId') saleId: string,
+    @Body() body: {
+      label: string;
+      amount?: number;
+      percentOfPrice?: number;
+      trigger?: SalePaymentTrigger;
+      dueDate?: string;
+      milestoneId?: string;
+      interiorProjectId?: string;
+      sequence?: number;
+      notes?: string;
+    },
+  ) {
+    return this.salePayments.addPayment(saleId, body);
+  }
+
+  @Post(':saleId/payments/from-template')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({ summary: 'Seed a schedule from a standard template (e.g. 10-40-50)' })
+  applyTemplate(
+    @Param('saleId') saleId: string,
+    @Body() body: { template: keyof typeof PAYMENT_TEMPLATES },
+  ) {
+    return this.salePayments.applyTemplate(saleId, body.template);
+  }
+
+  @Patch('payments/:id')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({ summary: 'Edit an installment' })
+  updatePayment(
+    @Param('id') id: string,
+    @Body() body: { label?: string; amount?: number; dueDate?: string; milestoneId?: string; sequence?: number; notes?: string },
+  ) {
+    return this.salePayments.updatePayment(id, body);
+  }
+
+  @Post('payments/:id/log')
+  @RequirePermissions('payment:log')
+  @ApiOperation({ summary: 'Log a (partial) payment against an installment' })
+  logPayment(@Param('id') id: string, @Body() body: { amount: number }) {
+    return this.salePayments.logPayment(id, body.amount);
+  }
+
+  @Delete('payments/:id')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({ summary: 'Remove an installment' })
+  removePayment(@Param('id') id: string) {
+    return this.salePayments.removePayment(id);
   }
 }

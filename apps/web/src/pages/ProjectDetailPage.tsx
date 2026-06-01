@@ -9,7 +9,8 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDollarSign } from 'react-icons/fi';
+import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import {
   useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCommitments, useBuildings,
@@ -18,7 +19,7 @@ import {
   useCreateUnit, useUpdateUnit, useUpdateUnitStatus, useDeleteUnit,
   useCreateMilestone, useUpdateMilestone, useDeleteMilestone,
   useCreateLease, useUpdateLease, useDeleteLease,
-  useCreateSale, useUpdateSale, useDeleteSale,
+  useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount,
   useCreateCommitment, useUpdateCommitment, useDeleteCommitment,
   useCreateBudget, useUpdateBudget, useDeleteBudget,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
@@ -2870,13 +2871,16 @@ function SalesTab({ projectId }: { projectId: string }) {
   const createSale = useCreateSale();
   const updateSale = useUpdateSale();
   const deleteSale = useDeleteSale();
+  const approveDiscount = useApproveSaleDiscount();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
+  const { isOpen: isPayOpen, onOpen: onPayOpen, onClose: onPayClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_SALE);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [paySale, setPaySale] = useState<any>(null);
 
   const units = (unitsData as any[]) || [];
 
@@ -3027,6 +3031,7 @@ function SalesTab({ projectId }: { projectId: string }) {
                       <div className="flex justify-between items-start mb-1">
                         <span className="font-semibold text-gray-800 truncate max-w-[100px]">{s.buyer || s.buyerName || 'Unnamed'}</span>
                         <div className="flex gap-0.5 shrink-0">
+                          <Button size="sm" variant="light" isIconOnly className="h-5 w-5 min-w-5" onPress={() => { setPaySale(s); onPayOpen(); }}><FiDollarSign className="text-[10px]" /></Button>
                           <Button size="sm" variant="light" isIconOnly className="h-5 w-5 min-w-5" onPress={() => openEdit(s)}><FiEdit2 className="text-[10px]" /></Button>
                           <Button size="sm" variant="light" color="danger" isIconOnly className="h-5 w-5 min-w-5" onPress={() => openDelete(s.id)}><FiTrash2 className="text-[10px]" /></Button>
                         </div>
@@ -3034,6 +3039,33 @@ function SalesTab({ projectId }: { projectId: string }) {
                       <p className="text-gray-500">Unit {s.unit?.unitNumber || '\u2014'}</p>
                       {s.salePrice && <p className="text-gray-700 font-medium mt-0.5">{fmt(s.salePrice)}</p>}
                       {s.closingDate && <p className="text-gray-400 mt-0.5">Closes {fmtDate(s.closingDate)}</p>}
+                      {(() => {
+                        const asking = s.unit?.askingPrice ? Number(s.unit.askingPrice) : null;
+                        const price = s.salePrice ? Number(s.salePrice) : null;
+                        if (!asking || !price || price >= asking) return null;
+                        const pct = ((asking - price) / asking) * 100;
+                        if (s.discountApprovedAt) {
+                          return <p className="text-[10px] text-green-600 mt-1">\u2713 {pct.toFixed(0)}% discount approved</p>;
+                        }
+                        return (
+                          <div className="mt-1 flex items-center gap-1">
+                            <span className="text-[10px] text-amber-600">\u26a0 {pct.toFixed(0)}% discount</span>
+                            <PermissionGate permission="sales:approve-discount">
+                              <Button
+                                size="sm" variant="light" color="warning"
+                                className="h-4 min-w-0 px-1 text-[10px]"
+                                isLoading={approveDiscount.isPending}
+                                onPress={() => approveDiscount.mutate(s.id, {
+                                  onSuccess: () => addToast({ title: 'Discount approved', color: 'success' }),
+                                  onError: (e) => addToast({ title: errMsg(e, 'Failed to approve'), color: 'danger' }),
+                                })}
+                              >
+                                Approve
+                              </Button>
+                            </PermissionGate>
+                          </div>
+                        );
+                      })()}
                     </div>
                   ))}
                   {sales.length === 0 && (
@@ -3045,6 +3077,20 @@ function SalesTab({ projectId }: { projectId: string }) {
           })}
         </div>
       )}
+
+      {/* Sale Payment Schedule Modal */}
+      <Modal isOpen={isPayOpen} onClose={onPayClose} size="lg">
+        <ModalContent>
+          <ModalHeader>
+            Payment schedule — {paySale?.buyer || paySale?.buyerName || 'Sale'}
+          </ModalHeader>
+          <ModalBody className="pb-6">
+            {paySale && (
+              <SalePaymentPanel saleId={paySale.id} salePrice={paySale.salePrice ? Number(paySale.salePrice) : undefined} />
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
 
       {/* Create / Edit Sale Modal */}
       <Modal isOpen={isFormOpen} onClose={onFormClose} size="lg">
