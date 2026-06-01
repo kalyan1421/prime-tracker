@@ -8,6 +8,7 @@ import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMa
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
+  useUnitWaitlist,
 } from '../hooks/useApi';
 
 const COMMENT_TYPE_COLORS: Record<string, string> = {
@@ -288,6 +289,9 @@ export default function UnitDetailPage() {
       {/* Leads & Activity Section */}
       <UnitLeadsPanel unitId={unitId!} />
 
+      {/* Waitlist — leads that expressed interest in this unit (demand signal) */}
+      <UnitWaitlistPanel unitId={unitId!} />
+
       {/* Interior / Fit-Out (Phase 1) */}
       <InteriorPanel unitId={unitId!} />
 
@@ -422,6 +426,43 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
             })}
           </div>
         )}
+      </CardBody>
+    </Card>
+  );
+}
+
+// Per-unit waitlist: leads that expressed interest in this unit (via LeadUnitInterest),
+// oldest first. A demand signal independent of the single primary-unit link.
+function UnitWaitlistPanel({ unitId }: { unitId: string }) {
+  const { data, isLoading } = useUnitWaitlist(unitId);
+  const rows: any[] = Array.isArray(data) ? data : [];
+  if (!isLoading && rows.length === 0) return null; // only surface when there's demand
+  return (
+    <Card shadow="sm">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <FiTarget className="text-rose-600" />
+          <p className="font-semibold text-sm text-gray-600">Waitlist {rows.length > 0 && `(${rows.length})`}</p>
+        </div>
+      </CardHeader>
+      <CardBody className="pt-0 space-y-2">
+        {rows.map((r) => (
+          <div key={r.interestId} className="flex items-center justify-between text-sm border-b border-gray-50 pb-1.5 last:border-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-gray-400 w-5 tabular-nums">#{r.position}</span>
+              <Avatar size="sm" name={r.lead?.name || 'Lead'} className="w-5 h-5 text-[9px]" />
+              <span className="truncate">{r.lead?.name || 'Unnamed lead'}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {r.lead?.budget != null && (
+                <span className="text-xs text-gray-400">${Number(r.lead.budget).toLocaleString()}</span>
+              )}
+              <Chip size="sm" color={LEAD_STATUS_COLORS[r.lead?.status] || 'default'} variant="flat" className="text-[10px]">
+                {(r.lead?.status || '').replace('_', ' ')}
+              </Chip>
+            </div>
+          </div>
+        ))}
       </CardBody>
     </Card>
   );

@@ -2005,3 +2005,38 @@ export function useDeleteBroker() {
     onSuccess: () => invalidateBrokers(qc),
   });
 }
+
+// ============================================================================
+// Multi-unit interest / per-unit waitlist (Phase 4)
+// ============================================================================
+
+export function useUnitWaitlist(unitId?: string) {
+  return useQuery({
+    queryKey: ['unit-waitlist', unitId],
+    queryFn: () => api.get('/leads/waitlist', { params: { unitId } }).then((r) => r.data),
+    enabled: !!unitId,
+  });
+}
+
+function invalidateInterest(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['unit-waitlist'] });
+  qc.invalidateQueries({ queryKey: ['leads'] });
+  qc.invalidateQueries({ queryKey: ['lead'] });
+}
+
+export function useAddLeadInterest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leadId, unitId, note }: { leadId: string; unitId: string; note?: string }) =>
+      api.post(`/leads/${leadId}/interests`, { unitId, note }).then((r) => r.data),
+    onSuccess: () => invalidateInterest(qc),
+  });
+}
+
+export function useRemoveLeadInterest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (interestId: string) => api.delete(`/leads/interests/${interestId}`).then((r) => r.data),
+    onSuccess: () => invalidateInterest(qc),
+  });
+}

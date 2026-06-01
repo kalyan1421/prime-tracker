@@ -12,6 +12,7 @@ import {
 import {
   useLeads, useLeadActivities, useProjects, useUnits, useCampaigns,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
+  useLead, useAddLeadInterest, useRemoveLeadInterest,
 } from '../hooks/useApi';
 import { LoadingState, ErrorState, EmptyState, fmtDate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
@@ -288,11 +289,78 @@ function LeadDetailPanel({ lead }: { lead: any }) {
         </div>
       )}
 
+      <LeadInterests leadId={lead.id} projectId={lead.projectId} />
+
       <div className="flex-1 overflow-auto">
         <ActivityTimeline leadId={lead.id} />
       </div>
 
       <ConvertToSaleModal isOpen={isConvertOpen} onClose={onConvertClose} lead={lead} />
+    </div>
+  );
+}
+
+// Multi-unit interest: the units this lead is considering. A lead can be on several
+// units' waitlists (and a unit can have many interested leads).
+function LeadInterests({ leadId, projectId }: { leadId: string; projectId: string }) {
+  const { data: detail } = useLead(leadId);
+  const { data: unitsData } = useUnits(projectId);
+  const addInterest = useAddLeadInterest();
+  const removeInterest = useRemoveLeadInterest();
+  const [adding, setAdding] = useState(false);
+  const [pick, setPick] = useState('');
+
+  const interests: any[] = detail?.unitInterests ?? [];
+  const units: any[] = (unitsData as any[]) || [];
+  const interestedUnitIds = new Set(interests.map((i) => i.unitId));
+  const available = units.filter((u) => !interestedUnitIds.has(u.id));
+
+  const add = async () => {
+    if (!pick) return;
+    try {
+      await addInterest.mutateAsync({ leadId, unitId: pick });
+      setPick('');
+      setAdding(false);
+      addToast({ title: 'Unit of interest added', color: 'success' });
+    } catch {
+      addToast({ title: 'Failed to add interest', color: 'danger' });
+    }
+  };
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+          Units of interest {interests.length > 0 && `(${interests.length})`}
+        </p>
+        <Button size="sm" variant="light" onPress={() => setAdding((v) => !v)}>+ Add</Button>
+      </div>
+      {interests.length === 0 && !adding && (
+        <p className="text-xs text-gray-400">Not on any unit waitlist yet.</p>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {interests.map((i) => (
+          <Chip
+            key={i.id}
+            size="sm"
+            variant="flat"
+            onClose={() => removeInterest.mutate(i.id)}
+          >
+            Unit {i.unit?.unitNumber ?? '—'}
+          </Chip>
+        ))}
+      </div>
+      {adding && (
+        <div className="flex gap-2 mt-2">
+          <Select
+            size="sm" aria-label="Unit" selectedKeys={pick ? [pick] : []} className="flex-1"
+            onSelectionChange={(k) => setPick((Array.from(k)[0] as string) || '')}
+          >
+            {available.map((u) => <SelectItem key={u.id}>Unit {u.unitNumber}</SelectItem>)}
+          </Select>
+          <Button size="sm" color="primary" onPress={add} isLoading={addInterest.isPending} isDisabled={!pick}>Add</Button>
+        </div>
+      )}
     </div>
   );
 }
