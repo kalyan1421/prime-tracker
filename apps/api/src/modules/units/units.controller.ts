@@ -65,6 +65,15 @@ export class UnitsController {
     return this.service.create(body);
   }
 
+  @Post('combine')
+  @RequirePermissions('unit:edit')
+  @ApiOperation({ summary: 'Combine 2+ adjacent units into one legal unit (sources archived, history kept)' })
+  combine(
+    @Body() body: { buildingId: string; sourceUnitIds: string[]; unitNumber: string; unitType?: string; notes?: string },
+  ) {
+    return this.service.combine(body);
+  }
+
   @Put(':id')
   @RequirePermissions('unit:edit')
   @ApiOperation({ summary: 'Update unit (Sales role: status only)' })

@@ -17,13 +17,15 @@ import { LoadingState, ErrorState, EmptyState, fmtDate } from '../components/ui'
 import { useAuthStore } from '../store/authStore';
 
 const LEAD_SOURCES = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'BROKER', 'EVENT', 'OTHER'];
-const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
+const LEAD_STATUSES = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
 const ACTIVITY_TYPES = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP', 'NOTE', 'STATUS_CHANGE'];
 
 const STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
   NEW: 'default',
   CONTACTED: 'primary',
+  POTENTIAL: 'primary',
   QUALIFIED: 'secondary',
+  SITE_VISIT: 'secondary',
   PROPOSAL_SENT: 'warning',
   NEGOTIATING: 'warning',
   CONVERTED: 'success',
@@ -37,7 +39,9 @@ const STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'succe
 const STATUS_TOKEN: Record<string, { bg: string; text: string; dot: string; rail: string }> = {
   NEW:           { bg: 'bg-slate-100',   text: 'text-slate-700',   dot: 'bg-slate-400',   rail: 'bg-slate-300' },
   CONTACTED:     { bg: 'bg-blue-50',     text: 'text-blue-700',    dot: 'bg-blue-500',    rail: 'bg-blue-500' },
+  POTENTIAL:     { bg: 'bg-sky-50',      text: 'text-sky-700',     dot: 'bg-sky-500',     rail: 'bg-sky-500' },
   QUALIFIED:     { bg: 'bg-indigo-50',   text: 'text-indigo-700',  dot: 'bg-indigo-500',  rail: 'bg-indigo-500' },
+  SITE_VISIT:    { bg: 'bg-teal-50',     text: 'text-teal-700',    dot: 'bg-teal-500',    rail: 'bg-teal-500' },
   PROPOSAL_SENT: { bg: 'bg-violet-50',   text: 'text-violet-700',  dot: 'bg-violet-500',  rail: 'bg-violet-500' },
   NEGOTIATING:   { bg: 'bg-amber-50',    text: 'text-amber-700',   dot: 'bg-amber-500',   rail: 'bg-amber-500' },
   CONVERTED:     { bg: 'bg-emerald-50',  text: 'text-emerald-700', dot: 'bg-emerald-500', rail: 'bg-emerald-500' },

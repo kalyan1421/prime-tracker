@@ -16,6 +16,7 @@ import { CashFlowService } from '../src/modules/cashflow/cashflow.service';
 import { SalesService } from '../src/modules/sales/sales.service';
 import { DailyLogsService } from '../src/modules/daily-logs/daily-logs.service';
 import { BrokersService } from '../src/modules/brokers/brokers.service';
+import { UnitsService } from '../src/modules/units/units.service';
 import { EventBus } from '../src/common/events/event-bus.service';
 
 const prisma = new PrismaClient();
@@ -47,6 +48,7 @@ async function main() {
   const sales = new SalesService(prisma as any, bus);
   const dailyLogs = new DailyLogsService(prisma as any);
   const brokers = new BrokersService(prisma as any);
+  const unitsSvc = new UnitsService(prisma as any);
 
   const unit = await prisma.unit.findFirst({ include: { building: true } });
   if (!unit?.building) throw new Error('No seeded unit/building found — seed the DB first');
@@ -57,7 +59,7 @@ async function main() {
   let vendor = await prisma.vendor.findFirst();
   if (!vendor) vendor = await prisma.vendor.create({ data: { name: 'Smoke Subcontractor' } });
 
-  const created: { interiorId?: string; saleId?: string; discountSaleId?: string; milestoneId?: string; dailyLogId?: string; brokerId?: string; brokerSaleId?: string; docIds: string[]; actualIds: string[] } = { docIds: [], actualIds: [] };
+  const created: { interiorId?: string; saleId?: string; discountSaleId?: string; milestoneId?: string; dailyLogId?: string; brokerId?: string; brokerSaleId?: string; combinedUnitId?: string; combineUnitIds: string[]; leadId?: string; docIds: string[]; actualIds: string[] } = { docIds: [], actualIds: [], combineUnitIds: [] };
   const originalUnitAsking = unit.askingPrice;
   const originalUnitStatus = unit.status;
 
@@ -179,6 +181,20 @@ async function main() {
     const row = report.find((r: any) => r.brokerId === broker.id);
     check(!!row && row.closedSales >= 1 && row.commissionEarned >= 10000, 'broker report shows closed sale + commission earned');
 
+    console.log('\n── Unit combine + lead funnel stages ──');
+    const ua = await prisma.unit.create({ data: { buildingId, unitNumber: 'SMK-A', unitType: 'RETAIL', sqft: 600, status: 'AVAILABLE' } });
+    const ub = await prisma.unit.create({ data: { buildingId, unitNumber: 'SMK-B', unitType: 'RETAIL', sqft: 400, status: 'AVAILABLE' } });
+    created.combineUnitIds = [ua.id, ub.id];
+    const combinedUnit = await unitsSvc.combine({ buildingId, sourceUnitIds: [ua.id, ub.id], unitNumber: 'SMK-A+B' });
+    created.combinedUnitId = combinedUnit.id;
+    check(Number(combinedUnit.sqft) === 1000, 'combined unit sums source area (600 + 400 = 1000)');
+    const srcA = await prisma.unit.findUnique({ where: { id: ua.id } });
+    check(srcA!.deletedAt != null && srcA!.mergedIntoId === combinedUnit.id, 'source unit archived + points at the combined unit');
+    // Lead funnel: the new SITE_VISIT stage is accepted by the DB enum.
+    const lead = await prisma.lead.create({ data: { projectId, source: 'BROKER', name: 'Funnel Lead', status: 'SITE_VISIT', createdBy: user!.id } });
+    created.leadId = lead.id;
+    check(lead.status === 'SITE_VISIT', 'lead accepts the new SITE_VISIT funnel stage');
+
     console.log('\n── Cashflow inflows + receivables + overdue cron ──');
     const cashflow = new CashFlowService(prisma as any);
     const forecast = await cashflow.getForecast(projectId);
@@ -199,6 +215,9 @@ async function main() {
     if (created.interiorId) await prisma.interiorProject.delete({ where: { id: created.interiorId } }).catch(() => {});
     for (const id of created.actualIds) await prisma.actual.delete({ where: { id } }).catch(() => {});
     for (const id of created.docIds) await prisma.document.delete({ where: { id } }).catch(() => {});
+    if (created.leadId) await prisma.lead.delete({ where: { id: created.leadId } }).catch(() => {});
+    if (created.combinedUnitId) await prisma.unit.delete({ where: { id: created.combinedUnitId } }).catch(() => {});
+    for (const id of created.combineUnitIds) await prisma.unit.delete({ where: { id } }).catch(() => {});
     if (created.dailyLogId) await prisma.dailyLog.delete({ where: { id: created.dailyLogId } }).catch(() => {});
     if (created.milestoneId) await prisma.milestone.delete({ where: { id: created.milestoneId } }).catch(() => {});
     await prisma.building.update({ where: { id: buildingId }, data: { phase: originalPhase } }).catch(() => {});

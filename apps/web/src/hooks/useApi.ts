@@ -550,6 +550,15 @@ export function useDeleteUnit() {
   });
 }
 
+export function useCombineUnits() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { buildingId: string; sourceUnitIds: string[]; unitNumber: string; unitType?: string; notes?: string }) =>
+      api.post('/units/combine', data).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['units'] }); },
+  });
+}
+
 // ---- Building Queries ----
 export function useBuildings(projectId: string) {
   return useQuery({

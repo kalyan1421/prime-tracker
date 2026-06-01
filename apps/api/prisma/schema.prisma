@@ -298,6 +298,11 @@ model Unit {
   // Time-on-market tracking: set when status flips to AVAILABLE, cleared on any other status.
   // Read-only from app code — UnitsService maintains this in update().
   availableSince DateTime?
+  // Unit combine: when adjacent units merge into one legal unit, the source units are
+  // soft-deleted and point here at the surviving combined unit (retains their child history).
+  mergedIntoId   String?
+  mergedInto     Unit?      @relation("UnitMerge", fields: [mergedIntoId], references: [id])
+  mergedFrom     Unit[]     @relation("UnitMerge")
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
   deletedAt      DateTime? // soft-delete: preserves financial history
@@ -317,6 +322,7 @@ model Unit {
   @@index([status, deletedAt])
   @@index([status, availableSince])
   @@index([deletedAt])
+  @@index([mergedIntoId])
   @@map("units")
 }
 
@@ -969,7 +975,10 @@ enum LeadSource {
 enum LeadStatus {
   NEW
   CONTACTED
+  // Client funnel: New -> Contacted -> Potential -> Qualified -> Site Visit -> Proposal -> Negotiation -> Converted/Lost
+  POTENTIAL
   QUALIFIED
+  SITE_VISIT
   PROPOSAL_SENT
   NEGOTIATING
   CONVERTED

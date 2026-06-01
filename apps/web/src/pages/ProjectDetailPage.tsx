@@ -12,6 +12,7 @@ import {
 import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDollarSign } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
+import { CombineUnitsModal } from '../components/CombineUnitsModal';
 import {
   useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCommitments, useBuildings,
@@ -1615,6 +1616,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const { isOpen: isStatusOpen, onOpen: onStatusOpen, onClose: onStatusClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
   const { isOpen: isCommentsOpen, onOpen: onCommentsOpen, onClose: onCommentsClose } = useDisclosure();
+  const { isOpen: isCombineOpen, onOpen: onCombineOpen, onClose: onCombineClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_UNIT);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -1976,9 +1978,12 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
           )}
         </div>
         {canCreate && (
-          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
-            Add Unit
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="flat" onPress={onCombineOpen}>Combine units</Button>
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
+              Add Unit
+            </Button>
+          </div>
         )}
       </div>
 
@@ -2020,6 +2025,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
           ))}
         </div>
       )}
+
+      {/* Combine Units Modal */}
+      <CombineUnitsModal isOpen={isCombineOpen} onClose={onCombineClose} units={allUnits} buildings={buildings} />
 
       {/* Create / Edit Unit Modal */}
       <Modal isOpen={isFormOpen} onClose={onFormClose} size="lg">
@@ -3609,14 +3617,14 @@ function RevenueTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Project Leads Tab ----
-const LEAD_STATUSES_TAB = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
+const LEAD_STATUSES_TAB = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
 const LEAD_SOURCES_TAB = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'BROKER', 'EVENT', 'OTHER'];
 const SOURCE_LABELS_TAB: Record<string, string> = {
   WEBSITE: 'Website', REFERRAL: 'Referral', SOCIAL_MEDIA: 'Social Media',
   WALK_IN: 'Walk-In', BROKER: 'Broker', EVENT: 'Event', OTHER: 'Other',
 };
 const LEAD_STATUS_COLORS_TAB: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
-  NEW: 'default', CONTACTED: 'primary', QUALIFIED: 'secondary',
+  NEW: 'default', CONTACTED: 'primary', POTENTIAL: 'primary', QUALIFIED: 'secondary', SITE_VISIT: 'secondary',
   PROPOSAL_SENT: 'warning', NEGOTIATING: 'warning', CONVERTED: 'success', LOST: 'danger', DEAD: 'danger',
 };
 const ACTIVITY_TYPES_TAB = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP', 'NOTE', 'STATUS_CHANGE'];

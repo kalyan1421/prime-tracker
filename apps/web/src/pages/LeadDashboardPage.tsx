@@ -12,13 +12,15 @@ import { useLeadDashboard, useProjects } from '../hooks/useApi';
 import { LoadingState, ErrorState, StatCard, fmtDate } from '../components/ui';
 import { useState } from 'react';
 
-const STATUS_ORDER = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
+const STATUS_ORDER = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
 
 // Funnel coloring — warm at the top of the funnel, cool/successful at the bottom.
 const STATUS_FILL: Record<string, string> = {
   NEW:           '#94a3b8',
   CONTACTED:     '#60a5fa',
+  POTENTIAL:     '#38bdf8',
   QUALIFIED:     '#3b82f6',
+  SITE_VISIT:    '#14b8a6',
   PROPOSAL_SENT: '#a855f7',
   NEGOTIATING:   '#f59e0b',
   CONVERTED:     '#10b981',

@@ -315,7 +315,9 @@ export default function UnitDetailPage() {
 const LEAD_STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
   NEW: 'default',
   CONTACTED: 'primary',
+  POTENTIAL: 'primary',
   QUALIFIED: 'secondary',
+  SITE_VISIT: 'secondary',
   PROPOSAL_SENT: 'warning',
   NEGOTIATING: 'warning',
   CONVERTED: 'success',

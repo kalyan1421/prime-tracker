@@ -63,11 +63,82 @@ export class UnitsService {
         leases: true,
         sales: true,
         loans: { select: { id: true, loanType: true, lender: true, monthlyPayment: true, principalAmt: true } },
+        // Provenance for combined units — which source units were merged in.
+        mergedFrom: { select: { id: true, unitNumber: true } },
         _count: { select: { comments: true, sales: true, leases: true } },
       },
     });
     if (!unit) throw new NotFoundException('Unit not found');
     return unit;
+  }
+
+  /**
+   * Combine 2+ adjacent units in the same building into ONE legal unit (client decision:
+   * merge, don't overlay). Creates a new combined unit (summed area), then soft-archives
+   * the sources and points them at the combined unit via mergedIntoId — their sales/leases/
+   * comments history is retained on the originals. The combined number must be distinct.
+   */
+  async combine(input: {
+    buildingId: string;
+    sourceUnitIds: string[];
+    unitNumber: string;
+    unitType?: string;
+    notes?: string;
+  }) {
+    if (!input.sourceUnitIds || input.sourceUnitIds.length < 2) {
+      throw new BadRequestException('Select at least two units to combine');
+    }
+    if (!input.unitNumber?.trim()) {
+      throw new BadRequestException('A unit number for the combined unit is required');
+    }
+    const number = input.unitNumber.trim();
+
+    const sources = await this.prisma.unit.findMany({
+      where: { id: { in: input.sourceUnitIds }, deletedAt: null },
+    });
+    if (sources.length !== input.sourceUnitIds.length) {
+      throw new BadRequestException('One or more units were not found or are already merged');
+    }
+    if (sources.some((u) => u.buildingId !== input.buildingId)) {
+      throw new BadRequestException('All units must belong to the same building');
+    }
+
+    // The combined number must be distinct from every existing unit (incl. archived sources,
+    // whose rows still occupy the (building, number) unique key).
+    const clash = await this.prisma.unit.findUnique({
+      where: { buildingId_unitNumber: { buildingId: input.buildingId, unitNumber: number } },
+    });
+    if (clash) {
+      throw new ConflictException(
+        `Unit '${number}' already exists in this building — choose a distinct number for the combined unit (e.g. "${sources.map((u) => u.unitNumber).join('+')}")`,
+      );
+    }
+
+    const sumNum = (pick: (u: (typeof sources)[number]) => unknown) =>
+      sources.reduce((s, u) => s + (pick(u) != null ? Number(pick(u)) : 0), 0) || null;
+    const primary = sources[0];
+
+    return this.prisma.$transaction(async (tx) => {
+      const combined = await tx.unit.create({
+        data: {
+          buildingId: input.buildingId,
+          unitNumber: number,
+          unitType: (input.unitType ?? primary.unitType) as any,
+          status: 'AVAILABLE',
+          availableSince: new Date(),
+          sqft: sumNum((u) => u.sqft) as number | null,
+          floorArea: sumNum((u) => u.floorArea),
+          mezzanineArea: sumNum((u) => u.mezzanineArea),
+          primeOwned: sources.every((u) => u.primeOwned),
+          notes: input.notes ?? `Combined from ${sources.map((u) => u.unitNumber).join(', ')}`,
+        },
+      });
+      await tx.unit.updateMany({
+        where: { id: { in: input.sourceUnitIds } },
+        data: { deletedAt: new Date(), mergedIntoId: combined.id },
+      });
+      return combined;
+    });
   }
 
   // ---- Writes ----
