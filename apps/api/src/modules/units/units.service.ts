@@ -31,7 +31,7 @@ export class UnitsService {
   async findByBuilding(buildingId: string) {
     if (!buildingId) throw new BadRequestException('buildingId required');
     return this.prisma.unit.findMany({
-      where: { buildingId },
+      where: { buildingId, deletedAt: null },
       include: { leases: { where: { status: 'ACTIVE' } }, sales: true },
       orderBy: { unitNumber: 'asc' },
     });
@@ -40,7 +40,7 @@ export class UnitsService {
   async findByProject(projectId: string) {
     if (!projectId) throw new BadRequestException('projectId required');
     return this.prisma.unit.findMany({
-      where: { building: { projectId } },
+      where: { building: { projectId }, deletedAt: null },
       include: {
         building: { select: { id: true, name: true } },
         leases: { where: { status: 'ACTIVE' } },
@@ -84,7 +84,11 @@ export class UnitsService {
     unitNumber: string;
     unitType?: string;
     notes?: string;
-  }) {
+  }, userRole: UserRole) {
+    // Combine archives the source units and mints a new one — same authority as delete().
+    if (userRole === 'SALES') {
+      throw new ForbiddenException('Sales role cannot combine units');
+    }
     if (!input.sourceUnitIds || input.sourceUnitIds.length < 2) {
       throw new BadRequestException('Select at least two units to combine');
     }
@@ -95,12 +99,22 @@ export class UnitsService {
 
     const sources = await this.prisma.unit.findMany({
       where: { id: { in: input.sourceUnitIds }, deletedAt: null },
+      include: { _count: { select: { sales: true, leases: { where: { status: 'ACTIVE' } } } } },
     });
     if (sources.length !== input.sourceUnitIds.length) {
       throw new BadRequestException('One or more units were not found or are already merged');
     }
     if (sources.some((u) => u.buildingId !== input.buildingId)) {
       throw new BadRequestException('All units must belong to the same building');
+    }
+    // Merging archives the sources; refuse to silently orphan their sales/active leases.
+    const encumbered = sources.filter((u) => u._count.sales > 0 || u._count.leases > 0);
+    if (encumbered.length > 0) {
+      throw new ConflictException(
+        `Cannot combine units with attached sales or active leases: ${encumbered
+          .map((u) => u.unitNumber)
+          .join(', ')}. Resolve or move those records first.`,
+      );
     }
 
     // The combined number must be distinct from every existing unit (incl. archived sources,
@@ -300,7 +314,7 @@ export class UnitsService {
     projectId?: string;
     search?: string;
   }) {
-    const where: any = {};
+    const where: any = { deletedAt: null };
     if (filters.status) where.status = filters.status;
     if (filters.unitType) where.unitType = filters.unitType;
     if (filters.projectId) where.building = { projectId: filters.projectId };

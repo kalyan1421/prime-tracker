@@ -96,6 +96,8 @@ export class LeadsService {
 
   /** Remove a lead↔unit interest by the join-row id. */
   async removeInterest(interestId: string) {
+    const existing = await this.prisma.leadUnitInterest.findUnique({ where: { id: interestId } });
+    if (!existing) throw new NotFoundException('Interest not found');
     return this.prisma.leadUnitInterest.delete({ where: { id: interestId } });
   }
 
@@ -103,7 +105,8 @@ export class LeadsService {
   async unitWaitlist(unitId: string) {
     if (!unitId) throw new BadRequestException('unitId is required');
     const interests = await this.prisma.leadUnitInterest.findMany({
-      where: { unitId },
+      // Exclude interests whose unit has been archived/merged away.
+      where: { unitId, unit: { deletedAt: null } },
       orderBy: { createdAt: 'asc' },
       include: {
         lead: {

@@ -4,7 +4,7 @@ import { LeadsService } from './leads.service';
 const mockPrisma: any = {
   lead: { findUnique: jest.fn() },
   unit: { findUnique: jest.fn() },
-  leadUnitInterest: { upsert: jest.fn(), delete: jest.fn(), findMany: jest.fn() },
+  leadUnitInterest: { upsert: jest.fn(), delete: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
 };
 
 function makeService() {
@@ -65,16 +65,23 @@ describe('LeadsService — multi-unit interest / waitlist', () => {
       expect(res[0]).toMatchObject({ position: 1, lead: { name: 'Early Bird' } });
       expect(res[1]).toMatchObject({ position: 2, note: 'backup' });
       expect(mockPrisma.leadUnitInterest.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { unitId: 'u1' }, orderBy: { createdAt: 'asc' } }),
+        expect.objectContaining({ where: { unitId: 'u1', unit: { deletedAt: null } }, orderBy: { createdAt: 'asc' } }),
       );
     });
   });
 
   describe('removeInterest', () => {
-    it('deletes by join-row id', async () => {
+    it('deletes by join-row id when it exists', async () => {
+      mockPrisma.leadUnitInterest.findUnique.mockResolvedValue({ id: 'i1' });
       mockPrisma.leadUnitInterest.delete.mockResolvedValue({ id: 'i1' });
       await service.removeInterest('i1');
       expect(mockPrisma.leadUnitInterest.delete).toHaveBeenCalledWith({ where: { id: 'i1' } });
+    });
+
+    it('throws NotFound when the interest does not exist', async () => {
+      mockPrisma.leadUnitInterest.findUnique.mockResolvedValue(null);
+      await expect(service.removeInterest('nope')).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.leadUnitInterest.delete).not.toHaveBeenCalled();
     });
   });
 });

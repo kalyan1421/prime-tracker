@@ -70,8 +70,9 @@ export class UnitsController {
   @ApiOperation({ summary: 'Combine 2+ adjacent units into one legal unit (sources archived, history kept)' })
   combine(
     @Body() body: { buildingId: string; sourceUnitIds: string[]; unitNumber: string; unitType?: string; notes?: string },
+    @CurrentUser('role') userRole: UserRole,
   ) {
-    return this.service.combine(body);
+    return this.service.combine(body, userRole);
   }
 
   @Put(':id')

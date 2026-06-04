@@ -7,7 +7,7 @@ import { FiPlus, FiDollarSign } from 'react-icons/fi';
 import {
   useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment,
 } from '../hooks/useApi';
-import { fmt, fmtDate } from './ui';
+import { fmt, fmtDate, PermissionGate } from './ui';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
   SCHEDULED: 'default',
@@ -139,10 +139,12 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
                   <Progress aria-label="paid" size="sm" value={pct} className="flex-1" color={pct >= 100 ? 'success' : 'primary'} />
                   <span className="text-xs text-gray-500 whitespace-nowrap">{fmt(paid)} / {fmt(amount)}</span>
                   {p.status !== 'PAID' && p.status !== 'WAIVED' && (
-                    <Button size="sm" variant="light" color="primary" startContent={<FiDollarSign />}
-                      onPress={() => { setLogTarget(p); setLogAmount(String(amount - paid)); logModal.onOpen(); }}>
-                      Log
-                    </Button>
+                    <PermissionGate permission="payment:log">
+                      <Button size="sm" variant="light" color="primary" startContent={<FiDollarSign />}
+                        onPress={() => { setLogTarget(p); setLogAmount(String(amount - paid)); logModal.onOpen(); }}>
+                        Log
+                      </Button>
+                    </PermissionGate>
                   )}
                   <Button size="sm" variant="light" color="danger" onPress={() => del.mutate({ id: p.id, saleId })}>✕</Button>
                 </div>

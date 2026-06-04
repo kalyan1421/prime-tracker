@@ -3579,8 +3579,10 @@ function ConstructionTab({ projectId }: { projectId: string }) {
     <div className="mt-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-0">🏗️ Buildings</p>
       <BuildingsTab projectId={projectId} />
-      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-2">📋 Daily Logs</p>
-      <DailyLogFeed projectId={projectId} />
+      <PermissionGate permission="dailylog:view">
+        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-2">📋 Daily Logs</p>
+        <DailyLogFeed projectId={projectId} />
+      </PermissionGate>
       <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-0">📊 Budget & Costs</p>
       <FinancialsTab projectId={projectId} />
     </div>

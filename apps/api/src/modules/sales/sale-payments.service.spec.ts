@@ -1,7 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { SalePaymentsService } from './sale-payments.service';
 
-const mockPrisma = {
+const mockPrisma: any = {
   sale: { findFirst: jest.fn() },
   salePayment: {
     findMany: jest.fn(),
@@ -9,10 +9,12 @@ const mockPrisma = {
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
     delete: jest.fn(),
     count: jest.fn(),
   },
-  $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
+  // Supports both the array form (templates) and the callback form (logPayment).
+  $transaction: jest.fn((arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma))),
 };
 
 const mockBus = { emit: jest.fn() };
@@ -90,26 +92,45 @@ describe('SalePaymentsService', () => {
 
   describe('logPayment (partial-aware)', () => {
     it('marks PARTIALLY_PAID when the payment is less than the total', async () => {
-      mockPrisma.salePayment.findUnique.mockResolvedValue({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 0 });
-      mockPrisma.salePayment.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      mockPrisma.salePayment.findUnique
+        .mockResolvedValueOnce({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 0, status: 'DUE' })
+        .mockResolvedValueOnce({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 400, status: 'PARTIALLY_PAID', paidAt: null });
+      mockPrisma.salePayment.updateMany.mockResolvedValue({ count: 1 });
       const res: any = await service.logPayment('p1', 400);
       expect(res.status).toBe('PARTIALLY_PAID');
-      expect(res.paidAmount).toBe(400);
+      expect(Number(res.paidAmount)).toBe(400);
       expect(res.paidAt).toBeNull();
+      expect(mockPrisma.salePayment.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'p1', paidAmount: 0 } }),
+      );
       expect(mockBus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'salePayment.paid', amount: 400 }));
     });
 
     it('marks PAID and stamps paidAt when cumulative payments reach the total', async () => {
-      mockPrisma.salePayment.findUnique.mockResolvedValue({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 600 });
-      mockPrisma.salePayment.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      mockPrisma.salePayment.findUnique
+        .mockResolvedValueOnce({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 600, status: 'PARTIALLY_PAID' })
+        .mockResolvedValueOnce({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 1000, status: 'PAID', paidAt: new Date() });
+      mockPrisma.salePayment.updateMany.mockResolvedValue({ count: 1 });
       const res: any = await service.logPayment('p1', 400);
       expect(res.status).toBe('PAID');
-      expect(res.paidAmount).toBe(1000);
+      expect(Number(res.paidAmount)).toBe(1000);
       expect(res.paidAt).toBeInstanceOf(Date);
     });
 
     it('rejects a non-positive payment', async () => {
       await expect(service.logPayment('p1', 0)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects overpayment beyond the outstanding balance', async () => {
+      mockPrisma.salePayment.findUnique.mockResolvedValue({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 800, status: 'PARTIALLY_PAID' });
+      await expect(service.logPayment('p1', 500)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.salePayment.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects logging against an already-settled (PAID) installment', async () => {
+      mockPrisma.salePayment.findUnique.mockResolvedValue({ id: 'p1', saleId: 's1', amount: 1000, paidAmount: 1000, status: 'PAID' });
+      await expect(service.logPayment('p1', 100)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.salePayment.updateMany).not.toHaveBeenCalled();
     });
   });
 

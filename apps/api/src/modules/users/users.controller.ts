@@ -51,6 +51,15 @@ export class UsersController {
     };
   }
 
+  @Patch('me')
+  @ApiOperation({ summary: 'Update your own profile (name/avatar)' })
+  updateSelf(
+    @Body() body: { name?: string; avatarUrl?: string },
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.usersService.updateSelf(userId, body);
+  }
+
   @Get(':id')
   @RequirePermissions('user:manage')
   @ApiOperation({ summary: 'Get user by ID' })

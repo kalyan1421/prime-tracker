@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import type { Prisma, SalePaymentStatus, SalePaymentTrigger } from '@prisma/client';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import type { SalePaymentTrigger } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 
@@ -137,7 +138,13 @@ export class SalePaymentsService {
     id: string,
     input: { label?: string; amount?: number; dueDate?: string; milestoneId?: string; sequence?: number; notes?: string },
   ) {
-    await this.getPayment(id);
+    const payment = await this.getPayment(id);
+    if (input.amount != null) {
+      if (!(input.amount > 0)) throw new BadRequestException('Installment amount must be positive');
+      if (new Prisma.Decimal(input.amount).lessThan(payment.paidAmount)) {
+        throw new BadRequestException('Installment amount cannot be lower than the amount already paid');
+      }
+    }
     const data: Prisma.SalePaymentUpdateInput = {
       label: input.label,
       amount: input.amount,
@@ -160,19 +167,42 @@ export class SalePaymentsService {
 
   async logPayment(id: string, payAmount: number) {
     if (!(payAmount > 0)) throw new BadRequestException('Payment amount must be positive');
-    const payment = await this.getPayment(id);
 
-    const newPaid = Number(payment.paidAmount) + payAmount;
-    const total = Number(payment.amount);
-    const fullyPaid = newPaid >= total;
-    const status: SalePaymentStatus = fullyPaid ? 'PAID' : 'PARTIALLY_PAID';
+    // Money math is done in Prisma.Decimal (not JS floats), inside a transaction with
+    // optimistic concurrency, so two concurrent logs can't lose an update or overpay.
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await tx.salePayment.findUnique({ where: { id } });
+      if (!payment) throw new NotFoundException('Sale payment not found');
+      if (payment.status === 'PAID' || payment.status === 'WAIVED') {
+        throw new BadRequestException('This installment is already settled');
+      }
 
-    const updated = await this.prisma.salePayment.update({
-      where: { id },
-      data: { paidAmount: newPaid, status, paidAt: fullyPaid ? new Date() : null },
+      const total = new Prisma.Decimal(payment.amount);
+      const newPaid = new Prisma.Decimal(payment.paidAmount).plus(payAmount);
+      if (newPaid.greaterThan(total)) {
+        throw new BadRequestException(
+          `Payment exceeds the outstanding balance (${total.minus(payment.paidAmount).toString()})`,
+        );
+      }
+      const fullyPaid = newPaid.greaterThanOrEqualTo(total);
+
+      // Guard on the paidAmount we read: if another payment landed first, count=0 → retry.
+      const res = await tx.salePayment.updateMany({
+        where: { id, paidAmount: payment.paidAmount },
+        data: {
+          paidAmount: newPaid,
+          status: fullyPaid ? 'PAID' : 'PARTIALLY_PAID',
+          paidAt: fullyPaid ? new Date() : null,
+        },
+      });
+      if (res.count === 0) {
+        throw new ConflictException('Payment was updated concurrently — please retry');
+      }
+      return tx.salePayment.findUnique({ where: { id } });
     });
-    this.bus.emit({ type: 'salePayment.paid', salePaymentId: id, saleId: payment.saleId, amount: payAmount });
-    return updated;
+
+    this.bus.emit({ type: 'salePayment.paid', salePaymentId: id, saleId: result!.saleId, amount: payAmount });
+    return result;
   }
 
   // ─────── Automation (called by event handlers) ───────
@@ -245,8 +275,12 @@ export class SalePaymentsService {
     percentOfPrice: number | undefined,
     salePrice: Prisma.Decimal | null,
   ): number {
-    if (amount != null) return amount;
+    if (amount != null) {
+      if (!(amount > 0)) throw new BadRequestException('Installment amount must be positive');
+      return amount;
+    }
     if (percentOfPrice != null) {
+      if (!(percentOfPrice > 0)) throw new BadRequestException('Installment percentage must be positive');
       if (salePrice == null) {
         throw new BadRequestException('Sale has no salePrice; cannot compute a percentage installment');
       }

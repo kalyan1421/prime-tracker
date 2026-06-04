@@ -11,7 +11,7 @@ const mockPrisma: any = {
   building: { findUnique: jest.fn() },
   document: { findFirst: jest.fn() },
   actual: { create: jest.fn() },
-  interiorInvoice: { create: jest.fn() },
+  interiorInvoice: { create: jest.fn(), findFirst: jest.fn() },
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
 };
 
@@ -194,6 +194,15 @@ describe('InteriorService', () => {
 
     it('rejects a non-positive invoice amount', async () => {
       await expect(service.addInvoice('ip1', { vendorId: 'v1', amount: 0 })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a duplicate invoiceNo for the same interior project (idempotency)', async () => {
+      mockPrisma.interiorProject.findFirst.mockResolvedValue({ id: 'ip1', building: { projectId: 'pr1' }, unit: null });
+      mockPrisma.interiorInvoice.findFirst.mockResolvedValue({ id: 'existing' });
+      await expect(
+        service.addInvoice('ip1', { vendorId: 'v1', amount: 2500, invoiceNo: 'INV-9' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(mockPrisma.actual.create).not.toHaveBeenCalled();
     });
 
     it('resolves the project via the unit when not building-anchored', async () => {

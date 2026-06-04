@@ -131,6 +131,7 @@ export class InteriorService {
   async create(input: CreateInteriorInput) {
     this.assertExactlyOneAnchor(input.unitId, input.buildingId);
     if (!input.name?.trim()) throw new BadRequestException('name is required');
+    this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
 
     const contractType = input.contractType ?? 'PER_SQFT';
     const contractValue = this.computeContractValue(
@@ -161,6 +162,11 @@ export class InteriorService {
 
   async update(id: string, input: UpdateInteriorInput) {
     const project = await this.findById(id);
+    this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
+    // COMPLETED is reached only by advancing to HANDOVER, never set directly here.
+    if (input.status === 'COMPLETED') {
+      throw new BadRequestException('Advance to the HANDOVER phase to complete an interior project');
+    }
     const contractType = input.contractType ?? project.contractType;
     const ratePerSqft = input.ratePerSqft ?? (project.ratePerSqft ? Number(project.ratePerSqft) : undefined);
     const area = input.area ?? (project.area ? Number(project.area) : undefined);
@@ -283,7 +289,9 @@ export class InteriorService {
     });
   }
 
-  removeScopeItem(itemId: string) {
+  async removeScopeItem(itemId: string) {
+    const item = await this.prisma.interiorScopeItem.findUnique({ where: { id: itemId } });
+    if (!item) throw new NotFoundException('Scope item not found');
     return this.prisma.interiorScopeItem.delete({ where: { id: itemId } });
   }
 
@@ -311,6 +319,17 @@ export class InteriorService {
     if (!ip) throw new NotFoundException('Interior project not found');
     const projectId = ip.building?.projectId ?? ip.unit?.building?.projectId;
     if (!projectId) throw new BadRequestException('Cannot resolve the project for this interior invoice');
+
+    // Idempotency: don't double-record (and double-count as a TI Actual) the same invoice no.
+    if (input.invoiceNo) {
+      const dup = await this.prisma.interiorInvoice.findFirst({
+        where: { interiorProjectId, invoiceNo: input.invoiceNo },
+        select: { id: true },
+      });
+      if (dup) {
+        throw new ConflictException(`Invoice ${input.invoiceNo} is already recorded for this interior project`);
+      }
+    }
 
     const txnDate = input.invoiceDate ? new Date(input.invoiceDate) : new Date();
     return this.prisma.$transaction(async (tx) => {
@@ -356,6 +375,8 @@ export class InteriorService {
   }
 
   async resolveSnag(snagId: string) {
+    const snag = await this.prisma.snagItem.findUnique({ where: { id: snagId } });
+    if (!snag) throw new NotFoundException('Snag not found');
     return this.prisma.snagItem.update({
       where: { id: snagId },
       data: { status: 'RESOLVED', resolvedAt: new Date() },
@@ -368,6 +389,12 @@ export class InteriorService {
     if (!!unitId === !!buildingId) {
       throw new BadRequestException('Provide exactly one of unitId or buildingId');
     }
+  }
+
+  private assertNonNegativeMoney(ratePerSqft?: number, area?: number, contractValue?: number) {
+    if (ratePerSqft != null && ratePerSqft < 0) throw new BadRequestException('ratePerSqft cannot be negative');
+    if (area != null && area < 0) throw new BadRequestException('area cannot be negative');
+    if (contractValue != null && contractValue < 0) throw new BadRequestException('contractValue cannot be negative');
   }
 
   private computeContractValue(

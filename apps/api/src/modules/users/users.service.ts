@@ -119,6 +119,47 @@ export class UsersService {
     return updated;
   }
 
+  /**
+   * Self-service profile edit. Any authenticated user may update their own
+   * display name / avatar — but NOT their email (the OAuth identity key),
+   * role, or active status. The actor is always the target (id === actorId).
+   */
+  async updateSelf(id: string, data: { name?: string; avatarUrl?: string }) {
+    const patch: Prisma.UserUpdateInput = {};
+    if (typeof data.name === 'string' && data.name.trim().length > 0) {
+      patch.name = data.name.trim();
+    }
+    if (typeof data.avatarUrl === 'string') {
+      patch.avatarUrl = data.avatarUrl.trim() || null;
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new BadRequestException('Provide a name or avatarUrl to update');
+    }
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: patch,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatarUrl: true,
+        role: true,
+        isActive: true,
+        mfaEnabled: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+    });
+    await this.audit.log({
+      userId: id,
+      action: 'UPDATE',
+      entity: 'User',
+      entityId: id,
+      newValues: patch,
+    });
+    return user;
+  }
+
   async update(id: string, data: { name?: string; email?: string }, actorId: string) {
     if (data.email) {
       const existing = await this.prisma.user.findUnique({ where: { email: data.email } });

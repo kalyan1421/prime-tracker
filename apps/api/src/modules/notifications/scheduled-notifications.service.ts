@@ -35,8 +35,10 @@ export class ScheduledNotificationsService {
     const in7 = new Date(now);
     in7.setDate(in7.getDate() + 7);
 
+    // Include OVERDUE so already-flagged installments keep re-notifying each run until
+    // they're paid (mirrors checkOverdueMilestones); otherwise the alert fires only once.
     const candidates = await this.prisma.salePayment.findMany({
-      where: { status: { in: ['SCHEDULED', 'DUE', 'PARTIALLY_PAID'] } },
+      where: { status: { in: ['SCHEDULED', 'DUE', 'PARTIALLY_PAID', 'OVERDUE'] } },
       include: {
         sale: { select: { id: true, buyer: true, projectId: true, project: { select: { name: true } } } },
       },

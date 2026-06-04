@@ -12,6 +12,10 @@ export class DailyLogsService {
   constructor(private prisma: PrismaService) {}
 
   findAll(filter: { projectId?: string; buildingId?: string }) {
+    // Require a scope — without one this would return every log across all projects.
+    if (!filter.projectId && !filter.buildingId) {
+      throw new BadRequestException('A projectId or buildingId filter is required');
+    }
     return this.prisma.dailyLog.findMany({
       where: { projectId: filter.projectId, buildingId: filter.buildingId },
       orderBy: [{ logDate: 'desc' }, { createdAt: 'desc' }],
@@ -86,6 +90,12 @@ export class DailyLogsService {
   async addPhoto(dailyLogId: string, input: { storagePath: string; caption?: string }) {
     await this.findById(dailyLogId);
     if (!input.storagePath) throw new BadRequestException('storagePath is required');
+    // Defensive: storagePath must be a relative bucket key from our presigned-upload flow,
+    // not an absolute path, traversal, or external URL.
+    const path = input.storagePath;
+    if (path.startsWith('/') || path.includes('..') || /^[a-z]+:\/\//i.test(path)) {
+      throw new BadRequestException('Invalid storagePath');
+    }
     return this.prisma.dailyLogPhoto.create({
       data: { dailyLogId, storagePath: input.storagePath, caption: input.caption },
     });

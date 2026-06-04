@@ -187,7 +187,7 @@ async function main() {
     const ua = await prisma.unit.create({ data: { buildingId, unitNumber: 'SMK-A', unitType: 'RETAIL', sqft: 600, status: 'AVAILABLE' } });
     const ub = await prisma.unit.create({ data: { buildingId, unitNumber: 'SMK-B', unitType: 'RETAIL', sqft: 400, status: 'AVAILABLE' } });
     created.combineUnitIds = [ua.id, ub.id];
-    const combinedUnit = await unitsSvc.combine({ buildingId, sourceUnitIds: [ua.id, ub.id], unitNumber: 'SMK-A+B' });
+    const combinedUnit = await unitsSvc.combine({ buildingId, sourceUnitIds: [ua.id, ub.id], unitNumber: 'SMK-A+B' }, 'PROJECT_MANAGER');
     created.combinedUnitId = combinedUnit.id;
     check(Number(combinedUnit.sqft) === 1000, 'combined unit sums source area (600 + 400 = 1000)');
     const srcA = await prisma.unit.findUnique({ where: { id: ua.id } });
