@@ -8,6 +8,9 @@ export class UploadDocumentDto {
   @IsOptional() @IsString()
   unitId?: string;
 
+  @IsOptional() @IsString()
+  interiorProjectId?: string;
+
   @IsOptional() @IsEnum(DocCategory)
   category?: DocCategory;
 }

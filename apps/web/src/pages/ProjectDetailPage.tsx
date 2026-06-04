@@ -13,6 +13,10 @@ import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessage
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
+import { CashflowForecastView } from '../components/CashflowForecastView';
+import { CancelSaleModal } from '../components/CancelSaleModal';
+import { TenantProfilePanel } from '../components/TenantProfilePanel';
+import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
 import {
   useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCommitments, useBuildings,
@@ -1337,6 +1341,16 @@ function FinancialsTab({ projectId }: { projectId: string }) {
               </tbody>
             </table></div>
           )}
+        </CardBody>
+      </Card>
+
+      {/* Cashflow Forecast */}
+      <Card shadow="sm">
+        <CardHeader className="pb-0">
+          <p className="font-semibold text-sm text-gray-600">Cashflow Projection</p>
+        </CardHeader>
+        <CardBody>
+          <CashflowForecastView projectId={projectId} />
         </CardBody>
       </Card>
 
@@ -2766,7 +2780,14 @@ function LeasesTab({ projectId }: { projectId: string }) {
               <tbody>
                 {leaseList.map((l: any) => (
                   <tr key={l.id} className="border-b border-gray-50">
-                    <td className="py-2 px-2 font-medium">{l.tenantName}</td>
+                    <td className="py-2 px-2 font-medium">
+                      <div>
+                        <span>{l.tenantBrand || l.tenantName}</span>
+                        {l.tenantBrand && l.tenantName !== l.tenantBrand && (
+                          <span className="text-xs text-gray-400 ml-1">({l.tenantName})</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="py-2 px-2">{l.unit?.unitNumber || l.unit?.name || '\u2014'}</td>
                     <td className="py-2 px-2 text-right">{fmt(l.monthlyRent)}</td>
                     <td className="py-2 px-2">{fmtDate(l.leaseStart || l.startDate)}</td>
@@ -2853,6 +2874,25 @@ function LeasesTab({ projectId }: { projectId: string }) {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* Tenant Profiles — inline below each lease row */}
+      {leaseList.length > 0 && (
+        <Card shadow="sm">
+          <CardHeader className="pb-0">
+            <p className="font-semibold text-sm text-gray-600">Tenant Profiles</p>
+          </CardHeader>
+          <CardBody className="space-y-4 divide-y divide-gray-50">
+            {leaseList.map((l: any) => (
+              <div key={`profile-${l.id}`} className="pt-4 first:pt-0">
+                <p className="text-xs text-gray-400 mb-2">
+                  Unit {l.unit?.unitNumber || '—'} · {l.tenantBrand || l.tenantName}
+                </p>
+                <TenantProfilePanel lease={l} />
+              </div>
+            ))}
+          </CardBody>
+        </Card>
+      )}
     </div>
   );
 }
@@ -2888,11 +2928,13 @@ function SalesTab({ projectId }: { projectId: string }) {
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
   const { isOpen: isPayOpen, onOpen: onPayOpen, onClose: onPayClose } = useDisclosure();
+  const { isOpen: isCancelOpen, onOpen: onCancelOpen, onClose: onCancelClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_SALE);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [paySale, setPaySale] = useState<any>(null);
+  const [cancelSale, setCancelSale] = useState<any>(null);
 
   const units = (unitsData as any[]) || [];
 
@@ -3032,9 +3074,17 @@ function SalesTab({ projectId }: { projectId: string }) {
               <div key={stage} className={`rounded-lg border-2 border-t-4 ${STAGE_TOP_COLOR[stage]} ${STAGE_BG[stage]} p-3 min-h-[100px]`}>
                 <div className="flex items-center justify-between mb-2 gap-1 flex-wrap">
                   <StatusBadge status={stage} />
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     {/* Slice 6: probability chip on column header */}
                     <ProbabilityChip stage={stage} size="sm" />
+                    {/* Document gate chip: show aggregate status for all sales in this stage */}
+                    {(SALE_STAGE_DOCS[stage]?.length ?? 0) > 0 && sales.length > 0 && (
+                      <DocumentGateChip
+                        docs={sales.flatMap((s: any) => s.documents ?? [])}
+                        required={SALE_STAGE_DOCS[stage]}
+                        compact
+                      />
+                    )}
                     <span className="text-xs text-gray-500 font-medium">{sales.length}</span>
                   </div>
                 </div>
@@ -3049,6 +3099,16 @@ function SalesTab({ projectId }: { projectId: string }) {
                         <div className="flex gap-0.5 shrink-0">
                           <Button size="sm" variant="light" isIconOnly className="h-5 w-5 min-w-5" onPress={() => { setPaySale(s); onPayOpen(); }}><FiDollarSign className="text-[10px]" /></Button>
                           <Button size="sm" variant="light" isIconOnly className="h-5 w-5 min-w-5" onPress={() => openEdit(s)}><FiEdit2 className="text-[10px]" /></Button>
+                          {s.status !== 'CANCELLED' && s.status !== 'CLOSED' && (
+                            <Button
+                              size="sm" variant="light" color="warning" isIconOnly
+                              className="h-5 w-5 min-w-5"
+                              onPress={() => { setCancelSale(s); onCancelOpen(); }}
+                              aria-label="Cancel sale"
+                            >
+                              <FiX className="text-[10px]" />
+                            </Button>
+                          )}
                           <Button size="sm" variant="light" color="danger" isIconOnly className="h-5 w-5 min-w-5" onPress={() => openDelete(s.id)}><FiTrash2 className="text-[10px]" /></Button>
                         </div>
                       </div>
@@ -3215,6 +3275,21 @@ function SalesTab({ projectId }: { projectId: string }) {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* Cancel Sale — structured flow */}
+      {cancelSale && (
+        <CancelSaleModal
+          isOpen={isCancelOpen}
+          onClose={() => { onCancelClose(); setCancelSale(null); }}
+          sale={{
+            id: cancelSale.id,
+            projectId,
+            unitNumber: cancelSale.unit?.unitNumber,
+            buyerName: cancelSale.buyer || cancelSale.buyerName,
+            salePrice: cancelSale.salePrice ? Number(cancelSale.salePrice) : undefined,
+          }}
+        />
+      )}
     </div>
   );
 }

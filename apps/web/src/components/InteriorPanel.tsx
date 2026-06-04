@@ -1,14 +1,19 @@
 import { useState } from 'react';
 import {
   Card, CardBody, CardHeader, Chip, Button, Input,
-  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
+  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
+  Tabs, Tab, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiAlertTriangle } from 'react-icons/fi';
+import { FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiList, FiAlertTriangle } from 'react-icons/fi';
 import {
   useInteriorProjects, useCreateInterior, useAdvanceInteriorPhase, useApproveInterior,
-  useAddSnag, useResolveSnag, useAddInteriorInvoice,
+  useAddInteriorInvoice,
 } from '../hooks/useApi';
 import { fmt, fmtDate } from './ui';
+import { SnagPanel } from './SnagPanel';
+import { InteriorBOQPanel } from './InteriorBOQPanel';
+import { InteriorDocumentsPanel } from './InteriorDocumentsPanel';
+import { DocumentGateChip, INTERIOR_PHASE_DOCS } from './DocumentGateChip';
 
 export const INTERIOR_PHASES = [
   'DESIGN', 'CLIENT_APPROVAL', 'CITY_APPROVAL', 'PROCUREMENT', 'EXECUTION', 'SNAGGING', 'HANDOVER',
@@ -29,21 +34,28 @@ const errMsg = (err: unknown, fallback: string) => {
   return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
 };
 
-function PhaseStepper({ current }: { current: string }) {
+function PhaseStepper({ current, docs = [] }: { current: string; docs?: Array<{ category: string }> }) {
   const idx = INTERIOR_PHASES.indexOf(current as any);
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {INTERIOR_PHASES.map((p, i) => (
-        <Chip
-          key={p}
-          size="sm"
-          variant={i === idx ? 'solid' : 'flat'}
-          color={i < idx ? 'success' : i === idx ? 'primary' : 'default'}
-          className={i > idx ? 'opacity-50' : ''}
-        >
-          {PHASE_LABEL[p]}
-        </Chip>
-      ))}
+    <div className="flex flex-wrap gap-1.5 items-center">
+      {INTERIOR_PHASES.map((p, i) => {
+        const required = INTERIOR_PHASE_DOCS[p] ?? [];
+        return (
+          <div key={p} className="flex items-center gap-1">
+            <Chip
+              size="sm"
+              variant={i === idx ? 'solid' : 'flat'}
+              color={i < idx ? 'success' : i === idx ? 'primary' : 'default'}
+              className={i > idx ? 'opacity-50' : ''}
+            >
+              {PHASE_LABEL[p]}
+            </Chip>
+            {required.length > 0 && i === idx && (
+              <DocumentGateChip docs={docs} required={required} compact />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -169,7 +181,7 @@ function InteriorProjectCard({ project }: { project: any }) {
         </Chip>
       </div>
 
-      <PhaseStepper current={project.phase} />
+      <PhaseStepper current={project.phase} docs={project.documents ?? []} />
 
       <div className="flex flex-wrap gap-2">
         {next && (
@@ -194,55 +206,99 @@ function InteriorProjectCard({ project }: { project: any }) {
         )}
       </div>
 
-      <SnagList project={project} />
-      <InvoiceQuickAdd project={project} />
+      {/* Tabbed detail: BOQ | Snags | Invoices */}
+      <InteriorDetailTabs project={project} />
     </div>
   );
 }
 
-function SnagList({ project }: { project: any }) {
-  const add = useAddSnag();
-  const resolve = useResolveSnag();
-  const [desc, setDesc] = useState('');
-  const snags: any[] = project.snags ?? [];
-  const open = snags.filter((s) => s.status !== 'RESOLVED');
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
-        <FiAlertTriangle className="text-orange-500" /> Snags / punch list ({open.length} open)
-      </div>
-      {snags.map((s) => (
-        <div key={s.id} className="flex items-center justify-between text-xs">
-          <span className={s.status === 'RESOLVED' ? 'line-through text-gray-400' : ''}>
-            {s.description}{s.room ? ` · ${s.room}` : ''}
-          </span>
-          {s.status !== 'RESOLVED' && (
-            <Button size="sm" variant="light" color="success" onPress={() => resolve.mutate(s.id)}>
-              Resolve
-            </Button>
-          )}
-        </div>
-      ))}
-      <div className="flex gap-2">
-        <Input size="sm" placeholder="Add a snag…" value={desc} onChange={(e) => setDesc(e.target.value)} />
-        <Button
-          size="sm" variant="flat" isDisabled={!desc.trim()}
-          onPress={async () => { await add.mutateAsync({ id: project.id, data: { description: desc.trim() } }); setDesc(''); }}
-        >
-          Add
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function InvoiceQuickAdd({ project }: { project: any }) {
+function InteriorDetailTabs({ project }: { project: any }) {
+  const snags:    any[] = project.snags    ?? [];
+  const scope:    any[] = project.scope    ?? [];
   const invoices: any[] = project.invoices ?? [];
-  const spend = invoices.reduce((s, i) => s + Number(i.amount), 0);
+  const spend = invoices.reduce((s: number, i: any) => s + Number(i.amount), 0);
+  const openSnags = snags.filter((s: any) => s.status !== 'RESOLVED').length;
+
   return (
-    <p className="text-xs text-gray-400">
-      Sub-contractor invoices: {invoices.length} · spend {fmt(spend)}
-    </p>
+    <div className="pt-1">
+      <Tabs size="sm" variant="underlined" aria-label="Interior details">
+        <Tab
+          key="snags"
+          title={
+            <span className="flex items-center gap-1.5">
+              <FiAlertTriangle size={12} />
+              Snags
+              {openSnags > 0 && (
+                <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-semibold">
+                  {openSnags}
+                </span>
+              )}
+            </span>
+          }
+        >
+          <div className="pt-3">
+            <SnagPanel projectId={project.id} snags={snags} />
+          </div>
+        </Tab>
+
+        <Tab
+          key="boq"
+          title={
+            <span className="flex items-center gap-1.5">
+              <FiList size={12} />
+              BOQ
+              {scope.length > 0 && (
+                <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">
+                  {scope.length}
+                </span>
+              )}
+            </span>
+          }
+        >
+          <div className="pt-3">
+            <InteriorBOQPanel
+              projectId={project.id}
+              items={scope}
+              contractValue={project.contractValue ? Number(project.contractValue) : undefined}
+            />
+          </div>
+        </Tab>
+
+        <Tab
+          key="invoices"
+          title={<span className="flex items-center gap-1.5">Invoices ({invoices.length})</span>}
+        >
+          <div className="pt-3 space-y-1.5">
+            {invoices.length === 0 && (
+              <p className="text-xs text-gray-400 italic">No sub-contractor invoices yet.</p>
+            )}
+            {invoices.map((inv: any) => (
+              <div key={inv.id} className="flex justify-between text-xs">
+                <span className="text-gray-700">{inv.vendor ?? 'Invoice'}</span>
+                <span className="tabular-nums font-medium">{fmt(Number(inv.amount))}</span>
+              </div>
+            ))}
+            {invoices.length > 0 && (
+              <div className="flex justify-between text-xs font-semibold border-t border-gray-100 pt-1.5">
+                <span className="text-gray-500">Total spend</span>
+                <span className="tabular-nums">{fmt(spend)}</span>
+              </div>
+            )}
+          </div>
+        </Tab>
+
+        <Tab
+          key="documents"
+          title={<span className="flex items-center gap-1.5">Documents</span>}
+        >
+          <div className="pt-3">
+            <InteriorDocumentsPanel
+              interiorProjectId={project.id}
+              currentPhase={project.phase}
+            />
+          </div>
+        </Tab>
+      </Tabs>
+    </div>
   );
 }

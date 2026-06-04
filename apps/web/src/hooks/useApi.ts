@@ -1181,11 +1181,19 @@ export function useAddContractPayment() {
 }
 
 // ---- Documents ----
-export function useDocuments(params: { projectId?: string; unitId?: string; buildingId?: string }) {
+export function useDocuments(params: { projectId?: string; unitId?: string; buildingId?: string; interiorProjectId?: string }) {
   return useQuery({
     queryKey: ['documents', params],
     queryFn: () => api.get('/documents', { params }).then((r) => r.data),
-    enabled: !!(params.projectId || params.unitId),
+    enabled: !!(params.projectId || params.unitId || params.interiorProjectId),
+  });
+}
+
+export function useInteriorDocuments(interiorProjectId?: string) {
+  return useQuery({
+    queryKey: ['documents', { interiorProjectId }],
+    queryFn: () => api.get('/documents', { params: { interiorProjectId } }).then((r) => r.data),
+    enabled: !!interiorProjectId,
   });
 }
 
@@ -1828,6 +1836,24 @@ export function useResolveSnag() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (snagId: string) => api.post(`/interior/snags/${snagId}/resolve`).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useUpdateSnag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.patch(`/interior/snags/${id}`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useDeleteInteriorScope() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, scopeId }: { projectId: string; scopeId: string }) =>
+      api.delete(`/interior/${projectId}/scope/${scopeId}`).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
   });
 }

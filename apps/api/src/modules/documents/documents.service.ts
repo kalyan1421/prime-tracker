@@ -36,9 +36,17 @@ export class DocumentsService {
     });
   }
 
+  async findByInteriorProject(interiorProjectId: string) {
+    return this.prisma.document.findMany({
+      where: { interiorProjectId, deletedAt: null },
+      include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async create(
     file: Express.Multer.File,
-    metadata: { projectId?: string; unitId?: string; category?: string },
+    metadata: { projectId?: string; unitId?: string; interiorProjectId?: string; category?: string },
     userId: string,
   ) {
     let projectName: string | undefined;
@@ -65,6 +73,7 @@ export class DocumentsService {
       data: {
         projectId: metadata.projectId || null,
         unitId: metadata.unitId || null,
+        interiorProjectId: metadata.interiorProjectId || null,
         fileName: file.originalname,
         fileUrl: publicUrl,
         fileSize: file.size,

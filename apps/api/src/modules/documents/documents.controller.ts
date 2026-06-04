@@ -43,12 +43,14 @@ export class DocumentsController {
 
   @Get()
   @RequirePermissions('document:view')
-  @ApiOperation({ summary: 'List documents by projectId, buildingId, or unitId' })
+  @ApiOperation({ summary: 'List documents by projectId, buildingId, unitId, or interiorProjectId' })
   find(
     @Query('projectId') projectId: string,
     @Query('unitId') unitId: string,
     @Query('buildingId') buildingId?: string,
+    @Query('interiorProjectId') interiorProjectId?: string,
   ) {
+    if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId);
     if (unitId) return this.service.findByUnit(unitId);
     if (buildingId) return this.service.findByBuilding(buildingId);
     return this.service.findByProject(projectId);
