@@ -7,8 +7,9 @@ export class ActualsService {
   constructor(private prisma: PrismaService) {}
 
   async findByProject(projectId: string) {
+    // Interior/TI actuals are reported in the interior module, not the project cost list.
     return this.prisma.actual.findMany({
-      where: { projectId },
+      where: { projectId, interiorProjectId: null },
       orderBy: { txnDate: 'desc' },
     });
   }

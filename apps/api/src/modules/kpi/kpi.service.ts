@@ -24,7 +24,7 @@ export class KpiService {
   async createSnapshot(projectId: string) {
     const [budgets, actuals, commitments, leases, units] = await Promise.all([
       this.prisma.budgetLine.findMany({ where: { projectId } }),
-      this.prisma.actual.findMany({ where: { projectId } }),
+      this.prisma.actual.findMany({ where: { projectId, interiorProjectId: null } }),
       this.prisma.commitment.findMany({ where: { projectId } }),
       this.prisma.lease.findMany({ where: { unit: { building: { projectId } }, status: 'ACTIVE' } }),
       this.prisma.unit.findMany({ where: { building: { projectId } } }),

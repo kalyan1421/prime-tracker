@@ -55,7 +55,7 @@ export class KpiPrecomputeService {
   async recomputeForProject(projectId: string) {
     const [budget, actuals, committed, units, leasedUnits, soldUnits] = await Promise.all([
       this.prisma.budgetLine.aggregate({ where: { projectId }, _sum: { baselineAmt: true } }),
-      this.prisma.actual.aggregate({ where: { projectId }, _sum: { amount: true } }),
+      this.prisma.actual.aggregate({ where: { projectId, interiorProjectId: null }, _sum: { amount: true } }),
       this.prisma.commitment.aggregate({ where: { projectId }, _sum: { contractAmt: true } }),
       this.prisma.unit.count({ where: { building: { projectId } } }),
       this.prisma.unit.count({ where: { building: { projectId }, status: 'LEASED' } }),

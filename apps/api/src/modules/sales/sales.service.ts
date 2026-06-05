@@ -122,16 +122,26 @@ export class SalesService {
 
     let result;
     if (data.status === 'CLOSED' && sale.unitId) {
-      // Atomic: update sale + unit status in one transaction
-      const [updated] = await this.prisma.$transaction([
-        this.prisma.sale.update({ where: { id }, data: dataWithActivity }),
-        this.prisma.unit.update({
-          where: { id: sale.unitId },
+      const unitId = sale.unitId;
+      // Atomic + optimistic-locked: only the NOT_CLOSED→CLOSED transition stamps the broker
+      // commission and flips the unit. Guarding the write on `status != CLOSED` means a
+      // concurrent CLOSE finds 0 rows and skips re-stamping brokerCommissionAmt.
+      result = await this.prisma.$transaction(async (tx) => {
+        const guard = await tx.sale.updateMany({
+          where: { id, status: { not: 'CLOSED' } },
+          data: dataWithActivity,
+        });
+        if (guard.count === 0) {
+          // Lost the race — already CLOSED elsewhere. Return current row, no side effects.
+          return tx.sale.findUniqueOrThrow({ where: { id } });
+        }
+        await tx.unit.update({
+          where: { id: unitId },
           // Sale closed → unit becomes SOLD; clear time-on-market
           data: { status: 'SOLD', availableSince: null },
-        }),
-      ]);
-      result = updated;
+        });
+        return tx.sale.findUniqueOrThrow({ where: { id } });
+      });
     } else if (cancelling && sale.unitId) {
       // Cancelling a sale must RELEASE the unit it was holding, or the unit stays stuck
       // in UNDER_CONTRACT forever (backend-issue #1). Only flip a unit that was *reserved*
