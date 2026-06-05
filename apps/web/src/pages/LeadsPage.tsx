@@ -10,7 +10,7 @@ import {
   FiHome, FiBarChart2, FiUser,
 } from 'react-icons/fi';
 import {
-  useLeads, useLeadActivities, useProjects, useUnits, useCampaigns,
+  useLeads, useLeadActivities, useProjects, useUnits, useCampaigns, useUsers,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
   useLead, useAddLeadInterest, useRemoveLeadInterest,
 } from '../hooks/useApi';
@@ -377,6 +377,7 @@ function LeadFormModal({
   projectId?: string;
 }) {
   const { data: projects } = useProjects();
+  const { data: users } = useUsers();
   const createLead = useCreateLead();
   const updateLead = useUpdateLead();
   const isEdit = !!lead;
@@ -435,7 +436,8 @@ function LeadFormModal({
         unitInterest: form.unitInterest || undefined,
         budget: form.budget ? parseFloat(form.budget) : undefined,
         notes: form.notes || undefined,
-        assignedTo: form.assignedTo || undefined,
+        // On edit, empty string clears the assignment; on create, just omit.
+        assignedTo: form.assignedTo || (isEdit ? null : undefined),
         // Sprint 2 — campaign attribution. Same pattern as unitId: on edit,
         // empty-string means "clear the link"; on create, empty just omits the field.
         campaignId: form.campaignId || (isEdit ? null : undefined),
@@ -524,6 +526,18 @@ function LeadFormModal({
                 <SelectItem key={c.id}>{c.name} · {String(c.channel).replace('_', ' ')}</SelectItem>
               ))}
             </Select>
+            <Select
+              size="sm"
+              label="Assigned To"
+              placeholder="Unassigned"
+              selectedKeys={form.assignedTo ? new Set([form.assignedTo]) : new Set()}
+              onSelectionChange={(keys) => set('assignedTo', (Array.from(keys)[0] as string) || '')}
+              className="sm:col-span-2"
+            >
+              {((users as any[]) || []).filter((u: any) => u.isActive !== false).map((u: any) => (
+                <SelectItem key={u.id}>{u.name}{u.role ? ` · ${String(u.role).replace('_', ' ')}` : ''}</SelectItem>
+              ))}
+            </Select>
             <Input
               size="sm"
               label="Notes on interest"
@@ -554,17 +568,27 @@ function LeadFormModal({
 }
 
 export default function LeadsPage() {
-  const { hasPermission } = useAuthStore();
+  const { hasPermission, user } = useAuthStore();
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  // assignee filter: '' = all, 'mine' = current user, 'unassigned' = no assignee, else a user id
+  const [assigneeFilter, setAssigneeFilter] = useState('');
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const [editLead, setEditLead] = useState<any>(null);
 
-  const { data: leads, isLoading, error } = useLeads({
+  const { data: users } = useUsers();
+
+  const leadsQuery = {
     status: statusFilter || undefined,
     search: search || undefined,
-  } as any);
+    ...(assigneeFilter === 'mine' && user?.id ? { assignedTo: user.id } : {}),
+    ...(assigneeFilter === 'unassigned' ? { unassigned: true } : {}),
+    ...(assigneeFilter && assigneeFilter !== 'mine' && assigneeFilter !== 'unassigned'
+      ? { assignedTo: assigneeFilter }
+      : {}),
+  };
+  const { data: leads, isLoading, error } = useLeads(leadsQuery as any);
   const deleteLead = useDeleteLead();
 
   const handleDelete = async (id: string) => {
@@ -636,7 +660,7 @@ export default function LeadsPage() {
         </div>
 
         {/* Filter bar */}
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
           <Input
             size="sm"
             placeholder="Search name, email, phone…"
@@ -648,9 +672,34 @@ export default function LeadsPage() {
             onClear={() => setSearch('')}
             aria-label="Search leads"
           />
-          {statusFilter && (
-            <Button size="sm" variant="flat" startContent={<FiRefreshCw className="w-3 h-3" />} onPress={() => setStatusFilter('')} aria-label="Clear status filter">
-              Clear status
+          <Select
+            size="sm"
+            aria-label="Filter by assignee"
+            placeholder="All assignees"
+            className="max-w-[200px]"
+            selectedKeys={assigneeFilter ? new Set([assigneeFilter]) : new Set()}
+            onSelectionChange={(keys) => setAssigneeFilter((Array.from(keys)[0] as string) || '')}
+            startContent={<FiUser className="text-gray-400 w-3.5 h-3.5" />}
+          >
+            {[
+              { key: 'mine', label: 'Assigned to me' },
+              { key: 'unassigned', label: 'Unassigned' },
+              ...((users as any[]) || [])
+                .filter((u: any) => u.isActive !== false && u.id !== user?.id)
+                .map((u: any) => ({ key: u.id as string, label: u.name as string })),
+            ].map((opt) => (
+              <SelectItem key={opt.key}>{opt.label}</SelectItem>
+            ))}
+          </Select>
+          {(statusFilter || assigneeFilter) && (
+            <Button
+              size="sm"
+              variant="flat"
+              startContent={<FiRefreshCw className="w-3 h-3" />}
+              onPress={() => { setStatusFilter(''); setAssigneeFilter(''); }}
+              aria-label="Clear filters"
+            >
+              Clear filters
             </Button>
           )}
         </div>

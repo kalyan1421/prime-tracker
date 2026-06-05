@@ -756,7 +756,7 @@ export function useLeadDashboard(params?: { projectId?: string }) {
   });
 }
 
-export function useLeads(params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; search?: string }) {
+export function useLeads(params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string }) {
   return useQuery({
     queryKey: ['leads', params],
     queryFn: () => api.get('/leads', { params }).then((r) => r.data),

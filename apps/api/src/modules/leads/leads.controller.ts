@@ -29,12 +29,17 @@ export class LeadsController {
     @Query('projectId') projectId?: string,
     @Query('status') status?: LeadStatus,
     @Query('assignedTo') assignedTo?: string,
+    @Query('unassigned') unassigned?: string,
     @Query('unitId') unitId?: string,
     @Query('buildingId') buildingId?: string,
     @Query('campaignId') campaignId?: string,
     @Query('search') search?: string,
   ) {
-    return this.service.findAll({ projectId, status, assignedTo, unitId, buildingId, campaignId, search });
+    return this.service.findAll({
+      projectId, status, assignedTo,
+      unassigned: unassigned === 'true' || unassigned === '1',
+      unitId, buildingId, campaignId, search,
+    });
   }
 
   @Get('waitlist')
@@ -96,7 +101,7 @@ export class LeadsController {
       unitInterest?: string;
       budget?: number;
       notes?: string;
-      assignedTo?: string;
+      assignedTo?: string | null;
     },
   ) {
     return this.service.update(id, body);

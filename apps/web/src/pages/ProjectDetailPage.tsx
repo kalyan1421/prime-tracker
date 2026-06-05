@@ -9,7 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDollarSign } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDollarSign, FiSearch } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
@@ -1640,6 +1640,8 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const [forceDelete, setForceDelete] = useState(false);
   const [commentUnit, setCommentUnit] = useState<{ id: string; label: string } | null>(null);
   const [filterBuildingId, setFilterBuildingId] = useState<string>('');
+  const [unitSearch, setUnitSearch] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('');
 
   const buildings = (buildingsData as any[]) || [];
   const li = leaseIncome as any;
@@ -1823,9 +1825,16 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   };
 
   const allUnits = (data as any[]) || [];
-  const filteredUnits = filterBuildingId
-    ? allUnits.filter((u: any) => u.buildingId === filterBuildingId || u.building?.id === filterBuildingId)
-    : allUnits;
+  const searchLower = unitSearch.trim().toLowerCase();
+  const filteredUnits = allUnits.filter((u: any) => {
+    if (filterBuildingId && u.buildingId !== filterBuildingId && u.building?.id !== filterBuildingId) return false;
+    if (statusFilter && u.status !== statusFilter) return false;
+    if (searchLower) {
+      const hay = `${u.unitNumber || ''} ${u.notes || ''} ${u.leases?.[0]?.tenantName || ''}`.toLowerCase();
+      if (!hay.includes(searchLower)) return false;
+    }
+    return true;
+  });
 
   // Group by building — must be called before any early return to satisfy React hooks rules
   const grouped = useMemo(() => {
@@ -1938,22 +1947,39 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
 
   return (
     <div className="mt-4">
-      {/* Unit Inventory Heat Map */}
+      {/* Unit Inventory Heat Map — pills double as status filter chips */}
       {allUnits.length > 0 && (
         <Card shadow="sm" className="mb-4">
           <CardBody className="py-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Unit Inventory</p>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(statusCounts).map(([status, count]) => (
-                <div
-                  key={status}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium cursor-pointer ${HEAT_COLORS[status] || 'bg-gray-100 border-gray-300'}`}
-                  onClick={() => setFilterBuildingId('')}
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase">Unit Inventory</p>
+              {statusFilter && (
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('')}
+                  className="text-[11px] text-blue-600 hover:underline"
                 >
-                  <span className="font-bold">{count as number}</span>
-                  <span>{status.replace(/_/g, ' ')}</span>
-                </div>
-              ))}
+                  Clear status filter
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(statusCounts).map(([status, count]) => {
+                const isActive = statusFilter === status;
+                return (
+                  <button
+                    type="button"
+                    key={status}
+                    onClick={() => setStatusFilter(isActive ? '' : status)}
+                    aria-pressed={isActive}
+                    aria-label={`Filter by ${status.replace(/_/g, ' ')}`}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium cursor-pointer transition-shadow ${HEAT_COLORS[status] || 'bg-gray-100 border-gray-300'} ${isActive ? 'ring-2 ring-offset-1 ring-blue-400 shadow-sm' : 'hover:shadow-sm'}`}
+                  >
+                    <span className="font-bold">{count as number}</span>
+                    <span>{status.replace(/_/g, ' ')}</span>
+                  </button>
+                );
+              })}
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 bg-gray-50 text-xs font-medium text-gray-600">
                 <span className="font-bold">{allUnits.length}</span>
                 <span>Total</span>
@@ -1972,8 +1998,26 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
       )}
 
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 gap-3 sm:gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <p className="font-semibold text-sm text-gray-600">{filteredUnits.length} units</p>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
+          <p className="font-semibold text-sm text-gray-600">
+            {filteredUnits.length} unit{filteredUnits.length === 1 ? '' : 's'}
+            {filteredUnits.length !== allUnits.length && (
+              <span className="text-gray-400 font-normal"> of {allUnits.length}</span>
+            )}
+          </p>
+          {allUnits.length > 0 && (
+            <Input
+              size="sm"
+              placeholder="Search unit #, tenant, notes…"
+              value={unitSearch}
+              onChange={(e) => setUnitSearch(e.target.value)}
+              startContent={<FiSearch className="text-gray-400 w-3.5 h-3.5" />}
+              className="w-full sm:w-[240px]"
+              isClearable
+              onClear={() => setUnitSearch('')}
+              aria-label="Search units"
+            />
+          )}
           {buildings.length > 1 && (
             <Select
               size="sm"
@@ -2003,15 +2047,34 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
 
       {filteredUnits.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <p className="text-sm font-medium text-gray-600">
-            {filterBuildingId ? 'No units in this building' : 'No units yet'}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            {filterBuildingId
-              ? 'Try clearing the building filter or add the first unit.'
-              : 'Add the first unit to start tracking availability and revenue.'}
-          </p>
-          {canCreate && buildings.length > 0 && (
+          {(() => {
+            const hasFilters = filterBuildingId || statusFilter || unitSearch.trim();
+            if (allUnits.length === 0) {
+              return (
+                <>
+                  <p className="text-sm font-medium text-gray-600">No units yet</p>
+                  <p className="text-xs text-gray-400 mt-1">Add the first unit to start tracking availability and revenue.</p>
+                </>
+              );
+            }
+            if (hasFilters) {
+              return (
+                <>
+                  <p className="text-sm font-medium text-gray-600">No units match your filters</p>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    className="mt-3"
+                    onPress={() => { setFilterBuildingId(''); setStatusFilter(''); setUnitSearch(''); }}
+                  >
+                    Clear filters
+                  </Button>
+                </>
+              );
+            }
+            return null;
+          })()}
+          {canCreate && buildings.length > 0 && allUnits.length === 0 && (
             <Button size="sm" color="primary" startContent={<FiPlus />} className="mt-3" onPress={openCreate}>
               Add Unit
             </Button>
@@ -3314,6 +3377,8 @@ function BuildingsTab({ projectId }: { projectId: string }) {
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; unitCount: number } | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
+  const [buildingSearch, setBuildingSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
 
   const openCreate = () => {
     setEditId(null);
@@ -3412,16 +3477,64 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     if (formErrors[field]) setFormErrors((errs) => ({ ...errs, [field]: '' }));
   };
 
-  const buildings = (data as any[]) || [];
+  const allBuildings = (data as any[]) || [];
+  const searchLower = buildingSearch.trim().toLowerCase();
+  const buildings = allBuildings.filter((b: any) => {
+    if (typeFilter && b.buildingType !== typeFilter) return false;
+    if (searchLower && !(b.name || '').toLowerCase().includes(searchLower)) return false;
+    return true;
+  });
+  const buildingTypes = Array.from(new Set(allBuildings.map((b: any) => b.buildingType).filter(Boolean))) as string[];
 
   return (
     <div className="mt-4">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
-        {!isLoading && (
-          <p className="font-semibold text-sm text-gray-600">
-            {buildings.length} building{buildings.length !== 1 ? 's' : ''}
-          </p>
-        )}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
+          {!isLoading && (
+            <p className="font-semibold text-sm text-gray-600">
+              {buildings.length} building{buildings.length !== 1 ? '' : ''}
+              {buildings.length !== allBuildings.length && (
+                <span className="text-gray-400 font-normal"> of {allBuildings.length}</span>
+              )}
+            </p>
+          )}
+          {allBuildings.length > 0 && (
+            <Input
+              size="sm"
+              placeholder="Search building name…"
+              value={buildingSearch}
+              onChange={(e) => setBuildingSearch(e.target.value)}
+              startContent={<FiSearch className="text-gray-400 w-3.5 h-3.5" />}
+              className="w-full sm:w-[220px]"
+              isClearable
+              onClear={() => setBuildingSearch('')}
+              aria-label="Search buildings by name"
+            />
+          )}
+          {buildingTypes.length > 1 && (
+            <Select
+              size="sm"
+              aria-label="Filter by building type"
+              placeholder="All types"
+              className="w-full sm:w-[160px]"
+              selectedKeys={typeFilter ? new Set([typeFilter]) : new Set()}
+              onSelectionChange={(keys) => setTypeFilter((Array.from(keys)[0] as string) || '')}
+            >
+              {buildingTypes.map((t) => (
+                <SelectItem key={t}>{t.replace(/_/g, ' ')}</SelectItem>
+              ))}
+            </Select>
+          )}
+          {(buildingSearch || typeFilter) && (
+            <Button
+              size="sm"
+              variant="light"
+              onPress={() => { setBuildingSearch(''); setTypeFilter(''); }}
+            >
+              Clear filters
+            </Button>
+          )}
+        </div>
         {canEdit && (
           <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
             Add Building
@@ -3450,7 +3563,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
 
       {!isLoading && error && <ErrorState message="Could not load buildings." />}
 
-      {!isLoading && !error && buildings.length === 0 && (
+      {!isLoading && !error && buildings.length === 0 && allBuildings.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-sm font-medium text-gray-600">No buildings yet</p>
           <p className="text-xs text-gray-400 mt-1">Add the first building to start tracking units.</p>
@@ -3459,6 +3572,20 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               Add Building
             </Button>
           )}
+        </div>
+      )}
+
+      {!isLoading && !error && buildings.length === 0 && allBuildings.length > 0 && (
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <p className="text-sm font-medium text-gray-600">No buildings match your filters</p>
+          <Button
+            size="sm"
+            variant="flat"
+            className="mt-3"
+            onPress={() => { setBuildingSearch(''); setTypeFilter(''); }}
+          >
+            Clear filters
+          </Button>
         </div>
       )}
 
