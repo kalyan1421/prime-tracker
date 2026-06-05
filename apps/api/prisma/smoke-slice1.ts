@@ -16,6 +16,7 @@ import { CashFlowService } from '../src/modules/cashflow/cashflow.service';
 import { SalesService } from '../src/modules/sales/sales.service';
 import { DailyLogsService } from '../src/modules/daily-logs/daily-logs.service';
 import { BrokersService } from '../src/modules/brokers/brokers.service';
+import { BudgetsService } from '../src/modules/budgets/budgets.service';
 import { UnitsService } from '../src/modules/units/units.service';
 import { LeadsService } from '../src/modules/leads/leads.service';
 import { EventBus } from '../src/common/events/event-bus.service';
@@ -49,6 +50,7 @@ async function main() {
   const sales = new SalesService(prisma as any, bus);
   const dailyLogs = new DailyLogsService(prisma as any);
   const brokers = new BrokersService(prisma as any);
+  const budgets = new BudgetsService(prisma as any);
   const unitsSvc = new UnitsService(prisma as any);
   const leadsSvc = new LeadsService(prisma as any);
 
@@ -112,6 +114,14 @@ async function main() {
     const actual = await prisma.actual.findUnique({ where: { id: inv.actualId! } });
     created.actualIds.push(inv.actualId!);
     check(!!actual && Number(actual.amount) === 2500 && actual.projectId === projectId, 'Actual exists, tagged to the project, amount matches');
+    check(actual?.interiorProjectId === ip.id, 'Actual is tagged with interiorProjectId (TI isolation)');
+    // TI isolation: the interior invoice must NOT inflate the main project's financial summary.
+    const summary = await budgets.getFinancialSummary(projectId);
+    const rawActuals = await prisma.actual.aggregate({ where: { projectId }, _sum: { amount: true } });
+    check(
+      Number(rawActuals._sum.amount ?? 0) >= 2500 && summary.actualTotal === Number(rawActuals._sum.amount ?? 0) - 2500,
+      'getFinancialSummary excludes the 2,500 TI actual from actualTotal',
+    );
 
     console.log('\n── Sale payment schedule ──');
     const sale = await prisma.sale.create({ data: { projectId, unitId: unit.id, buyer: 'Smoke Buyer', salePrice: 1000000, status: 'UNDER_CONTRACT' } });
