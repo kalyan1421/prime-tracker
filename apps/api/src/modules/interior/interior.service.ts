@@ -336,6 +336,8 @@ export class InteriorService {
       const actual = await tx.actual.create({
         data: {
           projectId,
+          // Tag as interior/TI spend so the main project's budget/variance/KPI views exclude it.
+          interiorProjectId,
           category: 'OTHER',
           description: `Interior (TI) invoice${input.invoiceNo ? ' ' + input.invoiceNo : ''}`,
           amount: input.amount,

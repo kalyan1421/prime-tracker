@@ -64,7 +64,7 @@ export class VarianceAlertCron {
     }
 
     const [actuals, commits] = await Promise.all([
-      this.prisma.actual.groupBy({ by: ['category'], where: { projectId }, _sum: { amount: true } }),
+      this.prisma.actual.groupBy({ by: ['category'], where: { projectId, interiorProjectId: null }, _sum: { amount: true } }),
       this.prisma.commitment.groupBy({ by: ['category'], where: { projectId }, _sum: { contractAmt: true } }),
     ]);
     const categoryActual: Record<string, number> = {};

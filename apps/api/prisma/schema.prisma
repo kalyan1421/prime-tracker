@@ -558,6 +558,10 @@ model Actual {
   id           String         @id @default(cuid())
   projectId    String
   project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Interior/TI spend is recorded as an Actual but reported inside the interior module —
+  // this tags those rows so the main project's budget/variance/KPI views can exclude them.
+  interiorProjectId String?
+  interiorProject   InteriorProject? @relation(fields: [interiorProjectId], references: [id], onDelete: SetNull)
   category     BudgetCategory
   description  String
   amount       Decimal        @db.Decimal(14, 2)
@@ -569,6 +573,7 @@ model Actual {
   updatedAt    DateTime       @updatedAt
 
   @@index([projectId, category])
+  @@index([interiorProjectId])
   @@index([qbTxnId])
   @@map("actuals")
 }
@@ -1743,6 +1748,7 @@ model InteriorProject {
   snags      SnagItem[]
   invoices   InteriorInvoice[]
   documents  Document[]
+  actuals    Actual[]
 
   @@index([unitId])
   @@index([buildingId])

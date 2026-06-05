@@ -3,8 +3,8 @@ import { BrokersService } from './brokers.service';
 
 const mockPrisma: any = {
   broker: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
-  lead: { count: jest.fn() },
-  sale: { aggregate: jest.fn() },
+  lead: { groupBy: jest.fn() },
+  sale: { groupBy: jest.fn() },
 };
 
 function makeService() {
@@ -53,8 +53,10 @@ describe('BrokersService', () => {
       mockPrisma.broker.findMany.mockResolvedValue([
         { id: 'b1', name: 'Jane', company: 'Acme', commissionRate: 2, commissionFlat: null },
       ]);
-      mockPrisma.lead.count.mockResolvedValue(10);
-      mockPrisma.sale.aggregate.mockResolvedValue({ _count: 4, _sum: { salePrice: 4000000, brokerCommissionAmt: 80000 } });
+      mockPrisma.lead.groupBy.mockResolvedValue([{ brokerId: 'b1', _count: 10 }]);
+      mockPrisma.sale.groupBy.mockResolvedValue([
+        { brokerId: 'b1', _count: 4, _sum: { salePrice: 4000000, brokerCommissionAmt: 80000 } },
+      ]);
 
       const rows = await service.report();
 
@@ -71,8 +73,8 @@ describe('BrokersService', () => {
 
     it('reports 0% conversion when a broker has no leads', async () => {
       mockPrisma.broker.findMany.mockResolvedValue([{ id: 'b2', name: 'Bob', commissionRate: null, commissionFlat: 5000 }]);
-      mockPrisma.lead.count.mockResolvedValue(0);
-      mockPrisma.sale.aggregate.mockResolvedValue({ _count: 0, _sum: { salePrice: null, brokerCommissionAmt: null } });
+      mockPrisma.lead.groupBy.mockResolvedValue([]);
+      mockPrisma.sale.groupBy.mockResolvedValue([]);
 
       const rows = await service.report();
       expect(rows[0]).toMatchObject({ leads: 0, closedSales: 0, closedValue: 0, commissionEarned: 0, conversionPct: 0 });

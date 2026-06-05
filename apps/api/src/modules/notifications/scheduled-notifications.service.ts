@@ -240,7 +240,8 @@ export class ScheduledNotificationsService {
       try {
         const [budgets, actuals] = await Promise.all([
           this.prisma.budgetLine.aggregate({ where: { projectId: project.id }, _sum: { baselineAmt: true } }),
-          this.prisma.actual.aggregate({ where: { projectId: project.id }, _sum: { amount: true } }),
+          // Exclude interior/TI actuals so they don't trip the main-project variance alert.
+          this.prisma.actual.aggregate({ where: { projectId: project.id, interiorProjectId: null }, _sum: { amount: true } }),
         ]);
 
         const totalBudget = budgets._sum.baselineAmt?.toNumber() ?? 0;

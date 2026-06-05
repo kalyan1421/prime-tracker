@@ -27,7 +27,9 @@ export class BudgetsService {
 
     const [budgets, actuals, commitments] = await Promise.all([
       this.prisma.budgetLine.findMany({ where: { projectId } }),
-      this.prisma.actual.findMany({ where: { projectId } }),
+      // Exclude interior/TI actuals — they are reported inside the interior module,
+      // not against the main project's budget (would otherwise inflate variance).
+      this.prisma.actual.findMany({ where: { projectId, interiorProjectId: null } }),
       this.prisma.commitment.findMany({ where: { projectId } }),
     ]);
 

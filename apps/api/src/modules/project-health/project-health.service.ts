@@ -90,7 +90,7 @@ export class ProjectHealthService {
   private async budgetScore(projectId: string) {
     const [b, a, c] = await Promise.all([
       this.prisma.budgetLine.aggregate({ where: { projectId }, _sum: { revisedAmt: true, baselineAmt: true } }),
-      this.prisma.actual.aggregate({ where: { projectId }, _sum: { amount: true } }),
+      this.prisma.actual.aggregate({ where: { projectId, interiorProjectId: null }, _sum: { amount: true } }),
       this.prisma.commitment.aggregate({ where: { projectId }, _sum: { contractAmt: true } }),
     ]);
 

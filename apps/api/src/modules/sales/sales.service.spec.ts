@@ -2,13 +2,23 @@ import { ForbiddenException } from '@nestjs/common';
 import { SalesService } from './sales.service';
 
 const mockPrisma: any = {
-  sale: { findUnique: jest.fn(), update: jest.fn() },
+  sale: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn() },
   unit: { findUnique: jest.fn(), update: jest.fn() },
   project: { findUnique: jest.fn() },
   orgSettings: { findUnique: jest.fn() },
   broker: { findUnique: jest.fn() },
-  $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
+  // Support both forms: array (batch) and callback (interactive) transactions.
+  $transaction: jest.fn((arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma))),
 };
+
+// The CLOSE-with-unit path uses an optimistic-locked interactive transaction
+// (updateMany guarded on status != CLOSED, then findUniqueOrThrow). Default to "won the race".
+function stubCloseTxn() {
+  mockPrisma.sale.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.sale.findUniqueOrThrow.mockImplementation((args: any) =>
+    Promise.resolve({ id: args.where.id, status: 'CLOSED' }),
+  );
+}
 const mockBus = { emit: jest.fn() };
 
 function makeService() {
@@ -25,6 +35,7 @@ describe('SalesService.update — unit-status side effects', () => {
       Promise.resolve({ id: args.where.id, status: args.data.status }),
     );
     mockPrisma.unit.update.mockResolvedValue({});
+    stubCloseTxn();
   });
 
   it('CANCELLING a sale releases the reserved unit back to AVAILABLE (backend-issue #1)', async () => {
@@ -87,6 +98,7 @@ describe('SalesService — discount-approval gate', () => {
     mockPrisma.unit.update.mockResolvedValue({});
     mockPrisma.project.findUnique.mockResolvedValue({ orgId: 'o1' });
     mockPrisma.orgSettings.findUnique.mockResolvedValue({ discountApprovalThresholdPct: 5 });
+    stubCloseTxn();
   });
 
   it('blocks committing a sale whose discount exceeds the threshold and is unapproved', async () => {
@@ -107,7 +119,8 @@ describe('SalesService — discount-approval gate', () => {
     mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
 
     await service.update('s1', { status: 'CLOSED' } as any);
-    expect(mockPrisma.sale.update).toHaveBeenCalled();
+    // close-with-unit commits via the optimistic-locked updateMany, not update
+    expect(mockPrisma.sale.updateMany).toHaveBeenCalled();
   });
 
   it('allows committing when the discount is within the threshold', async () => {
@@ -117,7 +130,20 @@ describe('SalesService — discount-approval gate', () => {
     mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 }); // 3% ≤ 5%
 
     await service.update('s1', { status: 'CLOSED' } as any);
-    expect(mockPrisma.sale.update).toHaveBeenCalled();
+    expect(mockPrisma.sale.updateMany).toHaveBeenCalled();
+  });
+
+  it('does NOT re-stamp commission / re-flip the unit when a concurrent CLOSE won the race', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: 'u1', salePrice: 97, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 0 }); // lost the optimistic lock
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+    expect(mockPrisma.sale.findUniqueOrThrow).toHaveBeenCalled();
   });
 
   it('does not gate a building-level sale (no unit asking price)', async () => {

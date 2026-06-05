@@ -104,34 +104,41 @@ export class BrokersService {
    * and lead→close conversion. Powers the broker report screen.
    */
   async report() {
-    const brokers = await this.prisma.broker.findMany({
-      where: { deletedAt: null },
-      orderBy: { name: 'asc' },
-    });
-    return Promise.all(
-      brokers.map(async (b) => {
-        const [leads, closed] = await Promise.all([
-          this.prisma.lead.count({ where: { brokerId: b.id } }),
-          this.prisma.sale.aggregate({
-            where: { brokerId: b.id, status: 'CLOSED', deletedAt: null },
-            _count: true,
-            _sum: { salePrice: true, brokerCommissionAmt: true },
-          }),
-        ]);
-        const closedSales = closed._count;
-        return {
-          brokerId: b.id,
-          name: b.name,
-          company: b.company,
-          commissionRate: b.commissionRate != null ? Number(b.commissionRate) : null,
-          commissionFlat: b.commissionFlat != null ? Number(b.commissionFlat) : null,
-          leads,
-          closedSales,
-          closedValue: Number(closed._sum.salePrice ?? 0),
-          commissionEarned: Number(closed._sum.brokerCommissionAmt ?? 0),
-          conversionPct: leads > 0 ? Math.round((closedSales / leads) * 100) : 0,
-        };
+    // Two grouped queries instead of 1+2N — aggregate per broker, then join in memory.
+    const [brokers, leadGroups, saleGroups] = await Promise.all([
+      this.prisma.broker.findMany({ where: { deletedAt: null }, orderBy: { name: 'asc' } }),
+      this.prisma.lead.groupBy({
+        by: ['brokerId'],
+        where: { brokerId: { not: null } },
+        _count: true,
       }),
-    );
+      this.prisma.sale.groupBy({
+        by: ['brokerId'],
+        where: { brokerId: { not: null }, status: 'CLOSED', deletedAt: null },
+        _count: true,
+        _sum: { salePrice: true, brokerCommissionAmt: true },
+      }),
+    ]);
+
+    const leadsByBroker = new Map(leadGroups.map((g) => [g.brokerId, g._count]));
+    const salesByBroker = new Map(saleGroups.map((g) => [g.brokerId, g]));
+
+    return brokers.map((b) => {
+      const leads = leadsByBroker.get(b.id) ?? 0;
+      const closed = salesByBroker.get(b.id);
+      const closedSales = closed?._count ?? 0;
+      return {
+        brokerId: b.id,
+        name: b.name,
+        company: b.company,
+        commissionRate: b.commissionRate != null ? Number(b.commissionRate) : null,
+        commissionFlat: b.commissionFlat != null ? Number(b.commissionFlat) : null,
+        leads,
+        closedSales,
+        closedValue: Number(closed?._sum.salePrice ?? 0),
+        commissionEarned: Number(closed?._sum.brokerCommissionAmt ?? 0),
+        conversionPct: leads > 0 ? Math.round((closedSales / leads) * 100) : 0,
+      };
+    });
   }
 }
