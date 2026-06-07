@@ -202,6 +202,15 @@ export class InteriorService {
     items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
   }) {
     if (!input.name?.trim()) throw new BadRequestException('name is required');
+    // A negative defaultRatePerSqft would otherwise flow unchecked into create()'s rate
+    // default (which runs before the template is fetched), so validate it here.
+    if (input.defaultRatePerSqft != null && input.defaultRatePerSqft < 0) {
+      throw new BadRequestException('defaultRatePerSqft cannot be negative');
+    }
+    for (const it of input.items ?? []) {
+      if (it.quantity != null && it.quantity < 0) throw new BadRequestException('item quantity cannot be negative');
+      if (it.unitPrice != null && it.unitPrice < 0) throw new BadRequestException('item unitPrice cannot be negative');
+    }
     return this.prisma.interiorPackageTemplate.create({
       data: {
         name: input.name.trim(),
@@ -259,7 +268,13 @@ export class InteriorService {
     if (input.pmId !== undefined) {
       data.pm = input.pmId ? { connect: { id: input.pmId } } : { disconnect: true };
     }
-    return this.prisma.interiorProject.update({ where: { id }, data });
+    const updated = await this.prisma.interiorProject.update({ where: { id }, data });
+    // Cancelling via update() must also revert any unpaid TI installment made due by a
+    // (now-undone) handover — mirror remove(), otherwise a cancelled fit-out leaves money "due".
+    if (input.status === 'CANCELLED' && project.status !== 'CANCELLED') {
+      this.bus.emit({ type: 'interior.cancelled', interiorProjectId: id });
+    }
+    return updated;
   }
 
   async remove(id: string) {
