@@ -6,7 +6,7 @@ import {
 import {
   FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield,
   FiMenu, FiPieChart, FiBell, FiUsers, FiCheck, FiTarget, FiBriefcase,
-  FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid,
+  FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp,
 } from 'react-icons/fi';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
@@ -20,6 +20,7 @@ const BASE_NAV_ITEMS = [
   { label: 'Projects', icon: FiFolder, path: '/projects' },
   { label: 'Inventory', icon: FiPackage, path: '/inventory' },
   { label: 'Interior', icon: FiGrid, path: '/interior', permission: 'interior:view' },
+  { label: 'Cash Flow', icon: FiTrendingUp, path: '/cashflow', permission: 'financial:view' },
   { label: 'Tasks', icon: FiCheckSquare, path: '/tasks' },
   { label: 'Lead Dashboard', icon: FiTarget, path: '/leads/dashboard', permission: 'lead:view' },
   { label: 'Leads', icon: FiTarget, path: '/leads', roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'] },

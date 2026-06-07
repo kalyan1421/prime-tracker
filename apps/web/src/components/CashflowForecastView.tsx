@@ -92,14 +92,17 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
   const [view, setView] = useState<'chart' | 'table'>('chart');
 
   const entries: ForecastEntry[] = useMemo(() => {
-    if (!Array.isArray(data)) return [];
-    return data.map((e: any) => ({
+    // The engine returns { summary, monthly:[{ inflows, outflows, net, inflowsBySource }] };
+    // older callers passed a bare array. Accept both.
+    const monthly = Array.isArray(data) ? data : (data as any)?.monthly;
+    if (!Array.isArray(monthly)) return [];
+    return monthly.map((e: any) => ({
       month:   e.month,
       label:   fmtMonth(e.month),
-      inflow:  Number(e.inflow  ?? 0),
-      outflow: Number(e.outflow ?? 0),
+      inflow:  Number(e.inflow  ?? e.inflows  ?? 0),
+      outflow: Number(e.outflow ?? e.outflows ?? 0),
       net:     Number(e.net     ?? 0),
-      sources: e.sources,
+      sources: e.inflowsBySource ?? e.sources,
     }));
   }, [data]);
 

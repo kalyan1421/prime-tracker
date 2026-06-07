@@ -29,6 +29,7 @@ import TasksPage from './pages/TasksPage';
 import InventoryPage from './pages/InventoryPage';
 import InteriorPortfolioPage from './pages/InteriorPortfolioPage';
 import InteriorProjectDetailPage from './pages/InteriorProjectDetailPage';
+import CashflowPage from './pages/CashflowPage';
 import BrokersPage from './pages/BrokersPage';
 
 function ProtectedRoute({ children, permission }: { children: React.ReactNode; permission?: string }) {
@@ -77,6 +78,7 @@ export default function App() {
         <Route path="tasks" element={<TasksPage />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="interior" element={<ProtectedRoute permission="interior:view"><InteriorPortfolioPage /></ProtectedRoute>} />
+        <Route path="cashflow" element={<ProtectedRoute permission="financial:view"><CashflowPage /></ProtectedRoute>} />
         <Route path="interior/:id" element={<ProtectedRoute permission="interior:view"><InteriorProjectDetailPage /></ProtectedRoute>} />
         <Route path="brokers" element={<ProtectedRoute permission="broker:view"><BrokersPage /></ProtectedRoute>} />
         <Route path="settings/notifications" element={<SettingsPage />} />
