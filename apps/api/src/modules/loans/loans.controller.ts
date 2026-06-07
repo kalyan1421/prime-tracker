@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuard
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { LoansService } from './loans.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { MfaGuard } from '../../common/guards/mfa.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
@@ -10,7 +11,7 @@ import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawStatusDto, Upser
 
 @ApiTags('Loans')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard, MfaGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, MfaGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('loans')
 export class LoansController {

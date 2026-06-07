@@ -19,6 +19,8 @@ const mockPrisma = {
   projectComment: { findMany: jest.fn().mockResolvedValue([]) },
   unitComment: { findMany: jest.fn().mockResolvedValue([]) },
 };
+// interactive transaction — run the callback with the same mock as the tx client
+(mockPrisma as any).$transaction = jest.fn((cb: any) => cb(mockPrisma));
 
 describe('ProjectsService', () => {
   let service: ProjectsService;

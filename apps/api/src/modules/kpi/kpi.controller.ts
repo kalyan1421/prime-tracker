@@ -2,13 +2,14 @@ import { Controller, Get, Post, Query, UseGuards, UseInterceptors } from '@nestj
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { KpiService } from './kpi.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
 
 @ApiTags('KPI')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('kpi')
 export class KpiController {

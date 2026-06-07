@@ -165,33 +165,34 @@ export class ProjectsService {
       throw new ConflictException(`Slug '${input.slug}' is already taken`);
     }
 
-    const project = await this.prisma.project.create({
-      data: {
-        name: input.name,
-        slug: input.slug,
-        location: input.location,
-        address: input.address,
-        acreage: input.acreage,
-        status: input.status,
-        phase: input.phase,
-        projectType: input.projectType,
-        description: input.description,
-        startDate: input.startDate ? new Date(input.startDate) : undefined,
-        targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
-      },
-    });
+    const data = {
+      name: input.name,
+      slug: input.slug,
+      location: input.location,
+      address: input.address,
+      acreage: input.acreage,
+      status: input.status,
+      phase: input.phase,
+      projectType: input.projectType,
+      description: input.description,
+      startDate: input.startDate ? new Date(input.startDate) : undefined,
+      targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
+    };
 
-    // Auto-enrol the creator as a member, otherwise a scoped role (e.g. PM) would
-    // immediately lose sight of the project it just created.
-    if (creatorId) {
-      await this.prisma.projectMember.upsert({
+    // Create the project and auto-enrol the creator as a member atomically — otherwise a
+    // scoped role (e.g. PM) could lose sight of the project it just created if enrolment failed.
+    if (!creatorId) {
+      return this.prisma.project.create({ data });
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({ data });
+      await tx.projectMember.upsert({
         where: { projectId_userId: { projectId: project.id, userId: creatorId } },
         create: { projectId: project.id, userId: creatorId, role: 'OWNER' },
         update: {},
       });
-    }
-
-    return project;
+      return project;
+    });
   }
 
   async update(id: string, input: {

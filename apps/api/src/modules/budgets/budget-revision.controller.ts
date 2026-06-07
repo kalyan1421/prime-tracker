@@ -3,13 +3,14 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { BudgetChangeReason } from '@prisma/client';
 import { BudgetRevisionService } from './budget-revision.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser } from '../../common/decorators';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 
 @ApiTags('Budget Revisions')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('budgets')
 export class BudgetRevisionController {

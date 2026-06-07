@@ -4,6 +4,7 @@ import { MilestonesService } from './milestones.service';
 import { MilestoneDepsService } from './milestone-deps.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
@@ -12,7 +13,7 @@ import { UpdateMilestoneDto } from './dto/update-milestone.dto';
 
 @ApiTags('Milestones')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('milestones')
 export class MilestonesController {
