@@ -133,31 +133,110 @@ export class InteriorService {
     if (!input.name?.trim()) throw new BadRequestException('name is required');
     this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
 
-    const contractType = input.contractType ?? 'PER_SQFT';
-    const contractValue = this.computeContractValue(
-      contractType,
-      input.ratePerSqft,
-      input.area,
-      input.contractValue,
-    );
+    // If a package template is chosen, default the rate from it and seed its BOQ lines.
+    let templateItems: Array<{
+      description: string; category: string | null;
+      quantity: Prisma.Decimal | null; unit: string | null; unitPrice: Prisma.Decimal | null;
+    }> = [];
+    let ratePerSqft = input.ratePerSqft;
+    if (input.packageTemplateId) {
+      const tpl = await this.prisma.interiorPackageTemplate.findFirst({
+        where: { id: input.packageTemplateId, deletedAt: null },
+        include: { items: { orderBy: { sequence: 'asc' } } },
+      });
+      if (!tpl) throw new BadRequestException('Package template not found');
+      templateItems = tpl.items;
+      if (ratePerSqft == null && tpl.defaultRatePerSqft != null) ratePerSqft = Number(tpl.defaultRatePerSqft);
+    }
 
-    return this.prisma.interiorProject.create({
-      data: {
-        unitId: input.unitId ?? null,
-        buildingId: input.buildingId ?? null,
-        saleId: input.saleId ?? null,
-        leaseId: input.leaseId ?? null,
-        name: input.name.trim(),
-        pmId: input.pmId ?? null,
-        contractType,
-        ratePerSqft: input.ratePerSqft ?? null,
-        area: input.area ?? null,
-        contractValue,
-        packageTemplateId: input.packageTemplateId ?? null,
-        startDate: input.startDate ? new Date(input.startDate) : null,
-        targetEnd: input.targetEnd ? new Date(input.targetEnd) : null,
-      },
+    const contractType = input.contractType ?? 'PER_SQFT';
+    const contractValue = this.computeContractValue(contractType, ratePerSqft, input.area, input.contractValue);
+
+    return this.prisma.$transaction(async (tx) => {
+      const project = await tx.interiorProject.create({
+        data: {
+          unitId: input.unitId ?? null,
+          buildingId: input.buildingId ?? null,
+          saleId: input.saleId ?? null,
+          leaseId: input.leaseId ?? null,
+          name: input.name.trim(),
+          pmId: input.pmId ?? null,
+          contractType,
+          ratePerSqft: ratePerSqft ?? null,
+          area: input.area ?? null,
+          contractValue,
+          packageTemplateId: input.packageTemplateId ?? null,
+          startDate: input.startDate ? new Date(input.startDate) : null,
+          targetEnd: input.targetEnd ? new Date(input.targetEnd) : null,
+        },
+      });
+      if (templateItems.length) {
+        await tx.interiorScopeItem.createMany({
+          data: templateItems.map((it) => ({
+            interiorProjectId: project.id,
+            description: it.description,
+            category: it.category,
+            quantity: it.quantity,
+            unit: it.unit,
+            unitPrice: it.unitPrice,
+            total: it.quantity != null && it.unitPrice != null ? Number(it.quantity) * Number(it.unitPrice) : null,
+          })),
+        });
+      }
+      return project;
     });
+  }
+
+  // ─────── Package templates (the "2-3 generic options"; otherwise custom) ───────
+
+  listPackageTemplates() {
+    return this.prisma.interiorPackageTemplate.findMany({
+      where: { deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      include: { items: { orderBy: { sequence: 'asc' } }, _count: { select: { interiorProjects: true } } },
+    });
+  }
+
+  async createPackageTemplate(input: {
+    name: string; description?: string; defaultRatePerSqft?: number;
+    items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
+  }) {
+    if (!input.name?.trim()) throw new BadRequestException('name is required');
+    // A negative defaultRatePerSqft would otherwise flow unchecked into create()'s rate
+    // default (which runs before the template is fetched), so validate it here.
+    if (input.defaultRatePerSqft != null && input.defaultRatePerSqft < 0) {
+      throw new BadRequestException('defaultRatePerSqft cannot be negative');
+    }
+    for (const it of input.items ?? []) {
+      if (it.quantity != null && it.quantity < 0) throw new BadRequestException('item quantity cannot be negative');
+      if (it.unitPrice != null && it.unitPrice < 0) throw new BadRequestException('item unitPrice cannot be negative');
+    }
+    return this.prisma.interiorPackageTemplate.create({
+      data: {
+        name: input.name.trim(),
+        description: input.description ?? null,
+        defaultRatePerSqft: input.defaultRatePerSqft ?? null,
+        items: input.items?.length
+          ? {
+              create: input.items.map((it, i) => ({
+                description: it.description,
+                category: it.category ?? null,
+                quantity: it.quantity ?? null,
+                unit: it.unit ?? null,
+                unitPrice: it.unitPrice ?? null,
+                sequence: i,
+              })),
+            }
+          : undefined,
+      },
+      include: { items: { orderBy: { sequence: 'asc' } } },
+    });
+  }
+
+  async removePackageTemplate(id: string) {
+    const tpl = await this.prisma.interiorPackageTemplate.findFirst({ where: { id, deletedAt: null } });
+    if (!tpl) throw new NotFoundException('Package template not found');
+    return this.prisma.interiorPackageTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
   }
 
   async update(id: string, input: UpdateInteriorInput) {
@@ -183,22 +262,31 @@ export class InteriorService {
       ratePerSqft: input.ratePerSqft,
       area: input.area,
       contractValue,
-      packageTemplateId: input.packageTemplateId,
       startDate: input.startDate ? new Date(input.startDate) : undefined,
       targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
     };
     if (input.pmId !== undefined) {
       data.pm = input.pmId ? { connect: { id: input.pmId } } : { disconnect: true };
     }
-    return this.prisma.interiorProject.update({ where: { id }, data });
+    const updated = await this.prisma.interiorProject.update({ where: { id }, data });
+    // Cancelling via update() must also revert any unpaid TI installment made due by a
+    // (now-undone) handover — mirror remove(), otherwise a cancelled fit-out leaves money "due".
+    if (input.status === 'CANCELLED' && project.status !== 'CANCELLED') {
+      this.bus.emit({ type: 'interior.cancelled', interiorProjectId: id });
+    }
+    return updated;
   }
 
   async remove(id: string) {
     await this.findById(id);
-    return this.prisma.interiorProject.update({
+    const removed = await this.prisma.interiorProject.update({
       where: { id },
       data: { deletedAt: new Date(), status: 'CANCELLED' },
     });
+    // Let the sale-payment schedule revert any unpaid TI installment that was made
+    // due by a (now-undone) handover, so a cancelled fit-out doesn't leave money "due".
+    this.bus.emit({ type: 'interior.cancelled', interiorProjectId: id });
+    return removed;
   }
 
   // ─────── Phase transitions (the core workflow) ───────
@@ -209,7 +297,12 @@ export class InteriorService {
    *   2. Soft parallel gate — PROCUREMENT/EXECUTION require shell complete.
    *   3. Document gates — CITY_APPROVAL doc before EXECUTION; HANDOVER_CERTIFICATE before HANDOVER.
    */
-  async advancePhase(id: string, target: InteriorPhase, _userId: string) {
+  async advancePhase(
+    id: string,
+    target: InteriorPhase,
+    _userId: string,
+    signoff?: { handoverSignedBy?: string; handoverNotes?: string },
+  ) {
     const project = await this.findById(id);
 
     if (!canTransition(project.phase, target)) {
@@ -239,6 +332,8 @@ export class InteriorService {
         phase: target,
         status: enteringHandover ? 'COMPLETED' : 'IN_PROGRESS',
         handoverAt: enteringHandover ? new Date() : undefined,
+        handoverSignedBy: enteringHandover ? signoff?.handoverSignedBy?.trim() || null : undefined,
+        handoverNotes: enteringHandover ? signoff?.handoverNotes?.trim() || null : undefined,
       },
     });
 

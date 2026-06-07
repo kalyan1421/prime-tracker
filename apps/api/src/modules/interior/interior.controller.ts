@@ -24,6 +24,35 @@ export class InteriorController {
     return this.service.portfolio();
   }
 
+  // ─────── Package templates (must precede ':id' routes) ───────
+
+  @Get('templates')
+  @RequirePermissions('interior:view')
+  @ApiOperation({ summary: 'List reusable fit-out package templates' })
+  listTemplates() {
+    return this.service.listPackageTemplates();
+  }
+
+  @Post('templates')
+  @RequirePermissions('interior:edit')
+  @ApiOperation({ summary: 'Create a package template (name + preset BOQ items)' })
+  createTemplate(
+    @Body() body: {
+      name: string;
+      description?: string;
+      defaultRatePerSqft?: number;
+      items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
+    },
+  ) {
+    return this.service.createPackageTemplate(body);
+  }
+
+  @Delete('templates/:tid')
+  @RequirePermissions('interior:edit')
+  removeTemplate(@Param('tid') tid: string) {
+    return this.service.removePackageTemplate(tid);
+  }
+
   @Get()
   @RequirePermissions('interior:view')
   @ApiOperation({ summary: 'List interior projects (filter by unit/building/status)' })
@@ -91,9 +120,12 @@ export class InteriorController {
   advance(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { target: InteriorPhase },
+    @Body() body: { target: InteriorPhase; handoverSignedBy?: string; handoverNotes?: string },
   ) {
-    return this.service.advancePhase(id, body.target, userId);
+    return this.service.advancePhase(id, body.target, userId, {
+      handoverSignedBy: body.handoverSignedBy,
+      handoverNotes: body.handoverNotes,
+    });
   }
 
   @Post(':id/approve-client')

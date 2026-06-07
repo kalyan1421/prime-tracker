@@ -22,7 +22,42 @@ export class ScheduledNotificationsService {
       this.checkLoanMaturities(),
       this.checkBudgetVariances(),
       this.checkSalePayments(),
+      this.checkOverdueSnags(),
     ]);
+  }
+
+  /**
+   * Interior punch-list items past their due date and not yet resolved. Re-notifies each
+   * run until resolved (mirrors the milestone pattern). Public for tests / smoke checks.
+   */
+  async checkOverdueSnags() {
+    const now = new Date();
+    const overdue = await this.prisma.snagItem.findMany({
+      where: {
+        dueDate: { lt: now },
+        status: { not: 'RESOLVED' },
+        interiorProject: { deletedAt: null },
+      },
+      include: { interiorProject: { select: { id: true, name: true } } },
+    });
+
+    for (const s of overdue) {
+      if (!s.dueDate || !s.interiorProject) continue;
+      const daysOverdue = Math.ceil((now.getTime() - s.dueDate.getTime()) / 86_400_000);
+      try {
+        await this.notifications.notifySnagOverdue({
+          id: s.id,
+          description: s.description,
+          interiorProjectId: s.interiorProject.id,
+          interiorName: s.interiorProject.name,
+          daysOverdue,
+        });
+      } catch (err) {
+        this.logger.warn(`Snag overdue notify failed for ${s.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Checked ${overdue.length} overdue snags`);
+    return overdue.length;
   }
 
   /**

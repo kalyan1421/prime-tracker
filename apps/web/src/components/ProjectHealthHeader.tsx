@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Card, CardBody, Button, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, addToast, Tooltip } from '@heroui/react';
+import { Button, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, addToast, Tooltip } from '@heroui/react';
 import { FiDollarSign, FiTrendingDown, FiTrendingUp, FiHome, FiKey, FiCreditCard, FiEdit2, FiCheck } from 'react-icons/fi';
 import {
   useFinancialSummary, useUnits, useLeases, useLoans, useUpdateProject,
@@ -75,82 +75,81 @@ export function ProjectHealthHeader({ project }: { project: any }) {
   }, [fin, units, leases, loans]);
 
   return (
-    <Card shadow="none" className="border border-gray-200 mb-3">
-      <CardBody className="py-3 px-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-3">
-          {/* Budget block — primary KPI, spans two columns on desktop */}
-          <div className="col-span-2 min-w-0">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[10px] uppercase tracking-wide text-gray-400 font-medium flex items-center gap-1">
-                <FiDollarSign className="w-3 h-3" /> Budget
+    <div className="flex h-full flex-col">
+        {/* Budget — the hero metric of this card */}
+        <div className="px-5 pt-4 pb-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold flex items-center gap-1.5">
+              <FiDollarSign className="w-3.5 h-3.5" /> Budget
+            </span>
+            <ProjectPhasePopover project={project} canEdit={canEdit} />
+          </div>
+
+          <div className="mt-2 flex items-end justify-between gap-x-4 gap-y-1 flex-wrap">
+            <span className="text-[26px] leading-none font-bold text-gray-900 tabular-nums tracking-tight">
+              {fmtMoney(summary.budget)}
+            </span>
+            <div className="flex items-center gap-4 text-xs tabular-nums pb-0.5">
+              <span className="text-gray-400">
+                Spent <span className="font-semibold text-gray-700">{fmtMoney(summary.actual)}</span>
               </span>
-              <ProjectPhasePopover project={project} canEdit={canEdit} />
-            </div>
-            <div className="mt-1 flex items-baseline gap-3 flex-wrap">
-              <span className="text-base font-semibold text-gray-900 tabular-nums">{fmtMoney(summary.budget)}</span>
-              <span className="text-xs text-gray-500 tabular-nums">
-                Spent <span className="font-medium text-gray-700">{fmtMoney(summary.actual)}</span>
-              </span>
-              <span className={`text-xs tabular-nums font-medium ${summary.overrun ? 'text-rose-600' : 'text-emerald-600'}`}>
-                {summary.overrun ? <FiTrendingDown className="inline w-3 h-3" /> : <FiTrendingUp className="inline w-3 h-3" />}
-                {' '}
+              <span className={`font-semibold inline-flex items-center gap-1 ${summary.overrun ? 'text-rose-600' : 'text-emerald-600'}`}>
+                {summary.overrun ? <FiTrendingDown className="w-3.5 h-3.5" /> : <FiTrendingUp className="w-3.5 h-3.5" />}
                 {summary.overrun ? 'Over by ' : 'Left '}{fmtMoney(Math.abs(summary.remaining))}
               </span>
             </div>
-            {/* Variance bar — color-graded so the founder can see health in 1 sec */}
-            <Tooltip content={`${fmtPct(summary.usedPct)} of budget used`}>
-              <div className="mt-2 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden" role="progressbar"
-                aria-valuenow={Math.round(summary.usedPct * 100)} aria-valuemin={0} aria-valuemax={100}>
-                <div
-                  className={`h-full rounded-full transition-all ${
-                    summary.overrun ? 'bg-rose-500'
-                    : summary.usedPct > 0.9 ? 'bg-amber-500'
-                    : summary.usedPct > 0.7 ? 'bg-yellow-400'
-                    : 'bg-emerald-500'
-                  }`}
-                  style={{ width: `${Math.min(summary.usedPct, 1) * 100}%` }}
-                />
-              </div>
-            </Tooltip>
           </div>
 
-          {/* Units */}
+          {/* Variance bar — color-graded so the founder reads budget health in 1 sec */}
+          <Tooltip content={`${fmtPct(summary.usedPct)} of budget used`}>
+            <div className="mt-3 h-2 w-full bg-gray-100 rounded-full overflow-hidden cursor-default" role="progressbar"
+              aria-valuenow={Math.round(summary.usedPct * 100)} aria-valuemin={0} aria-valuemax={100}>
+              <div
+                className={`h-full rounded-full transition-[width] duration-500 ${
+                  summary.overrun ? 'bg-rose-500'
+                  : summary.usedPct > 0.9 ? 'bg-amber-500'
+                  : summary.usedPct > 0.7 ? 'bg-yellow-400'
+                  : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.max(Math.min(summary.usedPct, 1) * 100, summary.budget > 0 ? 2 : 0)}%` }}
+              />
+            </div>
+          </Tooltip>
+        </div>
+
+        {/* Occupancy + debt — three peers, separated by hairlines */}
+        <div className="mt-auto grid grid-cols-3 border-t border-gray-100 divide-x divide-gray-100">
           <Stat
             icon={<FiHome />}
             label="Units"
             value={`${summary.sold + summary.leased}/${summary.unitTotal}`}
-            help={`${summary.sold} sold · ${summary.leased} leased · ${summary.available} available`}
+            help={`${summary.available} available`}
           />
-
-          {/* Active leases */}
           <Stat
             icon={<FiKey />}
-            label="Active leases"
+            label="Leases"
             value={summary.activeLeases.toString()}
-            help={summary.monthlyRent > 0 ? `${fmtMoney(summary.monthlyRent)}/mo gross rent` : undefined}
+            help={summary.monthlyRent > 0 ? `${fmtMoney(summary.monthlyRent)}/mo` : 'none active'}
           />
-
-          {/* Loans */}
           <Stat
             icon={<FiCreditCard />}
-            label="Loan balance"
+            label="Loan"
             value={summary.loanTotal > 0 ? fmtMoney(summary.loanTotal) : '—'}
-            help={summary.loanTotal > 0 ? 'outstanding principal' : 'no active loans'}
+            help={summary.loanTotal > 0 ? 'outstanding' : 'no loans'}
           />
         </div>
-      </CardBody>
-    </Card>
+    </div>
   );
 }
 
 function Stat({ icon, label, value, help }: { icon: React.ReactNode; label: string; value: string; help?: string }) {
   return (
-    <div className="min-w-0">
-      <span className="text-[10px] uppercase tracking-wide text-gray-400 font-medium flex items-center gap-1">
+    <div className="px-4 py-3 min-w-0">
+      <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold flex items-center gap-1">
         {icon} {label}
       </span>
-      <div className="mt-1 text-base font-semibold text-gray-900 tabular-nums truncate">{value}</div>
-      {help && <div className="text-[11px] text-gray-500 truncate">{help}</div>}
+      <div className="mt-1.5 text-lg leading-none font-bold text-gray-900 tabular-nums truncate">{value}</div>
+      {help && <div className="text-[11px] text-gray-400 truncate mt-1">{help}</div>}
     </div>
   );
 }

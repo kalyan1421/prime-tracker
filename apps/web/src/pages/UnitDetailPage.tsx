@@ -293,7 +293,11 @@ export default function UnitDetailPage() {
       <UnitWaitlistPanel unitId={unitId!} />
 
       {/* Interior / Fit-Out (Phase 1) */}
-      <InteriorPanel unitId={unitId!} />
+      <InteriorPanel
+        unitId={unitId!}
+        unitNumber={(unit as any)?.unitNumber}
+        unitSqft={(unit as any)?.sqft != null ? Number((unit as any).sqft) : undefined}
+      />
 
       {/* Sprint B: Documents scoped to this unit */}
       <UnitDocumentsPanel unitId={unitId!} />

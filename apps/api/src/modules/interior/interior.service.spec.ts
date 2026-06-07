@@ -45,6 +45,40 @@ describe('InteriorService', () => {
     service = makeService();
   });
 
+  describe('update — cancellation reversal', () => {
+    it('emits interior.cancelled when status is set to CANCELLED (so TI installments revert)', async () => {
+      stubProject({ status: 'IN_PROGRESS' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1', status: 'CANCELLED' });
+      await service.update('ip1', { status: 'CANCELLED' });
+      expect(mockBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'interior.cancelled', interiorProjectId: 'ip1' }),
+      );
+    });
+
+    it('does not emit interior.cancelled on a normal status update', async () => {
+      stubProject({ status: 'IN_PROGRESS' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1' });
+      await service.update('ip1', { name: 'Renamed' });
+      expect(mockBus.emit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'interior.cancelled' }),
+      );
+    });
+  });
+
+  describe('createPackageTemplate — validation', () => {
+    it('rejects a negative defaultRatePerSqft', async () => {
+      await expect(
+        service.createPackageTemplate({ name: 'Bad', defaultRatePerSqft: -5 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a negative item unitPrice', async () => {
+      await expect(
+        service.createPackageTemplate({ name: 'Bad', items: [{ description: 'x', unitPrice: -1 }] }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
   describe('create — anchor validation', () => {
     it('rejects when neither unit nor building is given', async () => {
       await expect(service.create({ name: 'Fit-out' } as any)).rejects.toBeInstanceOf(BadRequestException);

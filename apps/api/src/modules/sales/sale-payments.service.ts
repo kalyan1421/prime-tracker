@@ -243,6 +243,25 @@ export class SalePaymentsService {
     return payments.length;
   }
 
+  /**
+   * A fit-out was cancelled before handover, so its TI installment no longer has a
+   * trigger to be due. Revert UNPAID installments (DUE/OVERDUE, nothing collected)
+   * back to SCHEDULED. Installments with money against them (PARTIALLY_PAID / PAID /
+   * WAIVED) are left untouched — unwinding collected money is a separate refund concern.
+   */
+  async applyInteriorCancelled(interiorProjectId: string) {
+    const reverted = await this.prisma.salePayment.updateMany({
+      where: {
+        interiorProjectId,
+        trigger: 'ON_HANDOVER',
+        status: { in: ['DUE', 'OVERDUE'] },
+        paidAmount: 0,
+      },
+      data: { status: 'SCHEDULED', effectiveDueDate: null },
+    });
+    return reverted.count;
+  }
+
   // ─────── Internal ───────
 
   private async getSale(saleId: string) {

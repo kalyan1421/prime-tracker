@@ -99,7 +99,16 @@ export class UnitsService {
 
     const sources = await this.prisma.unit.findMany({
       where: { id: { in: input.sourceUnitIds }, deletedAt: null },
-      include: { _count: { select: { sales: true, leases: { where: { status: 'ACTIVE' } } } } },
+      include: {
+        _count: {
+          select: {
+            sales: true,
+            leases: { where: { status: 'ACTIVE' } },
+            // A fit-out anchored to a source unit would orphan (FK is SetNull) on merge.
+            interiorProjects: { where: { deletedAt: null } },
+          },
+        },
+      },
     });
     if (sources.length !== input.sourceUnitIds.length) {
       throw new BadRequestException('One or more units were not found or are already merged');
@@ -107,11 +116,13 @@ export class UnitsService {
     if (sources.some((u) => u.buildingId !== input.buildingId)) {
       throw new BadRequestException('All units must belong to the same building');
     }
-    // Merging archives the sources; refuse to silently orphan their sales/active leases.
-    const encumbered = sources.filter((u) => u._count.sales > 0 || u._count.leases > 0);
+    // Merging archives the sources; refuse to silently orphan their sales / active leases / fit-outs.
+    const encumbered = sources.filter(
+      (u) => u._count.sales > 0 || u._count.leases > 0 || u._count.interiorProjects > 0,
+    );
     if (encumbered.length > 0) {
       throw new ConflictException(
-        `Cannot combine units with attached sales or active leases: ${encumbered
+        `Cannot combine units with attached sales, active leases, or interior fit-out projects: ${encumbered
           .map((u) => u.unitNumber)
           .join(', ')}. Resolve or move those records first.`,
       );

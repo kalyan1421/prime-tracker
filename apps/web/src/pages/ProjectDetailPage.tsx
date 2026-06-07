@@ -284,40 +284,53 @@ export default function ProjectDetailPage() {
         All Projects
       </button>
 
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-2">
-        <div className="flex items-start gap-3 min-w-0">
-          {/* Slice 2: project health ring next to title */}
-          {health && (
-            <div className="shrink-0 mt-1">
-              <HealthScoreRing score={health.score} size="lg" breakdown={healthBreakdown} />
-            </div>
-          )}
-          <div className="min-w-0">
-            <h1 className="text-xl sm:text-2xl font-bold break-words">{p.name}</h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
-              {p.location?.trim() && (
-                <div className="flex items-center gap-1 min-w-0">
-                  <FiMapPin className="text-gray-400 text-xs shrink-0" />
-                  <span className="text-sm text-gray-500 truncate">{p.location}</span>
+      {/* Unified project header — identity (left zone) + financial/occupancy summary
+          (right zone) live in ONE card, split by a hairline. Stacks on mobile. */}
+      <Card shadow="none" className="border border-gray-200/80 rounded-xl overflow-hidden mb-4 sm:mb-6">
+        <CardBody className="p-0">
+          <div className="flex flex-col lg:flex-row">
+            {/* Left zone — project identity */}
+            <div className="lg:flex-1 min-w-0 p-5">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
+                <div className="flex items-start gap-3 min-w-0">
+                  {/* Slice 2: project health ring next to title */}
+                  {health && (
+                    <div className="shrink-0 mt-1">
+                      <HealthScoreRing score={health.score} size="lg" breakdown={healthBreakdown} />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <h1 className="text-xl sm:text-2xl font-bold break-words">{p.name}</h1>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
+                      {p.location?.trim() && (
+                        <div className="flex items-center gap-1 min-w-0">
+                          <FiMapPin className="text-gray-400 text-xs shrink-0" />
+                          <span className="text-sm text-gray-500 truncate">{p.location}</span>
+                        </div>
+                      )}
+                      {p.acreage && <span className="text-sm text-gray-500">{p.acreage} acres</span>}
+                    </div>
+                  </div>
                 </div>
-              )}
-              {p.acreage && <span className="text-sm text-gray-500">{p.acreage} acres</span>}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <StatusBadge status={p.status} />
+                  <StatusBadge status={p.phase} />
+                </div>
+              </div>
+
+              <div className="mt-4 max-w-full sm:max-w-[400px]">
+                <PhaseProgress current={p.phase} />
+              </div>
+            </div>
+
+            {/* Right zone — budget / units / leases / loans + inline phase update.
+                Hairline divider: horizontal on mobile, vertical on desktop. */}
+            <div className="w-full lg:w-[440px] lg:shrink-0 border-t lg:border-t-0 lg:border-l border-gray-100">
+              <ProjectHealthHeader project={p} />
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <StatusBadge status={p.status} />
-          <StatusBadge status={p.phase} />
-        </div>
-      </div>
-
-      <div className="mb-4 sm:mb-6 max-w-full sm:max-w-[400px]">
-        <PhaseProgress current={p.phase} />
-      </div>
-
-      {/* Sprint A — Project Health Header: budget / actuals / variance / units / leases / loans
-          + inline phase update popover. Keeps the founder's 60-second triage on one screen. */}
-      <ProjectHealthHeader project={p} />
+        </CardBody>
+      </Card>
 
       {/* Scrollable tab bar — extends to screen edges on mobile */}
       <div className="relative -mx-4 sm:mx-0 mb-4">

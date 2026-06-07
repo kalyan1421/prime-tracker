@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
-import { Card, CardBody, Chip } from '@heroui/react';
-import { FiHome } from 'react-icons/fi';
+import { useNavigate } from 'react-router-dom';
+import { Card, CardBody, Chip, Button, useDisclosure } from '@heroui/react';
+import { FiHome, FiPackage } from 'react-icons/fi';
 import { useInteriorPortfolio } from '../hooks/useApi';
 import { StatCard, LoadingState, EmptyState, fmt } from '../components/ui';
 import { INTERIOR_PHASES } from '../components/InteriorPanel';
+import { InteriorPackagesModal } from '../components/InteriorPackagesModal';
 
 const PHASE_LABEL: Record<string, string> = {
   DESIGN: 'Design', CLIENT_APPROVAL: 'Client Approval', CITY_APPROVAL: 'City Approval',
@@ -16,6 +18,8 @@ function phaseColor(phase: string): 'default' | 'primary' | 'success' {
 }
 
 export default function InteriorPortfolioPage() {
+  const navigate = useNavigate();
+  const packages = useDisclosure();
   const { data, isLoading } = useInteriorPortfolio();
   const rows: any[] = Array.isArray(data) ? data : [];
 
@@ -31,10 +35,16 @@ export default function InteriorPortfolioPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-2">
-        <FiHome className="text-2xl text-amber-600" />
-        <h1 className="text-2xl font-bold">Interior / Fit-Out Portfolio</h1>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <FiHome className="text-2xl text-amber-600" />
+          <h1 className="text-2xl font-bold">Interior / Fit-Out Portfolio</h1>
+        </div>
+        <Button size="sm" variant="flat" startContent={<FiPackage />} onPress={packages.onOpen}>
+          Manage packages
+        </Button>
       </div>
+      <InteriorPackagesModal isOpen={packages.isOpen} onClose={packages.onClose} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Active fit-outs" value={String(summary.active)} />
@@ -62,8 +72,12 @@ export default function InteriorPortfolioPage() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className="border-t border-gray-100">
-                    <td className="px-4 py-3 font-medium">{r.name}</td>
+                  <tr
+                    key={r.id}
+                    className="border-t border-gray-100 cursor-pointer hover:bg-gray-50"
+                    onClick={() => navigate(`/interior/${r.id}`)}
+                  >
+                    <td className="px-4 py-3 font-medium text-blue-600">{r.name}</td>
                     <td className="px-4 py-3 text-gray-500">
                       {r.unit?.unitNumber ? `Unit ${r.unit.unitNumber}` : r.building?.name ?? '—'}
                     </td>

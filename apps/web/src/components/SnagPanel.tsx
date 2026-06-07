@@ -15,7 +15,7 @@ import {
   FiAlertCircle, FiCheckCircle, FiClock, FiFilter,
   FiPlus, FiUser, FiMapPin, FiX,
 } from 'react-icons/fi';
-import { useAddSnag, useResolveSnag, useUpdateSnag } from '../hooks/useApi';
+import { useAddSnag, useResolveSnag, useUpdateSnag, useUsers } from '../hooks/useApi';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -48,7 +48,7 @@ const errMsg = (err: unknown, fallback: string) => {
   return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
 };
 
-const EMPTY_FORM = { description: '', room: '', assignee: '' };
+const EMPTY_FORM = { description: '', room: '', assigneeId: '' };
 
 // ─── main component ───────────────────────────────────────────────────────────
 
@@ -62,12 +62,14 @@ export function SnagPanel({
   const add     = useAddSnag();
   const resolve = useResolveSnag();
   const update  = useUpdateSnag();
+  const { data: usersData } = useUsers();
+  const users: any[] = Array.isArray(usersData) ? usersData : [];
 
   const [filter, setFilter] = useState<SnagStatus | 'ALL'>('ALL');
   const [adding, setAdding] = useState(false);
   const [form, setForm]     = useState(EMPTY_FORM);
   const set = (f: keyof typeof EMPTY_FORM) =>
-    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
       setForm((p) => ({ ...p, [f]: e.target.value }));
 
   // ── counts ──────────────────────────────────────────────────────────────────
@@ -89,7 +91,7 @@ export function SnagPanel({
         data: {
           description: form.description.trim(),
           room:        form.room.trim() || undefined,
-          assignee:    form.assignee.trim() || undefined,
+          assigneeId:  form.assigneeId || undefined,
         },
       });
       setForm(EMPTY_FORM);
@@ -176,11 +178,14 @@ export function SnagPanel({
               value={form.room} onChange={set('room')}
               startContent={<FiMapPin size={13} className="text-gray-400" />}
             />
-            <Input
-              size="sm" label="Assignee" placeholder="e.g. Ahmed"
-              value={form.assignee} onChange={set('assignee')}
+            <Select
+              size="sm" label="Assignee" placeholder="Unassigned"
+              selectedKeys={form.assigneeId ? [form.assigneeId] : []}
+              onChange={set('assigneeId')}
               startContent={<FiUser size={13} className="text-gray-400" />}
-            />
+            >
+              {users.map((u) => <SelectItem key={u.id}>{u.name}</SelectItem>)}
+            </Select>
           </div>
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="light" onPress={() => { setAdding(false); setForm(EMPTY_FORM); }}>
