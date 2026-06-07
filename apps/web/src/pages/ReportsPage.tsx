@@ -1,21 +1,23 @@
-import { useRef } from 'react';
-import { Button, Card, CardHeader, CardBody, Tabs, Tab } from '@heroui/react';
+import { useRef, useState } from 'react';
+import { Button, Card, CardHeader, CardBody, Tabs, Tab, Select, SelectItem } from '@heroui/react';
 import { useReactToPrint } from 'react-to-print';
 import { FiDownload } from 'react-icons/fi';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-import { usePortfolioReport, useSalesReport, useRevenueReport, useDebtReport } from '../hooks/useApi';
+import { usePortfolioReport, useSalesReport, useRevenueReport, useDebtReport, useProjects } from '../hooks/useApi';
 import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 // ---- Executive Summary Tab ----
-function PortfolioTab() {
+function PortfolioTab({ filterProject }: { filterProject?: string }) {
   const { data, isLoading, error } = usePortfolioReport();
   if (isLoading) return <LoadingState message="Loading portfolio report..." />;
   if (error) return <ErrorState />;
   if (!data) return null;
   const d = data as any;
+  const chartData = filterProject ? (d.chartData ?? []).filter((c: any) => c.name === filterProject) : d.chartData;
+  const projectComparison = filterProject ? (d.projectComparison ?? []).filter((p: any) => p.projectName === filterProject) : d.projectComparison;
 
   return (
     <div>
@@ -37,7 +39,7 @@ function PortfolioTab() {
         </CardHeader>
         <CardBody>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={d.chartData}>
+            <BarChart data={chartData}>
               <XAxis dataKey="name" fontSize={11} />
               <YAxis tickFormatter={(v: number) => `$${(v / 1e6).toFixed(1)}M`} />
               <Tooltip formatter={(v: number) => fmt(v)} />
@@ -70,7 +72,7 @@ function PortfolioTab() {
                 </tr>
               </thead>
               <tbody>
-                {(d.projectComparison as any[]).map((p: any) => (
+                {(projectComparison as any[]).map((p: any) => (
                   <tr key={p.projectId} className="border-b border-gray-50">
                     <td className="py-2 px-2 font-medium">{p.projectName}</td>
                     <td className="py-2 px-2"><StatusBadge status={p.phase} /></td>
@@ -95,12 +97,13 @@ function PortfolioTab() {
 }
 
 // ---- Sales Report Tab ----
-function SalesTab() {
+function SalesTab({ filterProject }: { filterProject?: string }) {
   const { data, isLoading, error } = useSalesReport();
   if (isLoading) return <LoadingState message="Loading sales report..." />;
   if (error) return <ErrorState />;
   if (!data) return null;
   const d = data as any;
+  const availableUnits = filterProject ? (d.availableUnits ?? []).filter((u: any) => u.projectName === filterProject) : (d.availableUnits ?? []);
 
   return (
     <div>
@@ -167,7 +170,7 @@ function SalesTab() {
                 </tr>
               </thead>
               <tbody>
-                {(d.availableUnits as any[]).map((u: any) => (
+                {(availableUnits as any[]).map((u: any) => (
                   <tr key={u.id} className="border-b border-gray-50">
                     <td className="py-2 px-2 font-medium">{u.unitNumber}</td>
                     <td className="py-2 px-2">{u.projectName}</td>
@@ -178,7 +181,7 @@ function SalesTab() {
                     <td className="py-2 px-2 text-right">{u.askingRent ? fmt(u.askingRent) : '\u2014'}</td>
                   </tr>
                 ))}
-                {(d.availableUnits as any[]).length === 0 && (
+                {(availableUnits as any[]).length === 0 && (
                   <tr><td colSpan={7} className="text-center py-4 text-gray-400">No available units</td></tr>
                 )}
               </tbody>
@@ -191,12 +194,13 @@ function SalesTab() {
 }
 
 // ---- Revenue & Leasing Tab ----
-function RevenueTab() {
+function RevenueTab({ filterProject }: { filterProject?: string }) {
   const { data, isLoading, error } = useRevenueReport();
   if (isLoading) return <LoadingState message="Loading revenue report..." />;
   if (error) return <ErrorState />;
   if (!data) return null;
   const d = data as any;
+  const expiringLeases = filterProject ? (d.expiringLeases ?? []).filter((l: any) => l.projectName === filterProject) : (d.expiringLeases ?? []);
 
   return (
     <div>
@@ -244,7 +248,7 @@ function RevenueTab() {
                 </tr>
               </thead>
               <tbody>
-                {(d.expiringLeases as any[]).map((l: any) => (
+                {(expiringLeases as any[]).map((l: any) => (
                   <tr key={l.id} className="border-b border-gray-50">
                     <td className="py-2 px-2 font-medium">{l.tenantName}</td>
                     <td className="py-2 px-2">{l.unitNumber} ({l.buildingName})</td>
@@ -255,7 +259,7 @@ function RevenueTab() {
                     <td className="py-2 px-2"><StatusBadge status={l.urgency} /></td>
                   </tr>
                 ))}
-                {(d.expiringLeases as any[]).length === 0 && (
+                {(expiringLeases as any[]).length === 0 && (
                   <tr><td colSpan={7} className="text-center py-4 text-gray-400">No leases expiring in the next 12 months</td></tr>
                 )}
               </tbody>
@@ -268,12 +272,14 @@ function RevenueTab() {
 }
 
 // ---- Debt & Financing Tab ----
-function DebtTab() {
+function DebtTab({ filterProject }: { filterProject?: string }) {
   const { data, isLoading, error } = useDebtReport();
   if (isLoading) return <LoadingState message="Loading debt report..." />;
   if (error) return <ErrorState />;
   if (!data) return null;
   const d = data as any;
+  const loans = filterProject ? (d.loans ?? []).filter((l: any) => l.projectName === filterProject) : (d.loans ?? []);
+  const maturities = filterProject ? (d.maturities ?? []).filter((l: any) => l.projectName === filterProject) : (d.maturities ?? []);
 
   return (
     <div>
@@ -321,7 +327,7 @@ function DebtTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(d.loans as any[]).map((l: any) => (
+                  {(loans as any[]).map((l: any) => (
                     <tr key={l.id} className="border-b border-gray-50">
                       <td className="py-2 px-2">{l.projectName}</td>
                       <td className="py-2 px-2"><StatusBadge status={l.loanType} /></td>
@@ -331,7 +337,7 @@ function DebtTab() {
                       <td className="py-2 px-2 text-right">{l.interestRate}%</td>
                     </tr>
                   ))}
-                  {(d.loans as any[]).length === 0 && (
+                  {(loans as any[]).length === 0 && (
                     <tr><td colSpan={6} className="text-center py-4 text-gray-400">No loans</td></tr>
                   )}
                 </tbody>
@@ -357,7 +363,7 @@ function DebtTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(d.maturities as any[]).map((l: any) => (
+                  {(maturities as any[]).map((l: any) => (
                     <tr key={l.id} className="border-b border-gray-50">
                       <td className="py-2 px-2">{l.projectName}</td>
                       <td className="py-2 px-2">{l.lender}</td>
@@ -368,7 +374,7 @@ function DebtTab() {
                       </td>
                     </tr>
                   ))}
-                  {(d.maturities as any[]).length === 0 && (
+                  {(maturities as any[]).length === 0 && (
                     <tr><td colSpan={5} className="text-center py-4 text-gray-400">No upcoming maturities</td></tr>
                   )}
                 </tbody>
@@ -402,17 +408,51 @@ export default function ReportsPage() {
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Reports' });
 
+  // Project-wise scope: when a project is picked, each report's per-project
+  // tables/charts are filtered to it (rows key off project name).
+  const { data: projects = [] } = useProjects();
+  const [projectId, setProjectId] = useState('');
+  const projList = projects as any[];
+  const filterProject = projectId ? projList.find((p) => p.id === projectId)?.name : undefined;
+
   const visibleTabs = Object.keys(REPORT_TAB_ROLES).filter((key) =>
     REPORT_TAB_ROLES[key].includes(role)
   );
 
   const renderTab = (key: string) => {
-    if (key === 'portfolio') return <PortfolioTab />;
-    if (key === 'sales') return <SalesTab />;
-    if (key === 'revenue') return <RevenueTab />;
-    if (key === 'debt') return <DebtTab />;
+    if (key === 'portfolio') return <PortfolioTab filterProject={filterProject} />;
+    if (key === 'sales') return <SalesTab filterProject={filterProject} />;
+    if (key === 'revenue') return <RevenueTab filterProject={filterProject} />;
+    if (key === 'debt') return <DebtTab filterProject={filterProject} />;
     return null;
   };
+
+  const projectSelect = (
+    <Select
+      aria-label="Filter by project"
+      size="sm"
+      className="w-full sm:max-w-[240px]"
+      selectedKeys={projectId ? [projectId] : ['__all']}
+      onSelectionChange={(k) => {
+        const v = Array.from(k)[0] as string;
+        setProjectId(v === '__all' ? '' : v);
+      }}
+    >
+      {[
+        <SelectItem key="__all">All Projects</SelectItem>,
+        ...projList.map((p) => <SelectItem key={p.id}>{p.name}</SelectItem>),
+      ]}
+    </Select>
+  );
+
+  const headerActions = (
+    <div className="flex items-center gap-2 w-full sm:w-auto">
+      {projectSelect}
+      <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
+        Download PDF
+      </Button>
+    </div>
+  );
 
   if (visibleTabs.length === 0) {
     return (
@@ -430,10 +470,9 @@ export default function ReportsPage() {
       <div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
           <h1 className="text-2xl font-bold">Reports</h1>
-          <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
-            Download PDF
-          </Button>
+          {headerActions}
         </div>
+        {filterProject && <p className="text-xs text-gray-500 mb-3">Scoped to <span className="font-semibold text-gray-700">{filterProject}</span> · portfolio-wide KPIs unchanged</p>}
         <div ref={printRef}>{renderTab(visibleTabs[0])}</div>
       </div>
     );
@@ -443,10 +482,9 @@ export default function ReportsPage() {
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
         <h1 className="text-2xl font-bold">Reports</h1>
-        <Button size="sm" variant="bordered" startContent={<FiDownload />} onPress={() => handlePrint()}>
-          Download PDF
-        </Button>
+        {headerActions}
       </div>
+      {filterProject && <p className="text-xs text-gray-500 mb-3">Scoped to <span className="font-semibold text-gray-700">{filterProject}</span> · portfolio-wide KPIs unchanged</p>}
       <div ref={printRef}>
         <Tabs color="primary" variant="underlined" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
           {visibleTabs.map((key) => (

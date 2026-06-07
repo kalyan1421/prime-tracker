@@ -1,5 +1,6 @@
 import React from 'react';
 import { Card, CardBody, Chip, Progress, Spinner, Button } from '@heroui/react';
+import { FiArrowRight } from 'react-icons/fi';
 import { useAuthStore } from '../store/authStore';
 
 // ---- Currency / Number Formatting ----
@@ -20,7 +21,7 @@ export function fmtDate(d: string | null | undefined): string {
 
 // ---- Stat Card ----
 export function StatCard({
-  label, value, helpText, trend, colorScheme = 'gray', variant,
+  label, value, helpText, trend, colorScheme = 'gray', variant, onClick,
 }: {
   label: string;
   value: string;
@@ -28,6 +29,8 @@ export function StatCard({
   trend?: 'increase' | 'decrease';
   colorScheme?: string;
   variant?: 'construction' | 'revenue' | 'neutral' | 'marketing';
+  /** When provided, the card becomes clickable and navigates/acts on press. */
+  onClick?: () => void;
 }) {
   const colorMap: Record<string, string> = {
     brand: 'text-blue-600',
@@ -49,10 +52,19 @@ export function StatCard({
     ? 'bg-purple-50 border border-purple-100'
     : 'border border-gray-100';
 
+  const clickable = !!onClick;
   return (
-    <Card shadow="sm" className={variantClass}>
+    <Card
+      shadow="sm"
+      isPressable={clickable}
+      onPress={onClick}
+      className={`${variantClass} ${clickable ? 'w-full text-left transition-shadow hover:shadow-md cursor-pointer' : ''}`}
+    >
       <CardBody className="p-5">
-        <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
+          {clickable && <FiArrowRight className="text-gray-300 shrink-0 mt-0.5" aria-hidden />}
+        </div>
         <p className={`text-2xl font-semibold ${colorMap[colorScheme] || 'text-gray-600'}`}>{value}</p>
         {helpText && (
           <p className="text-sm text-gray-500 mt-1">

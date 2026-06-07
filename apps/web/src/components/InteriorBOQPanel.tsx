@@ -19,7 +19,7 @@ export interface BOQItem {
   id: string;
   description: string;
   category?: string;
-  qty: number;
+  quantity: number;
   unit: string;
   unitPrice: number;
   total: number;
@@ -69,10 +69,9 @@ export function InteriorBOQPanel({
         data: {
           description: form.description.trim(),
           category:    form.category,
-          qty,
+          quantity:    qty,
           unit:        form.unit,
           unitPrice:   up,
-          total:       qty * up,
         },
       });
       setForm(EMPTY);
@@ -210,7 +209,7 @@ export function InteriorBOQPanel({
                 >
                   <td className="px-3 py-2 text-gray-800 font-medium">{item.description}</td>
                   <td className="px-3 py-2 text-gray-400">{item.category || '—'}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{item.qty}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{item.quantity}</td>
                   <td className="px-2 py-2 text-gray-400">{item.unit}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmt(item.unitPrice)}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-semibold text-gray-800">{fmt(item.total)}</td>

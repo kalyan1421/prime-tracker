@@ -36,6 +36,22 @@ export class BudgetRevisionService {
   }
 
   /**
+   * Project-wide budget change log — every revision across every budget line in
+   * the project, newest first. Powers the day-wise log in the Budget tab.
+   */
+  async listForProject(projectId: string) {
+    return this.prisma.budgetRevision.findMany({
+      where: { budgetLine: { projectId } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        createdBy:  { select: { id: true, name: true, email: true } },
+        approvedBy: { select: { id: true, name: true, email: true } },
+        budgetLine: { select: { id: true, description: true, category: true } },
+      },
+    });
+  }
+
+  /**
    * Create a new revision for an existing budget line.
    * Updates BudgetLine.revisedAmt to mirror the latest revision.
    */

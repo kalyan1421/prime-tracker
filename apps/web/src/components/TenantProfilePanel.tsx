@@ -11,7 +11,7 @@ import {
 } from '@heroui/react';
 import {
   FiEdit2, FiCheck, FiX, FiBriefcase, FiPhone,
-  FiFileText, FiUser, FiClock,
+  FiFileText, FiClock,
 } from 'react-icons/fi';
 import { useUpdateLease } from '../hooks/useApi';
 
@@ -133,79 +133,71 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
 
   // ── view mode ────────────────────────────────────────────────────────────────
   if (!editing) {
+    const brand = lease.tenantBrand || lease.tenantName || 'Tenant';
+    const initials = brand.trim().split(/\s+/).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase();
+    const isEmpty = !lease.tenantBrand && !lease.tenantContact && !displayBizType;
+
     return (
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <FiBriefcase size={14} className="text-blue-500" />
-            <span className="text-sm font-semibold text-gray-700">Tenant Profile</span>
+        {/* identity header */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-xs font-bold text-white">
+              {initials || <FiBriefcase size={14} />}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900 truncate">{brand}</p>
+              <p className="text-xs text-gray-400 truncate">
+                {lease.tenantLegalName || 'No legal entity on file'}
+              </p>
+            </div>
           </div>
-          <Button size="sm" variant="light" startContent={<FiEdit2 size={12} />} onPress={handleEdit}>
-            Edit
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            {displayBizType && (
+              <Chip size="sm" className={`text-[11px] ${displayColor}`}>{displayBizType}</Chip>
+            )}
+            <Button size="sm" variant="light" isIconOnly onPress={handleEdit} aria-label="Edit tenant profile">
+              <FiEdit2 size={13} />
+            </Button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {/* brand / DBA */}
-          <div className="space-y-1">
-            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Brand / DBA</p>
-            <p className="text-sm font-semibold text-gray-800">{lease.tenantBrand || lease.tenantName || '—'}</p>
+        {/* contact + trading hours */}
+        {(lease.tenantContact || parsed.tradingHours) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-sm">
+            {lease.tenantContact && (
+              <div className="flex items-center gap-2 text-gray-700">
+                <FiPhone size={13} className="text-gray-400 shrink-0" />
+                <span className="truncate">{lease.tenantContact}</span>
+              </div>
+            )}
+            {parsed.tradingHours && (
+              <div className="flex items-center gap-2 text-gray-700">
+                <FiClock size={13} className="text-gray-400 shrink-0" />
+                <span className="truncate">{parsed.tradingHours}</span>
+              </div>
+            )}
           </div>
-
-          {/* legal entity */}
-          <div className="space-y-1">
-            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1">
-              <FiUser size={10} /> Legal Entity
-            </p>
-            <p className="text-sm text-gray-700">{lease.tenantLegalName || '—'}</p>
-          </div>
-
-          {/* contact */}
-          {lease.tenantContact && (
-            <div className="space-y-1">
-              <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1">
-                <FiPhone size={10} /> Contact
-              </p>
-              <p className="text-sm text-gray-700">{lease.tenantContact}</p>
-            </div>
-          )}
-
-          {/* business type */}
-          {displayBizType && (
-            <div className="space-y-1">
-              <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Business Type</p>
-              <Chip size="sm" className={`text-xs ${displayColor}`}>{displayBizType}</Chip>
-            </div>
-          )}
-
-          {/* trading hours */}
-          {parsed.tradingHours && (
-            <div className="space-y-1 col-span-2 sm:col-span-1">
-              <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1">
-                <FiClock size={10} /> Trading Hours
-              </p>
-              <p className="text-sm text-gray-600">{parsed.tradingHours}</p>
-            </div>
-          )}
-        </div>
+        )}
 
         {/* design guidelines */}
         {parsed.designNotes && (
-          <div className="space-y-1 pt-1">
-            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1">
+          <div className="rounded-lg border border-gray-100 bg-white p-2.5">
+            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1 mb-1">
               <FiFileText size={10} /> Design / Fit-out Notes
             </p>
-            <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-2.5 leading-relaxed">
-              {parsed.designNotes}
-            </p>
+            <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">{parsed.designNotes}</p>
           </div>
         )}
 
         {/* empty nudge */}
-        {!lease.tenantBrand && !lease.tenantContact && !displayBizType && (
-          <p className="text-xs text-gray-400 italic">
-            No profile yet — click Edit to add business type, trading hours, and design guidelines.
-          </p>
+        {isEmpty && (
+          <button
+            onClick={handleEdit}
+            className="w-full rounded-lg border border-dashed border-gray-200 py-3 text-xs text-gray-400 hover:border-blue-300 hover:text-blue-500 transition-colors"
+          >
+            No profile yet — add business type, trading hours, and design guidelines.
+          </button>
         )}
       </div>
     );

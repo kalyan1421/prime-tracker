@@ -310,7 +310,11 @@ export default function DashboardPage() {
                       </thead>
                       <tbody>
                         {filteredMilestones.slice(0, 8).map((m: any) => (
-                          <tr key={m.id} className="border-b border-gray-50">
+                          <tr
+                            key={m.id}
+                            className={`border-b border-gray-50 ${m.projectId ? 'cursor-pointer hover:bg-gray-50' : ''}`}
+                            onClick={() => m.projectId && navigate(`/projects/${m.projectId}/milestones`)}
+                          >
                             <td className="py-2 px-2">{m.title}</td>
                             <td className="py-2 px-2 text-xs text-gray-500">{m.projectName}</td>
                             <td className="py-2 px-2 text-xs">{fmtDate(m.dueDate)}</td>

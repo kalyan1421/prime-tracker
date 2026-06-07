@@ -47,6 +47,7 @@ export default function FinanceDashboardPage() {
           helpText="across all projects"
           variant="construction"
           colorScheme="brand"
+          onClick={() => navigate('/reports')}
         />
         <StatCard
           label="Total Actuals"
@@ -54,6 +55,7 @@ export default function FinanceDashboardPage() {
           helpText={`${budgetUtilPct}% of budget`}
           variant="construction"
           colorScheme="orange"
+          onClick={() => navigate('/reports')}
         />
         <StatCard
           label="Budget Variance"
@@ -62,6 +64,7 @@ export default function FinanceDashboardPage() {
           trend={d.budgetVariance >= 0 ? 'increase' : 'decrease'}
           colorScheme={d.budgetVariance >= 0 ? 'green' : 'red'}
           variant="construction"
+          onClick={() => navigate('/reports')}
         />
         <StatCard
           label="Total Loan Book"
@@ -69,6 +72,7 @@ export default function FinanceDashboardPage() {
           helpText={`${fmt(d.totalMonthlyPayment)}/mo service`}
           variant="construction"
           colorScheme="purple"
+          onClick={() => navigate('/cashflow')}
         />
       </div>
 

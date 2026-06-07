@@ -46,9 +46,17 @@ export class DocumentsService {
 
   async create(
     file: Express.Multer.File,
-    metadata: { projectId?: string; unitId?: string; interiorProjectId?: string; category?: string },
+    metadata: { projectId?: string; unitId?: string; interiorProjectId?: string; category?: string; displayName?: string },
     userId: string,
   ) {
+    // Custom display name (optional). Preserve the original file extension so
+    // View/Download keep the right type even when the user renames it.
+    const customName = metadata.displayName?.trim();
+    const dot = file.originalname.lastIndexOf('.');
+    const ext = dot > 0 ? file.originalname.slice(dot) : '';
+    const fileName = customName
+      ? (ext && !customName.toLowerCase().endsWith(ext.toLowerCase()) ? customName + ext : customName)
+      : file.originalname;
     let projectName: string | undefined;
     if (metadata.projectId) {
       const project = await this.prisma.project.findUnique({
@@ -74,7 +82,7 @@ export class DocumentsService {
         projectId: metadata.projectId || null,
         unitId: metadata.unitId || null,
         interiorProjectId: metadata.interiorProjectId || null,
-        fileName: file.originalname,
+        fileName,
         fileUrl: publicUrl,
         fileSize: file.size,
         mimeType: file.mimetype,

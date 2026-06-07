@@ -13,4 +13,8 @@ export class UploadDocumentDto {
 
   @IsOptional() @IsEnum(DocCategory)
   category?: DocCategory;
+
+  /** Optional custom display name. Falls back to the uploaded file's name. */
+  @IsOptional() @IsString()
+  displayName?: string;
 }

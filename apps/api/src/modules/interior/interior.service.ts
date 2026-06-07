@@ -377,10 +377,10 @@ export class InteriorService {
     input: { description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number },
   ) {
     await this.findById(interiorProjectId);
-    const total =
-      input.quantity != null && input.unitPrice != null ? input.quantity * input.unitPrice : undefined;
+    const { description, category, quantity, unit, unitPrice } = input;
+    const total = quantity != null && unitPrice != null ? quantity * unitPrice : undefined;
     return this.prisma.interiorScopeItem.create({
-      data: { interiorProjectId, ...input, total },
+      data: { interiorProjectId, description, category, quantity, unit, unitPrice, total },
     });
   }
 

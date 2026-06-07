@@ -4,7 +4,7 @@ import {
   Card, CardBody, CardHeader, Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
@@ -16,7 +16,7 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   SALES: 'bg-blue-100 text-blue-700',
   FINANCIAL: 'bg-green-100 text-green-700',
 };
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
@@ -28,6 +28,67 @@ const errMsg = (err: unknown, fallback: string) => {
 
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
+
+// Single metric cell used inside the unified key-metrics strip.
+function Metric({ label, value, unit, accent }: { label: string; value: string; unit?: string; accent?: string }) {
+  return (
+    <div className="p-4 sm:p-5">
+      <p className="text-[11px] uppercase tracking-wide text-gray-400 font-medium">{label}</p>
+      <p className={`mt-1.5 text-xl sm:text-2xl font-bold tabular-nums ${accent ?? 'text-gray-900'}`}>
+        {value}
+        {unit && <span className="text-sm font-medium text-gray-400 ml-1">{unit}</span>}
+      </p>
+    </div>
+  );
+}
+
+// Consistent section card shell: tinted icon, title, optional right-side action/hint.
+function Section({
+  icon, title, count, action, children, className = '',
+}: {
+  icon: React.ReactNode;
+  title: string;
+  count?: number;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
+      <div className="flex items-center justify-between px-5 pt-4 pb-3">
+        <div className="flex items-center gap-2.5">
+          {icon}
+          <h2 className="font-semibold text-sm text-gray-800">
+            {title}
+            {count != null && count > 0 && <span className="text-gray-400 font-normal ml-1">({count})</span>}
+          </h2>
+        </div>
+        {action}
+      </div>
+      <div className="px-5 pb-5">{children}</div>
+    </div>
+  );
+}
+
+// Label/value row used inside detail lists.
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-2.5">
+      <dt className="text-gray-500">{label}</dt>
+      <dd className="text-right">{children}</dd>
+    </div>
+  );
+}
+
+// Compact, centered empty state for a section body.
+function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-6 text-gray-300">
+      {icon}
+      <p className="text-sm text-gray-400">{text}</p>
+    </div>
+  );
+}
 
 export default function UnitDetailPage() {
   const { id: projectId, unitId } = useParams<{ id: string; unitId: string }>();
@@ -87,33 +148,36 @@ export default function UnitDetailPage() {
   };
 
   return (
-    <div>
+    <div className="max-w-[1200px] mx-auto">
       <button
-        className="flex items-center gap-1 text-blue-600 text-sm font-medium mb-4 cursor-pointer hover:underline"
+        className="inline-flex items-center gap-1.5 text-gray-500 text-sm font-medium mb-4 cursor-pointer hover:text-blue-600 transition-colors"
         onClick={() => navigate(`/projects/${projectId}/units`)}
       >
-        <FiArrowLeft />
+        <FiArrowLeft className="w-4 h-4" />
         Back to Units
       </button>
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-4 sm:mb-6">
-        <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold">Unit {u.unitNumber}</h1>
-          <p className="text-sm text-gray-500 mt-1 break-words">
-            {u.building?.name}
-            {u.building?.project?.name && <> &middot; {u.building.project.name}</>}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <StatusBadge status={u.unitType} />
-          <StatusBadge status={u.status} />
-          {/* Slice 4: time-on-market shown only for AVAILABLE units */}
-          {u.status === 'AVAILABLE' && u.availableSince && (
-            <TimeOnMarketBar availableSince={u.availableSince} />
-          )}
-          {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime Owned</Chip>}
-          <Button size="sm" variant="flat" color="primary" startContent={<FiEdit2 />} onPress={openEdit}>
+      <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white mb-5 sm:mb-6">
+        <div className="absolute inset-y-0 left-0 w-1 bg-blue-500" />
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 p-5 sm:p-6 pl-6 sm:pl-7">
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">Unit {u.unitNumber}</h1>
+            <p className="text-sm text-gray-500 mt-1.5 break-words">
+              {u.building?.name}
+              {u.building?.project?.name && <> &middot; {u.building.project.name}</>}
+            </p>
+            <div className="flex items-center gap-2 flex-wrap mt-3">
+              <StatusBadge status={u.unitType} />
+              <StatusBadge status={u.status} />
+              {/* Slice 4: time-on-market shown only for AVAILABLE units */}
+              {u.status === 'AVAILABLE' && u.availableSince && (
+                <TimeOnMarketBar availableSince={u.availableSince} />
+              )}
+              {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime Owned</Chip>}
+            </div>
+          </div>
+          <Button size="sm" variant="flat" color="primary" startContent={<FiEdit2 />} onPress={openEdit} className="shrink-0 font-medium">
             Edit
           </Button>
         </div>
@@ -198,92 +262,55 @@ export default function UnitDetailPage() {
         </ModalContent>
       </Modal>
 
-      {/* Info Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
-        <StatCard label="Size" value={u.sqft ? `${u.sqft.toLocaleString()} sqft` : '\u2014'} />
-        <StatCard label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} />
-        <StatCard label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
-        <StatCard label="Asking Rent" value={u.askingRent ? `${fmt(u.askingRent)}/mo` : '\u2014'} />
+      {/* Key metrics */}
+      <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
+        <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
+        <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-600" />
+        <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
+        <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-600" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
         {/* Active Lease */}
-        <Card shadow="sm">
-          <CardHeader className="pb-2">
-            <p className="font-semibold text-sm text-gray-600">Active Lease</p>
-          </CardHeader>
-          <CardBody className="pt-0">
-            {activeLease ? (
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Tenant</span>
-                  <span className="font-medium">{activeLease.tenantName}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Monthly Rent</span>
-                  <span className="font-medium">{fmt(activeLease.monthlyRent)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Start</span>
-                  <span>{fmtDate(activeLease.startDate)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">End</span>
-                  <span>{fmtDate(activeLease.endDate)}</span>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400">No active lease</p>
-            )}
-          </CardBody>
-        </Card>
+        <Section icon={<FiHome className="w-4 h-4 text-blue-600" />} title="Active Lease">
+          {activeLease ? (
+            <dl className="text-sm divide-y divide-gray-100">
+              <Row label="Tenant"><span className="font-medium text-gray-900">{activeLease.tenantName}</span></Row>
+              <Row label="Monthly Rent"><span className="font-semibold text-emerald-600 tabular-nums">{fmt(activeLease.monthlyRent)}</span></Row>
+              <Row label="Start"><span className="text-gray-700">{fmtDate(activeLease.startDate)}</span></Row>
+              <Row label="End"><span className="text-gray-700">{fmtDate(activeLease.endDate)}</span></Row>
+            </dl>
+          ) : (
+            <EmptyRow icon={<FiHome className="w-5 h-5" />} text="No active lease" />
+          )}
+        </Section>
 
         {/* Linked Loans */}
-        <Card shadow="sm">
-          <CardHeader className="pb-2">
-            <p className="font-semibold text-sm text-gray-600">Linked Loans</p>
-          </CardHeader>
-          <CardBody className="pt-0">
-            {u.loans?.length > 0 ? (
-              <div className="space-y-3">
-                {u.loans.map((loan: any) => (
-                  <div key={loan.id} className="text-sm space-y-1 border-b border-gray-100 pb-2 last:border-0 last:pb-0">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Lender</span>
-                      <span className="font-medium">{loan.lender || '\u2014'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Type</span>
-                      <span>{loan.loanType?.replace(/_/g, ' ') || '\u2014'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Monthly Payment</span>
-                      <span>{loan.monthlyPayment ? fmt(loan.monthlyPayment) : '\u2014'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Principal</span>
-                      <span>{loan.principalAmt ? fmt(loan.principalAmt) : '\u2014'}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400">No linked loans</p>
-            )}
-          </CardBody>
-        </Card>
+        <Section icon={<FiCreditCard className="w-4 h-4 text-violet-600" />} title="Linked Loans" count={u.loans?.length}>
+          {u.loans?.length > 0 ? (
+            <div className="space-y-4">
+              {u.loans.map((loan: any) => (
+                <dl key={loan.id} className="text-sm divide-y divide-gray-100 rounded-xl border border-gray-100 px-3">
+                  <Row label="Lender"><span className="font-medium text-gray-900">{loan.lender || '\u2014'}</span></Row>
+                  <Row label="Type"><span className="text-gray-700">{loan.loanType?.replace(/_/g, ' ') || '\u2014'}</span></Row>
+                  <Row label="Monthly Payment"><span className="text-gray-700 tabular-nums">{loan.monthlyPayment ? fmt(loan.monthlyPayment) : '\u2014'}</span></Row>
+                  <Row label="Principal"><span className="text-gray-700 tabular-nums">{loan.principalAmt ? fmt(loan.principalAmt) : '\u2014'}</span></Row>
+                </dl>
+              ))}
+            </div>
+          ) : (
+            <EmptyRow icon={<FiCreditCard className="w-5 h-5" />} text="No linked loans" />
+          )}
+        </Section>
       </div>
 
       {/* Notes */}
       {u.notes && (
-        <Card shadow="sm" className="mb-6">
-          <CardHeader className="pb-2">
-            <p className="font-semibold text-sm text-gray-600">Notes</p>
-          </CardHeader>
-          <CardBody className="pt-0">
-            <p className="text-sm text-gray-700 whitespace-pre-wrap">{u.notes}</p>
-          </CardBody>
-        </Card>
+        <div className="mb-5 sm:mb-6">
+          <Section icon={<FiAlignLeft className="w-4 h-4 text-amber-600" />} title="Notes">
+            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{u.notes}</p>
+          </Section>
+        </div>
       )}
 
       {/* Leads & Activity Section */}

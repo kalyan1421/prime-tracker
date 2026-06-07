@@ -144,16 +144,17 @@ export default function ConstructionDashboardPage() {
 
       {/* Zone A — Summary Stat Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Active Projects" value={String(d.activeProjectCount)} variant="construction" colorScheme="brand" />
+        <StatCard label="Active Projects" value={String(d.activeProjectCount)} variant="construction" colorScheme="brand" onClick={() => navigate('/projects')} />
         <StatCard
           label="Overdue Milestones"
           value={String(d.overdueMilestoneCount)}
           helpText={d.overdueMilestoneCount > 0 ? 'Action required' : 'All on track'}
           variant="construction"
           colorScheme={d.overdueMilestoneCount > 0 ? 'red' : 'green'}
+          onClick={() => navigate('/reports/construction')}
         />
-        <StatCard label="In-Progress Milestones" value={String(d.inProgressMilestoneCount)} variant="construction" colorScheme="orange" />
-        <StatCard label="Budget Spent" value={`${budgetPct}%`} helpText="across all active projects" variant="construction" colorScheme="brand" />
+        <StatCard label="In-Progress Milestones" value={String(d.inProgressMilestoneCount)} variant="construction" colorScheme="orange" onClick={() => navigate('/reports/construction')} />
+        <StatCard label="Budget Spent" value={`${budgetPct}%`} helpText="across all active projects" variant="construction" colorScheme="brand" onClick={() => navigate('/reports/construction')} />
       </div>
 
       {/* Zone A2 — Financial Overview (budget:view roles only — PM + leadership, not Construction) */}

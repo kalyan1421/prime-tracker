@@ -11,7 +11,6 @@ import AdminPage from './pages/AdminPage';
 import ReportsPage from './pages/ReportsPage';
 import UnitDetailPage from './pages/UnitDetailPage';
 import LeadsPage from './pages/LeadsPage';
-import LeadDashboardPage from './pages/LeadDashboardPage';
 import CampaignsPage from './pages/CampaignsPage';
 import VacancyReportPage from './pages/VacancyReportPage';
 import BuildingDetailPage from './pages/BuildingDetailPage';
@@ -72,7 +71,8 @@ export default function App() {
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="leads" element={<LeadsPage />} />
-        <Route path="leads/dashboard" element={<ProtectedRoute permission="lead:view"><LeadDashboardPage /></ProtectedRoute>} />
+        {/* Unified into a single Leads section — old Lead Dashboard route now redirects. */}
+        <Route path="leads/dashboard" element={<Navigate to="/leads" replace />} />
         <Route path="campaigns" element={<ProtectedRoute permission="campaign:view"><CampaignsPage /></ProtectedRoute>} />
         <Route path="reports/vacancy" element={<ProtectedRoute permission="sales:view"><VacancyReportPage /></ProtectedRoute>} />
         <Route path="tasks" element={<TasksPage />} />

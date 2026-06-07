@@ -192,33 +192,47 @@ export class UnitsService {
       throw new ConflictException('Cannot add units to an archived project');
     }
 
+    // Normalize the number so whitespace variants ("101" vs "101 ") can't slip past the
+    // uniqueness check and create near-duplicate units. Mirrors combine().
+    const unitNumber = input.unitNumber?.trim();
+    if (!unitNumber) throw new BadRequestException('Unit number is required');
+
     // Surface the composite-unique-constraint failure with a friendly message
     const existing = await this.prisma.unit.findUnique({
-      where: { buildingId_unitNumber: { buildingId: input.buildingId, unitNumber: input.unitNumber } },
+      where: { buildingId_unitNumber: { buildingId: input.buildingId, unitNumber } },
     });
     if (existing) {
       throw new ConflictException(
-        `Unit '${input.unitNumber}' already exists in this building`,
+        `Unit '${unitNumber}' already exists in this building`,
       );
     }
 
     // If created as AVAILABLE (default), start the time-on-market clock now
     const status = input.status ?? 'AVAILABLE';
-    return this.prisma.unit.create({
-      data: {
-        buildingId: input.buildingId,
-        unitNumber: input.unitNumber,
-        unitType: input.unitType as any,
-        status,
-        availableSince: status === 'AVAILABLE' ? new Date() : null,
-        sqft: input.sqft,
-        askingRent: input.askingRent,
-        askingPrice: input.askingPrice,
-        primeOwned: input.primeOwned ?? false,
-        notes: input.notes,
-      },
-      include: { building: { select: { id: true, name: true } } },
-    });
+    try {
+      return await this.prisma.unit.create({
+        data: {
+          buildingId: input.buildingId,
+          unitNumber,
+          unitType: input.unitType as any,
+          status,
+          availableSince: status === 'AVAILABLE' ? new Date() : null,
+          sqft: input.sqft,
+          askingRent: input.askingRent,
+          askingPrice: input.askingPrice,
+          primeOwned: input.primeOwned ?? false,
+          notes: input.notes,
+        },
+        include: { building: { select: { id: true, name: true } } },
+      });
+    } catch (e: any) {
+      // Concurrent double-submit: the unique index is the source of truth, so a racing
+      // request that passed the findUnique check above lands here instead of duplicating.
+      if (e?.code === 'P2002') {
+        throw new ConflictException(`Unit '${unitNumber}' already exists in this building`);
+      }
+      throw e;
+    }
   }
 
   async update(
@@ -247,6 +261,9 @@ export class UnitsService {
         );
       }
     }
+
+    // Normalize so whitespace-only differences don't create near-duplicate numbers.
+    if (input.unitNumber != null) input.unitNumber = input.unitNumber.trim();
 
     // unitNumber change → uniqueness check
     if (input.unitNumber && input.unitNumber !== unit.unitNumber) {

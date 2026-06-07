@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { BudgetChangeReason } from '@prisma/client';
 import { BudgetRevisionService } from './budget-revision.service';
@@ -15,6 +15,12 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 @Controller('budgets')
 export class BudgetRevisionController {
   constructor(private revisions: BudgetRevisionService) {}
+
+  /** GET /api/budgets/revisions?projectId=  — project-wide budget change log */
+  @Get('revisions')
+  listForProject(@Query('projectId') projectId: string) {
+    return this.revisions.listForProject(projectId);
+  }
 
   /** GET /api/budgets/:lineId/revisions  — full audit trail for a budget line */
   @Get(':lineId/revisions')

@@ -9,7 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDollarSign, FiSearch } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
@@ -28,7 +28,7 @@ import {
   useCreateLease, useUpdateLease, useDeleteLease,
   useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount, useBrokers,
   useCreateCommitment, useUpdateCommitment, useDeleteCommitment,
-  useCreateBudget, useUpdateBudget, useDeleteBudget,
+  useCreateBudget, useUpdateBudget, useDeleteBudget, useProjectBudgetRevisions,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding,
   useMonthlyLeaseIncome, useMonthlyPayments,
@@ -210,11 +210,12 @@ import {
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
-const TAB_MAP = ['overview', 'construction', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments'];
+const TAB_MAP = ['overview', 'construction', 'budget', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments'];
 
 const TAB_TITLE_MAP: Record<string, string> = {
   overview: 'Overview',
   construction: 'Construction',
+  budget: 'Budget',
   revenue: 'Revenue',
   units: 'Units',
   milestones: 'Milestones',
@@ -234,6 +235,7 @@ const ALL_ROLES = [
 const TAB_ROLES: Record<string, string[]> = {
   overview: ALL_ROLES,
   construction: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER', 'CONSTRUCTION'],
+  budget: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER'],
   revenue: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'SALES'],
   units: ALL_ROLES,
   milestones: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'PROJECT_MANAGER', 'CONSTRUCTION', 'VIEWER'],
@@ -357,6 +359,7 @@ export default function ProjectDetailPage() {
       <div>
         {activeTab === 'overview' && <OverviewTab project={p} />}
         {activeTab === 'construction' && <ConstructionTab projectId={id!} />}
+        {activeTab === 'budget' && <BudgetTab projectId={id!} />}
         {activeTab === 'revenue' && <RevenueTab projectId={id!} />}
         {activeTab === 'units' && <UnitsTab projectId={id!} role={role} />}
         {activeTab === 'milestones' && <MilestonesTab projectId={id!} />}
@@ -2792,7 +2795,6 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const handleSave = async () => {
     try {
       const payload: Record<string, unknown> = {
-        unitId: form.unitId,
         tenantName: form.tenantName,
         tenantContact: form.tenantContact || undefined,
         monthlyRent: form.monthlyRent ? parseFloat(form.monthlyRent) : 0,
@@ -2805,10 +2807,11 @@ function LeasesTab({ projectId }: { projectId: string }) {
         notes: form.notes || undefined,
       };
       if (editId) {
+        // unitId is immutable on a lease — the UpdateLeaseDto rejects it (forbidNonWhitelisted).
         await updateLease.mutateAsync({ id: editId, data: payload });
         addToast({ title: 'Lease updated', color: 'success' });
       } else {
-        await createLease.mutateAsync(payload);
+        await createLease.mutateAsync({ ...payload, unitId: form.unitId });
         addToast({ title: 'Lease created', color: 'success' });
       }
       onFormClose();
@@ -2970,21 +2973,30 @@ function LeasesTab({ projectId }: { projectId: string }) {
 
       {/* Tenant Profiles — inline below each lease row */}
       {leaseList.length > 0 && (
-        <Card shadow="sm">
-          <CardHeader className="pb-0">
-            <p className="font-semibold text-sm text-gray-600">Tenant Profiles</p>
-          </CardHeader>
-          <CardBody className="space-y-4 divide-y divide-gray-50">
+        <div className="rounded-2xl border border-gray-200 bg-white">
+          <div className="flex items-center gap-2.5 px-5 pt-4 pb-3 border-b border-gray-100">
+            <FiUsers className="w-4 h-4 text-blue-600" />
+            <h2 className="font-semibold text-sm text-gray-800">
+              Tenant Profiles <span className="text-gray-400 font-normal">({leaseList.length})</span>
+            </h2>
+          </div>
+          <div className="p-4 sm:p-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
             {leaseList.map((l: any) => (
-              <div key={`profile-${l.id}`} className="pt-4 first:pt-0">
-                <p className="text-xs text-gray-400 mb-2">
-                  Unit {l.unit?.unitNumber || '—'} · {l.tenantBrand || l.tenantName}
-                </p>
+              <div
+                key={`profile-${l.id}`}
+                className="rounded-xl border border-gray-200 bg-gray-50/40 p-4 hover:border-gray-300 transition-colors"
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                    Unit {l.unit?.unitNumber || '—'}
+                  </span>
+                  <span className="text-xs text-gray-400 truncate">{l.tenantBrand || l.tenantName}</span>
+                </div>
                 <TenantProfilePanel lease={l} />
               </div>
             ))}
-          </CardBody>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -3028,6 +3040,15 @@ function SalesTab({ projectId }: { projectId: string }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [paySale, setPaySale] = useState<any>(null);
   const [cancelSale, setCancelSale] = useState<any>(null);
+  // Board UX: collapse a column to a slim rail, expand a card to reveal full detail + actions.
+  const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const [expandedSale, setExpandedSale] = useState<string | null>(null);
+  const toggleStage = (stage: string) =>
+    setCollapsedStages((prev) => {
+      const next = new Set(prev);
+      next.has(stage) ? next.delete(stage) : next.add(stage);
+      return next;
+    });
 
   const units = (unitsData as any[]) || [];
 
@@ -3158,87 +3179,125 @@ function SalesTab({ projectId }: { projectId: string }) {
       {!allSales.length ? (
         <EmptyState title="No sales activity" />
       ) : (
-        /* Kanban board */
-        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 items-start">
+        /* Kanban board \u2014 horizontal scroll keeps the funnel intact at any width;
+           columns collapse to a slim rail, cards expand inline for full detail + actions. */
+        <div className="flex items-stretch gap-3 overflow-x-auto pb-2">
           {stages.map((stage) => {
             const sales = byStatus[stage] || [];
             const colValue = sales.reduce((s: number, x: any) => s + Number(x.salePrice || 0), 0);
+            const collapsed = collapsedStages.has(stage);
+            const label = stage.replace(/_/g, ' ');
+
+            // Collapsed: slim vertical rail \u2014 click anywhere to expand.
+            if (collapsed) {
+              return (
+                <button
+                  key={stage}
+                  type="button"
+                  onClick={() => toggleStage(stage)}
+                  title={`Expand ${label}`}
+                  className={`group flex w-11 shrink-0 flex-col items-center gap-2 rounded-lg border-2 border-t-4 ${STAGE_TOP_COLOR[stage]} ${STAGE_BG[stage]} py-3 transition hover:brightness-95`}
+                >
+                  <FiChevronRight className="text-gray-400 group-hover:text-gray-600" />
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-600 [writing-mode:vertical-rl] rotate-180">{label}</span>
+                  <span className="mt-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-white/70 px-1.5 text-[11px] font-bold text-gray-600">{sales.length}</span>
+                </button>
+              );
+            }
+
             return (
-              <div key={stage} className={`rounded-lg border-2 border-t-4 ${STAGE_TOP_COLOR[stage]} ${STAGE_BG[stage]} p-3 min-h-[100px]`}>
-                <div className="flex items-center justify-between mb-2 gap-1 flex-wrap">
-                  <StatusBadge status={stage} />
-                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+              <div key={stage} className={`flex min-w-[250px] flex-1 flex-col rounded-lg border-2 border-t-4 ${STAGE_TOP_COLOR[stage]} ${STAGE_BG[stage]}`}>
+                {/* Column header */}
+                <div className="flex items-center justify-between gap-1 p-3 pb-2">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <button type="button" onClick={() => toggleStage(stage)} title="Collapse column" className="shrink-0 text-gray-400 hover:text-gray-600">
+                      <FiChevronLeft />
+                    </button>
+                    <StatusBadge status={stage} />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {/* Slice 6: probability chip on column header */}
                     <ProbabilityChip stage={stage} size="sm" />
-                    {/* Document gate chip: show aggregate status for all sales in this stage */}
+                    {/* Document gate chip: aggregate status for all sales in this stage */}
                     {(SALE_STAGE_DOCS[stage]?.length ?? 0) > 0 && sales.length > 0 && (
-                      <DocumentGateChip
-                        docs={sales.flatMap((s: any) => s.documents ?? [])}
-                        required={SALE_STAGE_DOCS[stage]}
-                        compact
-                      />
+                      <DocumentGateChip docs={sales.flatMap((s: any) => s.documents ?? [])} required={SALE_STAGE_DOCS[stage]} compact />
                     )}
-                    <span className="text-xs text-gray-500 font-medium">{sales.length}</span>
+                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-white/70 px-1.5 text-[11px] font-bold text-gray-600">{sales.length}</span>
                   </div>
                 </div>
                 {colValue > 0 && (
-                  <p className="text-xs text-gray-500 mb-2 font-mono">{fmt(colValue)}</p>
+                  <p className="-mt-1 mb-1 px-3 text-xs font-semibold tabular-nums text-gray-500">{fmt(colValue)}</p>
                 )}
-                <div className="space-y-2">
-                  {sales.map((s: any) => (
-                    <div key={s.id} className="bg-white rounded-md shadow-sm border border-gray-100 p-2.5 text-xs">
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="font-semibold text-gray-800 truncate max-w-[100px]">{s.buyer || s.buyerName || 'Unnamed'}</span>
-                        <div className="flex gap-0.5 shrink-0">
-                          <Button size="sm" variant="light" isIconOnly className="h-5 w-5 min-w-5" onPress={() => { setPaySale(s); onPayOpen(); }}><FiDollarSign className="text-[10px]" /></Button>
-                          <Button size="sm" variant="light" isIconOnly className="h-5 w-5 min-w-5" onPress={() => openEdit(s)}><FiEdit2 className="text-[10px]" /></Button>
-                          {s.status !== 'CANCELLED' && s.status !== 'CLOSED' && (
-                            <Button
-                              size="sm" variant="light" color="warning" isIconOnly
-                              className="h-5 w-5 min-w-5"
-                              onPress={() => { setCancelSale(s); onCancelOpen(); }}
-                              aria-label="Cancel sale"
-                            >
-                              <FiX className="text-[10px]" />
-                            </Button>
-                          )}
-                          <Button size="sm" variant="light" color="danger" isIconOnly className="h-5 w-5 min-w-5" onPress={() => openDelete(s.id)}><FiTrash2 className="text-[10px]" /></Button>
-                        </div>
-                      </div>
-                      <p className="text-gray-500">Unit {s.unit?.unitNumber || '\u2014'}</p>
-                      {s.salePrice && <p className="text-gray-700 font-medium mt-0.5">{fmt(s.salePrice)}</p>}
-                      {s.closingDate && <p className="text-gray-400 mt-0.5">Closes {fmtDate(s.closingDate)}</p>}
-                      {(() => {
-                        const asking = s.unit?.askingPrice ? Number(s.unit.askingPrice) : null;
-                        const price = s.salePrice ? Number(s.salePrice) : null;
-                        if (!asking || !price || price >= asking) return null;
-                        const pct = ((asking - price) / asking) * 100;
-                        if (s.discountApprovedAt) {
-                          return <p className="text-[10px] text-green-600 mt-1">\u2713 {pct.toFixed(0)}% discount approved</p>;
-                        }
-                        return (
-                          <div className="mt-1 flex items-center gap-1">
-                            <span className="text-[10px] text-amber-600">\u26a0 {pct.toFixed(0)}% discount</span>
-                            <PermissionGate permission="sales:approve-discount">
-                              <Button
-                                size="sm" variant="light" color="warning"
-                                className="h-4 min-w-0 px-1 text-[10px]"
-                                isLoading={approveDiscount.isPending}
-                                onPress={() => approveDiscount.mutate(s.id, {
-                                  onSuccess: () => addToast({ title: 'Discount approved', color: 'success' }),
-                                  onError: (e) => addToast({ title: errMsg(e, 'Failed to approve'), color: 'danger' }),
-                                })}
-                              >
-                                Approve
-                              </Button>
-                            </PermissionGate>
+                {/* Scrollable card list \u2014 caps board height even with 50+ closed deals */}
+                <div className="max-h-[58vh] flex-1 space-y-2 overflow-y-auto px-3 pb-3">
+                  {sales.map((s: any) => {
+                    const isOpen = expandedSale === s.id;
+                    const asking = s.unit?.askingPrice ? Number(s.unit.askingPrice) : null;
+                    const price = s.salePrice ? Number(s.salePrice) : null;
+                    const discountPct = asking && price && price < asking ? ((asking - price) / asking) * 100 : null;
+                    return (
+                      <div key={s.id} className="rounded-lg border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow">
+                        {/* Compact summary \u2014 click to expand */}
+                        <button type="button" onClick={() => setExpandedSale(isOpen ? null : s.id)} className="flex w-full items-start gap-2 p-2.5 text-left">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-gray-800">{s.buyer || s.buyerName || 'Unnamed'}</p>
+                            <p className="mt-0.5 text-xs text-gray-500">
+                              Unit {s.unit?.unitNumber || '\u2014'}
+                              {price != null && <span className="ml-1.5 font-medium text-gray-700">{fmt(price)}</span>}
+                            </p>
+                            {discountPct != null && (
+                              s.discountApprovedAt ? (
+                                <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-green-600">
+                                  <FiCheck className="shrink-0" /> {discountPct.toFixed(0)}% discount approved
+                                </span>
+                              ) : (
+                                <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                                  <FiAlertTriangle className="shrink-0" /> {discountPct.toFixed(0)}% discount
+                                </span>
+                              )
+                            )}
                           </div>
-                        );
-                      })()}
-                    </div>
-                  ))}
+                          <FiChevronDown className={`mt-0.5 shrink-0 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {/* Expanded detail + actions */}
+                        {isOpen && (
+                          <div className="space-y-1.5 border-t border-gray-100 px-2.5 py-2">
+                            {s.closingDate && (
+                              <div className="flex justify-between text-xs"><span className="text-gray-400">Closes</span><span className="text-gray-600">{fmtDate(s.closingDate)}</span></div>
+                            )}
+                            {s.depositAmt && (
+                              <div className="flex justify-between text-xs"><span className="text-gray-400">Deposit</span><span className="text-gray-600">{fmt(Number(s.depositAmt))}</span></div>
+                            )}
+                            {discountPct != null && !s.discountApprovedAt && (
+                              <PermissionGate permission="sales:approve-discount">
+                                <Button
+                                  size="sm" variant="flat" color="warning" fullWidth className="h-7 text-xs"
+                                  startContent={<FiCheck />}
+                                  isLoading={approveDiscount.isPending}
+                                  onPress={() => approveDiscount.mutate(s.id, {
+                                    onSuccess: () => addToast({ title: 'Discount approved', color: 'success' }),
+                                    onError: (e) => addToast({ title: errMsg(e, 'Failed to approve'), color: 'danger' }),
+                                  })}
+                                >
+                                  Approve {discountPct.toFixed(0)}% discount
+                                </Button>
+                              </PermissionGate>
+                            )}
+                            <div className="flex items-center gap-1 pt-1">
+                              <Button size="sm" variant="flat" className="h-7 flex-1 text-xs" startContent={<FiDollarSign />} onPress={() => { setPaySale(s); onPayOpen(); }}>Payments</Button>
+                              <Button size="sm" variant="flat" className="h-7 flex-1 text-xs" startContent={<FiEdit2 />} onPress={() => openEdit(s)}>Edit</Button>
+                              {s.status !== 'CANCELLED' && s.status !== 'CLOSED' && (
+                                <Button size="sm" variant="light" color="warning" isIconOnly className="h-7 w-7 min-w-7" aria-label="Cancel sale" onPress={() => { setCancelSale(s); onCancelOpen(); }}><FiX /></Button>
+                              )}
+                              <Button size="sm" variant="light" color="danger" isIconOnly className="h-7 w-7 min-w-7" aria-label="Delete sale" onPress={() => openDelete(s.id)}><FiTrash2 /></Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                   {sales.length === 0 && (
-                    <p className="text-xs text-gray-400 italic text-center py-2">Empty</p>
+                    <p className="py-6 text-center text-xs italic text-gray-400">Empty</p>
                   )}
                 </div>
               </div>
@@ -3815,10 +3874,122 @@ function ConstructionTab({ projectId }: { projectId: string }) {
         <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-2">📋 Daily Logs</p>
         <DailyLogFeed projectId={projectId} />
       </PermissionGate>
-      {/* Budget & Costs is financial data — Construction is fully blind (no budget:view). */}
-      <PermissionGate permission="budget:view">
-        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-0">📊 Budget & Costs</p>
-        <FinancialsTab projectId={projectId} />
+      {/* Budget & Costs now lives in its own top-level Budget tab. */}
+    </div>
+  );
+}
+
+// ---- Budget Tab (locked total budget + Budget & Costs + day-wise change log) ----
+function BudgetTab({ projectId }: { projectId: string }) {
+  const { hasPermission } = useAuthStore();
+  // Admin (Super Admin), Founder, Finance & Accounting hold budget:edit and may revise the total.
+  const canEditBudget = hasPermission('budget:edit');
+  const budgetLinesRef = React.useRef<HTMLDivElement>(null);
+  const scrollToLines = () => budgetLinesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const { data: summary } = useFinancialSummary(projectId);
+  const { data: revisions = [] } = useProjectBudgetRevisions(projectId);
+  const s = summary as any;
+
+  // Total = sum of revised budget across all lines (mirrors FinancialsTab's totals).
+  const totalBudget = Number(s?.budgetTotal ?? 0);
+  const totalActuals = Number(s?.actualTotal ?? 0);
+  const totalCommitted = Number(s?.committedTotal ?? 0);
+  const remaining = totalBudget - totalActuals - totalCommitted;
+  const usedPct = totalBudget > 0 ? Math.round(((totalActuals + totalCommitted) / totalBudget) * 100) : 0;
+
+  const revList = revisions as any[];
+  const reasonLabel = (r: string) => (r || '').replace(/_/g, ' ').toLowerCase();
+
+  return (
+    <div className="mt-4 space-y-6">
+      <PermissionGate
+        permission="budget:view"
+        fallback={<EmptyState title="No access" message="You don't have permission to view budget data." />}
+      >
+        {/* Total budget banner — editable by Admin / Finance / Founder (budget:edit). */}
+        <Card shadow="sm" className="border border-amber-100 bg-amber-50">
+          <CardBody className="p-5">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Total Project Budget</p>
+              {canEditBudget ? (
+                <Button size="sm" color="warning" variant="flat" startContent={<FiEdit2 className="text-[11px]" />} onPress={scrollToLines}>
+                  Edit budget
+                </Button>
+              ) : (
+                <Chip size="sm" variant="flat" startContent={<FiLock className="text-[11px]" />} className="bg-amber-100 text-amber-700">
+                  Read-only
+                </Chip>
+              )}
+            </div>
+            <p className="text-3xl font-bold text-gray-900 tabular-nums">{fmt(totalBudget)}</p>
+            <Progress aria-label="Budget used" value={usedPct} size="sm" className="mt-3" color={usedPct > 100 ? 'danger' : 'warning'} />
+            <div className="grid grid-cols-3 gap-3 mt-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500">Actuals</p>
+                <p className="text-sm font-semibold text-orange-600 tabular-nums">{fmt(totalActuals)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500">Committed</p>
+                <p className="text-sm font-semibold text-purple-600 tabular-nums">{fmt(totalCommitted)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500">Remaining</p>
+                <p className={`text-sm font-semibold tabular-nums ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(remaining)}</p>
+              </div>
+            </div>
+            <p className="text-[11px] text-amber-700/80 mt-3">
+              {canEditBudget
+                ? 'The total is the sum of the budget lines below — add or revise a line to change it. Every change is logged.'
+                : 'The total is set by the budget lines below. Editing is limited to Admin, Finance and Founder.'}
+            </p>
+          </CardBody>
+        </Card>
+
+        {/* Existing Budget & Costs (moved here from the Construction tab) */}
+        <div ref={budgetLinesRef}>
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-0">📊 Budget &amp; Costs</p>
+          <FinancialsTab projectId={projectId} />
+        </div>
+
+        {/* Day-wise budget change log (append-only revision history) */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-2">🗓️ Budget Change Log</p>
+          {revList.length === 0 ? (
+            <EmptyState title="No changes yet" message="Budget line revisions will appear here as a dated timeline." />
+          ) : (
+            <Card shadow="sm">
+              <CardBody className="p-0 divide-y divide-gray-100">
+                {revList.map((r) => (
+                  <div key={r.id} className="flex items-start gap-3 p-3">
+                    <div className="mt-0.5 h-7 w-7 shrink-0 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-[11px] font-bold">
+                      v{r.revisionNumber}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="text-sm font-medium text-gray-800 truncate">
+                          {r.budgetLine?.description || 'Budget line'}
+                          {r.budgetLine?.category && (
+                            <span className="ml-2 text-[11px] text-gray-400">{(r.budgetLine.category as string).replace(/_/g, ' ')}</span>
+                          )}
+                        </p>
+                        <span className="text-sm font-semibold tabular-nums text-gray-900 shrink-0">{fmt(Number(r.amount))}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        <span className="capitalize">{reasonLabel(r.changeReason)}</span>
+                        {r.reason ? ` — ${r.reason}` : ''}
+                      </p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {r.createdBy?.name || 'Someone'} · {fmtDate(r.createdAt)}
+                        {r.approvedAt ? ` · approved ${fmtDate(r.approvedAt)}` : ' · pending approval'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </CardBody>
+            </Card>
+          )}
+        </div>
       </PermissionGate>
     </div>
   );
@@ -4762,6 +4933,7 @@ function DocumentsTab({ projectId }: { projectId: string }) {
   const [filterCat, setFilterCat] = useState('ALL');
   const [uploadCategory, setUploadCategory] = useState('GENERAL');
   const [file, setFile] = useState<File | null>(null);
+  const [displayName, setDisplayName] = useState('');
 
   const filtered = filterCat === 'ALL' ? (docs as any[]) : (docs as any[]).filter((d: any) => d.category === filterCat);
 
@@ -4771,10 +4943,12 @@ function DocumentsTab({ projectId }: { projectId: string }) {
     fd.append('file', file);
     fd.append('projectId', projectId);
     fd.append('category', uploadCategory);
+    if (displayName.trim()) fd.append('displayName', displayName.trim());
     try {
       await uploadDoc.mutateAsync(fd);
       addToast({ title: 'Document uploaded', color: 'success' });
       setFile(null);
+      setDisplayName('');
       onClose();
     } catch (e) { addToast({ title: errMsg(e, 'Upload failed'), color: 'danger' }); }
   };
@@ -4852,6 +5026,13 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
               />
             </div>
+            <Input
+              label="Document name (optional)"
+              placeholder={file ? file.name : 'e.g. Floor Plan — Tower A'}
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              description="Leave blank to keep the original file name. The file extension is preserved."
+            />
             <Select label="Category" selectedKeys={[uploadCategory]} onSelectionChange={(k) => setUploadCategory(Array.from(k)[0] as string)}>
               {DOC_CATEGORIES.map((c) => <SelectItem key={c}>{c}</SelectItem>)}
             </Select>

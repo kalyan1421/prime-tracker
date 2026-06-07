@@ -76,11 +76,11 @@ export default function FounderDashboardPage() {
 
       {/* Zone A — Portfolio Health Bar */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
-        <StatCard label="Total Projects" value={String(d.totalProjects)} helpText={`${d.activeProjects} active`} variant="neutral" colorScheme="gray" />
-        <StatCard label="Active Projects" value={String(d.activeProjects)} variant="neutral" colorScheme="brand" />
-        <StatCard label="Budget Utilization" value={`${budgetUtilPct}%`} helpText={`${variancePct}% remaining`} variant="construction" colorScheme="orange" />
-        <StatCard label="Net Monthly Cash Flow" value={fmt(d.netMonthlyIncome)} helpText={d.netMonthlyIncome >= 0 ? 'Positive NOI' : 'Negative NOI'} trend={d.netMonthlyIncome >= 0 ? 'increase' : 'decrease'} variant="revenue" colorScheme={d.netMonthlyIncome >= 0 ? 'green' : 'red'} />
-        <StatCard label="Loan Book Total" value={fmt(d.loanBook?.totalPrincipal)} helpText={`${fmt(d.loanBook?.totalMonthlyPayment)}/mo`} variant="construction" colorScheme="brand" />
+        <StatCard label="Total Projects" value={String(d.totalProjects)} helpText={`${d.activeProjects} active`} variant="neutral" colorScheme="gray" onClick={() => navigate('/projects')} />
+        <StatCard label="Active Projects" value={String(d.activeProjects)} variant="neutral" colorScheme="brand" onClick={() => navigate('/projects')} />
+        <StatCard label="Budget Utilization" value={`${budgetUtilPct}%`} helpText={`${variancePct}% remaining`} variant="construction" colorScheme="orange" onClick={() => navigate('/reports/founder')} />
+        <StatCard label="Net Monthly Cash Flow" value={fmt(d.netMonthlyIncome)} helpText={d.netMonthlyIncome >= 0 ? 'Positive NOI' : 'Negative NOI'} trend={d.netMonthlyIncome >= 0 ? 'increase' : 'decrease'} variant="revenue" colorScheme={d.netMonthlyIncome >= 0 ? 'green' : 'red'} onClick={() => navigate('/cashflow')} />
+        <StatCard label="Loan Book Total" value={fmt(d.loanBook?.totalPrincipal)} helpText={`${fmt(d.loanBook?.totalMonthlyPayment)}/mo`} variant="construction" colorScheme="brand" onClick={() => navigate('/reports/founder')} />
       </div>
 
       {/* Zone B — Split Row */}

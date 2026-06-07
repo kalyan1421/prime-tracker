@@ -1512,6 +1512,14 @@ export function useBudgetRevisions(budgetLineId: string | undefined) {
     enabled: !!budgetLineId,
   });
 }
+/** Project-wide budget change log (every revision across all lines, newest first). */
+export function useProjectBudgetRevisions(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['budget-revisions', 'project', projectId],
+    queryFn: () => api.get('/budgets/revisions', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
 export function useCreateBudgetRevision() {
   const qc = useQueryClient();
   return useMutation({

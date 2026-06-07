@@ -53,12 +53,12 @@ export default function SalesDashboardPage() {
 
       {/* Zone A — Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard label="Available Units" value={String(inv.available ?? 0)} variant="neutral" colorScheme="gray" />
-        <StatCard label="Under Contract" value={String(inv.underContract ?? 0)} variant="revenue" colorScheme="brand" />
-        <StatCard label="Total Pipeline" value={fmt(d.pipelineTotalValue)} variant="revenue" colorScheme="green" />
-        <StatCard label="Closed Sales YTD" value={fmt(d.closedSalesRevenue)} variant="revenue" colorScheme="purple" />
-        <StatCard label="Monthly Lease Income" value={fmt(d.monthlyLeaseIncome)} helpText={`${fmt(d.monthlyLeaseIncome * 12)}/yr`} variant="revenue" colorScheme="teal" />
-        <StatCard label="Active Leads" value={String(d.leadStats?.active ?? 0)} helpText={`${d.leadStats?.thisMonthConverted ?? 0} converted this month`} variant="marketing" colorScheme="purple" />
+        <StatCard label="Available Units" value={String(inv.available ?? 0)} variant="neutral" colorScheme="gray" onClick={() => navigate('/inventory')} />
+        <StatCard label="Under Contract" value={String(inv.underContract ?? 0)} variant="revenue" colorScheme="brand" onClick={() => navigate('/inventory')} />
+        <StatCard label="Total Pipeline" value={fmt(d.pipelineTotalValue)} variant="revenue" colorScheme="green" onClick={() => navigate('/reports/sales')} />
+        <StatCard label="Closed Sales YTD" value={fmt(d.closedSalesRevenue)} variant="revenue" colorScheme="purple" onClick={() => navigate('/reports/sales')} />
+        <StatCard label="Monthly Lease Income" value={fmt(d.monthlyLeaseIncome)} helpText={`${fmt(d.monthlyLeaseIncome * 12)}/yr`} variant="revenue" colorScheme="teal" onClick={() => navigate('/reports/sales')} />
+        <StatCard label="Active Leads" value={String(d.leadStats?.active ?? 0)} helpText={`${d.leadStats?.thisMonthConverted ?? 0} converted this month`} variant="marketing" colorScheme="purple" onClick={() => navigate('/leads')} />
       </div>
 
       {/* Zone A2 — Sales & Marketing Financials */}
