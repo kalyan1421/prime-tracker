@@ -1782,8 +1782,32 @@ export function useUpdateInterior() {
 export function useAdvanceInteriorPhase() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, target }: { id: string; target: string }) =>
-      api.post(`/interior/${id}/advance`, { target }).then((r) => r.data),
+    mutationFn: ({ id, target, handoverSignedBy, handoverNotes }: { id: string; target: string; handoverSignedBy?: string; handoverNotes?: string }) =>
+      api.post(`/interior/${id}/advance`, { target, handoverSignedBy, handoverNotes }).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+// ─────── Interior package templates ───────
+export function useInteriorTemplates() {
+  return useQuery({
+    queryKey: ['interior', 'templates'],
+    queryFn: () => api.get('/interior/templates').then((r) => r.data),
+  });
+}
+
+export function useCreateInteriorTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, any>) => api.post('/interior/templates', data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useDeleteInteriorTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/interior/templates/${id}`).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
   });
 }

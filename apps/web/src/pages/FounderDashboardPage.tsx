@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardBody, Avatar } from '@heroui/react';
 import {
@@ -234,10 +234,9 @@ export default function FounderDashboardPage() {
                 </thead>
                 <tbody>
                   {(d.unsoldByProjectBuilding as any[]).map((proj: any) => (
-                    <>
+                    <Fragment key={proj.projectId}>
                       {/* Project row */}
                       <tr
-                        key={proj.projectId}
                         className="bg-gray-50 cursor-pointer hover:bg-amber-50"
                         onClick={() => navigate(`/projects/${proj.projectId}/units`)}
                       >
@@ -267,7 +266,7 @@ export default function FounderDashboardPage() {
                           <td className="py-1.5 px-3 text-right text-xs text-blue-600">{fmt(b.underContractValue)}</td>
                         </tr>
                       ))}
-                    </>
+                    </Fragment>
                   ))}
                   {/* Portfolio total row */}
                   <tr className="border-t-2 border-gray-200 bg-gray-100 font-semibold">

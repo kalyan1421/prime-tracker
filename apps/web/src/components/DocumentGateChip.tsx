@@ -23,11 +23,14 @@ export const SALE_STAGE_DOCS: Record<string, string[]> = {
   CLOSED:          ['DEED', 'NOC', 'POSSESSION_CERTIFICATE'],
 };
 
-/** Interior phase → required DocCategory values before advancing to next phase */
+/**
+ * Document gate per interior phase, keyed by the phase being ENTERED — mirrors the
+ * backend state machine (interior-state-machine.ts PHASE_GATES): a CITY_APPROVAL doc
+ * is required to enter EXECUTION, a HANDOVER_CERTIFICATE to enter HANDOVER.
+ */
 export const INTERIOR_PHASE_DOCS: Record<string, string[]> = {
-  CLIENT_APPROVAL: ['DRAWING'],
-  CITY_APPROVAL:   ['CITY_APPROVAL'],
-  HANDOVER:        ['HANDOVER_CERTIFICATE'],
+  EXECUTION: ['CITY_APPROVAL'],
+  HANDOVER:  ['HANDOVER_CERTIFICATE'],
 };
 
 /** Human-readable category labels */

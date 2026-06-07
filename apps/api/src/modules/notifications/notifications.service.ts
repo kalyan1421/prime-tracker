@@ -145,6 +145,18 @@ export class NotificationsService {
     });
   }
 
+  async notifySnagOverdue(snag: { id: string; description: string; interiorProjectId: string; interiorName?: string; daysOverdue: number }) {
+    const link = `/interior/${snag.interiorProjectId}`;
+    const short = snag.description.length > 50 ? `${snag.description.slice(0, 50)}…` : snag.description;
+    await this.sendToRoles({
+      roles: ['SUPER_ADMIN', 'FOUNDER', 'PROJECT_MANAGER', 'CONSTRUCTION'],
+      type: NotificationType.SNAG_OVERDUE,
+      title: `Snag overdue: ${short}`,
+      body: `A punch-list item${snag.interiorName ? ` in "${snag.interiorName}"` : ''} is ${snag.daysOverdue} day(s) overdue.`,
+      link,
+    });
+  }
+
   async notifyLeaseExpiring(lease: { unitId: string; tenantName: string; leaseEnd: Date; unit: { building: { project: { id: string; name: string } } } }, daysLeft: number) {
     const projectId = lease.unit.building.project.id;
     const link = `/projects/${projectId}/leases`;

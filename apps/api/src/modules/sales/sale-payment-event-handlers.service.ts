@@ -18,6 +18,7 @@ export class SalePaymentEventHandlers implements OnModuleInit {
   onModuleInit() {
     this.bus.on('milestone.completed', (e) => this.onMilestoneCompleted(e));
     this.bus.on('interior.handedOver', (e) => this.onInteriorHandedOver(e));
+    this.bus.on('interior.cancelled', (e) => this.onInteriorCancelled(e));
   }
 
   private async onMilestoneCompleted(e: { milestoneId: string; completedAt: Date }) {
@@ -28,5 +29,10 @@ export class SalePaymentEventHandlers implements OnModuleInit {
   private async onInteriorHandedOver(e: { interiorProjectId: string; at: Date }) {
     const n = await this.payments.applyInteriorHandover(e.interiorProjectId, e.at);
     if (n > 0) this.logger.log(`Interior ${e.interiorProjectId} handed over → ${n} TI payment(s) now DUE`);
+  }
+
+  private async onInteriorCancelled(e: { interiorProjectId: string }) {
+    const n = await this.payments.applyInteriorCancelled(e.interiorProjectId);
+    if (n > 0) this.logger.log(`Interior ${e.interiorProjectId} cancelled → ${n} unpaid TI payment(s) reverted to SCHEDULED`);
   }
 }

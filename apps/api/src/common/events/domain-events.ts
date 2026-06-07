@@ -34,6 +34,7 @@ export type DomainEvent =
   // Phase 1 — Interior / Fit-Out
   | { type: 'interior.phaseChanged'; interiorProjectId: string; from: string; to: string }
   | { type: 'interior.handedOver'; interiorProjectId: string; unitId?: string; at: Date }
+  | { type: 'interior.cancelled'; interiorProjectId: string }
   | { type: 'snag.overdue'; snagId: string; interiorProjectId: string; daysOverdue: number }
   // Phase 1 — Sale Payment Schedule
   | { type: 'salePayment.due'; salePaymentId: string; saleId: string }
