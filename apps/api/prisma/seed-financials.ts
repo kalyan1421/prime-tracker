@@ -303,7 +303,21 @@ async function main() {
           },
         });
       }
-      console.log(`   🏦 Loan: $${(principal / 1e6).toFixed(1)}M @ ${profile.loanRate}% (${profile.loanType}) + ${drawCount} draws`);
+      // Planned (future) draws → forward cash-flow inflows on the projection.
+      const plannedCount = randomBetween(2, 4);
+      const plannedAmt = Math.round((principal * profile.spendPct * 0.4) / plannedCount);
+      for (let i = 1; i <= plannedCount; i++) {
+        await prisma.drawSchedule.create({
+          data: {
+            loanId: loan.id,
+            drawNumber: drawCount + i,
+            plannedAmount: plannedAmt + randomBetween(-30000, 30000),
+            plannedDate: monthsFromNow(i * 2), // staggered every ~2 months out
+            description: `Planned draw ${drawCount + i}`,
+          },
+        });
+      }
+      console.log(`   🏦 Loan: $${(principal / 1e6).toFixed(1)}M @ ${profile.loanRate}% (${profile.loanType}) + ${drawCount} draws + ${plannedCount} planned`);
     } else {
       console.log(`   🏦 Loan: $${(principal / 1e6).toFixed(1)}M @ ${profile.loanRate}% (${profile.loanType})`);
     }
