@@ -99,10 +99,12 @@ function OverdueMilestonesCard({ milestones, navigate }: { milestones: any[]; na
 }
 
 export default function ConstructionDashboardPage() {
-  const { user } = useAuthStore();
+  const { user, hasPermission } = useAuthStore();
   const navigate = useNavigate();
   const { data, isLoading, error } = useConstructionDashboard();
   const role = user?.role || '';
+  // Construction is blind to financials (no budget:view); the API omits the figures too.
+  const canViewFinancials = hasPermission('budget:view');
 
   useEffect(() => {
     if (!user?.role) return;
@@ -154,7 +156,8 @@ export default function ConstructionDashboardPage() {
         <StatCard label="Budget Spent" value={`${budgetPct}%`} helpText="across all active projects" variant="construction" colorScheme="brand" />
       </div>
 
-      {/* Zone A2 — Financial Overview (all roles) */}
+      {/* Zone A2 — Financial Overview (budget:view roles only — PM + leadership, not Construction) */}
+      {canViewFinancials && (
       <Card shadow="sm" className="mb-6">
         <CardHeader className="pb-2">
           <p className="font-semibold text-sm text-amber-700">Construction Financials</p>
@@ -193,6 +196,7 @@ export default function ConstructionDashboardPage() {
           </div>
         </CardBody>
       </Card>
+      )}
 
       {/* Zone B — Project Status Board */}
       <Card shadow="sm" className="mb-6">
@@ -206,7 +210,7 @@ export default function ConstructionDashboardPage() {
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Project</th>
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Phase</th>
-                  <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase min-w-[140px]">Budget Spent</th>
+                  {canViewFinancials && <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase min-w-[140px]">Budget Spent</th>}
                   <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Overdue</th>
                   <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">In-Progress</th>
                   <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Done</th>
@@ -221,20 +225,22 @@ export default function ConstructionDashboardPage() {
                   >
                     <td className="py-2 px-2 font-medium">{p.name}</td>
                     <td className="py-2 px-2"><StatusBadge status={p.phase} /></td>
+                    {canViewFinancials && (
                     <td className="py-2 px-2">
                       <div>
                         <div className="text-xs text-gray-500 mb-1">
                           {p.rawBudget
                             ? `${fmt(p.rawBudget.actuals)} / ${fmt(p.rawBudget.budget)}`
-                            : `${Math.round(p.budgetSpentPct * 100)}%`}
+                            : `${Math.round((p.budgetSpentPct || 0) * 100)}%`}
                         </div>
                         <Progress
-                          value={p.budgetSpentPct * 100}
+                          value={(p.budgetSpentPct || 0) * 100}
                           size="sm"
                           color={p.budgetSpentPct > 1 ? 'danger' : p.budgetSpentPct > 0.9 ? 'warning' : 'primary'}
                         />
                       </div>
                     </td>
+                    )}
                     <td className="py-2 px-2 text-center">
                       <span className={p.milestoneCounts.overdue > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}>
                         {p.milestoneCounts.overdue}

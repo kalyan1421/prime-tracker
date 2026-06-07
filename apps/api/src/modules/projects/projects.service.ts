@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException } from '@nestjs/common
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, ProjectPhase, ProjectStatus, ProjectType } from '@prisma/client';
 import { isProjectScopedRole } from '@prime-tracker/shared';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 
 export interface ListProjectsParams {
   status?: ProjectStatus;
@@ -23,11 +24,13 @@ export interface ListProjectsParams {
 export interface ProjectViewer {
   userId: string;
   role: string;
+  /** Whether the viewer may see budget/spend aggregates (budget:view). */
+  canViewFinancials?: boolean;
 }
 
 @Injectable()
 export class ProjectsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
 
   async findAll(params?: ListProjectsParams, viewer?: ProjectViewer) {
     const where: Prisma.ProjectWhereInput = {};
@@ -278,9 +281,15 @@ export class ProjectsService {
 
   // ---- Dashboard Aggregation ----
 
-  async getDashboardSummary() {
+  async getDashboardSummary(viewer?: ProjectViewer) {
+    // Scoped viewers only aggregate their member projects.
+    const scopeWhere: Prisma.ProjectWhereInput =
+      viewer && isProjectScopedRole(viewer.role)
+        ? { id: { in: await this.access.accessibleProjectIds(viewer.userId) } }
+        : {};
+
     const projects = await this.prisma.project.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...scopeWhere },
       include: {
         budgetLines: true,
         actuals: true,
@@ -297,7 +306,7 @@ export class ProjectsService {
       },
     });
 
-    const allProjects = await this.prisma.project.findMany();
+    const allProjects = await this.prisma.project.findMany({ where: scopeWhere });
 
     let totalBudget = 0;
     let totalActuals = 0;
@@ -437,21 +446,29 @@ export class ProjectsService {
       )
       .slice(0, 10);
 
+    // Hide budget/spend/debt aggregates from viewers without budget:view.
+    const showFinancials = !viewer || viewer.canViewFinancials !== false;
+    const financials = showFinancials
+      ? {
+          totalBudget,
+          totalActuals,
+          totalCommitted,
+          budgetVariance: totalBudget - totalActuals,
+          totalMonthlyLeaseIncome,
+          totalMonthlyMortgage,
+          netMonthlyIncome: totalMonthlyLeaseIncome - totalMonthlyMortgage,
+        }
+      : {};
+
     return {
       totalProjects: allProjects.length,
       activeProjects: projects.length,
-      totalBudget,
-      totalActuals,
-      totalCommitted,
-      budgetVariance: totalBudget - totalActuals,
+      ...financials,
       unitsByStatus,
       projectsByPhase,
       recentMilestones,
-      alerts,
+      alerts: showFinancials ? alerts : alerts.filter((a) => a.type !== 'BUDGET_OVERRUN'),
       recentComments,
-      totalMonthlyLeaseIncome,
-      totalMonthlyMortgage,
-      netMonthlyIncome: totalMonthlyLeaseIncome - totalMonthlyMortgage,
     };
   }
 }

@@ -30,8 +30,16 @@ export class ProjectsController {
   @Get('dashboard')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Executive dashboard summary' })
-  getDashboard() {
-    return this.projectsService.getDashboardSummary();
+  getDashboard(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('permissions') permissions: string[],
+  ) {
+    return this.projectsService.getDashboardSummary({
+      userId,
+      role,
+      canViewFinancials: permissions?.includes('budget:view') ?? false,
+    });
   }
 
   @Get()

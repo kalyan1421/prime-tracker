@@ -244,7 +244,8 @@ function DrawRequestsTab() {
 }
 
 export default function ConstructionReportsPage() {
-  const { user } = useAuthStore();
+  const { user, hasPermission } = useAuthStore();
+  const canViewFinancials = hasPermission('financial:view');
   const navigate = useNavigate();
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Construction Reports' });
@@ -268,9 +269,13 @@ export default function ConstructionReportsPage() {
       </div>
       <div ref={printRef}>
         <Tabs color="primary" variant="underlined" classNames={{ tabList: "overflow-x-auto scrollbar-none flex-nowrap" }}>
-          <Tab key="budget" title="Budget & Cost">
-            <BudgetCostTab />
-          </Tab>
+          {/* Budget & Cost is a financial report — hidden from roles without financial:view
+              (Construction, and PM who keeps budget but not the financial module). */}
+          {canViewFinancials && (
+            <Tab key="budget" title="Budget & Cost">
+              <BudgetCostTab />
+            </Tab>
+          )}
           <Tab key="milestones" title="Milestone & Schedule">
             <MilestoneScheduleTab />
           </Tab>

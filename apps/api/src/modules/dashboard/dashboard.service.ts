@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../common/cache/cache.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
+import { Prisma } from '@prisma/client';
+
+// Roles on the construction dashboard that may see budget/spend/loan figures.
+// Construction is fully blind to financials (no budget:view); PM + leadership keep them.
+const CONSTRUCTION_FINANCIAL_ROLES = ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER'];
 
 // 60 seconds gives users a short staleness window without coupling every
 // CRUD service to the dashboard cache. Event handlers (DrawEventHandlers)
@@ -12,7 +18,21 @@ const DASHBOARD_TAG = 'dashboard';
 
 @Injectable()
 export class DashboardService {
-  constructor(private prisma: PrismaService, private cache: CacheService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+    private access: ProjectAccessService,
+  ) {}
+
+  /**
+   * For a scoped viewer, the set of project ids they may see; otherwise undefined
+   * (no restriction). Returned as a Prisma id-filter fragment for findMany where-clauses.
+   */
+  private async memberScope(role: string, userId?: string): Promise<Prisma.ProjectWhereInput> {
+    if (!userId || !this.access.isScoped(role)) return {};
+    const ids = await this.access.accessibleProjectIds(userId);
+    return { id: { in: ids } };
+  }
 
   /**
    * Call from any write path that affects dashboard aggregates
@@ -211,7 +231,12 @@ export class DashboardService {
   }
 
   // ---- Construction Dashboard ----
-  async getConstructionDashboard(role: string) {
+  async getConstructionDashboard(role: string, userId?: string) {
+    // Scoped roles (PM/Construction) see only their projects, so the result is
+    // per-user — bypass the role-keyed shared cache for them.
+    if (this.access.isScoped(role)) {
+      return this.computeConstructionDashboard(role, userId);
+    }
     return this.cache.wrap(
       `dashboard:construction:${role}`,
       DASHBOARD_TTL,
@@ -220,11 +245,12 @@ export class DashboardService {
     );
   }
 
-  private async computeConstructionDashboard(role: string) {
+  private async computeConstructionDashboard(role: string, userId?: string) {
     const isPM = role === 'PROJECT_MANAGER';
+    const canViewFinancials = CONSTRUCTION_FINANCIAL_ROLES.includes(role);
 
     const projects = await this.prisma.project.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...(await this.memberScope(role, userId)) },
       include: {
         budgetLines: true,
         actuals: true,
@@ -274,8 +300,8 @@ export class DashboardService {
         id: p.id,
         name: p.name,
         phase: p.phase,
-        budgetSpentPct,
-        rawBudget: { budget, actuals },
+        // Budget/spend hidden from roles without budget:view (Construction).
+        ...(canViewFinancials ? { budgetSpentPct, rawBudget: { budget, actuals } } : {}),
         milestoneCounts: {
           overdue,
           inProgress,
@@ -308,11 +334,16 @@ export class DashboardService {
       activeProjectCount: projects.length,
       overdueMilestoneCount,
       inProgressMilestoneCount,
-      totalBudget,
-      totalActuals,
-      totalLoanAvailable,
-      budgetVariance: totalBudget - totalActuals,
-      budgetSpentPct,
+      // Financial totals omitted for roles without budget:view (Construction).
+      ...(canViewFinancials
+        ? {
+            totalBudget,
+            totalActuals,
+            totalLoanAvailable,
+            budgetVariance: totalBudget - totalActuals,
+            budgetSpentPct,
+          }
+        : {}),
       projectSummaries,
       recentMilestones,
       drawRequestStats: {
@@ -324,7 +355,11 @@ export class DashboardService {
   }
 
   // ---- Sales Dashboard ----
-  async getSalesDashboard() {
+  async getSalesDashboard(role?: string, userId?: string) {
+    // SALES/MARKETING are scoped → per-user project set, bypass the shared cache.
+    if (role && this.access.isScoped(role)) {
+      return this.computeSalesDashboard(role, userId);
+    }
     return this.cache.wrap(
       'dashboard:sales',
       DASHBOARD_TTL,
@@ -333,9 +368,9 @@ export class DashboardService {
     );
   }
 
-  private async computeSalesDashboard() {
+  private async computeSalesDashboard(role?: string, userId?: string) {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, ...(await this.memberScope(role ?? '', userId)) },
       include: {
         sales: true,
         buildings: {

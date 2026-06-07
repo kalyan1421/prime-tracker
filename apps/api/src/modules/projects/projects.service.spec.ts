@@ -22,12 +22,18 @@ const mockPrisma = {
 // interactive transaction — run the callback with the same mock as the tx client
 (mockPrisma as any).$transaction = jest.fn((cb: any) => cb(mockPrisma));
 
+const mockAccess = {
+  isScoped: (role: string) => ['PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING'].includes(role),
+  accessibleProjectIds: jest.fn().mockResolvedValue([]),
+  isMember: jest.fn(),
+};
+
 describe('ProjectsService', () => {
   let service: ProjectsService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ProjectsService(mockPrisma as any);
+    service = new ProjectsService(mockPrisma as any, mockAccess as any);
   });
 
   describe('findAll', () => {
