@@ -963,11 +963,27 @@ export function useCashFlow(projectId: string) {
   });
 }
 
-export function useCashFlowForecast(projectId: string) {
+export function useCashFlowForecast(projectId: string, months?: number) {
   return useQuery({
-    queryKey: ['cashflow-forecast', projectId],
-    queryFn: () => api.get('/cashflow/forecast', { params: { projectId } }).then((r) => r.data),
+    queryKey: ['cashflow-forecast', projectId, months],
+    queryFn: () => api.get('/cashflow/forecast', { params: { projectId, months } }).then((r) => r.data),
     enabled: !!projectId,
+  });
+}
+
+/** Portfolio-wide cashflow forecast across the viewer's projects. */
+export function useCashflowPortfolio(months?: number) {
+  return useQuery({
+    queryKey: ['cashflow-portfolio', months],
+    queryFn: () => api.get('/cashflow/portfolio', { params: { months } }).then((r) => r.data),
+  });
+}
+
+/** Budget cash-obligations by category, M/Q/A. Omit projectId for portfolio. */
+export function useBudgetObligations(projectId?: string, granularity: 'month' | 'quarter' | 'year' = 'month') {
+  return useQuery({
+    queryKey: ['budget-obligations', projectId ?? 'portfolio', granularity],
+    queryFn: () => api.get('/cashflow/obligations', { params: { projectId, granularity } }).then((r) => r.data),
   });
 }
 

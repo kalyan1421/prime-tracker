@@ -13,6 +13,7 @@ import { SalePaymentsService } from '../src/modules/sales/sale-payments.service'
 import { SalePaymentEventHandlers } from '../src/modules/sales/sale-payment-event-handlers.service';
 import { ScheduledNotificationsService } from '../src/modules/notifications/scheduled-notifications.service';
 import { CashFlowService } from '../src/modules/cashflow/cashflow.service';
+import { CashflowEngineService } from '../src/modules/cashflow/cashflow-engine.service';
 import { SalesService } from '../src/modules/sales/sales.service';
 import { DailyLogsService } from '../src/modules/daily-logs/daily-logs.service';
 import { BrokersService } from '../src/modules/brokers/brokers.service';
@@ -212,9 +213,13 @@ async function main() {
     check(waitlist.some((w: any) => w.lead.id === lead.id && w.position >= 1), 'lead appears on the unit waitlist (multi-unit interest)');
 
     console.log('\n── Cashflow inflows + receivables + overdue cron ──');
-    const cashflow = new CashFlowService(prisma as any);
+    const accessStub = { isScoped: () => false, accessibleProjectIds: async () => [] } as any;
+    const cashflow = new CashFlowService(prisma as any, new CashflowEngineService(prisma as any), accessStub);
     const forecast = await cashflow.getForecast(projectId);
     check(forecast.summary.totalInflows > 0, 'cashflow forecast now includes sale-payment inflows');
+    // Slice 3: budget obligations view re-buckets the engine's 5 outflow categories
+    const obligations = await cashflow.getObligations({ userId: 'u', role: 'FINANCE' }, { projectId, granularity: 'quarter' });
+    check(Array.isArray(obligations.periods) && obligations.categories.length === 5, 'budget obligations view returns 5 categories by period');
     const recv = await payments.receivables(520); // wide horizon to capture all
     check(Array.isArray(recv) && recv.length > 0, `receivables view returns ${recv.length} outstanding installment(s)`);
     const cron = await scheduled.checkSalePayments();

@@ -14,6 +14,7 @@ import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
 import { CashflowForecastView } from '../components/CashflowForecastView';
+import { ObligationsPanel } from '../components/ObligationsPanel';
 import { CancelSaleModal } from '../components/CancelSaleModal';
 import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
@@ -1089,6 +1090,11 @@ function FinancialsTab({ projectId }: { projectId: string }) {
             variant="construction"
           />
         </PermissionGate>
+      </div>
+
+      {/* Budget — Cash Needs (forward obligations by category, M/Q/A) */}
+      <div className="mb-6">
+        <ObligationsPanel projectId={projectId} />
       </div>
 
       {/* Budget vs Actual Chart */}
