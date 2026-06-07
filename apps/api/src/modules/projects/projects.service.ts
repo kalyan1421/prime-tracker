@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, ProjectPhase, ProjectStatus, ProjectType } from '@prisma/client';
+import { isProjectScopedRole } from '@prime-tracker/shared';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 
 export interface ListProjectsParams {
   status?: ProjectStatus;
@@ -13,11 +15,24 @@ export interface ListProjectsParams {
   pageSize?: number;
 }
 
+/**
+ * Identifies the user making a read request, so the service can scope project
+ * visibility. Field roles (PM/Construction/Sales/Marketing) only see projects they
+ * are a ProjectMember of; everyone else sees the full portfolio. Omit `viewer` for
+ * internal calls (update/delete already gate on project:edit/delete permissions).
+ */
+export interface ProjectViewer {
+  userId: string;
+  role: string;
+  /** Whether the viewer may see budget/spend aggregates (budget:view). */
+  canViewFinancials?: boolean;
+}
+
 @Injectable()
 export class ProjectsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
 
-  async findAll(params?: ListProjectsParams) {
+  async findAll(params?: ListProjectsParams, viewer?: ProjectViewer) {
     const where: Prisma.ProjectWhereInput = {};
     if (params?.status) where.status = params.status;
     if (params?.phase) where.phase = params.phase;
@@ -28,6 +43,11 @@ export class ProjectsService {
         { location: { contains: params.search, mode: 'insensitive' } },
         { slug: { contains: params.search, mode: 'insensitive' } },
       ];
+    }
+
+    // Project-visibility scoping: field roles only see projects they're assigned to.
+    if (viewer && isProjectScopedRole(viewer.role)) {
+      where.members = { some: { userId: viewer.userId } };
     }
 
     const sortOrder = params?.sortOrder ?? 'desc';
@@ -89,7 +109,12 @@ export class ProjectsService {
     return projects;
   }
 
-  async findById(id: string) {
+  async findById(id: string, viewer?: ProjectViewer) {
+    // Scoped roles can only open projects they're assigned to. Checked before the
+    // fetch so a non-member can't tell an existing project from a missing one.
+    if (viewer && isProjectScopedRole(viewer.role)) {
+      await this.assertViewerCanAccess(id, viewer);
+    }
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
@@ -109,10 +134,19 @@ export class ProjectsService {
     return project;
   }
 
-  async findBySlug(slug: string) {
+  async findBySlug(slug: string, viewer?: ProjectViewer) {
     const project = await this.prisma.project.findUnique({ where: { slug } });
     if (!project) throw new NotFoundException('Project not found');
-    return this.findById(project.id);
+    return this.findById(project.id, viewer);
+  }
+
+  /** Throws NotFound if a scoped viewer isn't a member of the project. */
+  private async assertViewerCanAccess(projectId: string, viewer: ProjectViewer) {
+    const membership = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId: viewer.userId } },
+      select: { id: true },
+    });
+    if (!membership) throw new NotFoundException('Project not found');
   }
 
   async create(input: {
@@ -127,27 +161,40 @@ export class ProjectsService {
     description?: string;
     startDate?: string;
     targetEnd?: string;
-  }) {
+  }, creatorId?: string) {
     // Friendly slug uniqueness check (Prisma's P2002 is opaque)
     const existing = await this.prisma.project.findUnique({ where: { slug: input.slug } });
     if (existing) {
       throw new ConflictException(`Slug '${input.slug}' is already taken`);
     }
 
-    return this.prisma.project.create({
-      data: {
-        name: input.name,
-        slug: input.slug,
-        location: input.location,
-        address: input.address,
-        acreage: input.acreage,
-        status: input.status,
-        phase: input.phase,
-        projectType: input.projectType,
-        description: input.description,
-        startDate: input.startDate ? new Date(input.startDate) : undefined,
-        targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
-      },
+    const data = {
+      name: input.name,
+      slug: input.slug,
+      location: input.location,
+      address: input.address,
+      acreage: input.acreage,
+      status: input.status,
+      phase: input.phase,
+      projectType: input.projectType,
+      description: input.description,
+      startDate: input.startDate ? new Date(input.startDate) : undefined,
+      targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
+    };
+
+    // Create the project and auto-enrol the creator as a member atomically — otherwise a
+    // scoped role (e.g. PM) could lose sight of the project it just created if enrolment failed.
+    if (!creatorId) {
+      return this.prisma.project.create({ data });
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({ data });
+      await tx.projectMember.upsert({
+        where: { projectId_userId: { projectId: project.id, userId: creatorId } },
+        create: { projectId: project.id, userId: creatorId, role: 'OWNER' },
+        update: {},
+      });
+      return project;
     });
   }
 
@@ -234,9 +281,15 @@ export class ProjectsService {
 
   // ---- Dashboard Aggregation ----
 
-  async getDashboardSummary() {
+  async getDashboardSummary(viewer?: ProjectViewer) {
+    // Scoped viewers only aggregate their member projects.
+    const scopeWhere: Prisma.ProjectWhereInput =
+      viewer && isProjectScopedRole(viewer.role)
+        ? { id: { in: await this.access.accessibleProjectIds(viewer.userId) } }
+        : {};
+
     const projects = await this.prisma.project.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', ...scopeWhere },
       include: {
         budgetLines: true,
         actuals: true,
@@ -253,7 +306,7 @@ export class ProjectsService {
       },
     });
 
-    const allProjects = await this.prisma.project.findMany();
+    const allProjects = await this.prisma.project.findMany({ where: scopeWhere });
 
     let totalBudget = 0;
     let totalActuals = 0;
@@ -393,21 +446,29 @@ export class ProjectsService {
       )
       .slice(0, 10);
 
+    // Hide budget/spend/debt aggregates from viewers without budget:view.
+    const showFinancials = !viewer || viewer.canViewFinancials !== false;
+    const financials = showFinancials
+      ? {
+          totalBudget,
+          totalActuals,
+          totalCommitted,
+          budgetVariance: totalBudget - totalActuals,
+          totalMonthlyLeaseIncome,
+          totalMonthlyMortgage,
+          netMonthlyIncome: totalMonthlyLeaseIncome - totalMonthlyMortgage,
+        }
+      : {};
+
     return {
       totalProjects: allProjects.length,
       activeProjects: projects.length,
-      totalBudget,
-      totalActuals,
-      totalCommitted,
-      budgetVariance: totalBudget - totalActuals,
+      ...financials,
       unitsByStatus,
       projectsByPhase,
       recentMilestones,
-      alerts,
+      alerts: showFinancials ? alerts : alerts.filter((a) => a.type !== 'BUDGET_OVERRUN'),
       recentComments,
-      totalMonthlyLeaseIncome,
-      totalMonthlyMortgage,
-      netMonthlyIncome: totalMonthlyLeaseIncome - totalMonthlyMortgage,
     };
   }
 }

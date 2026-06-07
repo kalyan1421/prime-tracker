@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProjectAccessModule } from './common/access/project-access.module';
 import { CacheModule } from './common/cache/cache.module';
 import { EventBusModule } from './common/events/event-bus.module';
 import { HealthModule } from './common/health/health.module';
@@ -57,6 +58,7 @@ import { BrokersModule } from './modules/brokers/brokers.module';
     EventBusModule,
     HealthModule,
     PrismaModule,
+    ProjectAccessModule,
     AuthModule,
     UsersModule,
     ProjectsModule,

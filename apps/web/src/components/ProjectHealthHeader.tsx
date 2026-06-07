@@ -40,6 +40,9 @@ const fmtPct = (n: number) => `${(n * 100).toFixed(0)}%`;
 export function ProjectHealthHeader({ project }: { project: any }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('project:edit');
+  // Budget/spend/variance is financial data — hidden from roles without budget:view
+  // (e.g. Construction). Those roles still see the occupancy + debt row below.
+  const canViewBudget = hasPermission('budget:view');
   const { data: fin } = useFinancialSummary(project.id);
   const { data: units } = useUnits(project.id);
   const { data: leases } = useLeases(project.id);
@@ -76,7 +79,8 @@ export function ProjectHealthHeader({ project }: { project: any }) {
 
   return (
     <div className="flex h-full flex-col">
-        {/* Budget — the hero metric of this card */}
+        {/* Budget — the hero metric of this card. Financial data — gated on budget:view. */}
+        {canViewBudget && (
         <div className="px-5 pt-4 pb-4">
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold flex items-center gap-1.5">
@@ -116,6 +120,7 @@ export function ProjectHealthHeader({ project }: { project: any }) {
             </div>
           </Tooltip>
         </div>
+        )}
 
         {/* Occupancy + debt — three peers, separated by hairlines */}
         <div className="mt-auto grid grid-cols-3 border-t border-gray-100 divide-x divide-gray-100">

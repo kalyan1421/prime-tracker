@@ -1072,16 +1072,23 @@ function FinancialsTab({ projectId }: { projectId: string }) {
     <div className="mt-4">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Budget" value={fmt(fin.budgetTotal)} colorScheme="brand" variant="construction" />
-        <StatCard label="Actuals" value={fmt(fin.actualTotal)} colorScheme="orange" variant="construction" />
-        <StatCard label="Committed" value={fmt(fin.committedTotal)} colorScheme="purple" variant="construction" />
-        <StatCard
-          label="Variance"
-          value={fmt(fin.variance)}
-          helpText={fmtPct(fin.variancePercent)}
-          trend={fin.variance >= 0 ? 'increase' : 'decrease'}
-          colorScheme={fin.variance >= 0 ? 'green' : 'red'}
-          variant="construction"
-        />
+        {/* Actuals/Committed/Variance are spend data — financial:view only (PM sees budget only). */}
+        <PermissionGate permission="financial:view">
+          <StatCard label="Actuals" value={fmt(fin.actualTotal)} colorScheme="orange" variant="construction" />
+        </PermissionGate>
+        <PermissionGate permission="financial:view">
+          <StatCard label="Committed" value={fmt(fin.committedTotal)} colorScheme="purple" variant="construction" />
+        </PermissionGate>
+        <PermissionGate permission="financial:view">
+          <StatCard
+            label="Variance"
+            value={fmt(fin.variance)}
+            helpText={fmtPct(fin.variancePercent)}
+            trend={fin.variance >= 0 ? 'increase' : 'decrease'}
+            colorScheme={fin.variance >= 0 ? 'green' : 'red'}
+            variant="construction"
+          />
+        </PermissionGate>
       </div>
 
       {/* Budget vs Actual Chart */}
@@ -1310,7 +1317,8 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         )}
       </PermissionGate>
 
-      {/* Commitments */}
+      {/* Commitments — vendor spend, financial:view only */}
+      <PermissionGate permission="financial:view">
       <Card shadow="sm">
         <CardHeader className="pb-0 flex justify-between items-center">
           <p className="font-semibold text-sm text-gray-600">Contracts & Commitments</p>
@@ -1356,8 +1364,10 @@ function FinancialsTab({ projectId }: { projectId: string }) {
           )}
         </CardBody>
       </Card>
+      </PermissionGate>
 
-      {/* Cashflow Forecast */}
+      {/* Cashflow Forecast — financial:view only */}
+      <PermissionGate permission="financial:view">
       <Card shadow="sm">
         <CardHeader className="pb-0">
           <p className="font-semibold text-sm text-gray-600">Cashflow Projection</p>
@@ -1366,6 +1376,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
           <CashflowForecastView projectId={projectId} />
         </CardBody>
       </Card>
+      </PermissionGate>
 
       {/* Budget Line Modal */}
       <Modal isOpen={isBudgetFormOpen} onClose={onBudgetFormClose} size="lg">
@@ -3798,8 +3809,11 @@ function ConstructionTab({ projectId }: { projectId: string }) {
         <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-2">📋 Daily Logs</p>
         <DailyLogFeed projectId={projectId} />
       </PermissionGate>
-      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-0">📊 Budget & Costs</p>
-      <FinancialsTab projectId={projectId} />
+      {/* Budget & Costs is financial data — Construction is fully blind (no budget:view). */}
+      <PermissionGate permission="budget:view">
+        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-0">📊 Budget & Costs</p>
+        <FinancialsTab projectId={projectId} />
+      </PermissionGate>
     </div>
   );
 }

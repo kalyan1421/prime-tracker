@@ -2,13 +2,14 @@ import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseI
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { CashFlowService } from './cashflow.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
 
 @ApiTags('CashFlow')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('cashflow')
 export class CashFlowController {

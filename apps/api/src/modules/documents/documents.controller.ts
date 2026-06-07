@@ -8,6 +8,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagg
 import { DocumentsService } from './documents.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
@@ -18,7 +19,7 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 @ApiTags('Documents')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('documents')
 export class DocumentsController {

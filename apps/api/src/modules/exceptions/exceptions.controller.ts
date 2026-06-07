@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ExceptionsService } from './exceptions.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 
 /**
  * GET /api/exceptions          → portfolio-wide exception feed
@@ -12,7 +13,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
  */
 @ApiTags('Exceptions')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ProjectAccessGuard)
 @Controller('exceptions')
 export class ExceptionsController {
   constructor(private exceptions: ExceptionsService) {}

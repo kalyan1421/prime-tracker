@@ -5,9 +5,10 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ProjectsService } from './projects.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { ListProjectsDto } from './dto/list-projects.dto';
@@ -20,7 +21,7 @@ class AddMemberDto {
 
 @ApiTags('Projects')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('projects')
 export class ProjectsController {
@@ -29,36 +30,56 @@ export class ProjectsController {
   @Get('dashboard')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Executive dashboard summary' })
-  getDashboard() {
-    return this.projectsService.getDashboardSummary();
+  getDashboard(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('permissions') permissions: string[],
+  ) {
+    return this.projectsService.getDashboardSummary({
+      userId,
+      role,
+      canViewFinancials: permissions?.includes('budget:view') ?? false,
+    });
   }
 
   @Get()
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'List projects (paginated when page/pageSize provided)' })
-  findAll(@Query() query: ListProjectsDto) {
-    return this.projectsService.findAll(query);
+  findAll(
+    @Query() query: ListProjectsDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.projectsService.findAll(query, { userId, role });
   }
 
   @Get('slug/:slug')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Get project by slug' })
-  findBySlug(@Param('slug') slug: string) {
-    return this.projectsService.findBySlug(slug);
+  findBySlug(
+    @Param('slug') slug: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.projectsService.findBySlug(slug, { userId, role });
   }
 
   @Get(':id')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Get project by ID with all relations' })
-  findById(@Param('id') id: string) {
-    return this.projectsService.findById(id);
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.projectsService.findById(id, { userId, role });
   }
 
   @Post()
   @RequirePermissions('project:create')
   @ApiOperation({ summary: 'Create project' })
-  create(@Body() body: CreateProjectDto) {
-    return this.projectsService.create(body);
+  create(@Body() body: CreateProjectDto, @CurrentUser('sub') userId: string) {
+    return this.projectsService.create(body, userId);
   }
 
   @Put(':id')

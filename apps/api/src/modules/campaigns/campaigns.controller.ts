@@ -5,6 +5,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { CampaignsService } from './campaigns.service';
 import { CreateCampaignDto, UpdateCampaignDto, RecordSpendDto } from './dto/campaign.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
@@ -12,7 +13,7 @@ import { CampaignChannel, CampaignStatus } from '@prisma/client';
 
 @ApiTags('Campaigns')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('campaigns')
 export class CampaignsController {

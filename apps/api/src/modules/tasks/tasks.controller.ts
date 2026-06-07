@@ -8,6 +8,7 @@ import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { TasksService } from './tasks.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { CurrentUser } from '../../common/decorators/index';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 
@@ -18,7 +19,7 @@ function ensureUploadDir() {
 }
 
 @Controller('tasks')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 export class TasksController {
     constructor(private readonly tasksService: TasksService) { }
