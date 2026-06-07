@@ -154,6 +154,9 @@ model Project {
   location    String
   address     String?
   acreage     Decimal?      @db.Decimal(10, 3)
+  // Top-down "control total" approved by Finance/Founder. Detailed budget lines are
+  // tracked bottom-up against this; the Approved-vs-Planned gap is a key signal.
+  approvedBudget Decimal?   @db.Decimal(14, 2)
   status      ProjectStatus @default(ACTIVE)
   phase       ProjectPhase  @default(PRE_DEVELOPMENT)
   projectType ProjectType?

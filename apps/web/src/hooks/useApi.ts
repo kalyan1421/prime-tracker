@@ -499,6 +499,19 @@ export function useUpdateProject() {
   });
 }
 
+/** Set/clear the project's approved budget (control total). Gated server-side by budget:edit. */
+export function useSetApprovedBudget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, approvedBudget }: { id: string; approvedBudget: number | null }) =>
+      api.put(`/projects/${id}/approved-budget`, { approvedBudget }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['project', vars.id] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
+}
+
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({

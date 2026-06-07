@@ -89,6 +89,14 @@ export class ProjectsController {
     return this.projectsService.update(id, body);
   }
 
+  // Approved Budget (control total) is owned by Finance — gate on budget:edit, not project:edit.
+  @Put(':id/approved-budget')
+  @RequirePermissions('budget:edit')
+  @ApiOperation({ summary: 'Set or clear the project approved budget (control total)' })
+  setApprovedBudget(@Param('id') id: string, @Body() body: { approvedBudget: number | null }) {
+    return this.projectsService.setApprovedBudget(id, body.approvedBudget ?? null);
+  }
+
   @Delete(':id')
   @RequirePermissions('project:delete')
   @ApiOperation({ summary: 'Archive project (soft-delete: status → CANCELLED)' })

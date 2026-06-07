@@ -28,7 +28,7 @@ import {
   useCreateLease, useUpdateLease, useDeleteLease,
   useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount, useBrokers,
   useCreateCommitment, useUpdateCommitment, useDeleteCommitment,
-  useCreateBudget, useUpdateBudget, useDeleteBudget, useProjectBudgetRevisions,
+  useCreateBudget, useUpdateBudget, useDeleteBudget, useProjectBudgetRevisions, useSetApprovedBudget,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding,
   useMonthlyLeaseIncome, useMonthlyPayments,
@@ -3882,21 +3882,46 @@ function ConstructionTab({ projectId }: { projectId: string }) {
 // ---- Budget Tab (locked total budget + Budget & Costs + day-wise change log) ----
 function BudgetTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
-  // Admin (Super Admin), Founder, Finance & Accounting hold budget:edit and may revise the total.
+  // Admin (Super Admin), Founder, Finance & Accounting hold budget:edit and may set the approved total.
   const canEditBudget = hasPermission('budget:edit');
   const budgetLinesRef = React.useRef<HTMLDivElement>(null);
   const scrollToLines = () => budgetLinesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
+  const { data: project } = useProject(projectId);
   const { data: summary } = useFinancialSummary(projectId);
   const { data: revisions = [] } = useProjectBudgetRevisions(projectId);
+  const setApprovedBudget = useSetApprovedBudget();
+  const { isOpen: isApprovedOpen, onOpen: onApprovedOpen, onClose: onApprovedClose } = useDisclosure();
+  const [approvedInput, setApprovedInput] = useState('');
   const s = summary as any;
+  const proj = project as any;
 
-  // Total = sum of revised budget across all lines (mirrors FinancialsTab's totals).
-  const totalBudget = Number(s?.budgetTotal ?? 0);
+  // Top-down approved total (control total) vs bottom-up planned (sum of lines).
+  const approvedBudget = proj?.approvedBudget != null ? Number(proj.approvedBudget) : null;
+  const planned = Number(s?.budgetTotal ?? 0);        // sum of budget lines
   const totalActuals = Number(s?.actualTotal ?? 0);
   const totalCommitted = Number(s?.committedTotal ?? 0);
-  const remaining = totalBudget - totalActuals - totalCommitted;
-  const usedPct = totalBudget > 0 ? Math.round(((totalActuals + totalCommitted) / totalBudget) * 100) : 0;
+  const baseTotal = approvedBudget ?? planned;        // headline number; falls back to planned if unset
+  const remaining = baseTotal - totalActuals - totalCommitted;
+  const usedPct = baseTotal > 0 ? Math.round(((totalActuals + totalCommitted) / baseTotal) * 100) : 0;
+  const planVsApproved = approvedBudget != null ? planned - approvedBudget : null; // >0 means over-planned
+
+  const openApprovedEdit = () => {
+    setApprovedInput(approvedBudget != null ? String(approvedBudget) : (planned ? String(planned) : ''));
+    onApprovedOpen();
+  };
+  const saveApproved = async () => {
+    const val = approvedInput.trim() === '' ? undefined : parseFloat(approvedInput);
+    if (val != null && (isNaN(val) || val < 0)) {
+      addToast({ title: 'Enter a valid amount', color: 'warning' });
+      return;
+    }
+    try {
+      await setApprovedBudget.mutateAsync({ id: projectId, approvedBudget: val ?? null });
+      addToast({ title: 'Approved budget updated', color: 'success' });
+      onApprovedClose();
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to update'), color: 'danger' }); }
+  };
 
   const revList = revisions as any[];
   const reasonLabel = (r: string) => (r || '').replace(/_/g, ' ').toLowerCase();
@@ -3907,14 +3932,16 @@ function BudgetTab({ projectId }: { projectId: string }) {
         permission="budget:view"
         fallback={<EmptyState title="No access" message="You don't have permission to view budget data." />}
       >
-        {/* Total budget banner — editable by Admin / Finance / Founder (budget:edit). */}
+        {/* Approved Budget banner — top-down control total, editable by Admin / Finance / Founder. */}
         <Card shadow="sm" className="border border-amber-100 bg-amber-50">
           <CardBody className="p-5">
             <div className="flex items-center justify-between gap-2 mb-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Total Project Budget</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                {approvedBudget != null ? 'Approved Budget' : 'Total Project Budget'}
+              </p>
               {canEditBudget ? (
-                <Button size="sm" color="warning" variant="flat" startContent={<FiEdit2 className="text-[11px]" />} onPress={scrollToLines}>
-                  Edit budget
+                <Button size="sm" color="warning" variant="flat" startContent={<FiEdit2 className="text-[11px]" />} onPress={openApprovedEdit}>
+                  {approvedBudget != null ? 'Edit approved budget' : 'Set approved budget'}
                 </Button>
               ) : (
                 <Chip size="sm" variant="flat" startContent={<FiLock className="text-[11px]" />} className="bg-amber-100 text-amber-700">
@@ -3922,26 +3949,42 @@ function BudgetTab({ projectId }: { projectId: string }) {
                 </Chip>
               )}
             </div>
-            <p className="text-3xl font-bold text-gray-900 tabular-nums">{fmt(totalBudget)}</p>
+            <p className="text-3xl font-bold text-gray-900 tabular-nums">{fmt(baseTotal)}</p>
+            {approvedBudget == null && (
+              <p className="text-[11px] text-amber-700/80 mt-1">No approved total set — showing the sum of budget lines. {canEditBudget ? 'Set an approved budget to track plan-vs-approved.' : ''}</p>
+            )}
             <Progress aria-label="Budget used" value={usedPct} size="sm" className="mt-3" color={usedPct > 100 ? 'danger' : 'warning'} />
-            <div className="grid grid-cols-3 gap-3 mt-4">
+            {/* Reconciliation: Approved → Planned → Committed → Actual */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
               <div>
-                <p className="text-[11px] uppercase tracking-wide text-gray-500">Actuals</p>
-                <p className="text-sm font-semibold text-orange-600 tabular-nums">{fmt(totalActuals)}</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500">Planned (lines)</p>
+                <p className="text-sm font-semibold text-blue-600 tabular-nums">{fmt(planned)}</p>
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Committed</p>
                 <p className="text-sm font-semibold text-purple-600 tabular-nums">{fmt(totalCommitted)}</p>
               </div>
               <div>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500">Actuals</p>
+                <p className="text-sm font-semibold text-orange-600 tabular-nums">{fmt(totalActuals)}</p>
+              </div>
+              <div>
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Remaining</p>
                 <p className={`text-sm font-semibold tabular-nums ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(remaining)}</p>
               </div>
             </div>
+            {/* Plan-vs-approved signal — the headline number for planning discipline. */}
+            {planVsApproved != null && (
+              <div className={`mt-4 rounded-lg px-3 py-2 text-xs font-medium ${planVsApproved > 0.5 ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                {planVsApproved > 0.5
+                  ? `⚠ Planned lines exceed the approved budget by ${fmt(planVsApproved)} — re-plan or raise the approved total.`
+                  : `✓ Planned lines are within the approved budget (${fmt(Math.abs(planVsApproved))} headroom).`}
+              </div>
+            )}
             <p className="text-[11px] text-amber-700/80 mt-3">
               {canEditBudget
-                ? 'The total is the sum of the budget lines below — add or revise a line to change it. Every change is logged.'
-                : 'The total is set by the budget lines below. Editing is limited to Admin, Finance and Founder.'}
+                ? 'Approved budget is the top-down control total. The budget lines below are tracked against it — each line change is logged.'
+                : 'Approved budget editing is limited to Admin, Finance and Founder.'}
             </p>
           </CardBody>
         </Card>
@@ -3991,6 +4034,31 @@ function BudgetTab({ projectId }: { projectId: string }) {
           )}
         </div>
       </PermissionGate>
+
+      {/* Approved budget edit modal */}
+      <Modal isOpen={isApprovedOpen} onClose={onApprovedClose} size="sm">
+        <ModalContent>
+          <ModalHeader>{approvedBudget != null ? 'Edit Approved Budget' : 'Set Approved Budget'}</ModalHeader>
+          <ModalBody>
+            <Input
+              type="number"
+              label="Approved budget ($)"
+              placeholder="e.g. 18300000"
+              value={approvedInput}
+              onChange={(e) => setApprovedInput(e.target.value)}
+              startContent={<span className="text-gray-400 text-sm">$</span>}
+              description="The top-down control total approved by Finance/Founder. Leave blank to clear."
+            />
+            {planned > 0 && (
+              <p className="text-xs text-gray-500">Current planned (sum of budget lines): <span className="font-semibold text-gray-700">{fmt(planned)}</span></p>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="light" onPress={onApprovedClose}>Cancel</Button>
+            <Button color="primary" onPress={saveApproved} isLoading={setApprovedBudget.isPending}>Save</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

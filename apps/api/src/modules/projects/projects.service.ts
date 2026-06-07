@@ -155,6 +155,7 @@ export class ProjectsService {
     location: string;
     address?: string;
     acreage?: number;
+    approvedBudget?: number;
     status?: ProjectStatus;
     phase?: ProjectPhase;
     projectType?: ProjectType;
@@ -174,6 +175,7 @@ export class ProjectsService {
       location: input.location,
       address: input.address,
       acreage: input.acreage,
+      approvedBudget: input.approvedBudget,
       status: input.status,
       phase: input.phase,
       projectType: input.projectType,
@@ -204,6 +206,7 @@ export class ProjectsService {
     location?: string;
     address?: string;
     acreage?: number;
+    approvedBudget?: number;
     status?: ProjectStatus;
     phase?: ProjectPhase;
     projectType?: ProjectType;
@@ -229,6 +232,7 @@ export class ProjectsService {
         location: input.location,
         address: input.address,
         acreage: input.acreage,
+        approvedBudget: input.approvedBudget,
         status: input.status,
         phase: input.phase,
         projectType: input.projectType,
@@ -236,6 +240,22 @@ export class ProjectsService {
         startDate: input.startDate ? new Date(input.startDate) : undefined,
         targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
       },
+    });
+  }
+
+  /**
+   * Set/clear the top-down Approved Budget (control total). Separate from update()
+   * so it can be gated by budget:edit (Finance/Accounting/Founder/Admin) rather than
+   * project:edit — Finance owns the budget but does not edit project metadata.
+   */
+  async setApprovedBudget(id: string, approvedBudget: number | null) {
+    await this.findById(id);
+    if (approvedBudget != null && (isNaN(approvedBudget) || approvedBudget < 0)) {
+      throw new ConflictException('Approved budget must be a non-negative number');
+    }
+    return this.prisma.project.update({
+      where: { id },
+      data: { approvedBudget: approvedBudget ?? null },
     });
   }
 
