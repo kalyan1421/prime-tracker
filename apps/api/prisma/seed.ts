@@ -879,6 +879,7 @@ async function main() {
 
   // ---- Create Projects, Buildings & Units ----
   let totalUnits = 0;
+  const createdProjectIds: string[] = [];
 
   for (const proj of projects) {
     console.log(`\n📦 Creating project: ${proj.name}`);
@@ -895,6 +896,7 @@ async function main() {
         description: `${proj.name} - ${proj.location}`,
       },
     });
+    createdProjectIds.push(project.id);
 
     // Delete existing buildings (cascades to units, leases, sales, comments)
     await prisma.building.deleteMany({ where: { projectId: project.id } });
@@ -939,6 +941,23 @@ async function main() {
 
       console.log(`   🏢 ${bldg.name}: ${unitCreateData.length} units`);
     }
+  }
+
+  // ---- Project memberships ----
+  // Field roles (PM/Construction/Sales/Marketing) only see projects they're assigned to.
+  // For seed/demo, enrol every field-role user into every project so the app stays usable.
+  const fieldUsers = await prisma.user.findMany({
+    where: { role: { in: ['PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING'] } },
+    select: { id: true },
+  });
+  if (fieldUsers.length && createdProjectIds.length) {
+    await prisma.projectMember.createMany({
+      data: createdProjectIds.flatMap((projectId) =>
+        fieldUsers.map((u) => ({ projectId, userId: u.id, role: 'TEAM_MEMBER' })),
+      ),
+      skipDuplicates: true,
+    });
+    console.log(`   🔐 Enrolled ${fieldUsers.length} field users into ${createdProjectIds.length} projects`);
   }
 
   console.log('\n✅ Seed complete!');

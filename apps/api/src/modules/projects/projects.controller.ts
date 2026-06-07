@@ -7,7 +7,7 @@ import { ProjectsService } from './projects.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { ListProjectsDto } from './dto/list-projects.dto';
@@ -36,29 +36,41 @@ export class ProjectsController {
   @Get()
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'List projects (paginated when page/pageSize provided)' })
-  findAll(@Query() query: ListProjectsDto) {
-    return this.projectsService.findAll(query);
+  findAll(
+    @Query() query: ListProjectsDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.projectsService.findAll(query, { userId, role });
   }
 
   @Get('slug/:slug')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Get project by slug' })
-  findBySlug(@Param('slug') slug: string) {
-    return this.projectsService.findBySlug(slug);
+  findBySlug(
+    @Param('slug') slug: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.projectsService.findBySlug(slug, { userId, role });
   }
 
   @Get(':id')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Get project by ID with all relations' })
-  findById(@Param('id') id: string) {
-    return this.projectsService.findById(id);
+  findById(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.projectsService.findById(id, { userId, role });
   }
 
   @Post()
   @RequirePermissions('project:create')
   @ApiOperation({ summary: 'Create project' })
-  create(@Body() body: CreateProjectDto) {
-    return this.projectsService.create(body);
+  create(@Body() body: CreateProjectDto, @CurrentUser('sub') userId: string) {
+    return this.projectsService.create(body, userId);
   }
 
   @Put(':id')

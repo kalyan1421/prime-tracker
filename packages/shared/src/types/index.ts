@@ -369,7 +369,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BUILDING_EDIT,
     PERMISSIONS.UNIT_VIEW,
     PERMISSIONS.UNIT_EDIT,
-    PERMISSIONS.FINANCIAL_VIEW,
+    // financial:view (actuals, cashflow, commitments, financial reports) is Finance-only.
+    // PM keeps budget:view — needs the project budget to run the job — but not the
+    // detailed financial module. See discovery: "financial data = Accounting + Finance".
     PERMISSIONS.BUDGET_VIEW,
     PERMISSIONS.ACTUAL_VIEW,
     PERMISSIONS.DRAW_VIEW,
@@ -396,8 +398,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PROJECT_VIEW,
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
-    PERMISSIONS.FINANCIAL_VIEW,
-    PERMISSIONS.BUDGET_VIEW,
+    // Construction is fully blind to financials — no financial:view (actuals/cashflow/
+    // reports) and no budget:view (budget/spend/variance summary). Discovery: Construction
+    // must not see financial data. Keeps draw:view for inspection/site-photo workflow.
     PERMISSIONS.DRAW_VIEW,
     PERMISSIONS.MILESTONE_VIEW,
     PERMISSIONS.MILESTONE_EDIT,
@@ -460,7 +463,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PROJECT_VIEW,
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
-    PERMISSIONS.FINANCIAL_VIEW,
+    // Legal sees no financial data (financial:view removed; never had budget:view).
+    // Retains loan/contract/sale/lease views for document & legal review.
     PERMISSIONS.LOAN_VIEW,
     PERMISSIONS.SALES_VIEW,
     PERMISSIONS.LEASE_VIEW,
@@ -480,6 +484,27 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DAILYLOG_VIEW,
   ],
 };
+
+// ---- Project Visibility Scoping ----
+
+/**
+ * Roles whose project visibility is scoped to assignment (ProjectMember rows).
+ * Field/operational roles only see projects they are explicitly added to.
+ * Everyone else — leadership (Founder/Executive), finance (Finance/Accounting/AR_AP),
+ * Legal, Viewer, and Super Admin — sees the full portfolio.
+ * Decision (2026-06-07): scope field roles only.
+ */
+export const PROJECT_SCOPED_ROLES: UserRole[] = [
+  UserRole.PROJECT_MANAGER,
+  UserRole.CONSTRUCTION,
+  UserRole.SALES,
+  UserRole.MARKETING,
+];
+
+/** True when a role only sees projects it is assigned to (ProjectMember). */
+export function isProjectScopedRole(role: UserRole | string): boolean {
+  return (PROJECT_SCOPED_ROLES as string[]).includes(role as string);
+}
 
 // ---- Role Metadata ----
 

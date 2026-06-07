@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, ProjectPhase, ProjectStatus, ProjectType } from '@prisma/client';
+import { isProjectScopedRole } from '@prime-tracker/shared';
 
 export interface ListProjectsParams {
   status?: ProjectStatus;
@@ -13,11 +14,22 @@ export interface ListProjectsParams {
   pageSize?: number;
 }
 
+/**
+ * Identifies the user making a read request, so the service can scope project
+ * visibility. Field roles (PM/Construction/Sales/Marketing) only see projects they
+ * are a ProjectMember of; everyone else sees the full portfolio. Omit `viewer` for
+ * internal calls (update/delete already gate on project:edit/delete permissions).
+ */
+export interface ProjectViewer {
+  userId: string;
+  role: string;
+}
+
 @Injectable()
 export class ProjectsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(params?: ListProjectsParams) {
+  async findAll(params?: ListProjectsParams, viewer?: ProjectViewer) {
     const where: Prisma.ProjectWhereInput = {};
     if (params?.status) where.status = params.status;
     if (params?.phase) where.phase = params.phase;
@@ -28,6 +40,11 @@ export class ProjectsService {
         { location: { contains: params.search, mode: 'insensitive' } },
         { slug: { contains: params.search, mode: 'insensitive' } },
       ];
+    }
+
+    // Project-visibility scoping: field roles only see projects they're assigned to.
+    if (viewer && isProjectScopedRole(viewer.role)) {
+      where.members = { some: { userId: viewer.userId } };
     }
 
     const sortOrder = params?.sortOrder ?? 'desc';
@@ -89,7 +106,12 @@ export class ProjectsService {
     return projects;
   }
 
-  async findById(id: string) {
+  async findById(id: string, viewer?: ProjectViewer) {
+    // Scoped roles can only open projects they're assigned to. Checked before the
+    // fetch so a non-member can't tell an existing project from a missing one.
+    if (viewer && isProjectScopedRole(viewer.role)) {
+      await this.assertViewerCanAccess(id, viewer);
+    }
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
@@ -109,10 +131,19 @@ export class ProjectsService {
     return project;
   }
 
-  async findBySlug(slug: string) {
+  async findBySlug(slug: string, viewer?: ProjectViewer) {
     const project = await this.prisma.project.findUnique({ where: { slug } });
     if (!project) throw new NotFoundException('Project not found');
-    return this.findById(project.id);
+    return this.findById(project.id, viewer);
+  }
+
+  /** Throws NotFound if a scoped viewer isn't a member of the project. */
+  private async assertViewerCanAccess(projectId: string, viewer: ProjectViewer) {
+    const membership = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId: viewer.userId } },
+      select: { id: true },
+    });
+    if (!membership) throw new NotFoundException('Project not found');
   }
 
   async create(input: {
@@ -127,14 +158,14 @@ export class ProjectsService {
     description?: string;
     startDate?: string;
     targetEnd?: string;
-  }) {
+  }, creatorId?: string) {
     // Friendly slug uniqueness check (Prisma's P2002 is opaque)
     const existing = await this.prisma.project.findUnique({ where: { slug: input.slug } });
     if (existing) {
       throw new ConflictException(`Slug '${input.slug}' is already taken`);
     }
 
-    return this.prisma.project.create({
+    const project = await this.prisma.project.create({
       data: {
         name: input.name,
         slug: input.slug,
@@ -149,6 +180,18 @@ export class ProjectsService {
         targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
       },
     });
+
+    // Auto-enrol the creator as a member, otherwise a scoped role (e.g. PM) would
+    // immediately lose sight of the project it just created.
+    if (creatorId) {
+      await this.prisma.projectMember.upsert({
+        where: { projectId_userId: { projectId: project.id, userId: creatorId } },
+        create: { projectId: project.id, userId: creatorId, role: 'OWNER' },
+        update: {},
+      });
+    }
+
+    return project;
   }
 
   async update(id: string, input: {

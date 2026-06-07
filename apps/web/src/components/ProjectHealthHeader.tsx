@@ -40,6 +40,9 @@ const fmtPct = (n: number) => `${(n * 100).toFixed(0)}%`;
 export function ProjectHealthHeader({ project }: { project: any }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('project:edit');
+  // Budget/spend/variance is financial data — hidden from roles without budget:view
+  // (e.g. Construction). Those roles still see units/leases/loans.
+  const canViewBudget = hasPermission('budget:view');
   const { data: fin } = useFinancialSummary(project.id);
   const { data: units } = useUnits(project.id);
   const { data: leases } = useLeases(project.id);
@@ -78,7 +81,8 @@ export function ProjectHealthHeader({ project }: { project: any }) {
     <Card shadow="none" className="border border-gray-200 mb-3">
       <CardBody className="py-3 px-4">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-3">
-          {/* Budget block — primary KPI, spans two columns on desktop */}
+          {/* Budget block — primary KPI, spans two columns on desktop. Financial — gated. */}
+          {canViewBudget && (
           <div className="col-span-2 min-w-0">
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-[10px] uppercase tracking-wide text-gray-400 font-medium flex items-center gap-1">
@@ -113,6 +117,7 @@ export function ProjectHealthHeader({ project }: { project: any }) {
               </div>
             </Tooltip>
           </div>
+          )}
 
           {/* Units */}
           <Stat
