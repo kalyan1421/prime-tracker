@@ -1,48 +1,62 @@
 import { CashFlowService } from './cashflow.service';
 
-const mockPrisma = {
-  cashFlowEntry: { findMany: jest.fn() },
-  salePayment: { findMany: jest.fn() },
+const mockEngine = { buildTimeline: jest.fn().mockResolvedValue({ monthly: [], summary: {} }) };
+const mockAccess = {
+  isScoped: (role: string) => ['PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING'].includes(role),
+  accessibleProjectIds: jest.fn().mockResolvedValue(['pm-proj-1']),
 };
 
 function makeService() {
-  return new CashFlowService(mockPrisma as any);
+  return new CashFlowService({} as any, mockEngine as any, mockAccess as any);
 }
 
-describe('CashFlowService.getForecast — sale-payment inflows', () => {
+describe('CashFlowService — forecast delegation + portfolio scoping', () => {
   let service: CashFlowService;
-
   beforeEach(() => {
     jest.clearAllMocks();
     service = makeService();
   });
 
-  it('adds outstanding sale-payment installments as projected inflows, bucketed by due month', async () => {
-    mockPrisma.cashFlowEntry.findMany.mockResolvedValue([]); // no manual entries
-    mockPrisma.salePayment.findMany.mockResolvedValue([
-      { amount: 1000, paidAmount: 200, dueDate: new Date('2026-07-15T00:00:00Z'), effectiveDueDate: null },
-      { amount: 500, paidAmount: 0, dueDate: null, effectiveDueDate: new Date('2026-08-01T00:00:00Z') },
-    ]);
-
-    const forecast = await service.getForecast('p1');
-    const jul = forecast.monthly.find((m) => m.month === '2026-07');
-    const aug = forecast.monthly.find((m) => m.month === '2026-08');
-
-    expect(jul?.inflows).toBe(800); // 1000 - 200 outstanding
-    expect(aug?.inflows).toBe(500);
-    expect(forecast.summary.totalInflows).toBe(1300);
+  it('per-project forecast delegates to the engine with the projectId + horizon', async () => {
+    await service.getForecast('p1', 6);
+    expect(mockEngine.buildTimeline).toHaveBeenCalledWith({ projectId: 'p1', months: 6 });
   });
 
-  it('uses effectiveDueDate over dueDate and skips fully-paid / undated installments', async () => {
-    mockPrisma.cashFlowEntry.findMany.mockResolvedValue([]);
-    mockPrisma.salePayment.findMany.mockResolvedValue([
-      { amount: 1000, paidAmount: 1000, dueDate: new Date('2026-07-15T00:00:00Z'), effectiveDueDate: null }, // fully paid → skip
-      { amount: 300, paidAmount: 0, dueDate: null, effectiveDueDate: null }, // no date → skip
-      { amount: 400, paidAmount: 0, dueDate: new Date('2026-09-30T00:00:00Z'), effectiveDueDate: new Date('2026-07-20T00:00:00Z') },
-    ]);
+  it('portfolio forecast for a non-scoped role spans all projects (projectIds undefined)', async () => {
+    await service.getPortfolioForecast({ userId: 'u', role: 'FINANCE' });
+    expect(mockEngine.buildTimeline).toHaveBeenCalledWith({ projectIds: undefined, months: undefined });
+  });
 
-    const forecast = await service.getForecast('p1');
-    expect(forecast.monthly.find((m) => m.month === '2026-07')?.inflows).toBe(400); // bucketed by effectiveDueDate
-    expect(forecast.summary.totalInflows).toBe(400);
+  it('portfolio forecast for a scoped role is restricted to member projects', async () => {
+    await service.getPortfolioForecast({ userId: 'pm', role: 'PROJECT_MANAGER' }, 12);
+    expect(mockAccess.accessibleProjectIds).toHaveBeenCalledWith('pm');
+    expect(mockEngine.buildTimeline).toHaveBeenCalledWith({ projectIds: ['pm-proj-1'], months: 12 });
+  });
+
+  it('obligations re-buckets engine outflows by quarter with outstanding totals + immediate payables', async () => {
+    const cat = (over: Record<string, number> = {}) => ({
+      loanPayments: 0, subcontractorAP: 0, interiorTI: 0, commissions: 0, misc: 0, ...over,
+    });
+    mockEngine.buildTimeline.mockResolvedValueOnce({
+      monthly: [
+        { month: '2026-06', outflowsByCategory: cat({ loanPayments: 2000, subcontractorAP: 65000, interiorTI: 12000, commissions: 8000 }) },
+        { month: '2026-07', outflowsByCategory: cat({ loanPayments: 2000 }) },
+        { month: '2026-08', outflowsByCategory: cat({ loanPayments: 2000 }) },
+        { month: '2026-09', outflowsByCategory: cat({ loanPayments: 2000, misc: 500 }) },
+      ],
+      summary: {},
+    });
+
+    const result = await service.getObligations({ userId: 'u', role: 'FINANCE' }, { projectId: 'p1', granularity: 'quarter' });
+
+    // Calendar quarters: Jun = Q2; Jul+Aug+Sep = Q3
+    const q2 = result.periods.find((p: any) => p.key === '2026-Q2')!;
+    const q3 = result.periods.find((p: any) => p.key === '2026-Q3')!;
+    expect(q2.byCategory.loanPayments).toBe(2000); // Jun only
+    expect(q2.byCategory.subcontractorAP).toBe(65000);
+    expect(q3.byCategory.loanPayments).toBe(6000); // Jul+Aug+Sep × 2000
+    expect(q3.byCategory.misc).toBe(500);
+    expect(result.outstandingByCategory.loanPayments).toBe(8000); // 4 months
+    expect(result.immediatePayables).toBe(87000); // 65000 + 12000 + 8000 + 2000 (first month)
   });
 });

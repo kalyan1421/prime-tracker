@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 
 @ApiTags('CashFlow')
 @ApiBearerAuth()
@@ -24,9 +24,32 @@ export class CashFlowController {
 
   @Get('forecast')
   @RequirePermissions('financial:view')
-  @ApiOperation({ summary: 'Get cash flow forecast for a project' })
-  getForecast(@Query('projectId') projectId: string) {
-    return this.service.getForecast(projectId);
+  @ApiOperation({ summary: 'Unified cash flow forecast for one project (all sources, monthly)' })
+  getForecast(@Query('projectId') projectId: string, @Query('months') months?: string) {
+    return this.service.getForecast(projectId, months ? parseInt(months, 10) : undefined);
+  }
+
+  @Get('portfolio')
+  @RequirePermissions('financial:view')
+  @ApiOperation({ summary: 'Portfolio-wide cash flow forecast across the viewer\'s projects' })
+  getPortfolio(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @Query('months') months?: string,
+  ) {
+    return this.service.getPortfolioForecast({ userId, role }, months ? parseInt(months, 10) : undefined);
+  }
+
+  @Get('obligations')
+  @RequirePermissions('budget:view')
+  @ApiOperation({ summary: 'Budget cash-needs by category (Loan/Sub-AP/TI/Commissions/Misc), M/Q/A' })
+  getObligations(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @Query('projectId') projectId?: string,
+    @Query('granularity') granularity?: 'month' | 'quarter' | 'year',
+  ) {
+    return this.service.getObligations({ userId, role }, { projectId, granularity });
   }
 
   @Post()
