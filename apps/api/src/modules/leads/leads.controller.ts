@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { LeadsService } from './leads.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -58,6 +59,10 @@ export class LeadsController {
   }
 
   @Post()
+  // Tighten the per-minute limit to 5 on lead creation (the global 'medium' is
+  // 100/min). This is the intake path the public website will reuse via
+  // /api/public/leads, so it needs to resist enquiry-form spam bursts.
+  @Throttle({ medium: { limit: 5, ttl: 60_000 } })
   @RequirePermissions('lead:create')
   @ApiOperation({ summary: 'Create a new lead' })
   create(
