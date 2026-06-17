@@ -395,33 +395,59 @@ export class LeadsService {
       throw new BadRequestException('Lead is already converted');
     }
 
-    // Create the sale
-    const sale = await this.prisma.sale.create({
-      data: {
-        projectId: lead.projectId,
-        unitId: saleData.unitId,
-        buyer: saleData.buyer,
-        salePrice: saleData.salePrice,
-        contractDate: saleData.contractDate ? new Date(saleData.contractDate) : undefined,
-        closingDate: saleData.closingDate ? new Date(saleData.closingDate) : undefined,
-        status: 'UNDER_CONTRACT',
-      },
+    // Validate the unit exists and belongs to this lead's project — mirrors the
+    // checks in SalesService.create, which this path previously bypassed.
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: saleData.unitId },
+      include: { building: { select: { projectId: true } } },
     });
+    if (!unit) throw new NotFoundException('Unit not found');
+    if (unit.building.projectId !== lead.projectId) {
+      throw new BadRequestException("Unit does not belong to this lead's project");
+    }
 
-    // Mark lead as converted and link to sale
-    await this.prisma.lead.update({
-      where: { id: leadId },
-      data: { status: 'CONVERTED', convertedToSaleId: sale.id },
-    });
+    // Reserve the unit + create the sale atomically so two leads cannot convert
+    // onto the same unit. The guarded updateMany flips only a not-yet-committed
+    // unit; a racing second convert finds 0 rows and aborts.
+    const sale = await this.prisma.$transaction(async (tx) => {
+      const reserved = await tx.unit.updateMany({
+        where: { id: saleData.unitId, status: { notIn: ['UNDER_CONTRACT', 'SOLD'] } },
+        data: { status: 'UNDER_CONTRACT' },
+      });
+      if (reserved.count === 0) {
+        throw new BadRequestException('Unit is already under contract or sold');
+      }
 
-    // Log the activity
-    await this.prisma.leadActivity.create({
-      data: {
-        leadId,
-        createdBy: userId,
-        type: 'STATUS_CHANGE',
-        note: `Converted to sale (Sale ID: ${sale.id})`,
-      },
+      const created = await tx.sale.create({
+        data: {
+          projectId: lead.projectId,
+          unitId: saleData.unitId,
+          buyer: saleData.buyer,
+          salePrice: saleData.salePrice,
+          contractDate: saleData.contractDate ? new Date(saleData.contractDate) : undefined,
+          closingDate: saleData.closingDate ? new Date(saleData.closingDate) : undefined,
+          status: 'UNDER_CONTRACT',
+          lastActivityAt: new Date(),
+        },
+      });
+
+      // Mark lead as converted and link to sale
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { status: 'CONVERTED', convertedToSaleId: created.id },
+      });
+
+      // Log the activity
+      await tx.leadActivity.create({
+        data: {
+          leadId,
+          createdBy: userId,
+          type: 'STATUS_CHANGE',
+          note: `Converted to sale (Sale ID: ${created.id})`,
+        },
+      });
+
+      return created;
     });
 
     return { lead: await this.findById(leadId), sale };

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
+import { EventBus } from '../../common/events/event-bus.service';
 import { Prisma, DrawStatus } from '@prisma/client';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class LoansService {
   constructor(
     private prisma: PrismaService,
     private encryption: EncryptionService,
+    private bus: EventBus,
   ) {}
 
   async findByProject(projectId: string) {
@@ -187,7 +189,22 @@ export class LoansService {
     if (status === DrawStatus.FUNDED) updateData.fundedAt = new Date();
     if (status === DrawStatus.REJECTED) updateData.rejectionReason = rejectionReason;
 
-    return this.prisma.drawRequest.update({ where: { id }, data: updateData });
+    const updated = await this.prisma.drawRequest.update({ where: { id }, data: updateData });
+
+    // Split-brain fix: the new state machine (DrawsService.markFunded) emits this so
+    // the funded handler posts a budget Actual + invalidates dashboards. This legacy
+    // path must do the same, else draws funded via the table silently skip actuals/variance.
+    if (status === DrawStatus.FUNDED) {
+      this.bus.emit({
+        type: 'drawRequest.funded',
+        drawId: id,
+        loanId: draw.loanId,
+        projectId: draw.projectId ?? '',
+        amount: Number(draw.approvedAmount ?? draw.amount),
+      });
+    }
+
+    return updated;
   }
 
   async deleteDraw(id: string) {
