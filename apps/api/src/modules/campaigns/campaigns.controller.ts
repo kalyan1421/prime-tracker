@@ -28,8 +28,10 @@ export class CampaignsController {
     @Query('projectId') projectId?: string,
     @Query('status') status?: CampaignStatus,
     @Query('channel') channel?: CampaignChannel,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
   ) {
-    return this.service.findAll({ projectId, status, channel });
+    return this.service.findAll({ projectId, status, channel, viewer: userId && role ? { userId, role } : undefined });
   }
 
   @Get('performance')
@@ -39,8 +41,10 @@ export class CampaignsController {
     @Query('projectId') projectId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
   ) {
-    return this.service.performance({ projectId, from, to });
+    return this.service.performance({ projectId, from, to, viewer: userId && role ? { userId, role } : undefined });
   }
 
   @Get('spend-trend')

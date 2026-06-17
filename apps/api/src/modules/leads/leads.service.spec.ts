@@ -8,7 +8,8 @@ const mockPrisma: any = {
 };
 
 function makeService() {
-  return new LeadsService(mockPrisma as any);
+  // ProjectAccessService stub: no scoping in unit tests (undefined = unrestricted).
+  return new LeadsService(mockPrisma as any, { listProjectScope: async () => undefined } as any);
 }
 
 describe('LeadsService — multi-unit interest / waitlist', () => {

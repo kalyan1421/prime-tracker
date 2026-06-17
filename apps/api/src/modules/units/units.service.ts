@@ -3,6 +3,7 @@ import {
   ConflictException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 import { UnitStatus, UserRole } from '@prisma/client';
 
 // ---- Status state machine ----
@@ -24,7 +25,7 @@ const STATUS_OVERRIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'FOUNDER'];
 
 @Injectable()
 export class UnitsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
 
   // ---- Reads ----
 
@@ -341,11 +342,17 @@ export class UnitsService {
     unitType?: string;
     projectId?: string;
     search?: string;
+    viewer?: { userId: string; role: string };
   }) {
     const where: any = { deletedAt: null };
     if (filters.status) where.status = filters.status;
     if (filters.unitType) where.unitType = filters.unitType;
     if (filters.projectId) where.building = { projectId: filters.projectId };
+    else {
+      // Units reach a project via their building — scope on building.projectId.
+      const scopeIds = await this.access.listProjectScope(filters.viewer, filters.projectId);
+      if (scopeIds) where.building = { projectId: { in: scopeIds } };
+    }
     if (filters.search) {
       where.OR = [
         { unitNumber: { contains: filters.search, mode: 'insensitive' } },

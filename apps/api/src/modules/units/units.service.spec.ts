@@ -8,7 +8,8 @@ const mockPrisma: any = {
 };
 
 function makeService() {
-  return new UnitsService(mockPrisma as any);
+  // ProjectAccessService stub: no scoping in unit tests (undefined = unrestricted).
+  return new UnitsService(mockPrisma as any, { listProjectScope: async () => undefined } as any);
 }
 
 const PM: UserRole = 'PROJECT_MANAGER';
