@@ -12,13 +12,21 @@ export class ReportsService {
   // ---- Executive Summary (Founders) ----
   async getPortfolioSummary() {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null },
       include: {
-        budgetLines: true,
+        budgetLines: { where: { deletedAt: null } },
         actuals: true,
         commitments: true,
-        sales: true,
-        buildings: { include: { units: { include: { leases: { where: { status: 'ACTIVE' } } } } } },
+        sales: { where: { deletedAt: null } },
+        buildings: {
+          where: { deletedAt: null },
+          include: {
+            units: {
+              where: { deletedAt: null },
+              include: { leases: { where: { status: 'ACTIVE', deletedAt: null } } },
+            },
+          },
+        },
       },
     });
 
@@ -93,7 +101,7 @@ export class ReportsService {
   // ---- Sales Report (Sales Team) ----
   async getSalesSummary() {
     const sales = await this.prisma.sale.findMany({
-      where: { project: { status: { not: 'CANCELLED' } } },
+      where: { deletedAt: null, project: { status: { not: 'CANCELLED' } } },
       include: {
         unit: { include: { building: { select: { name: true } } } },
         project: { select: { id: true, name: true } },
@@ -142,6 +150,7 @@ export class ReportsService {
     const availableUnits = await this.prisma.unit.findMany({
       where: {
         status: 'AVAILABLE',
+        deletedAt: null,
         building: { project: { status: { not: 'CANCELLED' } } },
       },
       include: { building: { include: { project: { select: { name: true } } } } },
@@ -176,6 +185,7 @@ export class ReportsService {
     const activeLeases = await this.prisma.lease.findMany({
       where: {
         status: 'ACTIVE',
+        deletedAt: null,
         unit: { building: { project: { status: { not: 'CANCELLED' } } } },
       },
       include: {
@@ -188,7 +198,7 @@ export class ReportsService {
 
     // Portfolio occupancy
     const allUnits = await this.prisma.unit.findMany({
-      where: { building: { project: { status: { not: 'CANCELLED' } } } },
+      where: { deletedAt: null, building: { project: { status: { not: 'CANCELLED' } } } },
     });
     const occupiedUnits = allUnits.filter((u) => ['LEASED', 'SOLD', 'OCCUPIED'].includes(u.status));
     const portfolioOccupancy = allUnits.length > 0 ? (occupiedUnits.length / allUnits.length) * 100 : 0;
@@ -223,7 +233,7 @@ export class ReportsService {
 
     // Revenue by project (rental + sales)
     const closedSales = await this.prisma.sale.findMany({
-      where: { status: 'CLOSED', project: { status: { not: 'CANCELLED' } } },
+      where: { status: 'CLOSED', deletedAt: null, project: { status: { not: 'CANCELLED' } } },
       include: { project: { select: { id: true, name: true } } },
     });
 
@@ -257,7 +267,7 @@ export class ReportsService {
   // ---- Debt & Financing (Founders) ----
   async getDebtSummary() {
     const loans = await this.prisma.loan.findMany({
-      where: { project: { status: { not: 'CANCELLED' } } },
+      where: { deletedAt: null, project: { status: { not: 'CANCELLED' } } },
       include: {
         project: { select: { id: true, name: true } },
         drawRequests: { orderBy: { drawNumber: 'asc' } },
@@ -329,10 +339,11 @@ export class ReportsService {
   // ---- Unit Sales Value (Founders + Sales) ----
   async getUnitSalesReport() {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null },
       include: {
         buildings: {
-          include: { units: true },
+          where: { deletedAt: null },
+          include: { units: { where: { deletedAt: null } } },
         },
       },
       orderBy: { name: 'asc' },

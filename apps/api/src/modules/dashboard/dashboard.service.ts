@@ -54,18 +54,20 @@ export class DashboardService {
 
   private async computeFounderDashboard() {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null },
       include: {
-        budgetLines: true,
+        budgetLines: { where: { deletedAt: null } },
         actuals: true,
         commitments: true,
-        sales: true,
-        loans: { include: { drawRequests: true } },
+        sales: { where: { deletedAt: null } },
+        loans: { where: { deletedAt: null }, include: { drawRequests: true } },
         milestones: true,
         buildings: {
+          where: { deletedAt: null },
           include: {
             units: {
-              include: { leases: { where: { status: 'ACTIVE' } } },
+              where: { deletedAt: null },
+              include: { leases: { where: { status: 'ACTIVE', deletedAt: null } } },
             },
           },
         },
@@ -250,12 +252,12 @@ export class DashboardService {
     const canViewFinancials = CONSTRUCTION_FINANCIAL_ROLES.includes(role);
 
     const projects = await this.prisma.project.findMany({
-      where: { status: 'ACTIVE', ...(await this.memberScope(role, userId)) },
+      where: { status: 'ACTIVE', deletedAt: null, ...(await this.memberScope(role, userId)) },
       include: {
-        budgetLines: true,
+        budgetLines: { where: { deletedAt: null } },
         actuals: true,
         milestones: true,
-        loans: { include: { drawRequests: true } },
+        loans: { where: { deletedAt: null }, include: { drawRequests: true } },
       },
     });
 
@@ -370,13 +372,15 @@ export class DashboardService {
 
   private async computeSalesDashboard(role?: string, userId?: string) {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' }, ...(await this.memberScope(role ?? '', userId)) },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null, ...(await this.memberScope(role ?? '', userId)) },
       include: {
-        sales: true,
+        sales: { where: { deletedAt: null } },
         buildings: {
+          where: { deletedAt: null },
           include: {
             units: {
-              include: { leases: { where: { status: 'ACTIVE' } } },
+              where: { deletedAt: null },
+              include: { leases: { where: { status: 'ACTIVE', deletedAt: null } } },
             },
           },
         },
@@ -512,11 +516,11 @@ export class DashboardService {
 
   private async computeFinanceDashboard() {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null },
       include: {
-        budgetLines: true,
+        budgetLines: { where: { deletedAt: null } },
         actuals: true,
-        loans: { include: { drawRequests: true } },
+        loans: { where: { deletedAt: null }, include: { drawRequests: true } },
         commitments: true,
       },
     });
