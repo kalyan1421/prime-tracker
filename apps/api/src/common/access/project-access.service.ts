@@ -156,6 +156,22 @@ export class ProjectAccessService {
     return rows.map((r) => r.projectId);
   }
 
+  /**
+   * Project-id filter for cross-project LIST endpoints. Returns the viewer's member
+   * projectIds when they are a scoped field role, or `undefined` (no extra filter) when
+   * unrestricted (leadership/finance/legal/viewer/super) or when an explicit projectId is
+   * already supplied — that path is enforced by ProjectAccessGuard. A scoped user with no
+   * memberships yields `[]`, which correctly returns nothing.
+   */
+  async listProjectScope(
+    viewer: { userId: string; role: string } | undefined,
+    explicitProjectId?: string,
+  ): Promise<string[] | undefined> {
+    if (explicitProjectId) return undefined;
+    if (!viewer || !this.isScoped(viewer.role)) return undefined;
+    return this.accessibleProjectIds(viewer.userId);
+  }
+
   async isMember(userId: string, projectId: string): Promise<boolean> {
     const m = await this.prisma.projectMember.findUnique({
       where: { projectId_userId: { projectId, userId } },

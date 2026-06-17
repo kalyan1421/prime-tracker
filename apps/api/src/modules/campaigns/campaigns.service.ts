@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 import { Prisma, CampaignChannel, CampaignStatus, CampaignSpendSource, LeadStatus } from '@prisma/client';
 
 // Stage probabilities (matches the May 5 walkthrough's sales pipeline weighting).
@@ -16,13 +17,17 @@ const LEAD_STAGE_PROBABILITY: Partial<Record<LeadStatus, number>> = {
 
 @Injectable()
 export class CampaignsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
 
   // ---- CRUD ----
 
-  async findAll(params: { projectId?: string; status?: CampaignStatus; channel?: CampaignChannel } = {}) {
+  async findAll(params: { projectId?: string; status?: CampaignStatus; channel?: CampaignChannel; viewer?: { userId: string; role: string } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
     if (params.projectId) where.projectId = params.projectId;
+    else {
+      const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
+      if (scopeIds) where.projectId = { in: scopeIds };
+    }
     if (params.status) where.status = params.status;
     if (params.channel) where.channel = params.channel;
 
@@ -239,9 +244,13 @@ export class CampaignsService {
    * Optionally scoped to a project and a date range. Spend is summed from the ledger
    * (never overwritten); converted-revenue traces Lead.convertedToSaleId → Sale.salePrice.
    */
-  async performance(params: { projectId?: string; from?: string; to?: string } = {}) {
+  async performance(params: { projectId?: string; from?: string; to?: string; viewer?: { userId: string; role: string } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
     if (params.projectId) where.projectId = params.projectId;
+    else {
+      const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
+      if (scopeIds) where.projectId = { in: scopeIds };
+    }
 
     const campaigns = await this.prisma.campaign.findMany({
       where,

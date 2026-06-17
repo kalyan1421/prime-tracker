@@ -37,8 +37,10 @@ export class UnitsController {
     @Query('unitType') unitType?: string,
     @Query('projectId') projectId?: string,
     @Query('search') search?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
   ) {
-    return this.service.findInventory({ status: status as any, unitType, projectId, search });
+    return this.service.findInventory({ status: status as any, unitType, projectId, search, viewer: userId && role ? { userId, role } : undefined });
   }
 
   @Get()

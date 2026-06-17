@@ -19,8 +19,12 @@ export class LeadsController {
   @Get('dashboard')
   @RequirePermissions('lead:view')
   @ApiOperation({ summary: 'Aggregated dashboard: funnel, sources, stale, recent activity, attribution health' })
-  dashboard(@Query('projectId') projectId?: string) {
-    return this.service.dashboard({ projectId });
+  dashboard(
+    @Query('projectId') projectId?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+  ) {
+    return this.service.dashboard({ projectId, viewer: userId && role ? { userId, role } : undefined });
   }
 
   @Get()
@@ -35,11 +39,14 @@ export class LeadsController {
     @Query('buildingId') buildingId?: string,
     @Query('campaignId') campaignId?: string,
     @Query('search') search?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
   ) {
     return this.service.findAll({
       projectId, status, assignedTo,
       unassigned: unassigned === 'true' || unassigned === '1',
       unitId, buildingId, campaignId, search,
+      viewer: userId && role ? { userId, role } : undefined,
     });
   }
 

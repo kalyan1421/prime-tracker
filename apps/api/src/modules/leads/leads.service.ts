@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 import { LeadStatus, LeadSource, LeadActivityType, Prisma } from '@prisma/client';
 
 @Injectable()
 export class LeadsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
 
   async findAll(params: {
     projectId?: string;
@@ -15,11 +16,17 @@ export class LeadsService {
     buildingId?: string;
     campaignId?: string;
     search?: string;
+    viewer?: { userId: string; role: string };
   } = {}) {
-    const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, search } = params;
+    const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, search, viewer } = params;
 
     const where: Prisma.LeadWhereInput = {};
     if (projectId) where.projectId = projectId;
+    else {
+      // Scoped field roles (Sales/Marketing/PM) only see leads in their member projects.
+      const scopeIds = await this.access.listProjectScope(viewer, projectId);
+      if (scopeIds) where.projectId = { in: scopeIds };
+    }
     if (status) where.status = status;
     if (unassigned) where.assignedTo = null;
     else if (assignedTo) where.assignedTo = assignedTo;
@@ -270,9 +277,13 @@ export class LeadsService {
    * recent activity, and overall conversion rate. One query path per concern so we
    * don't repeat scans; everything filterable by projectId when scoped.
    */
-  async dashboard(params: { projectId?: string } = {}) {
-    const { projectId } = params;
+  async dashboard(params: { projectId?: string; viewer?: { userId: string; role: string } } = {}) {
+    const { projectId, viewer } = params;
     const where: Prisma.LeadWhereInput = projectId ? { projectId } : {};
+    if (!projectId) {
+      const scopeIds = await this.access.listProjectScope(viewer, projectId);
+      if (scopeIds) where.projectId = { in: scopeIds };
+    }
 
     // Pipeline funnel — count grouped by status.
     const byStatusRows = await this.prisma.lead.groupBy({
