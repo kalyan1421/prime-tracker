@@ -89,7 +89,7 @@ export class AuthService {
     };
   }
 
-  async validateGoogleUser(profile: GoogleProfile): Promise<TokenPair> {
+  async validateGoogleUser(profile: GoogleProfile) {
     const allowedDomain = this.config.get('GOOGLE_ALLOWED_DOMAIN');
 
     // Enforce domain restriction for Workspace SSO
@@ -142,7 +142,22 @@ export class AuthService {
       metadata: { provider: 'google' },
     });
 
-    return this.generateTokens(user.id, user.email, user.role as UserRole, false);
+    const tokens = await this.generateTokens(user.id, user.email, user.role as UserRole, false);
+    const permissions = ROLE_PERMISSIONS[user.role as UserRole] || [];
+
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        role: user.role,
+        permissions,
+        mfaEnabled: user.mfaEnabled,
+        mfaVerified: false,
+      },
+    };
   }
 
   async generateTokens(
