@@ -55,14 +55,17 @@ export class AuthController {
       picture?: string;
     };
 
-    const tokens = await this.authService.validateGoogleUser(profile);
+    const result = await this.authService.validateGoogleUser(profile);
     const frontendUrl = this.config.get('FRONTEND_URL', 'http://localhost:5173');
 
-    // Redirect to frontend with tokens
+    // Redirect to frontend with tokens + user — AuthCallbackPage requires all three
+    // and double-decodes the user param (URLSearchParams decodes once, the page
+    // calls decodeURIComponent again), so encode the JSON here.
     const params = new URLSearchParams({
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresIn: tokens.expiresIn.toString(),
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresIn: result.expiresIn.toString(),
+      user: encodeURIComponent(JSON.stringify(result.user)),
     });
 
     res.redirect(`${frontendUrl}/auth/callback?${params.toString()}`);

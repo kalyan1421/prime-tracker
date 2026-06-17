@@ -49,7 +49,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       email: user.email,
       role,
       permissions: ROLE_PERMISSIONS[role] ?? [],
-      mfaVerified: false,
+      mfaVerified: payload.mfaVerified ?? false,
       supabaseId: payload.sub,
     };
   }
