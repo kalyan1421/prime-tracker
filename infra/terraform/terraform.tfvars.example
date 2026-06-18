@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+aws_region  = "us-east-1"
+project     = "prime-tracker"
+domain_name = "theprimedeveloper.com"
+
+# Your workstation's public key:  cat ~/.ssh/id_ed25519.pub
+ssh_public_key = "ssh-ed25519 AAAA...replace...me you@host"
+
+# Lock SSH to your IP only. Find it:  curl -s https://checkip.amazonaws.com
+admin_cidr = "1.2.3.4/32"
+
+# RDS master password — >= 16 chars, generate one:  openssl rand -base64 24
+db_password = "REPLACE_with_a_strong_password"
+
+# Billing alarm (confirm the SNS email after apply)
+alarm_email           = "akprojects1431@gmail.com"
+billing_threshold_usd = 30
