@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
+import { validateEnv } from './common/config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectAccessModule } from './common/access/project-access.module';
 import { CacheModule } from './common/cache/cache.module';
@@ -45,7 +46,7 @@ import { BrokersModule } from './modules/brokers/brokers.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     // Tiered throttling: short-burst (10/sec), medium (60/min), long (1k/15min).
     // The tightest matching limit applies. Override per route with @Throttle().
     ThrottlerModule.forRoot([

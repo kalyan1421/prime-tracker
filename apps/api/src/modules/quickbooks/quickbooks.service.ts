@@ -22,6 +22,8 @@ export class QuickbooksService {
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly redirectUri: string;
+  /** Feature flag — QB code is unverified against live credentials, so it stays off by default. */
+  private readonly enabled: boolean;
 
   constructor(
     private prisma: PrismaService,
@@ -29,6 +31,7 @@ export class QuickbooksService {
     private encryption: EncryptionService,
     private audit: AuditService,
   ) {
+    this.enabled = this.config.get('QB_ENABLED', 'false') === 'true';
     const env = this.config.get('QB_ENVIRONMENT', 'sandbox');
     this.baseUrl = env === 'production'
       ? 'https://quickbooks.api.intuit.com'
@@ -38,9 +41,24 @@ export class QuickbooksService {
     this.redirectUri = this.config.get('QB_REDIRECT_URI', '');
   }
 
+  /** True when QB_ENABLED=true; lets the controller/UI show a clear disabled state. */
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /** Guards every outbound Intuit call so disabled/unverified creds can't 401 into other modules. */
+  private assertEnabled(): void {
+    if (!this.enabled) {
+      throw new BadRequestException(
+        'QuickBooks integration is disabled. Set QB_ENABLED=true once live credentials are verified.',
+      );
+    }
+  }
+
   // ---- OAuth Flow ----
 
   getAuthUrl(): string {
+    this.assertEnabled();
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
@@ -52,6 +70,7 @@ export class QuickbooksService {
   }
 
   async handleCallback(code: string, realmId: string): Promise<void> {
+    this.assertEnabled();
     const tokenUrl = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
     const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
 
@@ -173,6 +192,7 @@ export class QuickbooksService {
   // ---- Sync Operations ----
 
   async syncAll(realmId: string, userId?: string): Promise<{ vendors: number; bills: number; payments: number }> {
+    this.assertEnabled();
     const syncLog = await this.prisma.qBSyncLog.create({
       data: { syncType: 'ALL', status: 'STARTED' },
     });

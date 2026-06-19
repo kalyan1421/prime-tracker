@@ -2,44 +2,98 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
+/**
+ * AES-256-GCM field encryption with key versioning so the key can be rotated
+ * without losing access to historical ciphertext.
+ *
+ * Ciphertext formats supported on decrypt:
+ *   - "<keyId>:<base64(iv|tag|data)>"  — versioned (written by this class now)
+ *   - "<base64(iv|tag|data)>"          — legacy, unversioned (older rows)
+ *
+ * Rotation procedure:
+ *   1. Generate a new 64-hex key. Set ENCRYPTION_KEY=<new>, ENCRYPTION_KEY_ID=v2,
+ *      and ENCRYPTION_KEY_RETIRED="v1:<oldHex>".
+ *   2. Deploy. New writes are tagged "v2:"; old "v1:"/legacy rows still decrypt
+ *      because the retired key is loaded.
+ *   3. Re-encrypt existing rows at leisure (read → encrypt → write).
+ *   4. Once no ciphertext references the old key, drop ENCRYPTION_KEY_RETIRED.
+ */
 @Injectable()
 export class EncryptionService {
-  private readonly key: Buffer;
   private readonly algorithm = 'aes-256-gcm';
+  private readonly currentKeyId: string;
+  private readonly currentKey: Buffer;
+  /** All keys available for decryption, keyed by id (current + any retired). */
+  private readonly keys = new Map<string, Buffer>();
 
   constructor(private config: ConfigService) {
-    const hexKey = this.config.getOrThrow<string>('ENCRYPTION_KEY');
-    this.key = Buffer.from(hexKey, 'hex');
-    if (this.key.length !== 32) {
-      throw new Error('ENCRYPTION_KEY must be 32 bytes (64 hex chars)');
+    this.currentKeyId = this.config.get<string>('ENCRYPTION_KEY_ID', 'v1');
+    this.currentKey = this.parseKey(this.config.getOrThrow<string>('ENCRYPTION_KEY'), 'ENCRYPTION_KEY');
+    this.keys.set(this.currentKeyId, this.currentKey);
+
+    // Optional retired keys for in-flight rotation: "v1:<hex>,v0:<hex>"
+    const retired = this.config.get<string>('ENCRYPTION_KEY_RETIRED', '');
+    for (const pair of retired.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const idx = pair.indexOf(':');
+      const id = pair.slice(0, idx);
+      const hex = pair.slice(idx + 1);
+      this.keys.set(id, this.parseKey(hex, `ENCRYPTION_KEY_RETIRED[${id}]`));
     }
+  }
+
+  private parseKey(hex: string, label: string): Buffer {
+    const key = Buffer.from(hex, 'hex');
+    if (key.length !== 32) {
+      throw new Error(`${label} must be 32 bytes (64 hex chars)`);
+    }
+    return key;
   }
 
   encrypt(plaintext: string): string {
     const iv = randomBytes(12);
-    const cipher = createCipheriv(this.algorithm, this.key, iv);
-    const encrypted = Buffer.concat([
-      cipher.update(plaintext, 'utf8'),
-      cipher.final(),
-    ]);
+    const cipher = createCipheriv(this.algorithm, this.currentKey, iv);
+    const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
-    // Format: base64(iv:authTag:ciphertext)
-    const combined = Buffer.concat([iv, authTag, encrypted]);
-    return combined.toString('base64');
+    const combined = Buffer.concat([iv, authTag, encrypted]).toString('base64');
+    // Tag with the key id so a future rotation knows which key produced this.
+    return `${this.currentKeyId}:${combined}`;
   }
 
-  decrypt(encryptedBase64: string): string {
-    const combined = Buffer.from(encryptedBase64, 'base64');
+  decrypt(encrypted: string): string {
+    const sep = encrypted.indexOf(':');
+    // base64 never contains ':', so a ':' before the payload marks a key id.
+    if (sep > 0) {
+      const keyId = encrypted.slice(0, sep);
+      const key = this.keys.get(keyId);
+      if (key) {
+        return this.decryptWith(encrypted.slice(sep + 1), key);
+      }
+      // Unknown id — fall through and try every key (defensive).
+    }
+
+    // Legacy unversioned ciphertext (or unknown id): try each known key. GCM's
+    // auth tag makes a wrong-key attempt throw, so try-in-order is safe.
+    // If there was an (unknown) "<id>:" prefix, strip it; legacy values have none.
+    const payload = sep > 0 ? encrypted.slice(sep + 1) : encrypted;
+    let lastErr: unknown;
+    for (const key of this.keys.values()) {
+      try {
+        return this.decryptWith(payload, key);
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr ?? new Error('Unable to decrypt: no matching key');
+  }
+
+  private decryptWith(base64: string, key: Buffer): string {
+    const combined = Buffer.from(base64, 'base64');
     const iv = combined.subarray(0, 12);
     const authTag = combined.subarray(12, 28);
     const ciphertext = combined.subarray(28);
-    const decipher = createDecipheriv(this.algorithm, this.key, iv);
+    const decipher = createDecipheriv(this.algorithm, key, iv);
     decipher.setAuthTag(authTag);
-    const decrypted = Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]);
-    return decrypted.toString('utf8');
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
   }
 
   /** Encrypt a JSON object's specified fields */

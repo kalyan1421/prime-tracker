@@ -1,0 +1,85 @@
+name: CI / Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Always runs (push + PR). Catches build/type/schema breakage before deploy.
+  ci:
+    runs-on: ubuntu-latest
+    # Dummy URLs so `prisma validate` / `prisma generate` can resolve the
+    # datasource env() references (schema uses DATABASE_URL + DIRECT_URL).
+    # No DB connection is made during validate/generate.
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate Prisma schema
+        run: pnpm --filter @prime-tracker/api exec prisma validate
+      - name: Build API
+        run: pnpm --filter @prime-tracker/api run build
+      - name: Build web
+        run: pnpm --filter @prime-tracker/web run build
+
+  # Deploys the NestJS API to EC2. Dormant until the repo variable
+  # DEPLOY_ENABLED=true is set (i.e. after AWS infra exists).
+  deploy-api:
+    needs: ci
+    if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to EC2 over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/prime-tracker
+            git pull origin main
+            pnpm install --frozen-lockfile
+            pnpm --filter @prime-tracker/api run build
+            pnpm --filter @prime-tracker/api exec prisma migrate deploy
+            pm2 restart prime-api
+
+  # Builds the React SPA and syncs it to S3 + invalidates CloudFront.
+  deploy-web:
+    needs: ci
+    if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @prime-tracker/web run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - run: aws s3 sync apps/web/dist/ s3://${{ secrets.S3_APP_BUCKET }}/ --delete
+      - run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CF_DIST_ID }} --paths "/*"
