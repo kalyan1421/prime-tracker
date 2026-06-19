@@ -14,6 +14,12 @@ jobs:
   # Always runs (push + PR). Catches build/type/schema breakage before deploy.
   ci:
     runs-on: ubuntu-latest
+    # Dummy URLs so `prisma validate` / `prisma generate` can resolve the
+    # datasource env() references (schema uses DATABASE_URL + DIRECT_URL).
+    # No DB connection is made during validate/generate.
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
