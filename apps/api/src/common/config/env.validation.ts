@@ -10,14 +10,16 @@
  * list of required strings.
  */
 
-/** Secrets that must be present in every environment (all are `getOrThrow` at point-of-use today). */
+/**
+ * Secrets that must be present in every environment.
+ * GOOGLE_* are intentionally NOT required: Google SSO is optional (the
+ * GoogleStrategy is registered conditionally), so password login works without
+ * it. When all three GOOGLE_* are set, SSO turns on automatically.
+ */
 const REQUIRED_KEYS = [
   'DATABASE_URL',
   'JWT_ACCESS_SECRET',
   'ENCRYPTION_KEY',
-  'GOOGLE_CLIENT_ID',
-  'GOOGLE_CLIENT_SECRET',
-  'GOOGLE_CALLBACK_URL',
 ] as const;
 
 export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
