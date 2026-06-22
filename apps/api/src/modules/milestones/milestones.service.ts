@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { EventBus } from '../../common/events/event-bus.service';
 import { MilestoneDepsService } from './milestone-deps.service';
+import { StorageService } from '../../common/storage/storage.service';
 
 @Injectable()
 export class MilestonesService {
@@ -10,10 +11,21 @@ export class MilestonesService {
     private prisma: PrismaService,
     private bus: EventBus,
     private deps: MilestoneDepsService,
+    private storage: StorageService,
   ) {}
 
+  private async enrichPhotos<T extends { photos: Array<{ storagePath: string }> }>(item: T) {
+    const photos = await Promise.all(
+      item.photos.map(async (p) => ({
+        ...p,
+        url: await this.storage.signedUrl(p.storagePath, 3600).catch(() => ''),
+      })),
+    );
+    return { ...item, photos };
+  }
+
   async findByProject(projectId: string) {
-    return this.prisma.milestone.findMany({
+    const milestones = await this.prisma.milestone.findMany({
       where: { projectId },
       include: {
         owner: { select: { id: true, name: true } },
@@ -23,6 +35,7 @@ export class MilestonesService {
       },
       orderBy: { sortOrder: 'asc' },
     });
+    return Promise.all(milestones.map((m) => this.enrichPhotos(m)));
   }
 
   async findById(id: string) {
@@ -37,7 +50,7 @@ export class MilestonesService {
       },
     });
     if (!m) throw new NotFoundException('Milestone not found');
-    return m;
+    return this.enrichPhotos(m);
   }
 
   async create(data: Prisma.MilestoneUncheckedCreateInput) {

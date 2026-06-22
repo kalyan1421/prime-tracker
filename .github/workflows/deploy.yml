@@ -1,0 +1,152 @@
+name: CI / Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Always runs (push + PR). Catches build/type/schema breakage. ───────────
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate Prisma schema
+        run: pnpm --filter @prime-tracker/api exec prisma validate
+      - name: Build API
+        run: pnpm --filter @prime-tracker/api run build
+      - name: Build web
+        run: pnpm --filter @prime-tracker/web run build
+
+  # ── Deploys NestJS API to EC2. Arms when DEPLOY_ENABLED=true is set. ──────
+  # Required GitHub secrets: EC2_HOST, EC2_SSH_KEY, GH_DEPLOY_TOKEN
+  deploy-api:
+    needs: ci
+    if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      GH_DEPLOY_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
+    steps:
+      - name: Deploy to EC2 over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: GH_DEPLOY_TOKEN
+          # Timeout generous for first-run clone + full pnpm install
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            REPO_DIR=/home/ubuntu/prime-tracker
+            REPO_URL="https://x-access-token:${GH_DEPLOY_TOKEN}@github.com/kalyan1421/prime-tracker.git"
+
+            # ── 1. Clone (first deploy) or reset to latest main ───────────────
+            if [ -d "$REPO_DIR/.git" ]; then
+              cd "$REPO_DIR"
+              git remote set-url origin "$REPO_URL"
+              git fetch --depth=1 origin main
+              git reset --hard origin/main
+            else
+              git clone --depth=1 "$REPO_URL" "$REPO_DIR"
+              cd "$REPO_DIR"
+            fi
+
+            # ── 2. Install dependencies + build ───────────────────────────────
+            pnpm install --frozen-lockfile
+            pnpm --filter @prime-tracker/api run build
+
+            # ── 3. Write apps/api/.env from SSM (instance role has ssm:GetParameter*) ─
+            # Use GetParameter per name — GetParametersByPath requires the parent-path ARN
+            # which is not in the current IAM policy (only /prime-tracker/* is allowed).
+            for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
+                     JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD; do
+              V=$(aws ssm get-parameter --name /prime-tracker/$P --with-decryption \
+                    --region us-east-1 --query Parameter.Value --output text 2>/dev/null || echo '')
+              echo "$P=$V"
+            done > apps/api/.env
+            # Append non-secret config (not in SSM)
+            printf 'NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=https://app.theprimedeveloper.com\nCORS_ORIGINS=https://app.theprimedeveloper.com\nAPP_BASE_URL=https://app.theprimedeveloper.com\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\n' >> apps/api/.env
+            # DIRECT_URL mirrors DATABASE_URL (Prisma accelerate not used)
+            printf 'DIRECT_URL=%s\n' "$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
+            chmod 600 apps/api/.env
+
+            # ── 4. Run pending migrations ─────────────────────────────────────
+            export DATABASE_URL
+            DATABASE_URL=$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)
+            pnpm --filter @prime-tracker/api exec prisma migrate deploy
+
+            # ── 5. Start (first time) or restart (subsequent) via PM2 ─────────
+            if pm2 describe prime-api >/dev/null 2>&1; then
+              pm2 restart prime-api --update-env
+            else
+              pm2 start apps/api/dist/main.js \
+                --name prime-api \
+                --cwd "$REPO_DIR/apps/api" \
+                --log /home/ubuntu/prime-api.log \
+                --time
+              pm2 save
+            fi
+
+            # ── 6. Health check — fail deploy if API doesn't come up ──────────
+            for i in $(seq 1 6); do
+              sleep 5
+              if curl -sf http://localhost:3001/api/health >/dev/null 2>&1; then
+                echo "API healthy ✓"; break
+              fi
+              [ "$i" -eq 6 ] && { echo "ERROR: API did not become healthy in 30 s"; pm2 logs prime-api --lines 30; exit 1; }
+            done
+
+  # ── Builds React SPA, syncs to S3, optionally invalidates CloudFront. ─────
+  # Required GitHub secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+  #   AWS_REGION, S3_APP_BUCKET
+  # Optional: CF_DIST_ID (leave unset in Phase 1 — no CloudFront until enable_dns=true)
+  # Optional repo var: VITE_API_BASE_URL (overrides .env.production value)
+  deploy-web:
+    needs: ci
+    if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build web
+        run: pnpm --filter @prime-tracker/web run build
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Sync to S3
+        run: aws s3 sync apps/web/dist/ s3://${{ secrets.S3_APP_BUCKET }}/ --delete
+      - name: Invalidate CloudFront cache
+        # Only runs after enable_dns=true + Phase 2 infra is applied.
+        # Set CF_DIST_ID secret to the app distribution ID to enable.
+        if: ${{ env.CF_DIST_ID != '' }}
+        env:
+          CF_DIST_ID: ${{ secrets.CF_DIST_ID }}
+        run: aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" --paths "/*"

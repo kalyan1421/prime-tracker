@@ -33,7 +33,7 @@ export class DocumentsController {
    */
   @Post('presigned-upload')
   @RequirePermissions('document:upload')
-  @ApiOperation({ summary: 'Issue a presigned Supabase upload URL for client-direct upload' })
+  @ApiOperation({ summary: 'Issue a presigned S3 upload URL for client-direct upload' })
   presignedUpload(@Body() body: { filename: string; projectId?: string; projectName?: string; category?: string }) {
     return this.storage.createPresignedUpload(body.filename, {
       projectId: body.projectId,

@@ -4,13 +4,22 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { BuildingType, ProjectPhase } from '@prisma/client';
 import { ProjectPhaseService } from './project-phase.service';
+import { StorageService } from '../../common/storage/storage.service';
 
 @Injectable()
 export class BuildingsService {
   constructor(
     private prisma: PrismaService,
     private projectPhase: ProjectPhaseService,
+    private storage: StorageService,
   ) {}
+
+  private async withCoverUrl<T extends { coverPhotoPath?: string | null }>(b: T) {
+    const coverPhotoUrl = b.coverPhotoPath
+      ? await this.storage.signedUrl(b.coverPhotoPath, 3600).catch(() => '')
+      : null;
+    return { ...b, coverPhotoUrl };
+  }
 
   async findByProject(projectId: string) {
     if (!projectId) {
@@ -22,11 +31,12 @@ export class BuildingsService {
     });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
-    return this.prisma.building.findMany({
+    const buildings = await this.prisma.building.findMany({
       where: { projectId },
       include: { _count: { select: { units: true } } },
       orderBy: { name: 'asc' },
     });
+    return Promise.all(buildings.map((b) => this.withCoverUrl(b)));
   }
 
   async findById(id: string) {
@@ -39,7 +49,7 @@ export class BuildingsService {
       },
     });
     if (!building) throw new NotFoundException('Building not found');
-    return building;
+    return this.withCoverUrl(building);
   }
 
   async create(input: {

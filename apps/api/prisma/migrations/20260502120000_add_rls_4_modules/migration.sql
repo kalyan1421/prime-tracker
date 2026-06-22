@@ -1,4 +1,22 @@
 -- =====================================================================
+-- Local-dev compatibility: plain Postgres doesn't have Supabase's auth
+-- schema. These stubs are no-ops on Supabase (objects already exist).
+-- The API connects as superuser and bypasses RLS, so the stub uid()
+-- returning a fixed UUID has no runtime effect.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN
+    CREATE SCHEMA auth;
+    CREATE TABLE auth.users (
+      id    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      email text UNIQUE
+    );
+    CREATE FUNCTION auth.uid() RETURNS uuid
+      LANGUAGE sql STABLE
+      AS $f$ SELECT '00000000-0000-0000-0000-000000000000'::uuid $f$;
+  END IF;
+END $$;
+-- =====================================================================
 -- Row-Level Security for the 4 production-priority modules
 -- Tables (Prisma model → snake_case table):
 --   Project    → projects

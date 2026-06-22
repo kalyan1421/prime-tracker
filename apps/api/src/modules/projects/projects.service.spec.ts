@@ -15,7 +15,10 @@ const mockPrisma = {
     upsert: jest.fn(),
     createMany: jest.fn(),
   },
-  lease: { findMany: jest.fn().mockResolvedValue([]) },
+  lease: {
+    findMany: jest.fn().mockResolvedValue([]),
+    aggregate: jest.fn().mockResolvedValue({ _sum: { monthlyRent: 0 } }),
+  },
   projectComment: { findMany: jest.fn().mockResolvedValue([]) },
   unitComment: { findMany: jest.fn().mockResolvedValue([]) },
 };

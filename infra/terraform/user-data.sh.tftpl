@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# EC2 first-boot bootstrap: runtime + Redis + Nginx. App code is deployed
+# separately (GitHub Actions deploy.yml or manual git pull). Logs: /var/log/cloud-init-output.log
+set -euxo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y curl git nginx ca-certificates gnupg
+
+# --- Node 22 (supabase-js needs the native WebSocket global, added in Node 22.4) ---
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y nodejs
+
+# --- pnpm 10 + pm2 (process manager, restart on crash/reboot) ---
+npm install -g pnpm@10 pm2
+
+# --- Docker (Redis sidecar) ---
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+usermod -aG docker ubuntu
+
+# --- Redis 7, loopback-only (not exposed by the security group) ---
+# Harden later: stop, then re-run with `--requirepass "$REDIS_PASSWORD"` sourced
+# from SSM, and set REDIS_URL=redis://:<pw>@localhost:6379 in the app env.
+docker run -d --name redis --restart unless-stopped \
+  -p 127.0.0.1:6379:6379 \
+  redis:7-alpine redis-server --appendonly yes
+
+# --- certbot (TLS for api.<domain>; api is fronted by Nginx, not CloudFront) ---
+snap install --classic certbot || apt-get install -y certbot python3-certbot-nginx
+ln -sf /snap/bin/certbot /usr/bin/certbot || true
+
+# --- Nginx reverse proxy: api.<domain> -> NestJS on :3001 ---
+cat >/etc/nginx/sites-available/prime-api <<'NGINX'
+server {
+    listen 80;
+    server_name api.${domain};
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+NGINX
+ln -sf /etc/nginx/sites-available/prime-api /etc/nginx/sites-enabled/prime-api
+rm -f /etc/nginx/sites-enabled/default
+systemctl enable nginx
+systemctl restart nginx
+
+echo "Bootstrap complete. Deploy the app, then run: certbot --nginx -d api.${domain}"

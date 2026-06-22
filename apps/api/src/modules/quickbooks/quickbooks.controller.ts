@@ -44,6 +44,7 @@ export class QuickbooksController {
   async getStatus() {
     const connection = await this.service.getConnection();
     return {
+      enabled: this.service.isEnabled(),
       connected: !!connection,
       companyName: connection?.companyName,
       lastSyncAt: connection?.lastSyncAt,

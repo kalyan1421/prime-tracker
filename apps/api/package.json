@@ -19,6 +19,9 @@
     "seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1067.0",
+    "@aws-sdk/client-ses": "^3.1067.0",
+    "@aws-sdk/s3-request-presigner": "^3.1067.0",
     "@nestjs/bullmq": "^10.0.0",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.1.0",
@@ -31,7 +34,6 @@
     "@nestjs/throttler": "^5.1.0",
     "@prime-tracker/shared": "workspace:*",
     "@prisma/client": "^5.8.0",
-    "@supabase/supabase-js": "^2.105.2",
     "@types/multer": "^2.0.0",
     "@types/nodemailer": "^7.0.11",
     "bcrypt": "^6.0.0",

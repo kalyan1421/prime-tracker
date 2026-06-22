@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import {
-  Card, CardBody, CardHeader, Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
+  Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
 import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft } from 'react-icons/fi';
@@ -313,36 +313,38 @@ export default function UnitDetailPage() {
         </div>
       )}
 
-      {/* Leads & Activity Section */}
-      <UnitLeadsPanel unitId={unitId!} />
+      {/* Leads & Activity */}
+      <div className="mb-5 sm:mb-6">
+        <UnitLeadsPanel unitId={unitId!} />
+      </div>
 
-      {/* Waitlist — leads that expressed interest in this unit (demand signal) */}
+      {/* Waitlist — demand signal */}
       <UnitWaitlistPanel unitId={unitId!} />
 
-      {/* Interior / Fit-Out (Phase 1) */}
-      <InteriorPanel
-        unitId={unitId!}
-        unitNumber={(unit as any)?.unitNumber}
-        unitSqft={(unit as any)?.sqft != null ? Number((unit as any).sqft) : undefined}
-      />
+      {/* Interior / Fit-Out */}
+      <div className="mb-5 sm:mb-6">
+        <InteriorPanel
+          unitId={unitId!}
+          unitNumber={(unit as any)?.unitNumber}
+          unitSqft={(unit as any)?.sqft != null ? Number((unit as any).sqft) : undefined}
+        />
+      </div>
 
-      {/* Sprint B: Documents scoped to this unit */}
-      <UnitDocumentsPanel unitId={unitId!} />
+      {/* Documents scoped to this unit */}
+      <div className="mb-5 sm:mb-6">
+        <UnitDocumentsPanel unitId={unitId!} />
+      </div>
 
-      {/* Comments Section */}
-      <Card shadow="sm">
-        <CardHeader className="pb-2">
-          <div className="flex items-center gap-2">
-            <FiMessageSquare className="text-purple-600" />
-            <p className="font-semibold text-sm text-gray-600">
-              Comments {u._count?.comments > 0 && `(${u._count.comments})`}
-            </p>
-          </div>
-        </CardHeader>
-        <CardBody className="pt-0">
+      {/* Comments */}
+      <div className="mb-5 sm:mb-6">
+        <Section
+          icon={<FiMessageSquare className="w-4 h-4 text-purple-600" />}
+          title="Comments"
+          count={u._count?.comments > 0 ? u._count.comments : undefined}
+        >
           <InlineComments unitId={unitId!} />
-        </CardBody>
-      </Card>
+        </Section>
+      </div>
     </div>
   );
 }
@@ -398,67 +400,67 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
   const docs = ((data as any[]) || []);
 
   return (
-    <Card shadow="sm">
-      <CardHeader className="pb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <FiFileText className="text-violet-600" />
-          <p className="font-semibold text-sm text-gray-600">
-            Documents {docs.length > 0 && `(${docs.length})`}
-          </p>
+    <Section
+      icon={<FiFileText className="w-4 h-4 text-violet-600" />}
+      title="Documents"
+      count={docs.length || undefined}
+      action={<span className="text-xs text-gray-400 font-normal">Upload from the project Docs tab</span>}
+    >
+      {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
+      {!isLoading && docs.length === 0 && (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center">
+            <FiFileText className="w-4 h-4 text-violet-400" />
+          </div>
+          <p className="text-sm font-medium text-gray-500">No documents attached yet</p>
+          <p className="text-xs text-gray-400">Go to the project's <span className="font-medium text-gray-500">Documents tab</span> to upload and tag files to this unit.</p>
         </div>
-        <span className="text-xs text-gray-400">Upload from the project Docs tab</span>
-      </CardHeader>
-      <CardBody className="pt-0">
-        {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
-        {!isLoading && docs.length === 0 && (
-          <div className="text-sm text-gray-400 py-4 text-center">
-            No documents attached to this unit yet.
-          </div>
-        )}
-        {!isLoading && docs.length > 0 && (
-          <div className="space-y-1">
-            {docs.map((d: any) => {
-              const cat = d.category || 'OTHER';
-              const color = DOC_CATEGORY_COLORS[cat] ?? DOC_CATEGORY_COLORS.OTHER;
-              const sizeKb = d.fileSize ? Math.round(d.fileSize / 1024) : null;
-              return (
-                <div key={d.id} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-b-0">
-                  <FiFileText className="text-gray-400 shrink-0 w-4 h-4" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm text-gray-800 truncate">{d.fileName || d.name}</p>
-                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${color.bg} ${color.text}`}>
-                        {String(cat).replace(/_/g, ' ')}
-                      </span>
-                      {d.versionNumber > 1 && (
-                        <span className="text-[10px] text-gray-500">v{d.versionNumber}</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {d.uploadedBy?.name && <>by {d.uploadedBy.name} · </>}
-                      {fmtDate(d.createdAt)}
-                      {sizeKb && <> · {sizeKb < 1024 ? `${sizeKb} KB` : `${(sizeKb / 1024).toFixed(1)} MB`}</>}
-                    </p>
-                  </div>
-                  {d.fileUrl && (
-                    <a
-                      href={d.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-                      aria-label={`Download ${d.fileName || d.name}`}
-                    >
-                      <FiDownload className="w-3.5 h-3.5" />
-                      Open
-                    </a>
-                  )}
+      )}
+      {!isLoading && docs.length > 0 && (
+        <div className="space-y-0.5">
+          {docs.map((d: any) => {
+            const cat = d.category || 'OTHER';
+            const color = DOC_CATEGORY_COLORS[cat] ?? DOC_CATEGORY_COLORS.OTHER;
+            const sizeKb = d.fileSize ? Math.round(d.fileSize / 1024) : null;
+            return (
+              <div key={d.id} className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-b-0 group">
+                <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
+                  <FiFileText className="text-violet-500 w-3.5 h-3.5" />
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </CardBody>
-    </Card>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium text-gray-800 truncate">{d.fileName || d.name}</p>
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium ${color.bg} ${color.text}`}>
+                      {String(cat).replace(/_/g, ' ')}
+                    </span>
+                    {d.versionNumber > 1 && (
+                      <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">v{d.versionNumber}</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {d.uploadedBy?.name && <>by {d.uploadedBy.name} · </>}
+                    {fmtDate(d.createdAt)}
+                    {sizeKb && <> · {sizeKb < 1024 ? `${sizeKb} KB` : `${(sizeKb / 1024).toFixed(1)} MB`}</>}
+                  </p>
+                </div>
+                {d.fileUrl && (
+                  <a
+                    href={d.fileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                    aria-label={`Download ${d.fileName || d.name}`}
+                  >
+                    <FiDownload className="w-3.5 h-3.5" />
+                    Open
+                  </a>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -467,35 +469,35 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
 function UnitWaitlistPanel({ unitId }: { unitId: string }) {
   const { data, isLoading } = useUnitWaitlist(unitId);
   const rows: any[] = Array.isArray(data) ? data : [];
-  if (!isLoading && rows.length === 0) return null; // only surface when there's demand
+  if (!isLoading && rows.length === 0) return null;
   return (
-    <Card shadow="sm">
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <FiTarget className="text-rose-600" />
-          <p className="font-semibold text-sm text-gray-600">Waitlist {rows.length > 0 && `(${rows.length})`}</p>
+    <div className="mb-5 sm:mb-6">
+      <Section
+        icon={<FiTarget className="w-4 h-4 text-rose-600" />}
+        title="Waitlist"
+        count={rows.length || undefined}
+      >
+        <div className="space-y-1">
+          {rows.map((r) => (
+            <div key={r.interestId} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="text-[11px] font-medium text-gray-400 w-5 tabular-nums text-center">#{r.position}</span>
+                <Avatar size="sm" name={r.lead?.name || 'Lead'} className="w-6 h-6 text-[9px] shrink-0" />
+                <span className="text-sm font-medium text-gray-800 truncate">{r.lead?.name || 'Unnamed lead'}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {r.lead?.budget != null && (
+                  <span className="text-xs text-gray-500 tabular-nums">${Number(r.lead.budget).toLocaleString()}</span>
+                )}
+                <Chip size="sm" color={LEAD_STATUS_COLORS[r.lead?.status] || 'default'} variant="flat" className="text-[10px]">
+                  {(r.lead?.status || '').replace('_', ' ')}
+                </Chip>
+              </div>
+            </div>
+          ))}
         </div>
-      </CardHeader>
-      <CardBody className="pt-0 space-y-2">
-        {rows.map((r) => (
-          <div key={r.interestId} className="flex items-center justify-between text-sm border-b border-gray-50 pb-1.5 last:border-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs text-gray-400 w-5 tabular-nums">#{r.position}</span>
-              <Avatar size="sm" name={r.lead?.name || 'Lead'} className="w-5 h-5 text-[9px]" />
-              <span className="truncate">{r.lead?.name || 'Unnamed lead'}</span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {r.lead?.budget != null && (
-                <span className="text-xs text-gray-400">${Number(r.lead.budget).toLocaleString()}</span>
-              )}
-              <Chip size="sm" color={LEAD_STATUS_COLORS[r.lead?.status] || 'default'} variant="flat" className="text-[10px]">
-                {(r.lead?.status || '').replace('_', ' ')}
-              </Chip>
-            </div>
-          </div>
-        ))}
-      </CardBody>
-    </Card>
+      </Section>
+    </div>
   );
 }
 
@@ -510,96 +512,100 @@ function UnitLeadsPanel({ unitId }: { unitId: string }) {
     )
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  const tabToggle = (
+    <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+      {(['leads', 'activity'] as const).map((t) => (
+        <button
+          key={t}
+          onClick={() => setTab(t)}
+          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+            tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          {t === 'leads' ? `Leads${leadsArr.length > 0 ? ` (${leadsArr.length})` : ''}` : 'Activity'}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
-    <Card shadow="sm">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between w-full">
-          <div className="flex items-center gap-2">
-            <FiTarget className="text-blue-600" />
-            <p className="font-semibold text-sm text-gray-600">
-              Leads {leadsArr.length > 0 && `(${leadsArr.length})`}
-            </p>
+    <Section
+      icon={<FiTarget className="w-4 h-4 text-blue-600" />}
+      title="Leads"
+      action={tabToggle}
+    >
+      {isLoading && <div className="text-sm text-gray-400 py-6 text-center">Loading…</div>}
+
+      {!isLoading && leadsArr.length === 0 && (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
+            <FiTarget className="w-4 h-4 text-blue-400" />
           </div>
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant={tab === 'leads' ? 'flat' : 'light'}
-              color={tab === 'leads' ? 'primary' : 'default'}
-              onPress={() => setTab('leads')}
-            >
-              Leads
-            </Button>
-            <Button
-              size="sm"
-              variant={tab === 'activity' ? 'flat' : 'light'}
-              color={tab === 'activity' ? 'primary' : 'default'}
-              onPress={() => setTab('activity')}
-            >
-              Activity
-            </Button>
-          </div>
+          <p className="text-sm font-medium text-gray-500">No leads linked</p>
+          <p className="text-xs text-gray-400">Attach a lead from the <span className="font-medium text-gray-500">Leads page</span> or the project's <span className="font-medium text-gray-500">Leads tab</span>.</p>
         </div>
-      </CardHeader>
-      <CardBody className="pt-0">
-        {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
-        {!isLoading && leadsArr.length === 0 && (
-          <div className="text-sm text-gray-400 py-4 text-center">
-            No leads linked to this unit yet. Attach one from the Leads page or the project's Leads tab.
-          </div>
-        )}
-        {!isLoading && leadsArr.length > 0 && tab === 'leads' && (
-          <div className="space-y-2">
-            {leadsArr.map((lead) => (
-              <div key={lead.id} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-b-0">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-medium text-gray-800 truncate">{lead.name || <span className="text-gray-400 italic">Unnamed</span>}</p>
-                    <Chip size="sm" color={LEAD_STATUS_COLORS[lead.status] || 'default'} variant="flat" className="text-[10px]">
-                      {String(lead.status).replace('_', ' ')}
-                    </Chip>
-                    {lead.source && (
-                      <Chip size="sm" variant="bordered" className="text-[10px]">{String(lead.source).replace('_', ' ')}</Chip>
-                    )}
-                  </div>
-                  <div className="flex gap-3 mt-0.5 text-xs text-gray-500 flex-wrap">
-                    {lead.email && <span className="flex items-center gap-1"><FiMail />{lead.email}</span>}
-                    {lead.phone && <span className="flex items-center gap-1"><FiPhone />{lead.phone}</span>}
-                    {lead.budget && <span>${Number(lead.budget).toLocaleString()}</span>}
-                    {lead._count?.activities ? (
-                      <span className="flex items-center gap-1"><FiMessageSquare />{lead._count.activities}</span>
-                    ) : null}
-                  </div>
+      )}
+
+      {!isLoading && leadsArr.length > 0 && tab === 'leads' && (
+        <div className="space-y-0.5">
+          {leadsArr.map((lead) => (
+            <div key={lead.id} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0">
+              <Avatar size="sm" name={lead.name || '?'} className="w-8 h-8 text-xs shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-gray-900 truncate">
+                    {lead.name || <span className="text-gray-400 italic font-normal">Unnamed</span>}
+                  </p>
+                  <Chip size="sm" color={LEAD_STATUS_COLORS[lead.status] || 'default'} variant="flat" className="text-[10px] h-5">
+                    {String(lead.status).replace(/_/g, ' ')}
+                  </Chip>
+                  {lead.source && (
+                    <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                      {String(lead.source).replace(/_/g, ' ')}
+                    </span>
+                  )}
                 </div>
-                <div className="text-xs text-gray-400 shrink-0 flex items-center gap-1">
-                  <FiClock />{fmtDate(lead.updatedAt)}
+                <div className="flex gap-3 mt-1 text-xs text-gray-400 flex-wrap">
+                  {lead.email && <span className="flex items-center gap-1"><FiMail className="w-3 h-3" />{lead.email}</span>}
+                  {lead.phone && <span className="flex items-center gap-1"><FiPhone className="w-3 h-3" />{lead.phone}</span>}
+                  {lead.budget && <span className="text-gray-500 font-medium">${Number(lead.budget).toLocaleString()}</span>}
+                  {lead._count?.activities ? (
+                    <span className="flex items-center gap-1"><FiMessageSquare className="w-3 h-3" />{lead._count.activities} activities</span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="text-[11px] text-gray-400 shrink-0 flex items-center gap-1 mt-0.5">
+                <FiClock className="w-3 h-3" />{fmtDate(lead.updatedAt)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!isLoading && leadsArr.length > 0 && tab === 'activity' && (
+        activity.length === 0 ? (
+          <div className="text-sm text-gray-400 py-6 text-center">No activity logged yet across leads on this unit.</div>
+        ) : (
+          <div className="space-y-0.5">
+            {activity.map((a: any) => (
+              <div key={a.id} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium shrink-0 mt-0.5 bg-gray-100 text-gray-600`}>
+                  {ACTIVITY_TYPE_LABELS[a.type] || a.type}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{a.note}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    <span className="font-medium text-gray-600">{a.leadName}</span>
+                    {a.createdByUser?.name && <> · by {a.createdByUser.name}</>}
+                    <> · {fmtDate(a.createdAt)}</>
+                  </p>
                 </div>
               </div>
             ))}
           </div>
-        )}
-        {!isLoading && leadsArr.length > 0 && tab === 'activity' && (
-          activity.length === 0 ? (
-            <div className="text-sm text-gray-400 py-4 text-center">No activity logged yet across leads on this unit.</div>
-          ) : (
-            <div className="space-y-2">
-              {activity.map((a: any) => (
-                <div key={a.id} className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-b-0">
-                  <Chip size="sm" variant="flat" className="text-[10px] shrink-0">{ACTIVITY_TYPE_LABELS[a.type] || a.type}</Chip>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{a.note}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      <span className="font-medium">{a.leadName}</span>
-                      {a.createdByUser?.name && <> · by {a.createdByUser.name}</>}
-                      <> · {fmtDate(a.createdAt)}</>
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </CardBody>
-    </Card>
+        )
+      )}
+    </Section>
   );
 }
 

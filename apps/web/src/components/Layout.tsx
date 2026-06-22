@@ -198,7 +198,7 @@ function Sidebar({
     <>
       {/* Desktop sidebar — inline, persistent */}
       <nav
-        className={`${collapsed ? 'w-[60px]' : 'w-[220px]'} hidden lg:block min-h-screen bg-white border-r border-gray-200 transition-all duration-200 overflow-hidden pt-4 relative shrink-0`}
+        className={`${collapsed ? 'w-[60px]' : 'w-[220px]'} hidden lg:flex lg:flex-col sticky top-0 h-screen bg-white border-r border-gray-200 transition-all duration-200 overflow-y-auto overflow-x-hidden pt-4 shrink-0`}
       >
         <div className={`${collapsed ? 'px-2 justify-center' : 'px-4 justify-start'} flex items-center mb-8`}>
           {collapsed ? (

@@ -117,7 +117,7 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
               onSelectionChange={(keys) => setType(Array.from(keys)[0] as string)}
             >
               {ACTIVITY_TYPES.map((t) => (
-                <SelectItem key={t}>{t.replace('_', ' ')}</SelectItem>
+                <SelectItem key={t} textValue={t.replace('_', ' ')}>{t.replace('_', ' ')}</SelectItem>
               ))}
             </Select>
             <Textarea
@@ -205,7 +205,7 @@ function ConvertToSaleModal({ isOpen, onClose, lead }: { isOpen: boolean; onClos
               onSelectionChange={(k) => setF('unitId', Array.from(k)[0] as string)}
             >
               {availableUnits.map((u: any) => (
-                <SelectItem key={u.id}>{u.unitNumber} — {u.building?.name || ''} ({u.status})</SelectItem>
+                <SelectItem key={u.id} textValue={`${u.unitNumber} — ${u.building?.name || ''} (${u.status})`}>{u.unitNumber} — {u.building?.name || ''} ({u.status})</SelectItem>
               ))}
             </Select>
             <Input size="sm" label="Buyer Name *" value={form.buyer} onChange={(e) => setF('buyer', e.target.value)} />
@@ -356,7 +356,7 @@ function LeadInterests({ leadId, projectId }: { leadId: string; projectId: strin
             size="sm" aria-label="Unit" selectedKeys={pick ? [pick] : []} className="flex-1"
             onSelectionChange={(k) => setPick((Array.from(k)[0] as string) || '')}
           >
-            {available.map((u) => <SelectItem key={u.id}>Unit {u.unitNumber}</SelectItem>)}
+            {available.map((u) => <SelectItem key={u.id} textValue={`Unit ${u.unitNumber}`}>Unit {u.unitNumber}</SelectItem>)}
           </Select>
           <Button size="sm" color="primary" onPress={add} isLoading={addInterest.isPending} isDisabled={!pick}>Add</Button>
         </div>
@@ -472,7 +472,7 @@ function LeadFormModal({
                   onSelectionChange={(keys) => set('projectId', Array.from(keys)[0] as string)}
                 >
                   {(projects || []).map((p: any) => (
-                    <SelectItem key={p.id}>{p.name}</SelectItem>
+                    <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>
                   ))}
                 </Select>
               </div>
@@ -488,7 +488,7 @@ function LeadFormModal({
               onSelectionChange={(keys) => set('source', Array.from(keys)[0] as string)}
             >
               {LEAD_SOURCES.map((s) => (
-                <SelectItem key={s}>{SOURCE_LABELS[s] || s}</SelectItem>
+                <SelectItem key={s} textValue={SOURCE_LABELS[s] || s}>{SOURCE_LABELS[s] || s}</SelectItem>
               ))}
             </Select>
             <Select
@@ -498,7 +498,7 @@ function LeadFormModal({
               onSelectionChange={(keys) => set('status', Array.from(keys)[0] as string)}
             >
               {LEAD_STATUSES.map((s) => (
-                <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>
+                <SelectItem key={s} textValue={s.replace('_', ' ')}>{s.replace('_', ' ')}</SelectItem>
               ))}
             </Select>
             <Select
@@ -511,7 +511,7 @@ function LeadFormModal({
               className="sm:col-span-2"
             >
               {((formUnits as any[]) || []).map((u: any) => (
-                <SelectItem key={u.id}>{u.unitNumber}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}</SelectItem>
+                <SelectItem key={u.id} textValue={u.unitNumber}>{u.unitNumber}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}</SelectItem>
               ))}
             </Select>
             <Select
@@ -523,7 +523,7 @@ function LeadFormModal({
               className="sm:col-span-2"
             >
               {campaignOptions.map((c: any) => (
-                <SelectItem key={c.id}>{c.name} · {String(c.channel).replace('_', ' ')}</SelectItem>
+                <SelectItem key={c.id} textValue={c.name}>{c.name} · {String(c.channel).replace('_', ' ')}</SelectItem>
               ))}
             </Select>
             <Select
@@ -535,7 +535,7 @@ function LeadFormModal({
               className="sm:col-span-2"
             >
               {((users as any[]) || []).filter((u: any) => u.isActive !== false).map((u: any) => (
-                <SelectItem key={u.id}>{u.name}{u.role ? ` · ${String(u.role).replace('_', ' ')}` : ''}</SelectItem>
+                <SelectItem key={u.id} textValue={u.name}>{u.name}{u.role ? ` · ${String(u.role).replace('_', ' ')}` : ''}</SelectItem>
               ))}
             </Select>
             <Input

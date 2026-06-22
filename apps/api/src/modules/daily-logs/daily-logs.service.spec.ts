@@ -6,8 +6,10 @@ const mockPrisma: any = {
   dailyLogPhoto: { create: jest.fn(), delete: jest.fn() },
 };
 
+const mockStorage: any = { signedUrl: jest.fn().mockResolvedValue('https://signed-url') };
+
 function makeService() {
-  return new DailyLogsService(mockPrisma as any);
+  return new DailyLogsService(mockPrisma as any, mockStorage);
 }
 
 describe('DailyLogsService', () => {

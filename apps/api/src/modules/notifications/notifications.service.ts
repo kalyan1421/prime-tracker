@@ -2,31 +2,21 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { NotificationType } from '@prisma/client';
-import * as nodemailer from 'nodemailer';
+import { Mailer, createMailer } from './mailer';
 
 const ALL_TYPES = Object.values(NotificationType);
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
-  private transporter: nodemailer.Transporter | null = null;
+  // Provider-agnostic mailer (SMTP default, SES via MAIL_DRIVER=ses); null = in-app only.
+  private mailer: Mailer | null = null;
 
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
   ) {
-    const host = this.config.get('SMTP_HOST');
-    if (host) {
-      this.transporter = nodemailer.createTransport({
-        host,
-        port: parseInt(this.config.get('SMTP_PORT', '587')),
-        secure: this.config.get('SMTP_PORT', '587') === '465',
-        auth: {
-          user: this.config.get('SMTP_USER'),
-          pass: this.config.get('SMTP_PASS'),
-        },
-      });
-    }
+    this.mailer = createMailer(this.config);
   }
 
   // ---- Core: send in-app + optional email ----
@@ -56,7 +46,7 @@ export class NotificationsService {
     });
 
     // Send emails
-    if (this.transporter) {
+    if (this.mailer) {
       const users = await this.prisma.user.findMany({
         where: { id: { in: targetUserIds }, isActive: true },
         select: { email: true, name: true },
@@ -67,7 +57,7 @@ export class NotificationsService {
 
       for (const user of users) {
         try {
-          await this.transporter.sendMail({
+          await this.mailer.sendMail({
             from,
             to: user.email,
             subject: title,

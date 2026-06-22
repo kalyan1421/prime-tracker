@@ -8,14 +8,17 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
+import { JsonLogger } from './common/logging/json.logger';
 
 async function bootstrap() {
   // Ensure uploads directory exists
   const uploadsDir = path.join(process.cwd(), 'uploads');
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+  // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev.
+  const isProd = process.env.NODE_ENV === 'production';
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: ['error', 'warn', 'log', 'debug'],
+    logger: isProd ? new JsonLogger() : ['error', 'warn', 'log', 'debug'],
   });
 
   const config = app.get(ConfigService);
