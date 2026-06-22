@@ -1,22 +1,29 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../../common/storage/storage.service';
 
-/**
- * Daily construction logs — the client's #1 pain point. A dated field log per project
- * (optionally a building) with notes, weather, crew count, and photos. Mobile-first capture;
- * photos are uploaded to Supabase via the presigned-upload flow then attached by storagePath
- * (mirrors MilestonePhoto).
- */
 @Injectable()
 export class DailyLogsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private storage: StorageService,
+  ) {}
 
-  findAll(filter: { projectId?: string; buildingId?: string }) {
-    // Require a scope — without one this would return every log across all projects.
+  private async enrichPhotos<T extends { photos: Array<{ storagePath: string }> }>(log: T) {
+    const photos = await Promise.all(
+      log.photos.map(async (p) => ({
+        ...p,
+        url: await this.storage.signedUrl(p.storagePath, 3600).catch(() => ''),
+      })),
+    );
+    return { ...log, photos };
+  }
+
+  async findAll(filter: { projectId?: string; buildingId?: string }) {
     if (!filter.projectId && !filter.buildingId) {
       throw new BadRequestException('A projectId or buildingId filter is required');
     }
-    return this.prisma.dailyLog.findMany({
+    const logs = await this.prisma.dailyLog.findMany({
       where: { projectId: filter.projectId, buildingId: filter.buildingId },
       orderBy: [{ logDate: 'desc' }, { createdAt: 'desc' }],
       include: {
@@ -26,6 +33,7 @@ export class DailyLogsService {
         _count: { select: { photos: true } },
       },
     });
+    return Promise.all(logs.map((l) => this.enrichPhotos(l)));
   }
 
   async findById(id: string) {
@@ -38,7 +46,7 @@ export class DailyLogsService {
       },
     });
     if (!log) throw new NotFoundException('Daily log not found');
-    return log;
+    return this.enrichPhotos(log);
   }
 
   async create(input: {

@@ -82,33 +82,37 @@ function BuildingCoverPhotoUploader({
 }) {
   const presigned = usePresignedUpload();
   const fileRef = React.useRef<HTMLInputElement | null>(null);
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://dxkqrwxixjyzxhtxdkht.supabase.co';
+  const [previewSrc, setPreviewSrc] = React.useState<string>('');
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    const objectUrl = URL.createObjectURL(file);
     try {
       const { storagePath: path } = await presigned.mutateAsync({ file, category: 'buildings' });
+      setPreviewSrc(objectUrl);
       onChange(path);
       addToast({ title: `Uploaded ${file.name}`, color: 'success' });
     } catch (err: any) {
+      URL.revokeObjectURL(objectUrl);
       addToast({ title: err?.message || 'Upload failed', color: 'danger' });
     }
   };
+
+  const showPreview = previewSrc || storagePath;
 
   return (
     <div>
       <p className="text-xs font-medium text-gray-700 mb-1.5">Cover photo</p>
       <div className="flex items-center gap-3">
-        {storagePath ? (
+        {showPreview ? (
           <div className="relative w-32 h-20 rounded border border-gray-200 overflow-hidden bg-gray-100">
-            <img
-              src={`${supabaseUrl}/storage/v1/object/public/documents/${storagePath}`}
-              alt=""
-              className="w-full h-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
-            />
+            {previewSrc ? (
+              <img src={previewSrc} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Photo saved</div>
+            )}
           </div>
         ) : (
           <div className="w-32 h-20 rounded border border-dashed border-gray-300 flex items-center justify-center text-xs text-gray-400">
@@ -125,7 +129,7 @@ function BuildingCoverPhotoUploader({
             {storagePath ? 'Replace' : 'Upload'}
           </Button>
           {storagePath && (
-            <Button size="sm" variant="light" color="danger" onPress={() => onChange('')}>
+            <Button size="sm" variant="light" color="danger" onPress={() => { setPreviewSrc(''); onChange(''); }}>
               Remove
             </Button>
           )}
@@ -184,7 +188,7 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
           {list.map((p) => (
             <div key={p.id} className="relative group rounded border border-gray-200 overflow-hidden w-24 h-24 bg-gray-100">
               <img
-                src={`${import.meta.env.VITE_SUPABASE_URL || ''}/storage/v1/object/public/documents/${p.storagePath}`}
+                src={(p as any).url || ''}
                 alt=""
                 className="w-full h-full object-cover"
                 onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
@@ -3686,7 +3690,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               {b.coverPhotoPath && (
                 <div className="w-full h-28 bg-gray-100 overflow-hidden">
                   <img
-                    src={`${import.meta.env.VITE_SUPABASE_URL || 'https://dxkqrwxixjyzxhtxdkht.supabase.co'}/storage/v1/object/public/documents/${b.coverPhotoPath}`}
+                    src={(b as any).coverPhotoUrl || ''}
                     alt=""
                     className="w-full h-full object-cover"
                     onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
@@ -4921,7 +4925,7 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
           <ModalHeader>New Contract</ModalHeader>
           <ModalBody className="space-y-3">
             <Select label="Vendor" selectedKeys={form.vendorId ? [form.vendorId] : []} onSelectionChange={(k) => setForm((p) => ({ ...p, vendorId: Array.from(k)[0] as string }))}>
-              {(vendors as any[]).map((v: any) => <SelectItem key={v.id}>{v.name}{v.trade ? ` (${v.trade})` : ''}</SelectItem>)}
+              {(vendors as any[]).map((v: any) => <SelectItem key={v.id} textValue={v.name}>{v.name}{v.trade ? ` (${v.trade})` : ''}</SelectItem>)}
             </Select>
             <Input label="Description" value={form.description} onChange={set('description')} />
             <Input label="Contract Amount" type="number" value={form.originalAmount} onChange={set('originalAmount')} />

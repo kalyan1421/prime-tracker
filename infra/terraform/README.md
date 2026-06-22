@@ -136,26 +136,64 @@ of seeding — see `docs/AWS_MIGRATION_PLAN.md` §3.1.
 
 ---
 
-## Step 5 — Deploy app code + flip env flags
+## Step 5 — Arm GitHub Actions deploy
 
-1. **API on EC2:** clone repo, `pnpm install`, `pnpm --filter @prime-tracker/api build`,
-   then `pm2 start dist/main.js --name prime-api && pm2 save && pm2 startup`.
-   The app reads secrets from SSM `/prime-tracker/*` via the instance role.
-2. **TLS for api:** `sudo certbot --nginx -d api.<domain>`.
-3. **SPA:** `pnpm --filter @prime-tracker/web build` then
-   `aws s3 sync apps/web/dist s3://$(terraform output -raw app_bucket) --delete`
-   and invalidate CloudFront (`app_cloudfront_distribution_id`).
-4. **Cutover env** (see migration plan §"Cutover env flags"):
+The workflow (`.github/workflows/deploy.yml`) handles everything automatically on
+push to `main` once the secrets below are set. It clones the repo on first run,
+writes SSM params to `apps/api/.env`, runs migrations, and starts/restarts PM2.
+
+### Required GitHub secrets (Settings → Secrets → Actions)
+
+| Secret | Value |
+|---|---|
+| `EC2_HOST` | `98.89.192.161` (the Elastic IP from `terraform output ec2_public_ip`) |
+| `EC2_SSH_KEY` | Contents of `~/.ssh/prime-tracker-ec2` (private key) |
+| `GH_DEPLOY_TOKEN` | GitHub PAT with `repo:read` scope — EC2 uses this to clone/pull |
+| `AWS_ACCESS_KEY_ID` | terraform-prime IAM access key |
+| `AWS_SECRET_ACCESS_KEY` | terraform-prime IAM secret key |
+| `AWS_REGION` | `us-east-1` |
+| `S3_APP_BUCKET` | `prime-tracker-app-221082191502` (from `terraform output app_bucket`) |
+| `CF_DIST_ID` | *(leave unset in Phase 1 — add once `enable_dns=true` is applied)* |
+
+### Required GitHub secrets — add these (Settings → Secrets → Actions)
+
+| Secret | Value |
+|---|---|
+| `EC2_HOST` | `98.89.192.161` |
+| `EC2_SSH_KEY` | contents of `~/.ssh/prime-tracker-ec2` (private key) |
+| `GH_DEPLOY_TOKEN` | GitHub PAT with `Contents: read` scope |
+| `AWS_ACCESS_KEY_ID` | terraform-prime IAM key |
+| `AWS_SECRET_ACCESS_KEY` | terraform-prime IAM secret |
+| `AWS_REGION` | `us-east-1` |
+| `S3_APP_BUCKET` | `prime-tracker-app-221082191502` |
+| `VITE_API_BASE_URL` | `https://api.theprimedeveloper.com` *(already set — verify value)* |
+
+### Required GitHub repo variable (Settings → Variables → Actions)
+
+| Variable | Value |
+|---|---|
+| `DEPLOY_ENABLED` | `true` |
+
+### One-time manual steps after first successful deploy
+
+1. **TLS for API:** SSH to EC2, then:
+   ```bash
+   sudo certbot --nginx -d api.theprimedeveloper.com
    ```
-   STORAGE_DRIVER=s3   S3_BUCKET=<documents bucket>   AWS_REGION=us-east-1
-   S3_PUBLIC_BASE_URL=<s3_public_base_url output>
-   MAIL_DRIVER=ses     SMTP_FROM=<verified@domain>
-   NODE_ENV=production
+2. **PM2 on reboot:** run once after first deploy:
+   ```bash
+   pm2 startup    # prints a command — run it with sudo
+   pm2 save
    ```
-5. **SES:** request production access (exit sandbox) in the SES console.
-6. **GitHub Actions:** add secrets `EC2_HOST`, `EC2_SSH_KEY`, `AWS_ACCESS_KEY_ID`,
-   `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `CF_DIST_ID`; set repo var
-   `DEPLOY_ENABLED=true` to arm the deploy jobs.
+3. **SES:** request production access (exit sandbox) in the SES console.
+
+### Phase 2 (when ready): enable DNS + CloudFront
+
+```bash
+# In terraform.tfvars add:  enable_dns = true
+terraform apply
+# Then set CF_DIST_ID secret to: terraform output app_cloudfront_distribution_id
+```
 
 ---
 

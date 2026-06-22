@@ -41,24 +41,32 @@ export class BudgetsService {
     const forecastTotal =
       Math.max(committedTotal, actualTotal) + (budgetTotal - committedTotal) * 0.1;
 
-    const byCategory = budgets.map((b) => {
-      const catActuals = actuals
-        .filter((a) => a.category === b.category)
-        .reduce((s, a) => s + Number(a.amount), 0);
-      const catCommitted = commitments
-        .filter((c) => c.category === b.category)
-        .reduce((s, c) => s + Number(c.contractAmt), 0);
-      const budget = Number(b.revisedAmt ?? b.baselineAmt);
-      return {
-        category: b.category,
-        description: b.description,
-        budget,
-        actual: catActuals,
-        committed: catCommitted,
-        forecast: Math.max(catCommitted, catActuals),
-        variance: budget - catActuals,
-      };
-    });
+    // Group budget lines by category so each category appears once with summed amounts.
+    const categoryMap = new Map<string, { budget: number; actual: number; committed: number }>();
+    for (const b of budgets) {
+      const cat = b.category as string;
+      const existing = categoryMap.get(cat) ?? { budget: 0, actual: 0, committed: 0 };
+      existing.budget += Number(b.revisedAmt ?? b.baselineAmt);
+      categoryMap.set(cat, existing);
+    }
+    for (const a of actuals) {
+      const cat = a.category as string;
+      const existing = categoryMap.get(cat);
+      if (existing) existing.actual += Number(a.amount);
+    }
+    for (const c of commitments) {
+      const cat = c.category as string;
+      const existing = categoryMap.get(cat);
+      if (existing) existing.committed += Number(c.contractAmt);
+    }
+    const byCategory = Array.from(categoryMap.entries()).map(([category, v]) => ({
+      category,
+      budget: v.budget,
+      actual: v.actual,
+      committed: v.committed,
+      forecast: Math.max(v.committed, v.actual),
+      variance: v.budget - v.actual,
+    }));
 
     return {
       projectId,

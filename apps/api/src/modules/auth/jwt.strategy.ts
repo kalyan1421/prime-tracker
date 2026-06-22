@@ -34,7 +34,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('Token missing email claim');
     }
 
-    // Lookup app user by email — Supabase only handles auth, app roles live in our User table.
+    // Lookup app user by email — roles and permissions live in our User table.
     const user = await this.prisma.user.findUnique({
       where: { email: payload.email },
     });
@@ -50,7 +50,6 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       role,
       permissions: ROLE_PERMISSIONS[role] ?? [],
       mfaVerified: payload.mfaVerified ?? false,
-      supabaseId: payload.sub,
     };
   }
 }

@@ -16,7 +16,7 @@ export function fmtPct(n: number | null | undefined): string {
 
 export function fmtDate(d: string | null | undefined): string {
   if (!d) return '\u2014';
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
 // ---- Stat Card ----

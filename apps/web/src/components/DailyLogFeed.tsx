@@ -2,16 +2,14 @@ import { useRef, useState } from 'react';
 import {
   Card, CardBody, CardHeader, Button, Input, Textarea, Avatar, Chip, addToast,
 } from '@heroui/react';
-import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard } from 'react-icons/fi';
+import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage } from 'react-icons/fi';
 import {
   useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useAddDailyLogPhoto, useRemoveDailyLogPhoto,
   usePresignedUpload,
 } from '../hooks/useApi';
 import { fmtDate, PermissionGate } from './ui';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
-const photoUrl = (storagePath: string) =>
-  `${SUPABASE_URL}/storage/v1/object/public/documents/${storagePath}`;
+const photoUrl = (photo: { url?: string; storagePath: string }) => photo.url || '';
 
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;
@@ -27,15 +25,37 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 export function DailyLogFeed({ projectId, buildingId }: { projectId: string; buildingId?: string }) {
   const { data, isLoading } = useDailyLogs(projectId, buildingId);
   const create = useCreateDailyLog();
+  const addPhoto = useAddDailyLogPhoto();
+  const presigned = usePresignedUpload();
   const logs: any[] = Array.isArray(data) ? data : [];
 
   const [form, setForm] = useState<Record<string, string>>({ logDate: todayStr(), notes: '', weather: '', crewCount: '' });
   const set = (k: string) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
+  // Pending images selected before posting
+  const [pendingFiles, setPendingFiles] = useState<{ file: File; preview: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    const next = files.map((file) => ({ file, preview: URL.createObjectURL(file) }));
+    setPendingFiles((prev) => [...prev, ...next]);
+  };
+
+  const removePending = (idx: number) => {
+    setPendingFiles((prev) => {
+      URL.revokeObjectURL(prev[idx].preview);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
   const submit = async () => {
     if (!form.notes.trim()) return addToast({ title: 'Add what happened on site', color: 'warning' });
     try {
-      await create.mutateAsync({
+      setUploading(true);
+      const log = await create.mutateAsync({
         projectId,
         buildingId: buildingId || undefined,
         logDate: form.logDate ? new Date(form.logDate).toISOString() : undefined,
@@ -43,12 +63,27 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
         weather: form.weather || undefined,
         crewCount: form.crewCount ? Number(form.crewCount) : undefined,
       });
+      // Upload any pending photos sequentially
+      for (const { file } of pendingFiles) {
+        try {
+          const { storagePath } = await presigned.mutateAsync({ file, category: 'daily-logs' });
+          await addPhoto.mutateAsync({ id: (log as any).id, storagePath });
+        } catch {
+          // non-fatal — log was created, photo upload failed
+        }
+      }
+      pendingFiles.forEach((p) => URL.revokeObjectURL(p.preview));
+      setPendingFiles([]);
       setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '' });
       addToast({ title: 'Log posted', color: 'success' });
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to post log'), color: 'danger' });
+    } finally {
+      setUploading(false);
     }
   };
+
+  const isPosting = create.isPending || uploading;
 
   return (
     <Card shadow="sm">
@@ -64,14 +99,65 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
               size="sm" minRows={2} label="What happened on site today?"
               value={form.notes} onChange={set('notes')} placeholder="Poured foundation for Building A, inspection passed…"
             />
+
+            {/* Photo previews */}
+            {pendingFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {pendingFiles.map(({ preview }, idx) => (
+                  <div key={idx} className="relative group w-16 h-16 rounded-lg overflow-hidden border border-gray-200 bg-gray-100 shrink-0">
+                    <img src={preview} alt="" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removePending(idx)}
+                      className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label="Remove photo"
+                    >
+                      <FiX className="w-2.5 h-2.5 text-white" />
+                    </button>
+                  </div>
+                ))}
+                {/* Add more */}
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="w-16 h-16 rounded-lg border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-0.5 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition-colors shrink-0"
+                  aria-label="Add more photos"
+                >
+                  <FiPlus className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <Input size="sm" type="date" label="Date" value={form.logDate} onChange={set('logDate')} />
               <Input size="sm" label="Weather" value={form.weather} onChange={set('weather')} placeholder="Sunny, 78°F" />
               <Input size="sm" type="number" label="Crew" value={form.crewCount} onChange={set('crewCount')} />
-              <Button color="primary" className="self-end h-10" onPress={submit} isLoading={create.isPending} startContent={<FiPlus />}>
-                Post
-              </Button>
+              <div className="flex gap-1.5 self-end">
+                <Button
+                  size="sm" variant="flat" className="h-10 min-w-10 px-3"
+                  onPress={() => photoInputRef.current?.click()}
+                  aria-label="Attach photos"
+                >
+                  <FiImage className="w-4 h-4" />
+                  {pendingFiles.length > 0 && (
+                    <span className="ml-1 text-xs font-semibold text-blue-600">{pendingFiles.length}</span>
+                  )}
+                </Button>
+                <Button color="primary" className="h-10 flex-1" onPress={submit} isLoading={isPosting} startContent={<FiPlus />}>
+                  Post
+                </Button>
+              </div>
             </div>
+
+            {/* hidden file input — multiple, no capture so user can pick from gallery too */}
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handlePhotoSelect}
+            />
           </div>
         </PermissionGate>
 
@@ -141,7 +227,7 @@ function DailyLogCard({ log }: { log: any }) {
         {photos.map((p) => (
           <div key={p.id} className="relative group rounded border border-gray-200 overflow-hidden w-20 h-20 bg-gray-100">
             <img
-              src={photoUrl(p.storagePath)} alt={p.caption || ''}
+              src={photoUrl(p)} alt={p.caption || ''}
               className="w-full h-full object-cover"
               onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
             />

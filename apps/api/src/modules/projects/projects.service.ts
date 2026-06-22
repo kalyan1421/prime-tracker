@@ -326,7 +326,11 @@ export class ProjectsService {
       },
     });
 
-    const allProjects = await this.prisma.project.findMany({ where: scopeWhere });
+    // Lightweight: only the phase field is needed for phase-distribution counts.
+    const allProjects = await this.prisma.project.findMany({
+      where: scopeWhere,
+      select: { phase: true },
+    });
 
     let totalBudget = 0;
     let totalActuals = 0;
@@ -402,14 +406,12 @@ export class ProjectsService {
       }
     }
 
-    // Active lease income across all projects
-    const activeLeases = await this.prisma.lease.findMany({
+    // Active lease income — use DB aggregate instead of loading all lease rows.
+    const leaseAgg = await this.prisma.lease.aggregate({
       where: { status: 'ACTIVE' },
+      _sum: { monthlyRent: true },
     });
-    totalMonthlyLeaseIncome = activeLeases.reduce(
-      (sum, l) => sum + Number(l.monthlyRent),
-      0,
-    );
+    totalMonthlyLeaseIncome = Number(leaseAgg._sum.monthlyRent ?? 0);
 
     // Recent comments (unit + project, merged and sorted by type)
     const [rawUnitComments, rawProjectComments] = await Promise.all([

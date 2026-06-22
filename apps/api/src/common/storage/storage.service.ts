@@ -3,27 +3,16 @@ import { ConfigService } from '@nestjs/config';
 import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { StorageDriver } from './storage.driver';
-import { SupabaseStorageDriver } from './supabase.driver';
 import { S3StorageDriver } from './s3.driver';
 
-/**
- * Provider-agnostic file storage. Path generation lives here; the backend
- * (Supabase Storage or AWS S3) is chosen by STORAGE_DRIVER and implemented by
- * a StorageDriver. Default is `supabase` so existing deployments are unchanged;
- * set STORAGE_DRIVER=s3 at AWS cutover.
- */
 @Injectable()
 export class StorageService {
   private readonly driver: StorageDriver;
   private readonly logger = new Logger(StorageService.name);
 
   constructor(private config: ConfigService) {
-    const driverName = this.config.get<string>('STORAGE_DRIVER', 'supabase').toLowerCase();
-    this.driver =
-      driverName === 's3'
-        ? new S3StorageDriver(this.config)
-        : new SupabaseStorageDriver(this.config);
-    this.logger.log(`Storage driver: ${driverName === 's3' ? 's3' : 'supabase'}`);
+    this.driver = new S3StorageDriver(this.config);
+    this.logger.log('Storage driver: s3');
   }
 
   /** Build the canonical object path: {projectId|misc}/{category|general}/{slug}-{uuid}.{ext} */
