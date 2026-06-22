@@ -28,7 +28,7 @@ AWS_PROFILE="${AWS_PROFILE:-prime}"
 VITE_API_BASE_URL="${VITE_API_BASE_URL:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10"
+SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
 check_ssh_key() {
   if [ ! -f "$SSH_KEY" ]; then
@@ -81,16 +81,15 @@ cd /home/ubuntu/prime-tracker
 pnpm install --frozen-lockfile
 
 # Write apps/api/.env from SSM (instance IAM role has ssm:GetParameter*)
-aws ssm get-parameters-by-path \
-  --path /prime-tracker \
-  --with-decryption \
-  --region us-east-1 \
-  --query 'Parameters[*].[Name,Value]' \
-  --output text | \
-  awk -F'\t' '{n=$1; sub(".*/","",n); printf "%s=%s\n", n, $2}' \
-  > apps/api/.env
+for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
+          JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD; do
+  V=$(aws ssm get-parameter --name /prime-tracker/$P --with-decryption \
+        --region us-east-1 --query Parameter.Value --output text 2>/dev/null || echo '')
+  echo "$P=$V"
+done > apps/api/.env
 printf 'NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=https://app.theprimedeveloper.com\nCORS_ORIGINS=https://app.theprimedeveloper.com\nAPP_BASE_URL=https://app.theprimedeveloper.com\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\n' >> apps/api/.env
 printf 'DIRECT_URL=%s\n' "$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
+chmod 600 apps/api/.env
 
 # Run pending migrations
 export DATABASE_URL
@@ -99,7 +98,7 @@ pnpm --filter @prime-tracker/api exec prisma migrate deploy
 
 # Start (first time) or restart (subsequent)
 if pm2 describe prime-api >/dev/null 2>&1; then
-  pm2 restart prime-api
+  pm2 restart prime-api --update-env
 else
   pm2 start apps/api/dist/main.js \
     --name prime-api \
@@ -108,6 +107,16 @@ else
     --time
   pm2 save
 fi
+
+# Health check — fail deploy if API doesn't come up within 30 s
+for i in $(seq 1 6); do
+  sleep 5
+  if curl -sf http://localhost:3001/api/health >/dev/null 2>&1; then
+    echo "API healthy ✓"
+    break
+  fi
+  [ "$i" -eq 6 ] && { echo "ERROR: API did not become healthy in 30 s"; pm2 logs prime-api --lines 30; exit 1; }
+done
 
 echo ""
 pm2 list
