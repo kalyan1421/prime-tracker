@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react';
 import {
-  Card, CardBody, CardHeader, Button, Input, Textarea, Avatar, Chip, addToast,
+  Card, CardBody, CardHeader, Button, Input, Textarea, Avatar, Chip, Select, SelectItem, addToast,
 } from '@heroui/react';
-import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage } from 'react-icons/fi';
+import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage, FiHome } from 'react-icons/fi';
 import {
   useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useAddDailyLogPhoto, useRemoveDailyLogPhoto,
-  usePresignedUpload,
+  usePresignedUpload, useBuildings,
 } from '../hooks/useApi';
 import { fmtDate, PermissionGate } from './ui';
 
@@ -19,20 +19,24 @@ const errMsg = (err: unknown, fallback: string) => {
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 /**
- * Daily construction log feed for a project (optionally a building).
- * Mobile-first: a compact capture form + a recent-first feed with photo thumbnails.
+ * Daily construction log feed for a project (optionally scoped to a building).
+ * When no buildingId prop is passed, shows a building selector in the form so
+ * the author can tag which building the log entry relates to.
  */
 export function DailyLogFeed({ projectId, buildingId }: { projectId: string; buildingId?: string }) {
   const { data, isLoading } = useDailyLogs(projectId, buildingId);
+  const { data: buildingsData } = useBuildings(projectId);
   const create = useCreateDailyLog();
   const addPhoto = useAddDailyLogPhoto();
   const presigned = usePresignedUpload();
   const logs: any[] = Array.isArray(data) ? data : [];
+  const buildings: any[] = Array.isArray(buildingsData) ? buildingsData : [];
 
-  const [form, setForm] = useState<Record<string, string>>({ logDate: todayStr(), notes: '', weather: '', crewCount: '' });
+  const [form, setForm] = useState<Record<string, string>>({
+    logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '',
+  });
   const set = (k: string) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  // Pending images selected before posting
   const [pendingFiles, setPendingFiles] = useState<{ file: File; preview: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
@@ -57,24 +61,23 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
       setUploading(true);
       const log = await create.mutateAsync({
         projectId,
-        buildingId: buildingId || undefined,
+        buildingId: form.buildingId || undefined,
         logDate: form.logDate ? new Date(form.logDate).toISOString() : undefined,
         notes: form.notes.trim(),
         weather: form.weather || undefined,
         crewCount: form.crewCount ? Number(form.crewCount) : undefined,
       });
-      // Upload any pending photos sequentially
       for (const { file } of pendingFiles) {
         try {
           const { storagePath } = await presigned.mutateAsync({ file, category: 'daily-logs' });
           await addPhoto.mutateAsync({ id: (log as any).id, storagePath });
         } catch {
-          // non-fatal — log was created, photo upload failed
+          // non-fatal — log created, photo upload failed
         }
       }
       pendingFiles.forEach((p) => URL.revokeObjectURL(p.preview));
       setPendingFiles([]);
-      setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '' });
+      setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '' });
       addToast({ title: 'Log posted', color: 'success' });
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to post log'), color: 'danger' });
@@ -92,7 +95,6 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
         <p className="font-semibold text-sm text-gray-600">Daily Logs {logs.length > 0 && `(${logs.length})`}</p>
       </CardHeader>
       <CardBody className="pt-0 space-y-4">
-        {/* Capture form — gated to editors */}
         <PermissionGate permission="dailylog:edit">
           <div className="rounded-lg border border-gray-100 p-3 space-y-2 bg-gray-50/50">
             <Textarea
@@ -116,7 +118,6 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
                     </button>
                   </div>
                 ))}
-                {/* Add more */}
                 <button
                   type="button"
                   onClick={() => photoInputRef.current?.click()}
@@ -132,24 +133,40 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
               <Input size="sm" type="date" label="Date" value={form.logDate} onChange={set('logDate')} />
               <Input size="sm" label="Weather" value={form.weather} onChange={set('weather')} placeholder="Sunny, 78°F" />
               <Input size="sm" type="number" label="Crew" value={form.crewCount} onChange={set('crewCount')} />
-              <div className="flex gap-1.5 self-end">
-                <Button
-                  size="sm" variant="flat" className="h-10 min-w-10 px-3"
-                  onPress={() => photoInputRef.current?.click()}
-                  aria-label="Attach photos"
+              {/* Building tag — show selector only when the feed is at project scope */}
+              {!buildingId && buildings.length > 0 && (
+                <Select
+                  size="sm"
+                  label="Building (optional)"
+                  selectedKeys={form.buildingId ? new Set([form.buildingId]) : new Set()}
+                  onSelectionChange={(keys) => {
+                    const val = Array.from(keys)[0] as string ?? '';
+                    setForm((f) => ({ ...f, buildingId: val }));
+                  }}
                 >
-                  <FiImage className="w-4 h-4" />
-                  {pendingFiles.length > 0 && (
-                    <span className="ml-1 text-xs font-semibold text-blue-600">{pendingFiles.length}</span>
-                  )}
-                </Button>
-                <Button color="primary" className="h-10 flex-1" onPress={submit} isLoading={isPosting} startContent={<FiPlus />}>
-                  Post
-                </Button>
-              </div>
+                  {buildings.map((b) => (
+                    <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+                  ))}
+                </Select>
+              )}
             </div>
 
-            {/* hidden file input — multiple, no capture so user can pick from gallery too */}
+            <div className="flex gap-1.5">
+              <Button
+                size="sm" variant="flat" className="h-10 min-w-10 px-3"
+                onPress={() => photoInputRef.current?.click()}
+                aria-label="Attach photos"
+              >
+                <FiImage className="w-4 h-4" />
+                {pendingFiles.length > 0 && (
+                  <span className="ml-1 text-xs font-semibold text-blue-600">{pendingFiles.length}</span>
+                )}
+              </Button>
+              <Button color="primary" className="h-10 flex-1" onPress={submit} isLoading={isPosting} startContent={<FiPlus />}>
+                Post
+              </Button>
+            </div>
+
             <input
               ref={photoInputRef}
               type="file"
@@ -204,9 +221,7 @@ function DailyLogCard({ log }: { log: any }) {
           <Avatar size="sm" name={log.author?.name} src={log.author?.avatarUrl} className="w-6 h-6 text-[10px]" />
           <div>
             <p className="text-sm font-medium">{fmtDate(log.logDate)}</p>
-            <p className="text-xs text-gray-400">
-              {log.author?.name}{log.building?.name ? ` · ${log.building.name}` : ''}
-            </p>
+            <p className="text-xs text-gray-400">{log.author?.name}</p>
           </div>
         </div>
         <PermissionGate permission="dailylog:edit">
@@ -218,7 +233,13 @@ function DailyLogCard({ log }: { log: any }) {
 
       <p className="text-sm text-gray-700 whitespace-pre-wrap mt-2">{log.notes}</p>
 
+      {/* Chips: building tag + weather + crew */}
       <div className="flex flex-wrap gap-1.5 mt-2">
+        {log.building?.name && (
+          <Chip size="sm" variant="flat" color="primary" startContent={<FiHome className="text-xs" />}>
+            {log.building.name}
+          </Chip>
+        )}
         {log.weather && <Chip size="sm" variant="flat" startContent={<FiCloud className="text-xs" />}>{log.weather}</Chip>}
         {log.crewCount != null && <Chip size="sm" variant="flat" startContent={<FiUsers className="text-xs" />}>{log.crewCount} crew</Chip>}
       </div>
@@ -250,7 +271,6 @@ function DailyLogCard({ log }: { log: any }) {
             <FiCamera />
             <span className="text-[10px]">Photo</span>
           </Button>
-          {/* capture=environment opens the rear camera on phones */}
           <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         </PermissionGate>
       </div>
