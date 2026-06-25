@@ -74,7 +74,7 @@ async function bootstrap() {
     });
   }
 
-  await app.listen(port, '0.0.0.0');
+  await app.listen(port, isProd ? '127.0.0.1' : '0.0.0.0');
   console.log(`🚀 Prime Tracker API running on http://localhost:${port}`);
   console.log(`📚 Swagger: http://localhost:${port}/api/docs`);
 }
