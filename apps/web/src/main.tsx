@@ -4,11 +4,7 @@ import { HeroUIProvider, ToastProvider } from '@heroui/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
-import { useAuthStore } from './store/authStore';
 import './index.css';
-
-// Always start at login screen — clear any persisted session
-useAuthStore.getState().logout();
 
 const queryClient = new QueryClient({
   defaultOptions: {

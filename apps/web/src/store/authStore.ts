@@ -58,6 +58,8 @@ export const useAuthStore = create<AuthState>()(
         return permissions.some((p) => user?.permissions?.includes(p)) ?? false;
       },
     }),
-    { name: 'prime-tracker-auth' },
+    {
+      name: 'prime-tracker-auth',
+    },
   ),
 );

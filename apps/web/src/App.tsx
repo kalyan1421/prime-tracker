@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import Layout from './components/Layout';
@@ -33,9 +34,16 @@ import BrokersPage from './pages/BrokersPage';
 
 function ProtectedRoute({ children, permission }: { children: React.ReactNode; permission?: string }) {
   const { isAuthenticated, hasPermission } = useAuthStore();
+  // Zustand's persist middleware rehydrates from localStorage asynchronously
+  // (even though localStorage is sync, `await storage.getItem` creates a
+  // microtask). We defer routing until after the first mount so the microtask
+  // has resolved and isAuthenticated reflects the persisted session.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
+
+  if (!hydrated) return null;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (permission && !hasPermission(permission)) return <Navigate to="/" replace />;
-  // Per-route error boundary so one broken page doesn't blank the app shell
   return <ErrorBoundary section="page">{children}</ErrorBoundary>;
 }
 
