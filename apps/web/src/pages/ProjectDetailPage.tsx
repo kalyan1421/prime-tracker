@@ -4124,10 +4124,13 @@ function RevenueTab({ projectId }: { projectId: string }) {
 
 // ---- Project Leads Tab ----
 const LEAD_STATUSES_TAB = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
-const LEAD_SOURCES_TAB = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'BROKER', 'EVENT', 'OTHER'];
+const LEAD_SOURCES_TAB = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
 const SOURCE_LABELS_TAB: Record<string, string> = {
   WEBSITE: 'Website', REFERRAL: 'Referral', SOCIAL_MEDIA: 'Social Media',
-  WALK_IN: 'Walk-In', BROKER: 'Broker', EVENT: 'Event', OTHER: 'Other',
+  WALK_IN: 'Walk-In', SIGNAGE: 'Signage', COLD_CALL: 'Cold Call',
+  EMAIL_CAMPAIGN: 'Email Campaign', BROKER: 'Broker',
+  LOOPNET: 'LoopNet', CREXI: 'Crexi',
+  EVENT: 'Event', OTHER: 'Other',
 };
 const LEAD_STATUS_COLORS_TAB: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
   NEW: 'default', CONTACTED: 'primary', POTENTIAL: 'primary', QUALIFIED: 'secondary', SITE_VISIT: 'secondary',
