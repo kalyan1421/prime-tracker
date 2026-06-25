@@ -14,12 +14,12 @@ import {
   FiImage, FiAlertCircle, FiCheckCircle, FiFilter,
 } from 'react-icons/fi';
 import { useInteriorDocuments, useUploadDocument, useDeleteDocument } from '../hooks/useApi';
-import { fmtDate } from './ui';
+import { fmtDate } from '../utils/fmt';
 import { apiAssetUrl } from '../lib/api';
 
 // ─── types & config ───────────────────────────────────────────────────────────
 
-export type InteriorDocCategory =
+type InteriorDocCategory =
   | 'DRAWING'
   | 'CITY_APPROVAL'
   | 'HANDOVER_CERTIFICATE'
@@ -39,7 +39,7 @@ const CAT_META: Record<InteriorDocCategory, { label: string; color: string; requ
 const ALL_CATS = Object.keys(CAT_META) as InteriorDocCategory[];
 
 /** Categories required before certain phase gates can pass */
-export const PHASE_REQUIRED_DOCS: Record<string, InteriorDocCategory[]> = {
+const PHASE_REQUIRED_DOCS: Record<string, InteriorDocCategory[]> = {
   CITY_APPROVAL: ['DRAWING'],
   HANDOVER:      ['CITY_APPROVAL', 'HANDOVER_CERTIFICATE'],
 };

@@ -7,7 +7,8 @@ import {
 } from '@heroui/react';
 import { FiPlus } from 'react-icons/fi';
 import { useInvestors, useInvestorSummary, useCreateInvestor } from '../hooks/useApi';
-import { StatCard, LoadingState, ErrorState, EmptyState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, LoadingState, ErrorState, EmptyState } from '../components/ui';
 
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;

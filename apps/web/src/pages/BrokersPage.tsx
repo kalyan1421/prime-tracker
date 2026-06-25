@@ -7,7 +7,8 @@ import { FiBriefcase, FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import {
   useBrokers, useBrokerReport, useCreateBroker, useUpdateBroker, useDeleteBroker,
 } from '../hooks/useApi';
-import { StatCard, LoadingState, EmptyState, PermissionGate, fmt, fmtPct } from '../components/ui';
+import { fmt, fmtPct } from '../utils/fmt';
+import { StatCard, LoadingState, EmptyState, PermissionGate } from '../components/ui';
 
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;

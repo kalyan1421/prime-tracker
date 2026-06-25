@@ -9,7 +9,8 @@ import {
   FiAlertCircle, FiActivity,
 } from 'react-icons/fi';
 import { useLeadDashboard, useProjects } from '../hooks/useApi';
-import { LoadingState, ErrorState, StatCard, fmtDate } from '../components/ui';
+import { fmtDate } from '../utils/fmt';
+import { LoadingState, ErrorState, StatCard } from '../components/ui';
 import { useState } from 'react';
 
 const STATUS_ORDER = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];

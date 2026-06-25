@@ -11,7 +11,8 @@ import {
   useInvestor, useAddPosition, useCreateCapitalCall, useMarkCapitalCallPaid,
   useCreateDistribution, useProjects,
 } from '../hooks/useApi';
-import { StatCard, LoadingState, ErrorState, EmptyState, fmt, fmtDate, fmtPct } from '../components/ui';
+import { fmt, fmtDate, fmtPct } from '../utils/fmt';
+import { StatCard, LoadingState, ErrorState, EmptyState } from '../components/ui';
 
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;

@@ -11,11 +11,10 @@ import {
   useInteriorTemplates,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
-import { fmt, fmtDate } from './ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { INTERIOR_PHASES } from '../constants/interior';
 
-export const INTERIOR_PHASES = [
-  'DESIGN', 'CLIENT_APPROVAL', 'CITY_APPROVAL', 'PROCUREMENT', 'EXECUTION', 'SNAGGING', 'HANDOVER',
-] as const;
+export { INTERIOR_PHASES };
 
 const PHASE_LABEL: Record<string, string> = {
   DESIGN: 'Design',

@@ -6,7 +6,8 @@ import {
 } from 'recharts';
 import { FiAlertTriangle, FiTrendingUp, FiMessageSquare } from 'react-icons/fi';
 import { useFounderDashboard, useRecentComments, useExceptions } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { ExceptionFeed } from '../components/ExceptionFeed';

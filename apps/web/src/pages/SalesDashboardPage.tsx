@@ -6,7 +6,8 @@ import {
 } from 'recharts';
 import { FiTarget } from 'react-icons/fi';
 import { useSalesDashboard } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 const STATUS_ORDER = ['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT', 'CLOSED'];

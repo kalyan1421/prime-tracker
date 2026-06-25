@@ -9,7 +9,8 @@ import {
 } from 'recharts';
 import api from '../lib/api';
 import { useSalesReport, useRevenueReport, useLeads, useProjects, useUnitSalesReport } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 function SalesPerformanceTab() {

@@ -13,7 +13,8 @@ import {
   useDeactivateOrganization, useAddOrgMember, useRemoveOrgMember,
   useRoleCounts, useRoleDefinitions,
 } from '../hooks/useApi';
-import { StatusBadge, LoadingState, ErrorState, fmtDate } from '../components/ui';
+import { fmtDate } from '../utils/fmt';
+import { StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { API_BASE_URL } from '../lib/api';
 

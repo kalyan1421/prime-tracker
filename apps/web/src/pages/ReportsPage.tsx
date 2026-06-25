@@ -6,7 +6,8 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { usePortfolioReport, useSalesReport, useRevenueReport, useDebtReport, useProjects } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 // ---- Executive Summary Tab ----

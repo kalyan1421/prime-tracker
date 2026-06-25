@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import {
-  Button, Input, Textarea, Chip, addToast,
+  Button, Input, Textarea, Chip, Select, SelectItem, addToast,
 } from '@heroui/react';
 import {
   FiEdit2, FiCheck, FiX, FiBriefcase, FiPhone,
@@ -36,10 +36,42 @@ const BIZ_COLOR: Record<string, string> = {
   'Other':       'bg-gray-100 text-gray-600',
 };
 
+// ─── trading hours presets ────────────────────────────────────────────────────
+
+const PRESET_HOURS = [
+  'Mon–Fri, 8am–5pm',
+  'Mon–Fri, 9am–6pm',
+  'Mon–Sat, 9am–6pm',
+  'Mon–Sat, 8am–8pm',
+  'Mon–Sun, 10am–9pm',
+  '24/7',
+];
+
 const errMsg = (err: unknown, fallback: string) => {
   const msg = (err as any)?.response?.data?.message;
   return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
 };
+
+// ─── parse / build helpers (module-level so useState lazy init can use them) ──
+
+function parseNotes(raw?: string) {
+  const lines    = (raw ?? '').split('\n');
+  const extract  = (key: string) =>
+    lines.find((l) => l.startsWith(`${key}: `))?.replace(`${key}: `, '') ?? '';
+  const rest = lines
+    .filter((l) => !l.startsWith('businessType: ') && !l.startsWith('tradingHours: ') && !l.startsWith('designNotes: '))
+    .join('\n')
+    .trim();
+  return {
+    businessType: extract('businessType'),
+    tradingHours: extract('tradingHours'),
+    designNotes:  extract('designNotes') || rest,
+  };
+}
+
+function isCustomHours(value: string) {
+  return !!value && !PRESET_HOURS.includes(value);
+}
 
 // ─── component ────────────────────────────────────────────────────────────────
 
@@ -59,32 +91,25 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
   const updateLease = useUpdateLease();
   const [editing, setEditing] = useState(false);
 
-  const [form, setForm] = useState({
-    tenantBrand:     lease.tenantBrand     ?? '',
-    tenantLegalName: lease.tenantLegalName ?? '',
-    tenantContact:   lease.tenantContact   ?? '',
-    businessType:    '',          // stored in notes as "businessType: Coffee Shop\n..."
-    tradingHours:    '',          // stored in notes
-    designNotes:     '',          // stored in notes
+  // Lazy initializer parses notes immediately so businessType/tradingHours are
+  // populated from the first render — avoids pills being all-gray on open.
+  const [form, setForm] = useState(() => {
+    const p = parseNotes(lease.notes);
+    return {
+      tenantBrand:     lease.tenantBrand     ?? '',
+      tenantLegalName: lease.tenantLegalName ?? '',
+      tenantContact:   lease.tenantContact   ?? '',
+      businessType:    p.businessType,
+      tradingHours:    p.tradingHours,
+      designNotes:     p.designNotes,
+    };
   });
 
-  // Parse structured fields from notes on mount
-  const parseNotes = (raw?: string) => {
-    const lines    = (raw ?? '').split('\n');
-    const extract  = (key: string) =>
-      lines.find((l) => l.startsWith(`${key}: `))?.replace(`${key}: `, '') ?? '';
-    const rest = lines
-      .filter((l) => !l.startsWith('businessType: ') && !l.startsWith('tradingHours: ') && !l.startsWith('designNotes: '))
-      .join('\n')
-      .trim();
-    return {
-      businessType: extract('businessType'),
-      tradingHours: extract('tradingHours'),
-      designNotes:  extract('designNotes') || rest,
-    };
-  };
-
-  const parsed = parseNotes(lease.notes);
+  // Tracks whether the user has selected "Custom..." mode for trading hours.
+  const [customHoursMode, setCustomHoursMode] = useState(() => {
+    const p = parseNotes(lease.notes);
+    return isCustomHours(p.tradingHours);
+  });
 
   const buildNotes = () => {
     const parts: string[] = [];
@@ -95,14 +120,16 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
   };
 
   const handleEdit = () => {
+    const p = parseNotes(lease.notes);
     setForm({
       tenantBrand:     lease.tenantBrand     ?? '',
       tenantLegalName: lease.tenantLegalName ?? '',
       tenantContact:   lease.tenantContact   ?? '',
-      businessType:    parsed.businessType,
-      tradingHours:    parsed.tradingHours,
-      designNotes:     parsed.designNotes,
+      businessType:    p.businessType,
+      tradingHours:    p.tradingHours,
+      designNotes:     p.designNotes,
     });
+    setCustomHoursMode(isCustomHours(p.tradingHours));
     setEditing(true);
   };
 
@@ -128,6 +155,7 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((p) => ({ ...p, [f]: e.target.value }));
 
+  const parsed = parseNotes(lease.notes);
   const displayBizType = parsed.businessType;
   const displayColor   = BIZ_COLOR[displayBizType] ?? BIZ_COLOR['Other'];
 
@@ -204,6 +232,8 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
   }
 
   // ── edit mode ────────────────────────────────────────────────────────────────
+  const selectHoursKey = customHoursMode ? '__custom__' : (form.tradingHours || '');
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -227,16 +257,17 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
           <Input size="sm" label="Contact (phone / email)" value={form.tenantContact} onChange={set('tenantContact')} />
           {/* business type as button group */}
           <div className="flex-1">
-            <p className="text-xs text-gray-500 mb-1">Business type</p>
-            <div className="flex flex-wrap gap-1">
+            <p className="text-xs text-gray-500 mb-1.5">Business type</p>
+            <div className="flex flex-wrap gap-1.5">
               {BUSINESS_TYPES.map((bt) => (
                 <button
                   key={bt}
-                  onClick={() => setForm((p) => ({ ...p, businessType: bt }))}
-                  className={`px-2 py-0.5 rounded-full text-xs transition-colors ${
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, businessType: bt === p.businessType ? '' : bt }))}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
                     form.businessType === bt
-                      ? BIZ_COLOR[bt] + ' ring-1 ring-current font-semibold'
-                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      ? `${BIZ_COLOR[bt]} border-current shadow-sm scale-105`
+                      : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:bg-gray-50'
                   }`}
                 >
                   {bt}
@@ -246,11 +277,39 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
           </div>
         </div>
 
-        <Input
-          size="sm" label="Trading hours"
-          placeholder="e.g. Mon–Fri 8am–6pm, Sat 9am–3pm"
-          value={form.tradingHours} onChange={set('tradingHours')}
-        />
+        {/* Trading hours: predefined presets or custom entry */}
+        <div className="space-y-1.5">
+          <Select
+            size="sm"
+            label="Trading hours"
+            placeholder="Select hours or choose Custom…"
+            selectedKeys={selectHoursKey ? [selectHoursKey] : []}
+            onSelectionChange={(keys) => {
+              const val = Array.from(keys)[0] as string;
+              if (val === '__custom__') {
+                setCustomHoursMode(true);
+                // keep current tradingHours as starting text for custom input
+              } else if (val) {
+                setCustomHoursMode(false);
+                setForm((p) => ({ ...p, tradingHours: val }));
+              }
+            }}
+          >
+            {([...PRESET_HOURS, 'Custom…'] as string[]).map((h) => (
+              <SelectItem key={h === 'Custom…' ? '__custom__' : h} textValue={h}>{h}</SelectItem>
+            ))}
+          </Select>
+          {customHoursMode && (
+            <Input
+              size="sm"
+              placeholder="e.g. Mon–Fri 8am–6pm, Sat 9am–3pm"
+              value={form.tradingHours}
+              onChange={set('tradingHours')}
+              startContent={<FiClock size={13} className="text-gray-400 shrink-0" />}
+            />
+          )}
+        </div>
+
         <Textarea
           size="sm" label="Design / fit-out guidelines"
           placeholder="e.g. Requires 3-phase power, grease trap, ventilation to exterior…"

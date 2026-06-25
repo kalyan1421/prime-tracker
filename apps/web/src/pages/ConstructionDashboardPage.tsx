@@ -6,7 +6,8 @@ import {
 } from 'recharts';
 import { FiTrendingUp } from 'react-icons/fi';
 import { useConstructionDashboard } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 const PHASE_COLORS: Record<string, string> = {

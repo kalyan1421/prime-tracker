@@ -11,7 +11,8 @@ import { useNavigate } from 'react-router-dom';
 import { useState, useMemo, useCallback } from 'react';
 import { useProjects, useCreateProject, useUpdateProject, useDeleteProject, useProjectHealthBulk } from '../hooks/useApi';
 import { HealthScoreRing } from '../components/HealthScoreRing';
-import { StatusBadge, PhaseProgress, ErrorState, fmt } from '../components/ui';
+import { fmt } from '../utils/fmt';
+import { StatusBadge, PhaseProgress, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 const PHASES = ['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'];

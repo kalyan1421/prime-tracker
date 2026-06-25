@@ -7,7 +7,8 @@ import {
   useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useAddDailyLogPhoto, useRemoveDailyLogPhoto,
   usePresignedUpload, useBuildings,
 } from '../hooks/useApi';
-import { fmtDate, PermissionGate } from './ui';
+import { fmtDate } from '../utils/fmt';
+import { PermissionGate } from './ui';
 
 const photoUrl = (photo: { url?: string; storagePath: string }) => photo.url || '';
 

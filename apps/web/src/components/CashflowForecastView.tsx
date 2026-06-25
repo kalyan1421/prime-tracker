@@ -17,7 +17,7 @@ import {
   FiBarChart2, FiList,
 } from 'react-icons/fi';
 import { useCashFlowForecast } from '../hooks/useApi';
-import { fmt } from './ui';
+import { fmt } from '../utils/fmt';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 

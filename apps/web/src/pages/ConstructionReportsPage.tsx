@@ -9,7 +9,8 @@ import {
 } from 'recharts';
 import api from '../lib/api';
 import { usePortfolioReport, useProjects } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 function BudgetCostTab() {

@@ -13,7 +13,8 @@ import {
   useInteriorProject, useAdvanceInteriorPhase, useApproveInterior, useUpdateInterior,
   useDeleteInterior, useAddInteriorInvoice, useVendors,
 } from '../hooks/useApi';
-import { fmt, fmtDate, LoadingState, ErrorState } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { LoadingState, ErrorState } from '../components/ui';
 import { SnagPanel } from '../components/SnagPanel';
 import { InteriorBOQPanel } from '../components/InteriorBOQPanel';
 import { InteriorDocumentsPanel } from '../components/InteriorDocumentsPanel';

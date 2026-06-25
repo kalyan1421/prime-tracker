@@ -7,7 +7,8 @@ import {
 import {
   useBuilding, useUnits, useLeases, useLoans, useDocuments,
 } from '../hooks/useApi';
-import { LoadingState, ErrorState, StatCard, fmtDate } from '../components/ui';
+import { fmtDate } from '../utils/fmt';
+import { LoadingState, ErrorState, StatCard } from '../components/ui';
 
 // Unit status palette — re-uses the dashboard's status semantics so users only learn one.
 const STATUS_FILL: Record<string, string> = {

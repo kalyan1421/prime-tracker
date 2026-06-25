@@ -8,7 +8,8 @@ import {
   FiTrendingUp, FiTrendingDown, FiDollarSign, FiActivity, FiDownloadCloud,
 } from 'react-icons/fi';
 import { useCashflowPortfolio } from '../hooks/useApi';
-import { LoadingState, ErrorState, EmptyState, fmt } from '../components/ui';
+import { fmt } from '../utils/fmt';
+import { LoadingState, ErrorState, EmptyState } from '../components/ui';
 
 // ── horizon options ──────────────────────────────────────────────────────────
 const HORIZONS = [

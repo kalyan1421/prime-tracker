@@ -5,7 +5,7 @@ import {
 } from '@heroui/react';
 import { FiPlus, FiTrash2, FiPackage } from 'react-icons/fi';
 import { useInteriorTemplates, useCreateInteriorTemplate, useDeleteInteriorTemplate } from '../hooks/useApi';
-import { fmt } from './ui';
+import { fmt } from '../utils/fmt';
 import { useAuthStore } from '../store/authStore';
 
 const errMsg = (err: unknown, fallback: string) => {

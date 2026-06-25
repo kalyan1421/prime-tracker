@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardBody, Chip, Button, useDisclosure } from '@heroui/react';
 import { FiHome, FiPackage } from 'react-icons/fi';
 import { useInteriorPortfolio } from '../hooks/useApi';
-import { StatCard, LoadingState, EmptyState, fmt } from '../components/ui';
-import { INTERIOR_PHASES } from '../components/InteriorPanel';
+import { fmt } from '../utils/fmt';
+import { StatCard, LoadingState, EmptyState } from '../components/ui';
+import { INTERIOR_PHASES } from '../constants/interior';
 import { InteriorPackagesModal } from '../components/InteriorPackagesModal';
 
 const PHASE_LABEL: Record<string, string> = {

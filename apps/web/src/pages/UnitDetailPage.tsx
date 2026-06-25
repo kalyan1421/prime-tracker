@@ -17,7 +17,8 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   SALES: 'bg-blue-100 text-blue-700',
   FINANCIAL: 'bg-green-100 text-green-700',
 };
-import { StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
@@ -31,7 +32,7 @@ const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'R
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 
 // Single metric cell used inside the unified key-metrics strip.
-function Metric({ label, value, unit, accent }: { label: string; value: string; unit?: string; accent?: string }) {
+function Metric({ label, value, unit, accent, sub }: { label: string; value: string; unit?: string; accent?: string; sub?: string }) {
   return (
     <div className="p-4 sm:p-5">
       <p className="text-[11px] uppercase tracking-wide text-gray-400 font-medium">{label}</p>
@@ -39,6 +40,7 @@ function Metric({ label, value, unit, accent }: { label: string; value: string; 
         {value}
         {unit && <span className="text-sm font-medium text-gray-400 ml-1">{unit}</span>}
       </p>
+      {sub && <p className="text-[11px] text-gray-400 mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -139,11 +141,12 @@ export default function UnitDetailPage() {
     if (!leaseForm.tenantName.trim() || !leaseForm.monthlyRent || !leaseForm.leaseStart || !leaseForm.leaseEnd) {
       return addToast({ title: 'Tenant name, rent, and dates are required', color: 'warning' });
     }
+    const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
     const payload = {
       tenantName: leaseForm.tenantName.trim(),
       monthlyRent: parseFloat(leaseForm.monthlyRent),
-      leaseStart: new Date(leaseForm.leaseStart).toISOString(),
-      leaseEnd: new Date(leaseForm.leaseEnd).toISOString(),
+      leaseStart: toDate(leaseForm.leaseStart),
+      leaseEnd: toDate(leaseForm.leaseEnd),
       termMonths: leaseForm.termMonths ? parseInt(leaseForm.termMonths, 10) : undefined,
       status: leaseForm.status || 'ACTIVE',
     };
@@ -180,8 +183,9 @@ export default function UnitDetailPage() {
   if (error || !unit) return <ErrorState />;
 
   const u = unit as any;
-  const activeLease = u.leases?.find((l: any) => l.status === 'ACTIVE');
+  const activeLease = u.leases?.find((l: any) => !['EXPIRED', 'TERMINATED'].includes(l.status));
   const psf = u.askingPrice && u.sqft ? (Number(u.askingPrice) / u.sqft).toFixed(2) : null;
+  const rentPsf = u.askingRent && u.sqft ? ((Number(u.askingRent) * 12) / u.sqft).toFixed(2) : null;
 
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -373,7 +377,7 @@ export default function UnitDetailPage() {
         <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
         <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-600" />
         <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
-        <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-600" />
+        <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-600" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">

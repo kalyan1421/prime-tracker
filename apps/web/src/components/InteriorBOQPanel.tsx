@@ -11,7 +11,7 @@ import {
 } from '@heroui/react';
 import { FiPlus, FiTrash2, FiFileText } from 'react-icons/fi';
 import { useAddInteriorScope, useDeleteInteriorScope } from '../hooks/useApi';
-import { fmt } from './ui';
+import { fmt } from '../utils/fmt';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 

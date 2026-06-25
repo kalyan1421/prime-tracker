@@ -7,7 +7,8 @@ import {
 } from 'recharts';
 import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
 import { usePortfolioReport, useDebtReport, useSalesReport, useRevenueReport, useUnitSalesReport, useProjects, useCashFlowForecast, useCreateCashFlowEntry, useDeleteCashFlowEntry } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, EmptyState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState, EmptyState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 function PortfolioPLTab() {

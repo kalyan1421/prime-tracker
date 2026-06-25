@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardBody, CardHeader, Tooltip } from '@heroui/react';
 import { FiAlertCircle } from 'react-icons/fi';
 import { useBudgetObligations } from '../hooks/useApi';
-import { fmt } from './ui';
+import { fmt } from '../utils/fmt';
 
 // Mirrors the engine's five outflow categories (the client's budget lines).
 const CATS: { key: string; label: string; dot: string; chip: string }[] = [

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card, CardBody, Input, Select, SelectItem, Chip, Button,
@@ -6,9 +6,12 @@ import {
 } from '@heroui/react';
 import { FiSearch, FiFilter, FiPackage, FiExternalLink, FiEdit2 } from 'react-icons/fi';
 import { useInventory, useProjects, useUpdateUnitStatus } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState } from '../components/ui';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { useAuthStore } from '../store/authStore';
+
+const PAGE_SIZE = 20;
 
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'LEASE_PENDING', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
@@ -32,6 +35,7 @@ export default function InventoryPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
+  const [page, setPage] = useState(1);
 
   // Quick-edit status modal
   const { isOpen: isStatusOpen, onOpen: onStatusOpen, onClose: onStatusClose } = useDisclosure();
@@ -57,6 +61,11 @@ export default function InventoryPage() {
   };
 
   const { data: projectsData } = useProjects();
+  // Unfiltered fetch for heat-map counts and summary stats — always reflects the full portfolio.
+  const { data: allData } = useInventory({
+    unitType: typeFilter || undefined,
+    projectId: projectFilter || undefined,
+  });
   const { data, isLoading } = useInventory({
     status: statusFilter || undefined,
     unitType: typeFilter || undefined,
@@ -67,12 +76,19 @@ export default function InventoryPage() {
   const projects = (projectsData as any[] | { data: any[] } | undefined);
   const projectList = Array.isArray(projects) ? projects : (projects as any)?.data ?? [];
   const units = (data as any[]) || [];
+  const allUnits = (allData as any[]) || [];
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const u of units) counts[u.status] = (counts[u.status] || 0) + 1;
+    for (const u of allUnits) counts[u.status] = (counts[u.status] || 0) + 1;
     return counts;
-  }, [units]);
+  }, [allUnits]);
+
+  // Reset to first page whenever the filtered result set changes.
+  useEffect(() => { setPage(1); }, [search, statusFilter, typeFilter, projectFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(units.length / PAGE_SIZE));
+  const pagedUnits = units.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const clearFilters = () => {
     setSearch('');
@@ -116,7 +132,7 @@ export default function InventoryPage() {
 
       {/* Summary stat */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total Units" value={units.length.toString()} />
+        <StatCard label="Total Units" value={allUnits.length.toString()} />
         <StatCard label="Available" value={(statusCounts['AVAILABLE'] || 0).toString()} colorScheme="green" />
         <StatCard label="Occupied / Leased" value={((statusCounts['OCCUPIED'] || 0) + (statusCounts['LEASED'] || 0)).toString()} colorScheme="teal" />
         <StatCard label="Sold" value={(statusCounts['SOLD'] || 0).toString()} />
@@ -202,7 +218,7 @@ export default function InventoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {units.map((u: any) => {
+                {pagedUnits.map((u: any) => {
                   const activeLease = u.leases?.[0];
                   const activeSale = u.sales?.find((s: any) => !['CANCELLED'].includes(s.status));
                   return (
@@ -282,6 +298,34 @@ export default function InventoryPage() {
                 })}
               </tbody>
             </table></div>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-3 py-2.5 border-t border-gray-100">
+                <span className="text-xs text-gray-500">
+                  {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, units.length)} of {units.length} units
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    isDisabled={page === 1}
+                    onPress={() => setPage((p) => p - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-xs text-gray-500 px-2 tabular-nums">
+                    Page {page} / {totalPages}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    isDisabled={page === totalPages}
+                    onPress={() => setPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardBody>
         </Card>
       )}

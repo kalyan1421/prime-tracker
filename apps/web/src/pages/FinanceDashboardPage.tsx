@@ -6,7 +6,8 @@ import {
 } from 'recharts';
 import { FiAlertTriangle, FiDollarSign } from 'react-icons/fi';
 import { useFinanceDashboard } from '../hooks/useApi';
-import { StatCard, StatusBadge, LoadingState, ErrorState, fmt, fmtDate } from '../components/ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 const FINANCE_ROLES = ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP'];

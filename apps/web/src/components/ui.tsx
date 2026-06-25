@@ -3,22 +3,6 @@ import { Card, CardBody, Chip, Progress, Spinner, Button } from '@heroui/react';
 import { FiArrowRight } from 'react-icons/fi';
 import { useAuthStore } from '../store/authStore';
 
-// ---- Currency / Number Formatting ----
-export function fmt(n: number | null | undefined): string {
-  if (n == null) return '$0';
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-}
-
-export function fmtPct(n: number | null | undefined): string {
-  if (n == null) return '0%';
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
-}
-
-export function fmtDate(d: string | null | undefined): string {
-  if (!d) return '\u2014';
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-}
-
 // ---- Stat Card ----
 export function StatCard({
   label, value, helpText, trend, colorScheme = 'gray', variant, onClick,

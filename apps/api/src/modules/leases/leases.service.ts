@@ -70,6 +70,14 @@ export class LeasesService {
     if (unitId && buildingId) {
       throw new BadRequestException('Lease cannot reference both a unit and a building');
     }
+    if (unitId) {
+      const existing = await this.prisma.lease.findFirst({
+        where: { unitId, status: { notIn: ['EXPIRED', 'TERMINATED'] } },
+      });
+      if (existing) {
+        throw new BadRequestException('This unit already has an active lease. Expire or terminate the existing lease before adding a new one.');
+      }
+    }
     return this.prisma.lease.create({ data });
   }
 

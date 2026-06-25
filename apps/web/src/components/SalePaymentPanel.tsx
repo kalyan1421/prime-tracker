@@ -7,7 +7,8 @@ import { FiPlus, FiDollarSign } from 'react-icons/fi';
 import {
   useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment,
 } from '../hooks/useApi';
-import { fmt, fmtDate, PermissionGate } from './ui';
+import { fmt, fmtDate } from '../utils/fmt';
+import { PermissionGate } from './ui';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
   SCHEDULED: 'default',

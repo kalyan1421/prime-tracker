@@ -9,7 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
@@ -208,9 +208,10 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
     </div>
   );
 }
+import { fmt, fmtPct, fmtDate } from '../utils/fmt';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
-  PermissionGate, fmt, fmtPct, fmtDate,
+  PermissionGate,
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
@@ -1332,7 +1333,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
 
       {/* Commitments — vendor spend, financial:view only */}
       <PermissionGate permission="financial:view">
-      <Card shadow="sm">
+      <Card shadow="sm" className="mb-6">
         <CardHeader className="pb-0 flex justify-between items-center">
           <p className="font-semibold text-sm text-gray-600">Contracts & Commitments</p>
           <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCommitCreate}>
@@ -1341,7 +1342,10 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         </CardHeader>
         <CardBody>
           {commitmentList.length === 0 ? (
-            <EmptyState title="No commitments" />
+            <div className="flex items-center gap-2 py-4 px-1 text-sm text-gray-400">
+              <FiPlus className="text-gray-300 shrink-0" />
+              <span>No commitments yet — add the first vendor contract above.</span>
+            </div>
           ) : (
             <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
               <thead>
@@ -1381,7 +1385,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
 
       {/* Cashflow Forecast — financial:view only */}
       <PermissionGate permission="financial:view">
-      <Card shadow="sm">
+      <Card shadow="sm" className="mb-6">
         <CardHeader className="pb-0">
           <p className="font-semibold text-sm text-gray-600">Cashflow Projection</p>
         </CardHeader>
@@ -2823,13 +2827,27 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
 
   const handleSave = async () => {
+    if (!form.tenantName.trim()) {
+      addToast({ title: 'Tenant name is required', color: 'warning' }); return;
+    }
+    if (!form.monthlyRent) {
+      addToast({ title: 'Monthly rent is required', color: 'warning' }); return;
+    }
+    if (!form.leaseStart) {
+      addToast({ title: 'Lease start date is required', color: 'warning' }); return;
+    }
+    if (!form.leaseEnd) {
+      addToast({ title: 'Lease end date is required', color: 'warning' }); return;
+    }
+    // Use T12:00:00 to anchor the date at noon UTC — avoids off-by-one day in any timezone.
+    const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
     try {
       const payload: Record<string, unknown> = {
         tenantName: form.tenantName,
         tenantContact: form.tenantContact || undefined,
-        monthlyRent: form.monthlyRent ? parseFloat(form.monthlyRent) : 0,
-        leaseStart: form.leaseStart ? new Date(form.leaseStart).toISOString() : undefined,
-        leaseEnd: form.leaseEnd ? new Date(form.leaseEnd).toISOString() : undefined,
+        monthlyRent: parseFloat(form.monthlyRent),
+        leaseStart: toDate(form.leaseStart),
+        leaseEnd: toDate(form.leaseEnd),
         termMonths: form.termMonths ? parseInt(form.termMonths) : undefined,
         escalationPct: form.escalationPct ? parseFloat(form.escalationPct) : undefined,
         securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : undefined,
@@ -2867,6 +2885,18 @@ function LeasesTab({ projectId }: { projectId: string }) {
   if (ll || rl) return <LoadingState />;
   const leaseList = (leases as any[]) || [];
   const rr = rentRoll as any;
+
+  // Units already leased (any non-terminated/expired lease) or sold — excluded from the
+  // "Add Lease" dropdown. When editing, the current unit is always kept in the list.
+  const leasedUnitIds = new Set(
+    leaseList
+      .filter((l: any) => !['EXPIRED', 'TERMINATED'].includes(l.status))
+      .map((l: any) => l.unitId)
+      .filter(Boolean),
+  );
+  const availableForLease = units.filter(
+    (u: any) => u.status !== 'SOLD' && (!leasedUnitIds.has(u.id) || u.id === form.unitId),
+  );
 
   return (
     <div className="mt-4">
@@ -2950,8 +2980,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
                   if (val) setForm((f) => ({ ...f, unitId: val }));
                 }}
               >
-                {units.map((u: any) => (
-                  <SelectItem key={u.id}>{u.unitNumber || u.name}</SelectItem>
+                {availableForLease.map((u: any) => (
+                  <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} />
@@ -2959,7 +2989,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
               <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} />
               <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} />
               <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} />
-              <Input size="sm" label="Term (months)" isRequired type="number" value={form.termMonths} onChange={set('termMonths')} />
+              <Input size="sm" label="Term (months)" type="number" value={form.termMonths} onChange={set('termMonths')} />
               <Input size="sm" label="Escalation %" type="number" value={form.escalationPct} onChange={set('escalationPct')} />
               <Input size="sm" label="Security Deposit ($)" type="number" value={form.securityDeposit} onChange={set('securityDeposit')} />
               <Select
@@ -2972,7 +3002,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
                 }}
               >
                 {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((v) => (
-                  <SelectItem key={v}>{v}</SelectItem>
+                  <SelectItem key={v} textValue={v}>{v}</SelectItem>
                 ))}
               </Select>
               <div className="sm:col-span-2">
@@ -3066,6 +3096,7 @@ function SalesTab({ projectId }: { projectId: string }) {
   const { isOpen: isCancelOpen, onOpen: onCancelOpen, onClose: onCancelClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_SALE);
+  const [saleFormError, setSaleFormError] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [paySale, setPaySale] = useState<any>(null);
@@ -3085,6 +3116,7 @@ function SalesTab({ projectId }: { projectId: string }) {
   const openCreate = () => {
     setEditId(null);
     setForm({ ...EMPTY_SALE, unitId: units[0]?.id || '' });
+    setSaleFormError(null);
     onFormOpen();
   };
   const openEdit = (s: any) => {
@@ -3102,17 +3134,21 @@ function SalesTab({ projectId }: { projectId: string }) {
       brokerId: s.brokerId || '',
       brokerCommissionPct: s.brokerCommissionPct != null ? String(s.brokerCommissionPct) : '',
     });
+    setSaleFormError(null);
     onFormOpen();
   };
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
 
   const handleSave = async () => {
+    setSaleFormError(null);
     // Slice 6: forced lost-reason picker — frontend insists before submit so the
     // user understands the audit captures *why* deals die.
     if (form.status === 'CANCELLED' && !form.lostReason) {
-      addToast({ title: 'Pick a reason — why was this deal lost?', color: 'warning' });
+      setSaleFormError('Please select a reason — why was this deal lost?');
       return;
     }
+    // Use T12:00:00 to anchor dates at noon UTC — avoids off-by-one day in any timezone.
+    const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
     try {
       const payload: Record<string, unknown> = {
         projectId,
@@ -3121,10 +3157,10 @@ function SalesTab({ projectId }: { projectId: string }) {
         salePrice: form.salePrice ? parseFloat(form.salePrice) : undefined,
         depositAmt: form.depositAmt ? parseFloat(form.depositAmt) : undefined,
         status: form.status,
-        loiDate: form.loiDate ? new Date(form.loiDate).toISOString() : undefined,
-        contractDate: form.contractDate ? new Date(form.contractDate).toISOString() : undefined,
-        closingDate: form.closingDate ? new Date(form.closingDate).toISOString() : undefined,
-        expectedCloseDate: form.expectedCloseDate ? new Date(form.expectedCloseDate).toISOString() : undefined,
+        loiDate: form.loiDate ? toDate(form.loiDate) : undefined,
+        contractDate: form.contractDate ? toDate(form.contractDate) : undefined,
+        closingDate: form.closingDate ? toDate(form.closingDate) : undefined,
+        expectedCloseDate: form.expectedCloseDate ? toDate(form.expectedCloseDate) : undefined,
         notes: form.notes || undefined,
         lostReason: form.status === 'CANCELLED' ? form.lostReason : undefined,
         lostReasonNote: form.status === 'CANCELLED' ? (form.lostReasonNote || undefined) : undefined,
@@ -3140,7 +3176,9 @@ function SalesTab({ projectId }: { projectId: string }) {
       }
       onFormClose();
     } catch (e) {
-      addToast({ title: errMsg(e, 'Failed to save sale'), color: 'danger' });
+      const msg = errMsg(e, 'Failed to save sale');
+      setSaleFormError(msg);
+      addToast({ title: msg, color: 'danger' });
     }
   };
 
@@ -3367,7 +3405,7 @@ function SalesTab({ projectId }: { projectId: string }) {
                 }}
               >
                 {units.map((u: any) => (
-                  <SelectItem key={u.id}>{u.unitNumber || u.name}</SelectItem>
+                  <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="Buyer" value={form.buyer} onChange={set('buyer')} />
@@ -3383,7 +3421,7 @@ function SalesTab({ projectId }: { projectId: string }) {
                 }}
               >
                 {['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT', 'CLOSED', 'CANCELLED'].map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                  <SelectItem key={v} textValue={v.replace(/_/g, ' ')}>{v.replace(/_/g, ' ')}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="LOI Date" type="date" value={form.loiDate} onChange={set('loiDate')} />
@@ -3437,11 +3475,16 @@ function SalesTab({ projectId }: { projectId: string }) {
               </div>
             </div>
           </ModalBody>
-          <ModalFooter>
-            <Button size="sm" variant="light" onPress={onFormClose}>Cancel</Button>
-            <Button size="sm" color="primary" onPress={handleSave} isLoading={createSale.isPending || updateSale.isPending}>
-              {editId ? 'Save Changes' : 'Add Sale'}
-            </Button>
+          <ModalFooter className="flex-col items-stretch gap-2">
+            {saleFormError && (
+              <p className="text-xs text-danger text-center w-full px-2">{saleFormError}</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="light" onPress={onFormClose}>Cancel</Button>
+              <Button size="sm" color="primary" onPress={handleSave} isLoading={createSale.isPending || updateSale.isPending}>
+                {editId ? 'Save Changes' : 'Add Sale'}
+              </Button>
+            </div>
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -4253,6 +4296,11 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                       <p className="text-sm font-medium text-gray-800">{lead.name || <span className="text-gray-400 italic">Unnamed</span>}</p>
                       <Chip size="sm" color={LEAD_STATUS_COLORS_TAB[lead.status] || 'default'} variant="flat" className="text-[10px]">{lead.status.replace('_', ' ')}</Chip>
                       <Chip size="sm" variant="bordered" className="text-[10px]">{SOURCE_LABELS_TAB[lead.source] || lead.source}</Chip>
+                      {lead.unit?.unitNumber && (
+                        <Chip size="sm" color="primary" variant="flat" className="text-[10px]" startContent={<FiHome size={9} />}>
+                          {lead.unit.unitNumber}
+                        </Chip>
+                      )}
                     </div>
                     <div className="flex gap-3 mt-0.5 text-xs text-gray-500 flex-wrap">
                       {lead.email && <span className="flex items-center gap-1"><FiMail />{lead.email}</span>}
@@ -4281,10 +4329,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 <Input size="sm" label="Phone" value={form.phone} onChange={(e) => setF('phone', e.target.value)} />
                 <Input size="sm" label="Budget ($)" type="number" value={form.budget} onChange={(e) => setF('budget', e.target.value)} />
                 <Select size="sm" label="Source" selectedKeys={new Set([form.source])} onSelectionChange={(k) => setF('source', Array.from(k)[0] as string)}>
-                  {LEAD_SOURCES_TAB.map((s) => <SelectItem key={s}>{SOURCE_LABELS_TAB[s] || s}</SelectItem>)}
+                  {LEAD_SOURCES_TAB.map((s) => <SelectItem key={s} textValue={SOURCE_LABELS_TAB[s] || s}>{SOURCE_LABELS_TAB[s] || s}</SelectItem>)}
                 </Select>
                 <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => setF('status', Array.from(k)[0] as string)}>
-                  {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>)}
+                  {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s} textValue={s.replace('_', ' ')}>{s.replace('_', ' ')}</SelectItem>)}
                 </Select>
                 <Select
                   size="sm"
@@ -4294,9 +4342,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                   onSelectionChange={(k) => setF('unitId', (Array.from(k)[0] as string) || '')}
                   className="sm:col-span-2"
                 >
-                  {((projectUnits as any[]) || []).map((u: any) => (
-                    <SelectItem key={u.id}>{u.unitNumber}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}</SelectItem>
-                  ))}
+                  {((projectUnits as any[]) || []).map((u: any) => {
+                    const label = `${u.unitNumber}${u.status ? ` · ${u.status.replace('_', ' ')}` : ''}`;
+                    return <SelectItem key={u.id} textValue={label}>{label}</SelectItem>;
+                  })}
                 </Select>
                 <Input size="sm" label="Notes on interest" placeholder="e.g. 2BR preference" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
                 <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="sm:col-span-2" />
@@ -4317,15 +4366,25 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
         <div className="w-full lg:w-[320px] lg:shrink-0">
           <Card shadow="sm">
             <CardHeader className="pb-0">
-              <div>
+              <div className="w-full">
                 <p className="text-sm font-semibold text-gray-800">{selectedLead.name || 'Unnamed Lead'}</p>
-                <Chip size="sm" color={LEAD_STATUS_COLORS_TAB[selectedLead.status] || 'default'} variant="flat" className="mt-1 text-[10px]">{selectedLead.status.replace('_', ' ')}</Chip>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <Chip size="sm" color={LEAD_STATUS_COLORS_TAB[selectedLead.status] || 'default'} variant="flat" className="text-[10px]">{selectedLead.status.replace('_', ' ')}</Chip>
+                  {selectedLead.unit?.unitNumber && (
+                    <Chip size="sm" color="primary" variant="flat" className="text-[10px]" startContent={<FiHome size={9} />}>
+                      Unit {selectedLead.unit.unitNumber}
+                    </Chip>
+                  )}
+                </div>
+                {selectedLead.email && <p className="text-xs text-gray-400 mt-1">{selectedLead.email}</p>}
+                {selectedLead.phone && <p className="text-xs text-gray-400">{selectedLead.phone}</p>}
+                {selectedLead.budget && <p className="text-xs text-gray-500 font-medium">${Number(selectedLead.budget).toLocaleString()} budget</p>}
               </div>
             </CardHeader>
             <CardBody className="space-y-3">
               {selectedLead.notes && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded">{selectedLead.notes}</p>}
               {!['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
-                <Button size="sm" color="success" variant="flat" className="w-full" onPress={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}>
+                <Button size="sm" color="success" variant="flat" className="w-full" onPress={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, unitId: selectedLead.unitId || '', buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}>
                   Convert to Sale
                 </Button>
               )}
@@ -4367,9 +4426,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
             <div className="space-y-3">
               <p className="text-xs text-gray-500">This will create a sale record and mark the lead as Converted.</p>
               <Select size="sm" label="Unit *" selectedKeys={convertForm.unitId ? new Set([convertForm.unitId]) : new Set()} onSelectionChange={(k) => setCF('unitId', Array.from(k)[0] as string)}>
-                {((projectUnits as any[]) || []).filter((u: any) => u.status !== 'SOLD').map((u: any) => (
-                  <SelectItem key={u.id}>{u.unitNumber} — {u.building?.name || ''} ({u.status})</SelectItem>
-                ))}
+                {((projectUnits as any[]) || []).filter((u: any) => u.status !== 'SOLD').map((u: any) => {
+                  const label = `${u.unitNumber}${u.building?.name ? ` — ${u.building.name}` : ''} (${u.status})`;
+                  return <SelectItem key={u.id} textValue={label}>{label}</SelectItem>;
+                })}
               </Select>
               <Input size="sm" label="Buyer Name *" value={convertForm.buyer} onChange={(e) => setCF('buyer', e.target.value)} />
               <Input size="sm" label="Sale Price ($) *" type="number" value={convertForm.salePrice} onChange={(e) => setCF('salePrice', e.target.value)} />
