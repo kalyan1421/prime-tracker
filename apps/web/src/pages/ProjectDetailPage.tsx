@@ -1662,6 +1662,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const updateUnit = useUpdateUnit();
   const updateUnitStatus = useUpdateUnitStatus();
   const deleteUnit = useDeleteUnit();
+  const updateLease = useUpdateLease();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isStatusOpen, onOpen: onStatusOpen, onClose: onStatusClose } = useDisclosure();
@@ -1672,7 +1673,8 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const [form, setForm] = useState<Record<string, string>>(EMPTY_UNIT);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [editId, setEditId] = useState<string | null>(null);
-  const [statusTarget, setStatusTarget] = useState<{ id: string; unitNumber: string; currentStatus: string; newStatus: string } | null>(null);
+  const [statusTarget, setStatusTarget] = useState<{ id: string; unitNumber: string; currentStatus: string; newStatus: string; notes: string } | null>(null);
+  const [activeLeaseId, setActiveLeaseId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; unitNumber: string; leaseCount: number; saleCount: number } | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
   const [commentUnit, setCommentUnit] = useState<{ id: string; label: string } | null>(null);
@@ -1692,18 +1694,20 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   };
 
   const openEdit = (u: any) => {
-    // SALES uses the status-only modal
+    // SALES uses the status + notes modal
     if (isSales) {
       setStatusTarget({
         id: u.id,
         unitNumber: u.unitNumber || '',
         currentStatus: u.status || 'AVAILABLE',
         newStatus: u.status || 'AVAILABLE',
+        notes: u.notes || '',
       });
       onStatusOpen();
       return;
     }
     setEditId(u.id);
+    setActiveLeaseId(u.leases?.[0]?.id || null);
     setForm({
       unitNumber: u.unitNumber || '',
       buildingId: u.buildingId || u.building?.id || '',
@@ -1814,6 +1818,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
       if (editId) {
         // Update DTO omits buildingId (units can't move between buildings)
         await updateUnit.mutateAsync({ id: editId, data: basePayload });
+        // If tenant name was provided and an active lease exists, update it there.
+        if (activeLeaseId && form.tenantName.trim()) {
+          await updateLease.mutateAsync({ id: activeLeaseId, data: { tenantName: form.tenantName.trim() } });
+        }
         addToast({ title: 'Unit updated', color: 'success' });
       } else {
         await createUnit.mutateAsync({ ...basePayload, buildingId: form.buildingId });
@@ -1826,17 +1834,21 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   };
 
   const handleStatusSave = async () => {
-    if (!statusTarget || statusTarget.newStatus === statusTarget.currentStatus) {
-      onStatusClose();
-      return;
-    }
+    if (!statusTarget) { onStatusClose(); return; }
+    const statusChanged = statusTarget.newStatus !== statusTarget.currentStatus;
+    const originalNotes = allUnits.find((u: any) => u.id === statusTarget.id)?.notes || '';
+    const notesChanged = statusTarget.notes !== originalNotes;
+    if (!statusChanged && !notesChanged) { onStatusClose(); return; }
     try {
-      await updateUnitStatus.mutateAsync({ id: statusTarget.id, status: statusTarget.newStatus });
-      addToast({ title: `Unit ${statusTarget.unitNumber} → ${statusTarget.newStatus.replace(/_/g, ' ')}`, color: 'success' });
+      const payload: Record<string, unknown> = {};
+      if (statusChanged) payload.status = statusTarget.newStatus;
+      if (notesChanged) payload.notes = statusTarget.notes;
+      await updateUnit.mutateAsync({ id: statusTarget.id, data: payload });
+      addToast({ title: statusChanged ? `Unit ${statusTarget.unitNumber} → ${statusTarget.newStatus.replace(/_/g, ' ')}` : 'Unit notes updated', color: 'success' });
       onStatusClose();
       setStatusTarget(null);
     } catch (e) {
-      addToast({ title: errMsg(e, 'Failed to update status'), color: 'danger' });
+      addToast({ title: errMsg(e, 'Failed to update unit'), color: 'danger' });
     }
   };
 
@@ -2225,7 +2237,14 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                 <span className="text-sm">Prime Developer Owned</span>
               </div>
               {editId && (
-                <Input size="sm" label="Current Tenant" value={form.tenantName} isReadOnly description="Managed via Leases tab" />
+                <Input
+                  size="sm"
+                  label="Current Tenant"
+                  value={form.tenantName}
+                  onChange={set('tenantName')}
+                  description={activeLeaseId ? 'Updates the active lease tenant name' : 'Add a lease in the Leases tab first to set a tenant'}
+                  isDisabled={!activeLeaseId}
+                />
               )}
               <Input
                 size="sm" label="Notes"
@@ -2257,10 +2276,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         </ModalContent>
       </Modal>
 
-      {/* Status-only Modal (SALES role) */}
+      {/* Status + Notes Modal (SALES role) */}
       <Modal isOpen={isStatusOpen} onClose={onStatusClose} size="sm">
         <ModalContent>
-          <ModalHeader>Update Unit Status</ModalHeader>
+          <ModalHeader>Edit Unit</ModalHeader>
           <ModalBody>
             {statusTarget && (
               <div className="space-y-3">
@@ -2284,6 +2303,14 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                 {!isOverrideRole && (
                   <p className="text-xs text-gray-400">Only valid status transitions are shown.</p>
                 )}
+                <Textarea
+                  size="sm"
+                  label="Notes"
+                  value={statusTarget.notes}
+                  onChange={(e) => setStatusTarget((s) => s ? { ...s, notes: e.target.value } : null)}
+                  minRows={2}
+                  placeholder="Add notes about this unit…"
+                />
               </div>
             )}
           </ModalBody>
@@ -2292,10 +2319,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
             <Button
               size="sm" color="primary"
               onPress={handleStatusSave}
-              isLoading={updateUnitStatus.isPending}
-              isDisabled={!statusTarget || statusTarget.newStatus === statusTarget.currentStatus}
+              isLoading={updateUnit.isPending}
             >
-              Update Status
+              Save
             </Button>
           </ModalFooter>
         </ModalContent>

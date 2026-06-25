@@ -978,6 +978,8 @@ enum LeadSource {
   SIGNAGE
   EMAIL_CAMPAIGN
   BROKER
+  LOOPNET
+  CREXI
   OTHER
 }
 

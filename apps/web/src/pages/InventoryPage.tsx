@@ -2,19 +2,22 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card, CardBody, Input, Select, SelectItem, Chip, Button,
+  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiSearch, FiFilter, FiPackage, FiExternalLink } from 'react-icons/fi';
-import { useInventory, useProjects } from '../hooks/useApi';
+import { FiSearch, FiFilter, FiPackage, FiExternalLink, FiEdit2 } from 'react-icons/fi';
+import { useInventory, useProjects, useUpdateUnitStatus } from '../hooks/useApi';
 import { StatCard, StatusBadge, LoadingState, fmt, fmtDate } from '../components/ui';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
+import { useAuthStore } from '../store/authStore';
 
-const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
+const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'LEASE_PENDING', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 
 const STATUS_COLORS: Record<string, string> = {
   AVAILABLE: 'bg-green-100 text-green-800',
   UNDER_CONTRACT: 'bg-blue-100 text-blue-800',
   LEASED: 'bg-teal-100 text-teal-800',
+  LEASE_PENDING: 'bg-cyan-100 text-cyan-800',
   OCCUPIED: 'bg-purple-100 text-purple-800',
   SOLD: 'bg-gray-100 text-gray-600',
   UNDER_CONSTRUCTION: 'bg-orange-100 text-orange-800',
@@ -22,10 +25,36 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function InventoryPage() {
   const navigate = useNavigate();
+  const { hasPermission } = useAuthStore();
+  const canEdit = hasPermission('unit:edit');
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
+
+  // Quick-edit status modal
+  const { isOpen: isStatusOpen, onOpen: onStatusOpen, onClose: onStatusClose } = useDisclosure();
+  const [statusTarget, setStatusTarget] = useState<{ id: string; unitNumber: string; currentStatus: string; newStatus: string } | null>(null);
+  const updateUnitStatus = useUpdateUnitStatus();
+
+  const openStatusEdit = (e: React.MouseEvent, u: any) => {
+    e.stopPropagation();
+    setStatusTarget({ id: u.id, unitNumber: u.unitNumber, currentStatus: u.status, newStatus: u.status });
+    onStatusOpen();
+  };
+
+  const handleStatusSave = async () => {
+    if (!statusTarget || statusTarget.newStatus === statusTarget.currentStatus) { onStatusClose(); return; }
+    try {
+      await updateUnitStatus.mutateAsync({ id: statusTarget.id, status: statusTarget.newStatus });
+      addToast({ title: `Unit ${statusTarget.unitNumber} → ${statusTarget.newStatus.replace(/_/g, ' ')}`, color: 'success' });
+      onStatusClose();
+      setStatusTarget(null);
+    } catch {
+      addToast({ title: 'Failed to update status', color: 'danger' });
+    }
+  };
 
   const { data: projectsData } = useProjects();
   const { data, isLoading } = useInventory({
@@ -77,7 +106,7 @@ export default function InventoryPage() {
             onClick={() => setStatusFilter(statusFilter === s ? '' : s)}
             className={`rounded-lg p-3 text-center border-2 transition-all ${
               statusFilter === s ? 'border-primary shadow-md' : 'border-transparent'
-            } ${STATUS_COLORS[s]} hover:opacity-80`}
+            } ${STATUS_COLORS[s] || 'bg-gray-100 text-gray-800'} hover:opacity-80`}
           >
             <div className="text-2xl font-bold">{statusCounts[s] || 0}</div>
             <div className="text-xs mt-0.5 font-medium">{s.replace(/_/g, ' ')}</div>
@@ -206,7 +235,18 @@ export default function InventoryPage() {
                       <td className="py-2 px-3">{u.askingPrice ? `$${fmt(u.askingPrice)}` : '—'}</td>
                       <td className="py-2 px-3">
                         <div className="flex flex-col gap-1">
-                          <StatusBadge status={u.status} />
+                          <div className="flex items-center gap-1.5">
+                            <StatusBadge status={u.status} />
+                            {canEdit && (
+                              <button
+                                onClick={(e) => openStatusEdit(e, u)}
+                                className="text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Update status"
+                              >
+                                <FiEdit2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
                           {/* Slice 4: time-on-market shown only for AVAILABLE units */}
                           {u.status === 'AVAILABLE' && u.availableSince && (
                             <TimeOnMarketBar availableSince={u.availableSince} />
@@ -231,7 +271,8 @@ export default function InventoryPage() {
                           size="sm"
                           variant="light"
                           isIconOnly
-                          onPress={(e) => navigate(`/projects/${u.building.project.id}/units/${u.id}`)}
+                          onPress={() => navigate(`/projects/${u.building.project.id}/units/${u.id}`)}
+                          title="View unit detail"
                         >
                           <FiExternalLink className="text-xs" />
                         </Button>
@@ -244,6 +285,48 @@ export default function InventoryPage() {
           </CardBody>
         </Card>
       )}
+
+      {/* Quick status update modal */}
+      <Modal isOpen={isStatusOpen} onClose={onStatusClose} size="sm">
+        <ModalContent>
+          <ModalHeader>Update Unit Status</ModalHeader>
+          <ModalBody>
+            {statusTarget && (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-600">
+                  Unit <strong>{statusTarget.unitNumber}</strong>
+                </p>
+                <Select
+                  size="sm"
+                  label="Status"
+                  selectedKeys={[statusTarget.newStatus]}
+                  onSelectionChange={(keys) => {
+                    const val = Array.from(keys)[0] as string;
+                    if (val) setStatusTarget((s) => s ? { ...s, newStatus: val } : null);
+                  }}
+                >
+                  {UNIT_STATUSES.map((s) => (
+                    <SelectItem key={s} textValue={s.replace(/_/g, ' ')}>{s.replace(/_/g, ' ')}</SelectItem>
+                  ))}
+                </Select>
+                <p className="text-xs text-gray-400">To update tenant or buyer details, open the unit and edit the Lease or Sale.</p>
+              </div>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={onStatusClose}>Cancel</Button>
+            <Button
+              size="sm"
+              color="primary"
+              onPress={handleStatusSave}
+              isLoading={updateUnitStatus.isPending}
+              isDisabled={!statusTarget || statusTarget.newStatus === statusTarget.currentStatus}
+            >
+              Update Status
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

@@ -1,15 +1,16 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
-  useUnitWaitlist,
+  useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useUploadDocument, useDeleteDocument,
 } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
 
 const COMMENT_TYPE_COLORS: Record<string, string> = {
   MARKETING: 'bg-purple-100 text-purple-700',
@@ -99,6 +100,81 @@ export default function UnitDetailPage() {
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>({});
   const [primeOwned, setPrimeOwned] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const canEditUnit = hasPermission('unit:edit');
+  const canEditLease = hasPermission('lease:edit');
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
+  const [leaseModalOpen, setLeaseModalOpen] = useState(false);
+  const [leaseIsNew, setLeaseIsNew] = useState(false);
+  const [leaseEditId, setLeaseEditId] = useState<string | null>(null);
+  const [leaseForm, setLeaseForm] = useState<Record<string, string>>({
+    tenantName: '', monthlyRent: '', leaseStart: '', leaseEnd: '', termMonths: '', status: 'ACTIVE',
+  });
+  const createLease = useCreateLease();
+  const updateLease = useUpdateLease();
+
+  const openAddLease = () => {
+    setLeaseIsNew(true);
+    setLeaseEditId(null);
+    setLeaseForm({ tenantName: '', monthlyRent: '', leaseStart: '', leaseEnd: '', termMonths: '', status: 'ACTIVE' });
+    setLeaseModalOpen(true);
+  };
+
+  const openEditLease = (lease: any) => {
+    setLeaseIsNew(false);
+    setLeaseEditId(lease.id);
+    setLeaseForm({
+      tenantName: lease.tenantName || '',
+      monthlyRent: lease.monthlyRent != null ? String(Number(lease.monthlyRent)) : '',
+      leaseStart: lease.leaseStart ? lease.leaseStart.slice(0, 10) : '',
+      leaseEnd: lease.leaseEnd ? lease.leaseEnd.slice(0, 10) : '',
+      termMonths: lease.termMonths != null ? String(lease.termMonths) : '',
+      status: lease.status || 'ACTIVE',
+    });
+    setLeaseModalOpen(true);
+  };
+
+  const handleSaveLease = async () => {
+    if (!leaseForm.tenantName.trim() || !leaseForm.monthlyRent || !leaseForm.leaseStart || !leaseForm.leaseEnd) {
+      return addToast({ title: 'Tenant name, rent, and dates are required', color: 'warning' });
+    }
+    const payload = {
+      tenantName: leaseForm.tenantName.trim(),
+      monthlyRent: parseFloat(leaseForm.monthlyRent),
+      leaseStart: new Date(leaseForm.leaseStart).toISOString(),
+      leaseEnd: new Date(leaseForm.leaseEnd).toISOString(),
+      termMonths: leaseForm.termMonths ? parseInt(leaseForm.termMonths, 10) : undefined,
+      status: leaseForm.status || 'ACTIVE',
+    };
+    try {
+      if (leaseIsNew) {
+        await createLease.mutateAsync({ ...payload, unitId: unitId! });
+        addToast({ title: 'Lease created', color: 'success' });
+      } else {
+        await updateLease.mutateAsync({ id: leaseEditId!, data: payload });
+        addToast({ title: 'Lease updated', color: 'success' });
+      }
+      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      setLeaseModalOpen(false);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to save lease'), color: 'danger' });
+    }
+  };
+
+  const setLease = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setLeaseForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const saveNotes = async () => {
+    try {
+      await updateUnit.mutateAsync({ id: unitId!, data: { notes: notesDraft || null } });
+      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      addToast({ title: 'Notes saved', color: 'success' });
+      setEditingNotes(false);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to save notes'), color: 'danger' });
+    }
+  };
 
   if (isLoading) return <LoadingState />;
   if (error || !unit) return <ErrorState />;
@@ -262,6 +338,36 @@ export default function UnitDetailPage() {
         </ModalContent>
       </Modal>
 
+      {/* Lease Modal */}
+      <Modal isOpen={leaseModalOpen} onClose={() => setLeaseModalOpen(false)} size="md">
+        <ModalContent>
+          <ModalHeader>{leaseIsNew ? 'Add Lease' : 'Edit Lease'}</ModalHeader>
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Tenant Name" size="sm" value={leaseForm.tenantName} onChange={setLease('tenantName')} className="sm:col-span-2" />
+              <Input label="Monthly Rent ($)" size="sm" type="number" value={leaseForm.monthlyRent} onChange={setLease('monthlyRent')} />
+              <Input label="Term (months)" size="sm" type="number" value={leaseForm.termMonths} onChange={setLease('termMonths')} />
+              <Input label="Start Date" size="sm" type="date" value={leaseForm.leaseStart} onChange={setLease('leaseStart')} />
+              <Input label="End Date" size="sm" type="date" value={leaseForm.leaseEnd} onChange={setLease('leaseEnd')} />
+              <Select label="Status" size="sm" selectedKeys={[leaseForm.status]}
+                onSelectionChange={(k) => { const v = Array.from(k)[0] as string; if (v) setLeaseForm((f) => ({ ...f, status: v })); }}
+                className="sm:col-span-2"
+              >
+                {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((s) => (
+                  <SelectItem key={s} textValue={s}>{s}</SelectItem>
+                ))}
+              </Select>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={() => setLeaseModalOpen(false)}>Cancel</Button>
+            <Button color="primary" onPress={handleSaveLease} isLoading={createLease.isPending || updateLease.isPending}>
+              {leaseIsNew ? 'Add Lease' : 'Save Changes'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
         <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
@@ -272,13 +378,37 @@ export default function UnitDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
         {/* Active Lease */}
-        <Section icon={<FiHome className="w-4 h-4 text-blue-600" />} title="Active Lease">
+        <Section
+          icon={<FiHome className="w-4 h-4 text-blue-600" />}
+          title="Active Lease"
+          action={canEditLease ? (
+            activeLease ? (
+              <button
+                onClick={() => openEditLease(activeLease)}
+                className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
+                title="Edit lease"
+              >
+                <FiEdit2 className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              <button
+                onClick={openAddLease}
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+              >
+                + Add Lease
+              </button>
+            )
+          ) : undefined}
+        >
           {activeLease ? (
             <dl className="text-sm divide-y divide-gray-100">
               <Row label="Tenant"><span className="font-medium text-gray-900">{activeLease.tenantName}</span></Row>
               <Row label="Monthly Rent"><span className="font-semibold text-emerald-600 tabular-nums">{fmt(activeLease.monthlyRent)}</span></Row>
-              <Row label="Start"><span className="text-gray-700">{fmtDate(activeLease.startDate)}</span></Row>
-              <Row label="End"><span className="text-gray-700">{fmtDate(activeLease.endDate)}</span></Row>
+              <Row label="Start"><span className="text-gray-700">{fmtDate(activeLease.leaseStart)}</span></Row>
+              <Row label="End"><span className="text-gray-700">{fmtDate(activeLease.leaseEnd)}</span></Row>
+              {activeLease.status && activeLease.status !== 'ACTIVE' && (
+                <Row label="Status"><span className="text-gray-700">{activeLease.status}</span></Row>
+              )}
             </dl>
           ) : (
             <EmptyRow icon={<FiHome className="w-5 h-5" />} text="No active lease" />
@@ -304,18 +434,53 @@ export default function UnitDetailPage() {
         </Section>
       </div>
 
-      {/* Notes */}
-      {u.notes && (
+      {/* Notes — always visible so users can add notes even when empty */}
+      {(u.notes || canEditUnit) && (
         <div className="mb-5 sm:mb-6">
-          <Section icon={<FiAlignLeft className="w-4 h-4 text-amber-600" />} title="Notes">
-            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{u.notes}</p>
+          <Section
+            icon={<FiAlignLeft className="w-4 h-4 text-amber-600" />}
+            title="Notes"
+            action={canEditUnit && !editingNotes ? (
+              <button
+                onClick={() => { setNotesDraft(u.notes ?? ''); setEditingNotes(true); }}
+                className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
+                title="Edit notes"
+              >
+                <FiEdit2 className="w-3.5 h-3.5" />
+              </button>
+            ) : undefined}
+          >
+            {editingNotes ? (
+              <div className="space-y-2">
+                <Textarea
+                  autoFocus
+                  size="sm"
+                  minRows={3}
+                  value={notesDraft}
+                  onValueChange={setNotesDraft}
+                  placeholder="Add notes about this unit…"
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" color="primary" startContent={<FiCheck />} onPress={saveNotes} isLoading={updateUnit.isPending}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="flat" startContent={<FiX />} onPress={() => setEditingNotes(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                {u.notes || <span className="text-gray-400 italic">No notes yet{canEditUnit ? ' — click edit to add' : ''}</span>}
+              </p>
+            )}
           </Section>
         </div>
       )}
 
       {/* Leads & Activity */}
       <div className="mb-5 sm:mb-6">
-        <UnitLeadsPanel unitId={unitId!} />
+        <UnitLeadsPanel unitId={unitId!} projectId={projectId!} />
       </div>
 
       {/* Waitlist — demand signal */}
@@ -372,11 +537,6 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   STATUS_CHANGE: 'Status change',
 };
 
-// Sprint B — Unit Docs tab. Lists every document attached directly to this unit
-// (booking agreements, deeds, receipts, brochures, possession certificates).
-// Uses the existing /documents?unitId= endpoint; upload UI is intentionally
-// excluded here for v1 — uploads happen from the project Documents tab which
-// already has the category picker and tag flow.
 const DOC_CATEGORY_COLORS: Record<string, { bg: string; text: string }> = {
   BROCHURE:               { bg: 'bg-blue-50',     text: 'text-blue-700' },
   LOI:                    { bg: 'bg-indigo-50',   text: 'text-indigo-700' },
@@ -393,29 +553,147 @@ const DOC_CATEGORY_COLORS: Record<string, { bg: string; text: string }> = {
   PERMITS:                { bg: 'bg-yellow-50',   text: 'text-yellow-700' },
   INSURANCE:              { bg: 'bg-teal-50',     text: 'text-teal-700' },
   OTHER:                  { bg: 'bg-zinc-100',    text: 'text-zinc-700' },
+  GENERAL:                { bg: 'bg-gray-50',     text: 'text-gray-600' },
 };
+
+// Categories relevant at the unit level (excludes project-wide types like PERMIT, DRAWING, CONTRACT).
+const UNIT_DOC_CATEGORIES = [
+  'LOI', 'BOOKING_AGREEMENT', 'DEED', 'RECEIPT',
+  'NOC', 'POSSESSION_CERTIFICATE', 'LEASE_DOCS',
+  'BROCHURE', 'FINANCIAL', 'GENERAL', 'OTHER',
+] as const;
 
 function UnitDocumentsPanel({ unitId }: { unitId: string }) {
   const { data, isLoading } = useDocuments({ unitId });
-  const docs = ((data as any[]) || []);
+  const docs: any[] = Array.isArray(data) ? data : [];
+  const upload = useUploadDocument();
+  const deleteDoc = useDeleteDocument();
+  const { hasPermission } = useAuthStore();
+  const canUpload = hasPermission('document:upload');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [category, setCategory] = useState('GENERAL');
+  const [displayName, setDisplayName] = useState('');
+  const [showUploadForm, setShowUploadForm] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setPendingFile(f);
+    setDisplayName(f.name.replace(/\.[^.]+$/, ''));
+    setShowUploadForm(true);
+    // Reset so same file can be re-selected after cancel
+    e.target.value = '';
+  };
+
+  const handleUpload = async () => {
+    if (!pendingFile) return;
+    const fd = new FormData();
+    fd.append('file', pendingFile);
+    fd.append('unitId', unitId);
+    fd.append('category', category);
+    if (displayName.trim()) fd.append('displayName', displayName.trim());
+    try {
+      await upload.mutateAsync(fd);
+      addToast({ title: 'Document uploaded', color: 'success' });
+      setPendingFile(null);
+      setDisplayName('');
+      setCategory('GENERAL');
+      setShowUploadForm(false);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Upload failed'), color: 'danger' });
+    }
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Delete "${name}"?`)) return;
+    try {
+      await deleteDoc.mutateAsync(id);
+      addToast({ title: 'Document deleted', color: 'success' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Delete failed'), color: 'danger' });
+    }
+  };
+
+  const uploadAction = canUpload ? (
+    <Button
+      size="sm" variant="flat" color="primary"
+      startContent={<FiUpload className="w-3 h-3" />}
+      onPress={() => fileInputRef.current?.click()}
+      isLoading={upload.isPending}
+      className="text-xs h-7"
+    >
+      Upload
+    </Button>
+  ) : undefined;
 
   return (
     <Section
       icon={<FiFileText className="w-4 h-4 text-violet-600" />}
       title="Documents"
       count={docs.length || undefined}
-      action={<span className="text-xs text-gray-400 font-normal">Upload from the project Docs tab</span>}
+      action={uploadAction}
     >
+      {/* Hidden file input */}
+      {canUpload && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp"
+          onChange={onFileChange}
+        />
+      )}
+
+      {/* Upload form — shown after file is picked */}
+      {showUploadForm && pendingFile && (
+        <div className="mb-4 p-3 rounded-xl border border-violet-100 bg-violet-50 space-y-2">
+          <p className="text-xs font-medium text-violet-700 truncate">
+            <FiFileText className="inline w-3 h-3 mr-1" />{pendingFile.name}
+            <span className="text-violet-400 ml-1">({Math.round(pendingFile.size / 1024)} KB)</span>
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <Input
+              size="sm" label="Display name" value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder={pendingFile.name}
+            />
+            <Select
+              size="sm" label="Category"
+              selectedKeys={[category]}
+              onSelectionChange={(k) => { const v = Array.from(k)[0] as string; if (v) setCategory(v); }}
+            >
+              {UNIT_DOC_CATEGORIES.map((c) => (
+                <SelectItem key={c} textValue={c.replace(/_/g, ' ')}>{c.replace(/_/g, ' ')}</SelectItem>
+              ))}
+            </Select>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" color="primary" startContent={<FiUpload />} onPress={handleUpload} isLoading={upload.isPending}>
+              Upload
+            </Button>
+            <Button size="sm" variant="flat" onPress={() => { setPendingFile(null); setShowUploadForm(false); }}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
       {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
-      {!isLoading && docs.length === 0 && (
+
+      {!isLoading && docs.length === 0 && !showUploadForm && (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
           <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center">
             <FiFileText className="w-4 h-4 text-violet-400" />
           </div>
-          <p className="text-sm font-medium text-gray-500">No documents attached yet</p>
-          <p className="text-xs text-gray-400">Go to the project's <span className="font-medium text-gray-500">Documents tab</span> to upload and tag files to this unit.</p>
+          <p className="text-sm font-medium text-gray-500">No documents yet</p>
+          {canUpload
+            ? <p className="text-xs text-gray-400">Click <span className="font-medium text-gray-500">Upload</span> to attach a file directly to this unit.</p>
+            : <p className="text-xs text-gray-400">Upload from the project's Documents tab.</p>
+          }
         </div>
       )}
+
       {!isLoading && docs.length > 0 && (
         <div className="space-y-0.5">
           {docs.map((d: any) => {
@@ -443,18 +721,29 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                     {sizeKb && <> · {sizeKb < 1024 ? `${sizeKb} KB` : `${(sizeKb / 1024).toFixed(1)} MB`}</>}
                   </p>
                 </div>
-                {d.fileUrl && (
-                  <a
-                    href={d.fileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="shrink-0 inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
-                    aria-label={`Download ${d.fileName || d.name}`}
-                  >
-                    <FiDownload className="w-3.5 h-3.5" />
-                    Open
-                  </a>
-                )}
+                <div className="flex items-center gap-1 shrink-0">
+                  {d.fileUrl && (
+                    <a
+                      href={d.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                      aria-label={`Open ${d.fileName || d.name}`}
+                    >
+                      <FiDownload className="w-3.5 h-3.5" />
+                      Open
+                    </a>
+                  )}
+                  {canUpload && (
+                    <button
+                      onClick={() => handleDelete(d.id, d.fileName || d.name)}
+                      className="p-1.5 text-gray-300 hover:text-red-500 transition-colors rounded opacity-0 group-hover:opacity-100"
+                      title="Delete"
+                    >
+                      <FiTrash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -501,10 +790,41 @@ function UnitWaitlistPanel({ unitId }: { unitId: string }) {
   );
 }
 
-function UnitLeadsPanel({ unitId }: { unitId: string }) {
+const LEAD_SOURCES_LIST = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
+
+function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: string }) {
   const { data: leads, isLoading } = useLeads({ unitId });
   const leadsArr: any[] = Array.isArray(leads) ? leads : [];
   const [tab, setTab] = useState<'leads' | 'activity'>('leads');
+  const [addLeadOpen, setAddLeadOpen] = useState(false);
+  const [leadForm, setLeadForm] = useState<Record<string, string>>({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', budget: '' });
+  const createLead = useCreateLead();
+  const { hasPermission } = useAuthStore();
+  const canAddLead = hasPermission('lead:create');
+
+  const setLF = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setLeadForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const submitLead = async () => {
+    if (!leadForm.name.trim()) return addToast({ title: 'Name is required', color: 'warning' });
+    try {
+      await createLead.mutateAsync({
+        projectId,
+        unitId,
+        name: leadForm.name.trim(),
+        email: leadForm.email || undefined,
+        phone: leadForm.phone || undefined,
+        source: leadForm.source || 'WEBSITE',
+        status: leadForm.status || 'NEW',
+        budget: leadForm.budget ? parseFloat(leadForm.budget) : undefined,
+      });
+      addToast({ title: 'Lead added', color: 'success' });
+      setLeadForm({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', budget: '' });
+      setAddLeadOpen(false);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to add lead'), color: 'danger' });
+    }
+  };
 
   const activity = leadsArr
     .flatMap((l) =>
@@ -513,22 +833,57 @@ function UnitLeadsPanel({ unitId }: { unitId: string }) {
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const tabToggle = (
-    <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
-      {(['leads', 'activity'] as const).map((t) => (
-        <button
-          key={t}
-          onClick={() => setTab(t)}
-          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-            tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          {t === 'leads' ? `Leads${leadsArr.length > 0 ? ` (${leadsArr.length})` : ''}` : 'Activity'}
-        </button>
-      ))}
+    <div className="flex items-center gap-2">
+      {canAddLead && (
+        <Button size="sm" variant="flat" color="primary" startContent={<FiTarget />} onPress={() => setAddLeadOpen(true)} className="text-xs h-7">
+          Add Lead
+        </Button>
+      )}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+        {(['leads', 'activity'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+              tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t === 'leads' ? `Leads${leadsArr.length > 0 ? ` (${leadsArr.length})` : ''}` : 'Activity'}
+          </button>
+        ))}
+      </div>
     </div>
   );
 
   return (
+    <>
+      <Modal isOpen={addLeadOpen} onClose={() => setAddLeadOpen(false)} size="md">
+        <ModalContent>
+          <ModalHeader>Add Lead to Unit</ModalHeader>
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Name" size="sm" value={leadForm.name} onChange={setLF('name')} className="sm:col-span-2" />
+              <Input label="Email" size="sm" type="email" value={leadForm.email} onChange={setLF('email')} />
+              <Input label="Phone" size="sm" value={leadForm.phone} onChange={setLF('phone')} />
+              <Select label="Source" size="sm" selectedKeys={[leadForm.source]}
+                onSelectionChange={(k) => { const v = Array.from(k)[0] as string; if (v) setLeadForm((f) => ({ ...f, source: v })); }}>
+                {LEAD_SOURCES_LIST.map((s) => <SelectItem key={s} textValue={s.replace(/_/g, ' ')}>{s.replace(/_/g, ' ')}</SelectItem>)}
+              </Select>
+              <Select label="Status" size="sm" selectedKeys={[leadForm.status]}
+                onSelectionChange={(k) => { const v = Array.from(k)[0] as string; if (v) setLeadForm((f) => ({ ...f, status: v })); }}>
+                {['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATING'].map((s) => (
+                  <SelectItem key={s} textValue={s.replace(/_/g, ' ')}>{s.replace(/_/g, ' ')}</SelectItem>
+                ))}
+              </Select>
+              <Input label="Budget ($)" size="sm" type="number" value={leadForm.budget} onChange={setLF('budget')} />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={() => setAddLeadOpen(false)}>Cancel</Button>
+            <Button color="primary" onPress={submitLead} isLoading={createLead.isPending}>Add Lead</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     <Section
       icon={<FiTarget className="w-4 h-4 text-blue-600" />}
       title="Leads"
@@ -542,7 +897,7 @@ function UnitLeadsPanel({ unitId }: { unitId: string }) {
             <FiTarget className="w-4 h-4 text-blue-400" />
           </div>
           <p className="text-sm font-medium text-gray-500">No leads linked</p>
-          <p className="text-xs text-gray-400">Attach a lead from the <span className="font-medium text-gray-500">Leads page</span> or the project's <span className="font-medium text-gray-500">Leads tab</span>.</p>
+          <p className="text-xs text-gray-400">{canAddLead ? 'Click "Add Lead" to create one for this unit.' : 'Attach a lead from the Leads page or the project\'s Leads tab.'}</p>
         </div>
       )}
 
@@ -606,6 +961,7 @@ function UnitLeadsPanel({ unitId }: { unitId: string }) {
         )
       )}
     </Section>
+    </>
   );
 }
 

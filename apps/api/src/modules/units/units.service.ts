@@ -252,13 +252,12 @@ export class UnitsService {
   ) {
     const unit = await this.findById(id);
 
-    // SALES role: only `status` is allowed. Other fields are silently dropped
-    // to avoid surprising API errors when a UI form sends extra fields.
+    // SALES role: only `status` and `notes` are allowed.
     if (userRole === 'SALES') {
-      const otherFields = Object.keys(input).filter((k) => k !== 'status');
+      const otherFields = Object.keys(input).filter((k) => !['status', 'notes'].includes(k));
       if (otherFields.length > 0) {
         throw new ForbiddenException(
-          `Sales role can only update unit status. Disallowed fields: ${otherFields.join(', ')}`,
+          `Sales role can only update unit status and notes. Disallowed fields: ${otherFields.join(', ')}`,
         );
       }
     }

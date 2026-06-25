@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Card, CardBody, Button, Input, Select, SelectItem, Chip, Avatar,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -10,14 +10,14 @@ import {
   FiHome, FiBarChart2, FiUser,
 } from 'react-icons/fi';
 import {
-  useLeads, useLeadActivities, useProjects, useUnits, useCampaigns, useUsers,
+  useLeads, useLeadActivities, useProjects, useUnits, useBuildings, useCampaigns, useUsers,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
   useLead, useAddLeadInterest, useRemoveLeadInterest,
 } from '../hooks/useApi';
 import { LoadingState, ErrorState, EmptyState, fmtDate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
-const LEAD_SOURCES = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'BROKER', 'EVENT', 'OTHER'];
+const LEAD_SOURCES = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
 const LEAD_STATUSES = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
 const ACTIVITY_TYPES = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP', 'NOTE', 'STATUS_CHANGE'];
 
@@ -64,7 +64,12 @@ const SOURCE_LABELS: Record<string, string> = {
   REFERRAL: 'Referral',
   SOCIAL_MEDIA: 'Social Media',
   WALK_IN: 'Walk-In',
+  SIGNAGE: 'Signage',
+  COLD_CALL: 'Cold Call',
+  EMAIL_CAMPAIGN: 'Email Campaign',
   BROKER: 'Broker',
+  LOOPNET: 'LoopNet',
+  CREXI: 'Crexi',
   EVENT: 'Event',
   OTHER: 'Other',
 };
@@ -382,7 +387,7 @@ function LeadFormModal({
   const updateLead = useUpdateLead();
   const isEdit = !!lead;
 
-  const [form, setForm] = useState({
+  const buildForm = () => ({
     projectId: lead?.projectId || defaultProjectId || '',
     name: lead?.name || '',
     email: lead?.email || '',
@@ -390,6 +395,7 @@ function LeadFormModal({
     source: lead?.source || 'WEBSITE',
     status: lead?.status || 'NEW',
     unitId: lead?.unitId || '',
+    buildingId: lead?.buildingId || '',
     unitInterest: lead?.unitInterest || '',
     budget: lead?.budget ? String(Number(lead.budget)) : '',
     notes: lead?.notes || '',
@@ -397,7 +403,16 @@ function LeadFormModal({
     campaignId: lead?.campaignId || '',
   });
 
+  const [form, setForm] = useState(buildForm);
+
+  // Reset form every time the modal opens or switches to a different lead.
+  useEffect(() => {
+    if (isOpen) setForm(buildForm());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, lead?.id]);
+
   const { data: formUnits } = useUnits(form.projectId || '');
+  const { data: formBuildings } = useBuildings(form.projectId || '');
   // Campaign options: portfolio-wide campaigns (projectId null) + campaigns tied to
   // this project. The picker shows both so a lead on Spur Plaza can attribute to
   // either a Spur-specific campaign or a brand-wide Prime Developers push.
@@ -416,7 +431,12 @@ function LeadFormModal({
   })();
 
   const set = (field: string, val: string) => {
-    setForm((f) => (field === 'projectId' && val !== f.projectId ? { ...f, projectId: val, unitId: '' } : { ...f, [field]: val }));
+    setForm((f) => {
+      if (field === 'projectId' && val !== f.projectId) return { ...f, projectId: val, unitId: '', buildingId: '' };
+      if (field === 'unitId' && val) return { ...f, unitId: val, buildingId: '' };
+      if (field === 'buildingId' && val) return { ...f, buildingId: val, unitId: '' };
+      return { ...f, [field]: val };
+    });
   };
 
   const handleSubmit = async () => {
@@ -424,22 +444,28 @@ function LeadFormModal({
       addToast({ title: 'Project and Source are required', color: 'warning' });
       return;
     }
+    if (!form.name.trim()) {
+      addToast({ title: 'Name is required', color: 'warning' });
+      return;
+    }
+    if (!form.phone.trim()) {
+      addToast({ title: 'Phone is required', color: 'warning' });
+      return;
+    }
     try {
       const payload: Record<string, unknown> = {
         projectId: form.projectId,
         source: form.source,
         status: form.status,
-        name: form.name || undefined,
+        name: form.name.trim(),
         email: form.email || undefined,
-        phone: form.phone || undefined,
+        phone: form.phone.trim(),
         unitId: form.unitId || (isEdit ? null : undefined),
+        buildingId: form.buildingId || (isEdit ? null : undefined),
         unitInterest: form.unitInterest || undefined,
         budget: form.budget ? parseFloat(form.budget) : undefined,
         notes: form.notes || undefined,
-        // On edit, empty string clears the assignment; on create, just omit.
         assignedTo: form.assignedTo || (isEdit ? null : undefined),
-        // Sprint 2 — campaign attribution. Same pattern as unitId: on edit,
-        // empty-string means "clear the link"; on create, empty just omits the field.
         campaignId: form.campaignId || (isEdit ? null : undefined),
       };
       if (isEdit) {
@@ -477,9 +503,9 @@ function LeadFormModal({
                 </Select>
               </div>
             )}
-            <Input size="sm" label="Name" value={form.name} onChange={(e) => set('name', e.target.value)} />
+            <Input size="sm" label="Name *" value={form.name} onChange={(e) => set('name', e.target.value)} isRequired />
             <Input size="sm" label="Email" type="email" value={form.email} onChange={(e) => set('email', e.target.value)} />
-            <Input size="sm" label="Phone" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+            <Input size="sm" label="Phone *" value={form.phone} onChange={(e) => set('phone', e.target.value)} isRequired />
             <Input size="sm" label="Budget ($)" type="number" value={form.budget} onChange={(e) => set('budget', e.target.value)} />
             <Select
               size="sm"
@@ -503,17 +529,44 @@ function LeadFormModal({
             </Select>
             <Select
               size="sm"
+              label="Building"
+              placeholder={form.projectId ? (form.buildingId ? undefined : 'No specific building') : 'Select a project first'}
+              selectedKeys={form.buildingId ? new Set([form.buildingId]) : new Set()}
+              onSelectionChange={(keys) => {
+                const val = (Array.from(keys)[0] as string) || '';
+                set('buildingId', val);
+              }}
+              isDisabled={!form.projectId}
+              className="sm:col-span-2"
+            >
+              {((formBuildings as any[]) || []).map((b: any) => (
+                <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+              ))}
+            </Select>
+            <Select
+              size="sm"
               label="Unit"
-              placeholder={form.projectId ? 'No specific unit' : 'Select a project first'}
+              placeholder={form.projectId ? (form.unitId ? undefined : 'No specific unit') : 'Select a project first'}
               selectedKeys={form.unitId ? new Set([form.unitId]) : new Set()}
-              onSelectionChange={(keys) => set('unitId', (Array.from(keys)[0] as string) || '')}
+              onSelectionChange={(keys) => {
+                const val = (Array.from(keys)[0] as string) || '';
+                set('unitId', val);
+              }}
               isDisabled={!form.projectId}
               className="sm:col-span-2"
             >
               {((formUnits as any[]) || []).map((u: any) => (
-                <SelectItem key={u.id} textValue={u.unitNumber}>{u.unitNumber}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}</SelectItem>
+                <SelectItem key={u.id} textValue={`${u.unitNumber}${u.building?.name ? ` — ${u.building.name}` : ''}${u.status ? ` (${u.status.replace('_', ' ')})` : ''}`}>
+                  {u.unitNumber}{u.building?.name ? ` — ${u.building.name}` : ''}{u.status ? ` · ${u.status.replace('_', ' ')}` : ''}
+                </SelectItem>
               ))}
             </Select>
+            {(form.buildingId || form.unitId) && (
+              <p className="text-xs text-gray-400 sm:col-span-2 -mt-1">
+                {form.buildingId && !form.unitId && 'Lead linked to building. Selecting a unit will switch the link.'}
+                {form.unitId && !form.buildingId && 'Lead linked to unit. Selecting a building will switch the link.'}
+              </p>
+            )}
             <Select
               size="sm"
               label="Campaign"

@@ -10,6 +10,7 @@ import {
   useInteriorProjects, useCreateInterior, useAdvanceInteriorPhase, useApproveInterior,
   useInteriorTemplates,
 } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate } from './ui';
 
 export const INTERIOR_PHASES = [
@@ -57,6 +58,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
   const templates: any[] = Array.isArray(templatesData) ? templatesData : [];
   const create = useCreateInterior();
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const canEditInterior = useAuthStore((s) => s.hasPermission('interior:edit'));
 
   // Prefill from the existing unit: name from its number, area from its sqft.
   const defaultForm = (): Record<string, string> => ({
@@ -100,9 +102,11 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
             Interior / Fit-Out {projects.length > 0 && `(${projects.length})`}
           </p>
         </div>
-        <Button size="sm" variant="flat" color="primary" startContent={<FiPlus />} onPress={openModal}>
-          Start fit-out
-        </Button>
+        {canEditInterior && (
+          <Button size="sm" variant="flat" color="primary" startContent={<FiPlus />} onPress={openModal}>
+            Start fit-out
+          </Button>
+        )}
       </CardHeader>
       <CardBody className="pt-0 space-y-3">
         {isLoading && <p className="text-sm text-gray-400">Loading…</p>}
@@ -188,6 +192,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
 function InteriorProjectCard({ project }: { project: any }) {
   const advance = useAdvanceInteriorPhase();
   const approve = useApproveInterior();
+  const canEdit = useAuthStore((s) => s.hasPermission('interior:edit'));
   const idx = INTERIOR_PHASES.indexOf(project.phase);
   const next = idx >= 0 && idx < INTERIOR_PHASES.length - 1 ? INTERIOR_PHASES[idx + 1] : null;
 
@@ -221,28 +226,30 @@ function InteriorProjectCard({ project }: { project: any }) {
 
       <PhaseStepper current={project.phase} />
 
-      <div className="flex flex-wrap gap-2">
-        {next && (
-          <Button
-            size="sm" color="primary" variant="flat" endContent={<FiArrowRight />}
-            isLoading={advance.isPending} onPress={doAdvance}
-          >
-            Advance to {PHASE_LABEL[next]}
-          </Button>
-        )}
-        {project.phase === 'CLIENT_APPROVAL' && (
-          <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
-            onPress={() => approve.mutate({ id: project.id, kind: 'client' })}>
-            Record client approval
-          </Button>
-        )}
-        {project.phase === 'CITY_APPROVAL' && (
-          <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
-            onPress={() => approve.mutate({ id: project.id, kind: 'city' })}>
-            Record city approval
-          </Button>
-        )}
-      </div>
+      {canEdit && (
+        <div className="flex flex-wrap gap-2">
+          {next && (
+            <Button
+              size="sm" color="primary" variant="flat" endContent={<FiArrowRight />}
+              isLoading={advance.isPending} onPress={doAdvance}
+            >
+              Advance to {PHASE_LABEL[next]}
+            </Button>
+          )}
+          {project.phase === 'CLIENT_APPROVAL' && (
+            <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
+              onPress={() => approve.mutate({ id: project.id, kind: 'client' })}>
+              Record client approval
+            </Button>
+          )}
+          {project.phase === 'CITY_APPROVAL' && (
+            <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
+              onPress={() => approve.mutate({ id: project.id, kind: 'city' })}>
+              Record city approval
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Full workspace: scope, invoices, snags, documents live on the detail page
           (the per-unit card only carries quick status + phase actions). */}
