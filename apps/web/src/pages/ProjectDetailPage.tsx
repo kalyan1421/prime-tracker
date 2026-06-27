@@ -4200,6 +4200,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const [activityType, setActivityType] = useState('NOTE');
   const [convertForm, setConvertForm] = useState({ unitId: '', buyer: '', salePrice: '', contractDate: '', closingDate: '' });
   const setCF = (f: string, v: string) => setConvertForm((prev) => ({ ...prev, [f]: v }));
+  const [filterGroup, setFilterGroup] = useState<'all' | 'active' | 'converted' | 'lost'>('all');
+  const [search, setSearch] = useState('');
+  const [popoverLeadId, setPopoverLeadId] = useState<string | null>(null);
+  const [stageSuggestion, setStageSuggestion] = useState<{ leadId: string; suggestedStatus: string; label: string } | null>(null);
 
   const { data: activities } = useLeadActivities(selectedLead?.id || '');
 
@@ -4256,166 +4260,456 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
     } catch { addToast({ title: 'Failed to convert lead', color: 'danger' }); }
   };
 
+  const STAGE_ORDER = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING'];
+  const ACTIVITY_TO_STAGE: Record<string, string> = {
+    CALL: 'CONTACTED', MEETING: 'QUALIFIED', SITE_VISIT: 'SITE_VISIT',
+  };
+
+  const handleStatusChange = async (leadId: string, newStatus: string) => {
+    setPopoverLeadId(null);
+    try {
+      await updateLead.mutateAsync({ id: leadId, data: { status: newStatus } });
+      if (selectedLead?.id === leadId) setSelectedLead((prev: any) => ({ ...prev, status: newStatus }));
+    } catch { addToast({ title: 'Failed to update status', color: 'danger' }); }
+  };
+
+  const getOtherStages = (currentStatus: string) => STAGE_ORDER.filter(s => s !== currentStatus);
+
   const handleAddActivity = async () => {
     if (!activityNote.trim() || !selectedLead) return;
     try {
       await addActivity.mutateAsync({ leadId: selectedLead.id, data: { type: activityType, note: activityNote.trim() } });
       setActivityNote('');
+      const suggestedStage = ACTIVITY_TO_STAGE[activityType];
+      if (suggestedStage && STAGE_ORDER.indexOf(suggestedStage) > STAGE_ORDER.indexOf(selectedLead.status)) {
+        setStageSuggestion({ leadId: selectedLead.id, suggestedStatus: suggestedStage, label: suggestedStage.replace('_', ' ') });
+      }
       setActivityType('NOTE');
     } catch { addToast({ title: 'Failed to log activity', color: 'danger' }); }
   };
 
   const leadsArr = (leads as any[]) || [];
+  const ACTIVE_STATUSES = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING'];
+  const PIPELINE_STAGES = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING'];
+  const pipelineCounts = PIPELINE_STAGES.map(s => ({ status: s, count: leadsArr.filter((l: any) => l.status === s).length }));
+  const pipelineTotal = pipelineCounts.reduce((sum, p) => sum + p.count, 0);
+  const convertedCount = leadsArr.filter((l: any) => l.status === 'CONVERTED').length;
+  const lostCount = leadsArr.filter((l: any) => ['LOST', 'DEAD'].includes(l.status)).length;
+
+  const filtered = leadsArr.filter((l: any) => {
+    const matchesGroup = filterGroup === 'all' ? true
+      : filterGroup === 'active' ? ACTIVE_STATUSES.includes(l.status)
+      : filterGroup === 'converted' ? l.status === 'CONVERTED'
+      : ['LOST', 'DEAD'].includes(l.status);
+    const matchesSearch = !search || [l.name, l.email, l.phone].some((v: any) => v?.toLowerCase().includes(search.toLowerCase()));
+    return matchesGroup && matchesSearch;
+  });
+
+  const STATUS_BAR: Record<string, string> = {
+    NEW: 'bg-slate-400', CONTACTED: 'bg-blue-400', POTENTIAL: 'bg-blue-500',
+    QUALIFIED: 'bg-violet-500', SITE_VISIT: 'bg-indigo-500',
+    PROPOSAL_SENT: 'bg-amber-500', NEGOTIATING: 'bg-orange-500',
+    CONVERTED: 'bg-emerald-500', LOST: 'bg-rose-400', DEAD: 'bg-stone-300',
+  };
+  const STATUS_BORDER: Record<string, string> = {
+    NEW: 'border-l-slate-300', CONTACTED: 'border-l-blue-400', POTENTIAL: 'border-l-blue-500',
+    QUALIFIED: 'border-l-violet-500', SITE_VISIT: 'border-l-indigo-500',
+    PROPOSAL_SENT: 'border-l-amber-500', NEGOTIATING: 'border-l-orange-500',
+    CONVERTED: 'border-l-emerald-500', LOST: 'border-l-rose-400', DEAD: 'border-l-stone-400',
+  };
+  const STATUS_LABEL: Record<string, string> = {
+    NEW: 'New', CONTACTED: 'Contacted', POTENTIAL: 'Potential', QUALIFIED: 'Qualified',
+    SITE_VISIT: 'Site Visit', PROPOSAL_SENT: 'Proposal', NEGOTIATING: 'Negotiating',
+    CONVERTED: 'Converted', LOST: 'Lost', DEAD: 'Dead',
+  };
+  const STATUS_TEXT: Record<string, string> = {
+    NEW: 'text-slate-500', CONTACTED: 'text-blue-600', POTENTIAL: 'text-blue-700',
+    QUALIFIED: 'text-violet-600', SITE_VISIT: 'text-indigo-600',
+    PROPOSAL_SENT: 'text-amber-600', NEGOTIATING: 'text-orange-600',
+    CONVERTED: 'text-emerald-600', LOST: 'text-rose-500', DEAD: 'text-stone-400',
+  };
+  const ACT_ICON: Record<string, React.ReactNode> = {
+    CALL: <FiPhone size={11} />, EMAIL: <FiMail size={11} />, MEETING: <FiUsers size={11} />,
+    SITE_VISIT: <FiHome size={11} />, FOLLOW_UP: <FiCalendar size={11} />,
+    NOTE: <FiMessageSquare size={11} />, STATUS_CHANGE: <FiCheck size={11} />,
+  };
+  const ACT_BG: Record<string, string> = {
+    CALL: 'bg-blue-100 text-blue-600', EMAIL: 'bg-violet-100 text-violet-600',
+    MEETING: 'bg-emerald-100 text-emerald-600', SITE_VISIT: 'bg-amber-100 text-amber-600',
+    FOLLOW_UP: 'bg-orange-100 text-orange-600', NOTE: 'bg-stone-100 text-stone-600',
+    STATUS_CHANGE: 'bg-indigo-100 text-indigo-600',
+  };
+  const daysSince = (lead: any) => {
+    const d = lead.lastActivityAt || lead.createdAt;
+    if (!d) return null;
+    return Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
+  };
 
   return (
-    <div className="mt-4 flex gap-4">
-      {/* Leads list */}
-      <div className="flex-1 min-w-0">
+    <div className="mt-2">
+      {/* Pipeline Funnel Bar */}
+      <div className="mb-4 rounded-xl border border-stone-200 bg-stone-50 p-4">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <FiTarget className="text-blue-600" />
-            <p className="font-semibold text-gray-700">Leads</p>
-            <Chip size="sm" variant="flat">{leadsArr.length}</Chip>
+          <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-stone-400">Pipeline</p>
+          <div className="flex items-center gap-3 text-[11px] text-stone-400">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+              {convertedCount} converted
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-rose-400" />
+              {lostCount} lost
+            </span>
           </div>
-          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNewForm}>New Lead</Button>
         </div>
-
-        {isLoading && <div className="text-sm text-gray-400 text-center py-6">Loading...</div>}
-        {!isLoading && leadsArr.length === 0 && (
-          <EmptyState title="No leads for this project" message="Add leads to track marketing interest" action={<Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNewForm}>New Lead</Button>} />
-        )}
-
-        <div className="space-y-2">
-          {leadsArr.map((lead: any) => (
-            <Card key={lead.id} shadow="sm" isPressable onPress={() => setSelectedLead(lead)} className={`cursor-pointer ${selectedLead?.id === lead.id ? 'ring-2 ring-blue-500' : ''}`}>
-              <CardBody className="py-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-medium text-gray-800">{lead.name || <span className="text-gray-400 italic">Unnamed</span>}</p>
-                      <Chip size="sm" color={LEAD_STATUS_COLORS_TAB[lead.status] || 'default'} variant="flat" className="text-[10px]">{lead.status.replace('_', ' ')}</Chip>
-                      <Chip size="sm" variant="bordered" className="text-[10px]">{SOURCE_LABELS_TAB[lead.source] || lead.source}</Chip>
-                      {lead.unit?.unitNumber && (
-                        <Chip size="sm" color="primary" variant="flat" className="text-[10px]" startContent={<FiHome size={9} />}>
-                          {lead.unit.unitNumber}
-                        </Chip>
-                      )}
-                    </div>
-                    <div className="flex gap-3 mt-0.5 text-xs text-gray-500 flex-wrap">
-                      {lead.email && <span className="flex items-center gap-1"><FiMail />{lead.email}</span>}
-                      {lead.phone && <span className="flex items-center gap-1"><FiPhone />{lead.phone}</span>}
-                      {lead.budget && <span>${Number(lead.budget).toLocaleString()}</span>}
-                    </div>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button isIconOnly size="sm" variant="light" onPress={() => openEditForm(lead)}><FiEdit2 /></Button>
-                    <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => handleDeleteLead(lead.id)}><FiTrash2 /></Button>
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
+        <div className="flex gap-0.5 h-5 rounded-md overflow-hidden">
+          {pipelineTotal === 0 ? (
+            <div className="flex-1 bg-stone-200 flex items-center justify-center">
+              <span className="text-[10px] text-stone-400">No active leads</span>
+            </div>
+          ) : (
+            pipelineCounts.map(({ status, count }) => count > 0 ? (
+              <div
+                key={status}
+                className={`${STATUS_BAR[status]} flex items-center justify-center text-white text-[9px] font-bold`}
+                style={{ flex: count }}
+                title={`${STATUS_LABEL[status]}: ${count}`}
+              >
+                {count}
+              </div>
+            ) : null)
+          )}
+        </div>
+        <div className="flex gap-3 mt-2 flex-wrap">
+          {pipelineCounts.filter(p => p.count > 0).map(({ status, count }) => (
+            <span key={status} className="flex items-center gap-1 text-[10px] text-stone-500">
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${STATUS_BAR[status]}`} />
+              {STATUS_LABEL[status]} ({count})
+            </span>
           ))}
         </div>
-
-        {/* Lead Form Modal */}
-        <Modal isOpen={showForm} onClose={() => setShowForm(false)} size="lg">
-          <ModalContent>
-            <ModalHeader>{editLead ? 'Edit Lead' : 'New Lead'}</ModalHeader>
-            <ModalBody>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Input size="sm" label="Name" value={form.name} onChange={(e) => setF('name', e.target.value)} />
-                <Input size="sm" label="Email" type="email" value={form.email} onChange={(e) => setF('email', e.target.value)} />
-                <Input size="sm" label="Phone" value={form.phone} onChange={(e) => setF('phone', e.target.value)} />
-                <Input size="sm" label="Budget ($)" type="number" value={form.budget} onChange={(e) => setF('budget', e.target.value)} />
-                <Select size="sm" label="Source" selectedKeys={new Set([form.source])} onSelectionChange={(k) => setF('source', Array.from(k)[0] as string)}>
-                  {LEAD_SOURCES_TAB.map((s) => <SelectItem key={s} textValue={SOURCE_LABELS_TAB[s] || s}>{SOURCE_LABELS_TAB[s] || s}</SelectItem>)}
-                </Select>
-                <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => setF('status', Array.from(k)[0] as string)}>
-                  {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s} textValue={s.replace('_', ' ')}>{s.replace('_', ' ')}</SelectItem>)}
-                </Select>
-                <Select
-                  size="sm"
-                  label="Unit"
-                  placeholder="No specific unit"
-                  selectedKeys={form.unitId ? new Set([form.unitId]) : new Set()}
-                  onSelectionChange={(k) => setF('unitId', (Array.from(k)[0] as string) || '')}
-                  className="sm:col-span-2"
-                >
-                  {((projectUnits as any[]) || []).map((u: any) => {
-                    const label = `${u.unitNumber}${u.status ? ` · ${u.status.replace('_', ' ')}` : ''}`;
-                    return <SelectItem key={u.id} textValue={label}>{label}</SelectItem>;
-                  })}
-                </Select>
-                <Input size="sm" label="Notes on interest" placeholder="e.g. 2BR preference" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
-                <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="sm:col-span-2" />
-              </div>
-            </ModalBody>
-            <ModalFooter>
-              <Button size="sm" variant="light" onPress={() => setShowForm(false)}>Cancel</Button>
-              <Button size="sm" color="primary" onPress={handleSubmitLead} isLoading={createLead.isPending || updateLead.isPending}>
-                {editLead ? 'Save Changes' : 'Create Lead'}
-              </Button>
-            </ModalFooter>
-          </ModalContent>
-        </Modal>
       </div>
 
-      {/* Activity panel */}
-      {selectedLead && (
-        <div className="w-full lg:w-[320px] lg:shrink-0">
-          <Card shadow="sm">
-            <CardHeader className="pb-0">
-              <div className="w-full">
-                <p className="text-sm font-semibold text-gray-800">{selectedLead.name || 'Unnamed Lead'}</p>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <Chip size="sm" color={LEAD_STATUS_COLORS_TAB[selectedLead.status] || 'default'} variant="flat" className="text-[10px]">{selectedLead.status.replace('_', ' ')}</Chip>
-                  {selectedLead.unit?.unitNumber && (
-                    <Chip size="sm" color="primary" variant="flat" className="text-[10px]" startContent={<FiHome size={9} />}>
-                      Unit {selectedLead.unit.unitNumber}
-                    </Chip>
-                  )}
-                </div>
-                {selectedLead.email && <p className="text-xs text-gray-400 mt-1">{selectedLead.email}</p>}
-                {selectedLead.phone && <p className="text-xs text-gray-400">{selectedLead.phone}</p>}
-                {selectedLead.budget && <p className="text-xs text-gray-500 font-medium">${Number(selectedLead.budget).toLocaleString()} budget</p>}
-              </div>
-            </CardHeader>
-            <CardBody className="space-y-3">
-              {selectedLead.notes && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded">{selectedLead.notes}</p>}
-              {!['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
-                <Button size="sm" color="success" variant="flat" className="w-full" onPress={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, unitId: selectedLead.unitId || '', buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}>
-                  Convert to Sale
-                </Button>
+      {/* Controls */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-0.5 bg-stone-100 rounded-lg p-0.5">
+          {(['all', 'active', 'converted', 'lost'] as const).map((g) => {
+            const counts: Record<string, number> = {
+              all: leadsArr.length,
+              active: leadsArr.filter((l: any) => ACTIVE_STATUSES.includes(l.status)).length,
+              converted: convertedCount,
+              lost: lostCount,
+            };
+            return (
+              <button
+                key={g}
+                onClick={() => setFilterGroup(g)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all capitalize ${filterGroup === g ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}
+              >
+                {g} <span className="opacity-50">{counts[g]}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex-1 relative min-w-[140px]">
+          <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" size={12} />
+          <input
+            type="text"
+            placeholder="Search leads…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-7 pr-3 py-1.5 text-[11px] border border-stone-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-stone-300 text-stone-700 placeholder-stone-400"
+          />
+        </div>
+        <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNewForm} className="shrink-0">
+          New Lead
+        </Button>
+      </div>
+
+      {/* Main Layout */}
+      <div className="flex gap-3 items-start">
+        {/* Lead list */}
+        <div className={`flex-1 min-w-0 space-y-1.5 ${selectedLead ? 'hidden lg:block' : ''}`}>
+          {isLoading && (
+            <div className="space-y-2">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="h-14 rounded-lg bg-stone-100 animate-pulse border-l-4 border-l-stone-200" />
+              ))}
+            </div>
+          )}
+
+          {!isLoading && filtered.length === 0 && (
+            <div className="py-12 text-center">
+              <FiTarget className="mx-auto text-stone-300 mb-2" size={28} />
+              <p className="text-sm text-stone-400">
+                {search ? 'No leads match your search' : leadsArr.length === 0 ? 'No leads yet — add your first' : 'No leads in this group'}
+              </p>
+              {leadsArr.length === 0 && (
+                <Button size="sm" color="primary" className="mt-3" startContent={<FiPlus />} onPress={openNewForm}>Add Lead</Button>
               )}
-              <p className="text-xs font-semibold text-gray-700">Log Activity</p>
-              <Select size="sm" label="Type" selectedKeys={new Set([activityType])} onSelectionChange={(k) => setActivityType(Array.from(k)[0] as string)}>
-                {ACTIVITY_TYPES_TAB.map((t) => <SelectItem key={t}>{t.replace('_', ' ')}</SelectItem>)}
-              </Select>
-              <div className="flex gap-2">
-                <Input size="sm" placeholder="Note..." value={activityNote} onChange={(e) => setActivityNote(e.target.value)} className="flex-1" onKeyDown={(e) => { if (e.key === 'Enter') handleAddActivity(); }} />
-                <Button size="sm" color="primary" isIconOnly onPress={handleAddActivity} isLoading={addActivity.isPending}><FiSend /></Button>
-              </div>
-              <div className="space-y-2 max-h-[280px] overflow-auto">
-                {(activities as any[] || []).map((act: any) => (
-                  <div key={act.id} className="flex gap-2 items-start">
-                    <span className="text-sm">{ACTIVITY_ICONS_TAB[act.type] || '📝'}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1">
-                        <p className="text-[10px] font-medium text-gray-600">{act.type.replace('_', ' ')}</p>
-                        <span className="text-[10px] text-gray-400">· {fmtDate(act.createdAt)}</span>
+            </div>
+          )}
+
+          {filtered.map((lead: any) => {
+            const days = daysSince(lead);
+            const isSelected = selectedLead?.id === lead.id;
+            return (
+              <div
+                key={lead.id}
+                onClick={() => { setSelectedLead(isSelected ? null : lead); setPopoverLeadId(null); }}
+                className={`group relative flex items-center gap-3 rounded-lg border border-l-[3px] bg-white px-3.5 py-2.5 cursor-pointer transition-all ${STATUS_BORDER[lead.status] || 'border-l-stone-300'} ${isSelected ? 'border-stone-300 shadow-md ring-1 ring-stone-200' : 'border-stone-200 hover:border-stone-300 hover:shadow-sm'}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-stone-800 truncate">
+                      {lead.name || <span className="text-stone-400 font-normal italic text-xs">Unnamed</span>}
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setPopoverLeadId(popoverLeadId === lead.id ? null : lead.id); }}
+                      className={`text-[9px] font-bold uppercase tracking-[0.08em] hover:opacity-70 transition-opacity ${STATUS_TEXT[lead.status] || 'text-stone-500'}`}
+                    >
+                      {STATUS_LABEL[lead.status] || lead.status} ▾
+                    </button>
+                    {popoverLeadId === lead.id && (
+                      <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-stone-200 rounded-xl shadow-lg py-1.5 min-w-[172px]">
+                        <p className="px-3 pb-1 text-[9px] font-bold uppercase tracking-widest text-stone-400">Set Stage</p>
+                        {STAGE_ORDER.map(s => {
+                          const isCurrent = s === lead.status;
+                          const isBack = STAGE_ORDER.indexOf(s) < STAGE_ORDER.indexOf(lead.status);
+                          return (
+                            <button key={s} onClick={(e) => { e.stopPropagation(); if (!isCurrent) handleStatusChange(lead.id, s); else setPopoverLeadId(null); }}
+                              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${isCurrent ? 'bg-stone-50 text-stone-800 font-semibold cursor-default' : isBack ? 'text-stone-500 hover:bg-stone-50' : 'text-stone-700 hover:bg-stone-50'}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_BAR[s]}`} />
+                              <span className="flex-1">{STATUS_LABEL[s]}</span>
+                              {isCurrent && <FiCheck size={10} className="text-stone-500 shrink-0" />}
+                              {isBack && !isCurrent && <span className="text-[9px] text-stone-300">↩</span>}
+                            </button>
+                          );
+                        })}
+                        {!['LOST', 'DEAD'].includes(lead.status) && (
+                          <>
+                            <div className="my-1 border-t border-stone-100" />
+                            <button onClick={(e) => { e.stopPropagation(); handleStatusChange(lead.id, 'LOST'); }}
+                              className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-rose-400" />
+                              Mark as Lost
+                            </button>
+                          </>
+                        )}
+                        {['LOST', 'DEAD'].includes(lead.status) && (
+                          <>
+                            <div className="my-1 border-t border-stone-100" />
+                            <button onClick={(e) => { e.stopPropagation(); handleStatusChange(lead.id, 'NEW'); }}
+                              className="w-full text-left px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-slate-400" />
+                              Reopen as New
+                            </button>
+                          </>
+                        )}
                       </div>
-                      <p className="text-xs text-gray-600">{act.note}</p>
-                    </div>
+                    )}
                   </div>
-                ))}
-                {(!activities || (activities as any[]).length === 0) && (
-                  <p className="text-xs text-gray-400 text-center py-4">No activities yet</p>
+                  <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                    <span className="text-[11px] text-stone-400">{SOURCE_LABELS_TAB[lead.source] || lead.source}</span>
+                    {lead.email && <span className="text-[11px] text-stone-400 truncate max-w-[140px]">{lead.email}</span>}
+                    {lead.unit?.unitNumber && (
+                      <span className="text-[11px] text-stone-500 flex items-center gap-0.5">
+                        <FiHome size={9} /> {lead.unit.unitNumber}
+                      </span>
+                    )}
+                    {days !== null && days > 3 && (
+                      <span className={`text-[10px] ${days > 14 ? 'text-rose-500' : days > 7 ? 'text-amber-500' : 'text-stone-400'}`}>
+                        {days}d idle
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {lead.budget && (
+                    <span className="text-xs font-semibold text-stone-600 tabular-nums">${Number(lead.budget).toLocaleString()}</span>
+                  )}
+                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEditForm(lead); }}
+                      className="p-1 rounded text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+                    >
+                      <FiEdit2 size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
+                      className="p-1 rounded text-stone-400 hover:text-rose-600 hover:bg-rose-50"
+                    >
+                      <FiTrash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Activity Panel */}
+        {selectedLead && (
+          <div className="w-full lg:w-[288px] lg:shrink-0">
+            <div className="rounded-xl border border-stone-200 bg-white overflow-hidden">
+              {/* Header */}
+              <div className={`px-4 pt-4 pb-3 border-b border-stone-100 border-l-4 ${STATUS_BORDER[selectedLead.status] || 'border-l-stone-300'}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-stone-800 text-sm truncate">{selectedLead.name || 'Unnamed Lead'}</p>
+                    <p className={`text-[9px] font-bold uppercase tracking-[0.1em] mt-0.5 ${STATUS_TEXT[selectedLead.status] || 'text-stone-500'}`}>
+                      {STATUS_LABEL[selectedLead.status] || selectedLead.status}
+                    </p>
+                  </div>
+                  <button onClick={() => setSelectedLead(null)} className="text-stone-400 hover:text-stone-600 mt-0.5 shrink-0">
+                    <FiX size={14} />
+                  </button>
+                </div>
+                <div className="mt-2 space-y-0.5">
+                  {selectedLead.email && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiMail size={9} />{selectedLead.email}</p>}
+                  {selectedLead.phone && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiPhone size={9} />{selectedLead.phone}</p>}
+                  {selectedLead.budget && <p className="text-[11px] font-semibold text-stone-600 mt-1">${Number(selectedLead.budget).toLocaleString()} budget</p>}
+                  {selectedLead.unit?.unitNumber && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />Unit {selectedLead.unit.unitNumber}</p>}
+                </div>
+                {!['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
+                  <button
+                    onClick={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, unitId: selectedLead.unitId || '', buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}
+                    className="mt-3 w-full text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg py-1.5 transition-colors"
+                  >
+                    Convert to Sale →
+                  </button>
                 )}
               </div>
-            </CardBody>
-          </Card>
-        </div>
-      )}
+
+              {/* Log Activity */}
+              <div className="px-4 py-3 border-b border-stone-100">
+                <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-2">Log Activity</p>
+                <div className="flex gap-1 mb-2">
+                  {ACTIVITY_TYPES_TAB.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setActivityType(t)}
+                      className={`flex items-center justify-center w-6 h-6 rounded transition-all ${activityType === t ? `${ACT_BG[t] || 'bg-stone-200 text-stone-600'} ring-1 ring-current` : 'text-stone-400 hover:bg-stone-100'}`}
+                      title={t.replace('_', ' ')}
+                    >
+                      {ACT_ICON[t]}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder={`${activityType.replace('_', ' ').toLowerCase()}…`}
+                    value={activityNote}
+                    onChange={(e) => setActivityNote(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddActivity(); }}
+                    className="flex-1 px-2.5 py-1.5 text-xs border border-stone-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-stone-300 text-stone-700 placeholder-stone-400 min-w-0"
+                  />
+                  <button
+                    onClick={handleAddActivity}
+                    disabled={!activityNote.trim() || addActivity.isPending}
+                    className="px-2.5 py-1.5 bg-stone-800 text-white rounded-lg hover:bg-stone-700 disabled:opacity-40 transition-colors shrink-0"
+                  >
+                    <FiSend size={11} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Stage promotion suggestion */}
+              {stageSuggestion && stageSuggestion.leadId === selectedLead?.id && (
+                <div className="px-4 py-2.5 border-b border-stone-100 bg-indigo-50 flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-indigo-700">
+                    Move to <strong className="capitalize">{stageSuggestion.label.toLowerCase()}</strong>?
+                  </span>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => { handleStatusChange(stageSuggestion.leadId, stageSuggestion.suggestedStatus); setStageSuggestion(null); }}
+                      className="px-2 py-0.5 bg-indigo-600 text-white rounded text-[11px] font-medium hover:bg-indigo-700 transition-colors"
+                    >
+                      Yes
+                    </button>
+                    <button
+                      onClick={() => setStageSuggestion(null)}
+                      className="px-2 py-0.5 text-indigo-600 hover:bg-indigo-100 rounded text-[11px] transition-colors"
+                    >
+                      Skip
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Activity Timeline */}
+              <div className="px-4 py-3 max-h-[260px] overflow-y-auto">
+                {(!activities || (activities as any[]).length === 0) ? (
+                  <p className="text-[11px] text-stone-400 text-center py-4">No activities logged yet</p>
+                ) : (
+                  <div className="relative">
+                    <div className="absolute left-[10px] top-1 bottom-1 w-px bg-stone-100" />
+                    <div className="space-y-3">
+                      {(activities as any[]).map((act: any) => (
+                        <div key={act.id} className="flex gap-2.5 relative">
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 z-10 ${ACT_BG[act.type] || 'bg-stone-100 text-stone-500'}`}>
+                            {ACT_ICON[act.type] || <FiMessageSquare size={10} />}
+                          </div>
+                          <div className="flex-1 min-w-0 pt-0.5">
+                            <div className="flex items-baseline gap-1.5 flex-wrap">
+                              <span className="text-[10px] font-semibold text-stone-600">{act.type.replace('_', ' ')}</span>
+                              <span className="text-[10px] text-stone-400">{fmtDate(act.createdAt)}</span>
+                            </div>
+                            <p className="text-xs text-stone-600 leading-snug mt-0.5">{act.note}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Lead Form Modal */}
+      <Modal isOpen={showForm} onClose={() => setShowForm(false)} size="lg">
+        <ModalContent>
+          <ModalHeader>{editLead ? 'Edit Lead' : 'New Lead'}</ModalHeader>
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input size="sm" label="Name" value={form.name} onChange={(e) => setF('name', e.target.value)} />
+              <Input size="sm" label="Email" type="email" value={form.email} onChange={(e) => setF('email', e.target.value)} />
+              <Input size="sm" label="Phone" value={form.phone} onChange={(e) => setF('phone', e.target.value)} />
+              <Input size="sm" label="Budget ($)" type="number" value={form.budget} onChange={(e) => setF('budget', e.target.value)} />
+              <Select size="sm" label="Source" selectedKeys={new Set([form.source])} onSelectionChange={(k) => setF('source', Array.from(k)[0] as string)}>
+                {LEAD_SOURCES_TAB.map((s) => <SelectItem key={s} textValue={SOURCE_LABELS_TAB[s] || s}>{SOURCE_LABELS_TAB[s] || s}</SelectItem>)}
+              </Select>
+              <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => setF('status', Array.from(k)[0] as string)}>
+                {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s} textValue={s.replace('_', ' ')}>{s.replace('_', ' ')}</SelectItem>)}
+              </Select>
+              <Select
+                size="sm"
+                label="Unit"
+                placeholder="No specific unit"
+                selectedKeys={form.unitId ? new Set([form.unitId]) : new Set()}
+                onSelectionChange={(k) => setF('unitId', (Array.from(k)[0] as string) || '')}
+                className="sm:col-span-2"
+              >
+                {((projectUnits as any[]) || []).map((u: any) => {
+                  const label = `${u.unitNumber}${u.status ? ` · ${u.status.replace('_', ' ')}` : ''}`;
+                  return <SelectItem key={u.id} textValue={label}>{label}</SelectItem>;
+                })}
+              </Select>
+              <Input size="sm" label="Notes on interest" placeholder="e.g. 2BR preference" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
+              <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="sm:col-span-2" />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={() => setShowForm(false)}>Cancel</Button>
+            <Button size="sm" color="primary" onPress={handleSubmitLead} isLoading={createLead.isPending || updateLead.isPending}>
+              {editLead ? 'Save Changes' : 'Create Lead'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       {/* Convert to Sale Modal */}
       <Modal isOpen={showConvert} onClose={() => setShowConvert(false)} size="md">
