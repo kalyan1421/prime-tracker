@@ -7,8 +7,9 @@ import { FiPlus, FiDollarSign } from 'react-icons/fi';
 import {
   useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment,
 } from '../hooks/useApi';
-import { fmt, fmtDate } from '../utils/fmt';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
+import { FormError } from './FormError';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
   SCHEDULED: 'default',
@@ -20,11 +21,6 @@ const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success'
 };
 
 const TRIGGERS = ['FIXED_DATE', 'ON_SIGNING', 'ON_MILESTONE', 'ON_HANDOVER'];
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
 
 export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePrice?: number }) {
   const { data, isLoading } = useSalePayments(saleId);
@@ -39,13 +35,18 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
 
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({ label: '', amount: '', trigger: 'FIXED_DATE', dueDate: '' });
+  const [addErr, setAddErr] = useState<string | null>(null);
 
   const logModal = useDisclosure();
   const [logTarget, setLogTarget] = useState<any>(null);
   const [logAmount, setLogAmount] = useState('');
+  const [logErr, setLogErr] = useState<string | null>(null);
 
   const seed = async (template: string) => {
-    if (!salePrice) return addToast({ title: 'Set a sale price first to use % templates', color: 'warning' });
+    if (!salePrice) {
+      setAddErr('Set a sale price first to use % templates');
+      return;
+    }
     try {
       await applyTemplate.mutateAsync({ saleId, template });
       addToast({ title: `Applied ${template} schedule`, color: 'success' });
@@ -55,7 +56,11 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
   };
 
   const submitAdd = async () => {
-    if (!form.label.trim()) return addToast({ title: 'Label is required', color: 'warning' });
+    if (!form.label.trim()) {
+      setAddErr('Label is required');
+      return;
+    }
+    setAddErr(null);
     try {
       await addPayment.mutateAsync({
         saleId,
@@ -70,19 +75,25 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
       setAdding(false);
       addToast({ title: 'Installment added', color: 'success' });
     } catch (e) {
+      setAddErr(errMsg(e, 'Failed to add installment'));
       addToast({ title: errMsg(e, 'Failed to add installment'), color: 'danger' });
     }
   };
 
   const submitLog = async () => {
     const amt = Number(logAmount);
-    if (!(amt > 0)) return addToast({ title: 'Enter a positive amount', color: 'warning' });
+    if (!(amt > 0)) {
+      setLogErr('Enter a positive amount');
+      return;
+    }
+    setLogErr(null);
     try {
       await logPayment.mutateAsync({ id: logTarget.id, amount: amt, saleId });
       addToast({ title: 'Payment logged', color: 'success' });
       logModal.onClose();
       setLogAmount('');
     } catch (e) {
+      setLogErr(errMsg(e, 'Failed to log payment'));
       addToast({ title: errMsg(e, 'Failed to log payment'), color: 'danger' });
     }
   };
@@ -100,7 +111,8 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-gray-700">Payment schedule</p>
-        <Button size="sm" variant="flat" startContent={<FiPlus />} onPress={() => setAdding((v) => !v)}>
+        <Button size="sm" variant="flat" startContent={<FiPlus />}
+          onPress={() => { setAdding((v) => !v); setAddErr(null); }}>
           Add installment
         </Button>
       </div>
@@ -110,6 +122,7 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
       {!isLoading && payments.length === 0 && (
         <div className="rounded-lg border border-dashed border-gray-200 p-3 text-center space-y-2">
           <p className="text-sm text-gray-400">No schedule yet. Seed one from a template:</p>
+          <FormError message={addErr} />
           <div className="flex justify-center gap-2">
             <Button size="sm" variant="flat" color="primary" onPress={() => seed('10-40-50')} isLoading={applyTemplate.isPending}>
               10 / 40 / 50
@@ -142,7 +155,7 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
                   {p.status !== 'PAID' && p.status !== 'WAIVED' && (
                     <PermissionGate permission="payment:log">
                       <Button size="sm" variant="light" color="primary" startContent={<FiDollarSign />}
-                        onPress={() => { setLogTarget(p); setLogAmount(String(amount - paid)); logModal.onOpen(); }}>
+                        onPress={() => { setLogTarget(p); setLogAmount(String(amount - paid)); setLogErr(null); logModal.onOpen(); }}>
                         Log
                       </Button>
                     </PermissionGate>
@@ -161,9 +174,18 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
 
       {adding && (
         <div className="rounded-lg border border-gray-100 p-3 space-y-2">
+          <FormError message={addErr} />
           <div className="flex gap-2">
-            <Input size="sm" label="Label" value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} />
-            <Input size="sm" type="number" label="Amount ($)" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
+            <Input
+              size="sm" label="Label" value={form.label}
+              onChange={(e) => { setForm((f) => ({ ...f, label: e.target.value })); setAddErr(null); }}
+              isInvalid={!!addErr && !form.label.trim()}
+              errorMessage="Required"
+            />
+            <Input
+              size="sm" type="number" label="Amount ($)" value={form.amount}
+              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+            />
           </div>
           <div className="flex gap-2 items-end">
             <Select size="sm" label="Trigger" selectedKeys={[form.trigger]}
@@ -182,7 +204,14 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
         <ModalContent>
           <ModalHeader>Log payment — {logTarget?.label}</ModalHeader>
           <ModalBody>
-            <Input type="number" label="Amount ($)" value={logAmount} onChange={(e) => setLogAmount(e.target.value)} autoFocus />
+            <FormError message={logErr} />
+            <Input
+              type="number" label="Amount ($)" value={logAmount}
+              onChange={(e) => { setLogAmount(e.target.value); setLogErr(null); }}
+              isInvalid={!!logErr && !(Number(logAmount) > 0)}
+              errorMessage="Enter a positive amount"
+              autoFocus
+            />
             <p className="text-xs text-gray-400">Partial payments are supported; the installment flips to PAID when fully covered.</p>
           </ModalBody>
           <ModalFooter>

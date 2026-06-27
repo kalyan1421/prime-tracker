@@ -7,15 +7,11 @@ import {
   useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useAddDailyLogPhoto, useRemoveDailyLogPhoto,
   usePresignedUpload, useBuildings,
 } from '../hooks/useApi';
-import { fmtDate } from '../utils/fmt';
+import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
+import { FormError } from './FormError';
 
 const photoUrl = (photo: { url?: string; storagePath: string }) => photo.url || '';
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -37,6 +33,7 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
     logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '',
   });
   const set = (k: string) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const [logFeedErr, setLogFeedErr] = useState<string | null>(null);
 
   const [pendingFiles, setPendingFiles] = useState<{ file: File; preview: string }[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -57,7 +54,11 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
   };
 
   const submit = async () => {
-    if (!form.notes.trim()) return addToast({ title: 'Add what happened on site', color: 'warning' });
+    if (!form.notes.trim()) {
+      setLogFeedErr('Add what happened on site');
+      return;
+    }
+    setLogFeedErr(null);
     try {
       setUploading(true);
       const log = await create.mutateAsync({
@@ -81,6 +82,7 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
       setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '' });
       addToast({ title: 'Log posted', color: 'success' });
     } catch (e) {
+      setLogFeedErr(errMsg(e, 'Failed to post log'));
       addToast({ title: errMsg(e, 'Failed to post log'), color: 'danger' });
     } finally {
       setUploading(false);
@@ -98,9 +100,14 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
       <CardBody className="pt-0 space-y-4">
         <PermissionGate permission="dailylog:edit">
           <div className="rounded-lg border border-gray-100 p-3 space-y-2 bg-gray-50/50">
+            <FormError message={logFeedErr} />
             <Textarea
               size="sm" minRows={2} label="What happened on site today?"
-              value={form.notes} onChange={set('notes')} placeholder="Poured foundation for Building A, inspection passed…"
+              value={form.notes}
+              onChange={(e) => { set('notes')(e); setLogFeedErr(null); }}
+              placeholder="Poured foundation for Building A, inspection passed…"
+              isInvalid={!!logFeedErr && !form.notes.trim()}
+              errorMessage="Required"
             />
 
             {/* Photo previews */}
