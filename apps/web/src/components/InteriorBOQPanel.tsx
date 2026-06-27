@@ -11,7 +11,8 @@ import {
 } from '@heroui/react';
 import { FiPlus, FiTrash2, FiFileText } from 'react-icons/fi';
 import { useAddInteriorScope, useDeleteInteriorScope } from '../hooks/useApi';
-import { fmt } from '../utils/fmt';
+import { fmt, errMsg } from '../utils/fmt';
+import { FormError } from './FormError';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -30,11 +31,6 @@ const CATEGORIES = ['Flooring', 'Ceiling', 'Walls', 'MEP', 'Joinery', 'Furniture
 
 const EMPTY = { description: '', category: 'Other', qty: '', unit: 'sqft', unitPrice: '' };
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
-
 // ─── component ────────────────────────────────────────────────────────────────
 
 export function InteriorBOQPanel({
@@ -51,17 +47,26 @@ export function InteriorBOQPanel({
 
   const [adding, setAdding] = useState(false);
   const [form, setForm]     = useState(EMPTY);
-  const set = (f: keyof typeof EMPTY, v: string) =>
+  const [boqErr, setBoqErr] = useState<string | null>(null);
+  const set = (f: keyof typeof EMPTY, v: string) => {
+    setBoqErr(null);
     setForm((p) => ({ ...p, [f]: v }));
+  };
 
   const boqTotal = items.reduce((s, i) => s + Number(i.total), 0);
   const variance = contractValue !== undefined ? boqTotal - contractValue : undefined;
 
   const handleAdd = async () => {
-    if (!form.description.trim()) return addToast({ title: 'Description is required', color: 'warning' });
+    if (!form.description.trim()) {
+      setBoqErr('Description is required');
+      return;
+    }
     const qty = parseFloat(form.qty);
     const up  = parseFloat(form.unitPrice);
-    if (!(qty > 0) || !(up > 0)) return addToast({ title: 'Qty and unit price must be positive', color: 'warning' });
+    if (!(qty > 0) || !(up > 0)) {
+      setBoqErr('Qty and unit price must be positive');
+      return;
+    }
 
     try {
       await addScope.mutateAsync({
@@ -75,9 +80,11 @@ export function InteriorBOQPanel({
         },
       });
       setForm(EMPTY);
+      setBoqErr(null);
       setAdding(false);
       addToast({ title: 'Line item added', color: 'success' });
     } catch (e) {
+      setBoqErr(errMsg(e, 'Failed to add line item'));
       addToast({ title: errMsg(e, 'Failed to add line item'), color: 'danger' });
     }
   };
@@ -96,6 +103,9 @@ export function InteriorBOQPanel({
     return q > 0 && u > 0 ? q * u : null;
   })();
 
+  const descInvalid = !!boqErr && !form.description.trim();
+  const numInvalid  = !!boqErr && boqErr.includes('Qty') && (!(parseFloat(form.qty) > 0) || !(parseFloat(form.unitPrice) > 0));
+
   return (
     <div className="space-y-3">
       {/* header */}
@@ -110,7 +120,7 @@ export function InteriorBOQPanel({
         <Button
           size="sm" variant="flat" color="primary"
           startContent={<FiPlus size={13} />}
-          onPress={() => setAdding((v) => !v)}
+          onPress={() => { setAdding((v) => !v); setBoqErr(null); }}
         >
           Add item
         </Button>
@@ -119,11 +129,14 @@ export function InteriorBOQPanel({
       {/* add form */}
       {adding && (
         <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2.5">
+          <FormError message={boqErr} />
           <div className="flex gap-2">
             <Input
               size="sm" label="Description" placeholder="e.g. Vinyl plank flooring"
               value={form.description}
               onChange={(e) => set('description', e.target.value)}
+              isInvalid={descInvalid}
+              errorMessage={descInvalid ? boqErr ?? undefined : undefined}
               className="flex-[2]"
             />
             <Select
@@ -139,6 +152,7 @@ export function InteriorBOQPanel({
             <Input
               size="sm" type="number" label="Qty"
               value={form.qty} onChange={(e) => set('qty', e.target.value)}
+              isInvalid={numInvalid}
               className="flex-1"
             />
             <Select
@@ -152,6 +166,7 @@ export function InteriorBOQPanel({
             <Input
               size="sm" type="number" label="Unit price ($)"
               value={form.unitPrice} onChange={(e) => set('unitPrice', e.target.value)}
+              isInvalid={numInvalid}
               className="flex-1"
             />
             <div className="flex-1 flex flex-col justify-end">
@@ -169,7 +184,7 @@ export function InteriorBOQPanel({
           <div className="flex justify-end">
             <Button
               size="sm" variant="light"
-              onPress={() => { setAdding(false); setForm(EMPTY); }}
+              onPress={() => { setAdding(false); setForm(EMPTY); setBoqErr(null); }}
             >
               Cancel
             </Button>

@@ -3,11 +3,8 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Button, Select, SelectItem, Input, Checkbox, addToast,
 } from '@heroui/react';
 import { useCombineUnits } from '../hooks/useApi';
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
+import { errMsg } from '../utils/fmt';
+import { FormError } from './FormError';
 
 /**
  * Combine 2+ adjacent units in one building into a single legal unit.
@@ -25,6 +22,7 @@ export function CombineUnitsModal({
   const [buildingId, setBuildingId] = useState('');
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [unitNumber, setUnitNumber] = useState('');
+  const [combineErr, setCombineErr] = useState<string | null>(null);
 
   // Only active (non-merged) units in the chosen building are combinable.
   const candidates = useMemo(
@@ -34,26 +32,36 @@ export function CombineUnitsModal({
   const chosen = candidates.filter((u) => selected[u.id]);
   const suggested = chosen.map((u) => u.unitNumber).join('+');
 
-  const reset = () => { setBuildingId(''); setSelected({}); setUnitNumber(''); };
+  const reset = () => { setBuildingId(''); setSelected({}); setUnitNumber(''); setCombineErr(null); };
   const close = () => { reset(); onClose(); };
 
   const toggle = (id: string) => setSelected((s) => ({ ...s, [id]: !s[id] }));
 
   const submit = async () => {
     const ids = chosen.map((u) => u.id);
-    if (ids.length < 2) return addToast({ title: 'Select at least two units', color: 'warning' });
+    if (ids.length < 2) {
+      setCombineErr('Select at least two units');
+      return;
+    }
     const number = (unitNumber || suggested).trim();
-    if (!number) return addToast({ title: 'Enter a number for the combined unit', color: 'warning' });
+    if (!number) {
+      setCombineErr('Enter a number for the combined unit');
+      return;
+    }
+    setCombineErr(null);
     try {
       await combine.mutateAsync({ buildingId, sourceUnitIds: ids, unitNumber: number });
       addToast({ title: `Combined ${ids.length} units into ${number}`, color: 'success' });
       close();
     } catch (e) {
+      setCombineErr(errMsg(e, 'Failed to combine units'));
       addToast({ title: errMsg(e, 'Failed to combine units'), color: 'danger' });
     }
   };
 
   const totalSqft = chosen.reduce((s, u) => s + (u.sqft ? Number(u.sqft) : 0), 0);
+
+  const unitNumberInvalid = !!combineErr && combineErr.includes('number for the combined');
 
   return (
     <Modal isOpen={isOpen} onClose={close} size="lg">
@@ -64,10 +72,11 @@ export function CombineUnitsModal({
             Merge adjacent units into one legal unit. The originals are archived (their sales/lease history is kept)
             and a new combined unit is created.
           </p>
+          <FormError message={combineErr} />
           <Select
             size="sm" label="Building"
             selectedKeys={buildingId ? [buildingId] : []}
-            onSelectionChange={(k) => { setBuildingId((Array.from(k)[0] as string) || ''); setSelected({}); }}
+            onSelectionChange={(k) => { setBuildingId((Array.from(k)[0] as string) || ''); setSelected({}); setCombineErr(null); }}
           >
             {buildings.map((b: any) => <SelectItem key={b.id}>{b.name}</SelectItem>)}
           </Select>
@@ -91,9 +100,11 @@ export function CombineUnitsModal({
             <>
               <Input
                 size="sm" label="Combined unit number"
-                value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)}
+                value={unitNumber} onChange={(e) => { setUnitNumber(e.target.value); setCombineErr(null); }}
                 placeholder={suggested}
                 description={`Must be distinct from existing units. Combined area ≈ ${totalSqft || '—'} sqft`}
+                isInvalid={unitNumberInvalid}
+                errorMessage={unitNumberInvalid ? combineErr ?? undefined : undefined}
               />
             </>
           )}
