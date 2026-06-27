@@ -22,6 +22,7 @@ import { StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
+import { SoldUnitPanel } from '../components/SoldUnitPanel';
 
 
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
@@ -371,14 +372,35 @@ export default function UnitDetailPage() {
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
         <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
-        <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-600" />
-        <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
-        <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-600" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
+        {u.status === 'SOLD' ? (() => {
+          const closedSale = u.sales?.find((s: any) => s.status === 'CLOSED');
+          const sp = closedSale?.salePrice != null ? Number(closedSale.salePrice) : null;
+          const soldPsf = sp && u.sqft ? (sp / u.sqft).toFixed(2) : null;
+          return (
+            <>
+              <Metric label="Sale Price" value={sp != null ? fmt(sp) : '\u2014'} accent="text-emerald-600" />
+              <Metric label="Price PSF" value={soldPsf ? `$${soldPsf}` : '\u2014'} />
+              <Metric label="Closed" value={fmtDate(closedSale?.closingDate)} />
+            </>
+          );
+        })() : (
+          <>
+            <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-600" />
+            <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
+            <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-600" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
+          </>
+        )}
       </div>
 
+      {/* Sold unit details */}
+      {u.status === 'SOLD' && (() => {
+        const closedSale = u.sales?.find((s: any) => s.status === 'CLOSED');
+        return closedSale ? <SoldUnitPanel sale={closedSale} /> : null;
+      })()}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
-        {/* Active Lease */}
-        <Section
+        {/* Active Lease — hidden for SOLD units */}
+        {u.status !== 'SOLD' && <Section
           icon={<FiHome className="w-4 h-4 text-blue-600" />}
           title="Active Lease"
           action={canEditLease ? (
@@ -413,7 +435,7 @@ export default function UnitDetailPage() {
           ) : (
             <EmptyRow icon={<FiHome className="w-5 h-5" />} text="No active lease" />
           )}
-        </Section>
+        </Section>}
 
         {/* Linked Loans */}
         <Section icon={<FiCreditCard className="w-4 h-4 text-violet-600" />} title="Linked Loans" count={u.loans?.length}>
