@@ -71,6 +71,9 @@ export class LeasesService {
       throw new BadRequestException('Lease cannot reference both a unit and a building');
     }
     if (unitId) {
+      // Fast-path check — the real enforcement is the partial unique index
+      // "lease_unit_active_unique". This gives a friendlier 400 vs a raw Prisma
+      // unique constraint error.
       const existing = await this.prisma.lease.findFirst({
         where: { unitId, status: { notIn: ['EXPIRED', 'TERMINATED'] } },
       });
@@ -78,7 +81,14 @@ export class LeasesService {
         throw new BadRequestException('This unit already has an active lease. Expire or terminate the existing lease before adding a new one.');
       }
     }
-    return this.prisma.lease.create({ data });
+    try {
+      return await this.prisma.lease.create({ data });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        throw new BadRequestException('This unit already has an active lease. Expire or terminate the existing lease before adding a new one.');
+      }
+      throw e;
+    }
   }
 
   async update(id: string, data: Prisma.LeaseUncheckedUpdateInput) {
