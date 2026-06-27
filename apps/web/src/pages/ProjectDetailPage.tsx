@@ -208,7 +208,8 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
     </div>
   );
 }
-import { fmt, fmtPct, fmtDate } from '../utils/fmt';
+import { fmt, fmtPct, fmtDate, errMsg } from '../utils/fmt';
+import { FormError } from '../components/FormError';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
   PermissionGate,
@@ -252,12 +253,6 @@ const TAB_ROLES: Record<string, string[]> = {
   comments: ALL_ROLES,
 };
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  if (Array.isArray(msg)) return msg[0] ?? fallback;
-  if (typeof msg === 'string') return msg;
-  return fallback;
-};
 
 export default function ProjectDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
@@ -2797,6 +2792,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_LEASE);
+  const [leaseFormError, setLeaseFormError] = useState<string | null>(null);
+  const [leaseErrors, setLeaseErrors] = useState<Record<string, string>>({});
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
@@ -2805,6 +2802,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const openCreate = () => {
     setEditId(null);
     setForm({ ...EMPTY_LEASE, unitId: units[0]?.id || '' });
+    setLeaseErrors({});
+    setLeaseFormError(null);
     onFormOpen();
   };
   const openEdit = (l: any) => {
@@ -2822,23 +2821,19 @@ function LeasesTab({ projectId }: { projectId: string }) {
       status: l.status || 'DRAFT',
       notes: l.notes || '',
     });
+    setLeaseErrors({});
+    setLeaseFormError(null);
     onFormOpen();
   };
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
 
   const handleSave = async () => {
-    if (!form.tenantName.trim()) {
-      addToast({ title: 'Tenant name is required', color: 'warning' }); return;
-    }
-    if (!form.monthlyRent) {
-      addToast({ title: 'Monthly rent is required', color: 'warning' }); return;
-    }
-    if (!form.leaseStart) {
-      addToast({ title: 'Lease start date is required', color: 'warning' }); return;
-    }
-    if (!form.leaseEnd) {
-      addToast({ title: 'Lease end date is required', color: 'warning' }); return;
-    }
+    const errs: Record<string, string> = {};
+    if (!form.tenantName.trim()) errs.tenantName = 'Required';
+    if (!form.monthlyRent) errs.monthlyRent = 'Required';
+    if (!form.leaseStart) errs.leaseStart = 'Required';
+    if (!form.leaseEnd) errs.leaseEnd = 'Required';
+    if (Object.keys(errs).length) { setLeaseErrors(errs); return; }
     // Use T12:00:00 to anchor the date at noon UTC — avoids off-by-one day in any timezone.
     const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
     try {
@@ -2864,7 +2859,9 @@ function LeasesTab({ projectId }: { projectId: string }) {
       }
       onFormClose();
     } catch (e) {
-      addToast({ title: errMsg(e, 'Failed to save lease'), color: 'danger' });
+      const msg = errMsg(e, 'Failed to save lease');
+      setLeaseFormError(msg);
+      addToast({ title: msg, color: 'danger' });
     }
   };
 
@@ -2879,8 +2876,10 @@ function LeasesTab({ projectId }: { projectId: string }) {
     }
   };
 
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [field]: e.target.value }));
+    if (leaseErrors[field]) setLeaseErrors((errs) => ({ ...errs, [field]: '' }));
+  };
 
   if (ll || rl) return <LoadingState />;
   const leaseList = (leases as any[]) || [];
@@ -2969,6 +2968,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>{editId ? 'Edit Lease' : 'Add Lease'}</ModalHeader>
           <ModalBody>
+            <FormError message={leaseFormError} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
                 size="sm"
@@ -2984,11 +2984,11 @@ function LeasesTab({ projectId }: { projectId: string }) {
                   <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
                 ))}
               </Select>
-              <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} />
+              <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} isInvalid={!!leaseErrors.tenantName} errorMessage={leaseErrors.tenantName} />
               <Input size="sm" label="Tenant Contact" value={form.tenantContact} onChange={set('tenantContact')} />
-              <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} />
-              <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} />
-              <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} />
+              <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} isInvalid={!!leaseErrors.monthlyRent} errorMessage={leaseErrors.monthlyRent} />
+              <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} isInvalid={!!leaseErrors.leaseStart} errorMessage={leaseErrors.leaseStart} />
+              <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} isInvalid={!!leaseErrors.leaseEnd} errorMessage={leaseErrors.leaseEnd} />
               <Input size="sm" label="Term (months)" type="number" value={form.termMonths} onChange={set('termMonths')} />
               <Input size="sm" label="Escalation %" type="number" value={form.escalationPct} onChange={set('escalationPct')} />
               <Input size="sm" label="Security Deposit ($)" type="number" value={form.securityDeposit} onChange={set('securityDeposit')} />
@@ -3097,6 +3097,7 @@ function SalesTab({ projectId }: { projectId: string }) {
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_SALE);
   const [saleFormError, setSaleFormError] = useState<string | null>(null);
+  const handleSaleFormClose = () => { setSaleFormError(null); onFormClose(); };
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [paySale, setPaySale] = useState<any>(null);
@@ -3174,7 +3175,7 @@ function SalesTab({ projectId }: { projectId: string }) {
         await createSale.mutateAsync(payload);
         addToast({ title: 'Sale created', color: 'success' });
       }
-      onFormClose();
+      handleSaleFormClose();
     } catch (e) {
       const msg = errMsg(e, 'Failed to save sale');
       setSaleFormError(msg);
@@ -3389,10 +3390,11 @@ function SalesTab({ projectId }: { projectId: string }) {
       </Modal>
 
       {/* Create / Edit Sale Modal */}
-      <Modal isOpen={isFormOpen} onClose={onFormClose} size="lg">
+      <Modal isOpen={isFormOpen} onClose={handleSaleFormClose} size="lg">
         <ModalContent>
           <ModalHeader>{editId ? 'Edit Sale' : 'Add Sale'}</ModalHeader>
           <ModalBody>
+            <FormError message={saleFormError} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
                 size="sm"
@@ -3457,6 +3459,8 @@ function SalesTab({ projectId }: { projectId: string }) {
                     isRequired
                     description="Captured for the lost-deal heatmap"
                     selectedKeys={form.lostReason ? [form.lostReason] : []}
+                    isInvalid={form.status === 'CANCELLED' && !form.lostReason && saleFormError !== null}
+                    errorMessage="Required when cancelling"
                     onSelectionChange={(keys) => {
                       const val = Array.from(keys)[0] as string;
                       if (val) setForm((f) => ({ ...f, lostReason: val }));
@@ -3475,16 +3479,11 @@ function SalesTab({ projectId }: { projectId: string }) {
               </div>
             </div>
           </ModalBody>
-          <ModalFooter className="flex-col items-stretch gap-2">
-            {saleFormError && (
-              <p className="text-xs text-danger text-center w-full px-2">{saleFormError}</p>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="light" onPress={onFormClose}>Cancel</Button>
-              <Button size="sm" color="primary" onPress={handleSave} isLoading={createSale.isPending || updateSale.isPending}>
-                {editId ? 'Save Changes' : 'Add Sale'}
-              </Button>
-            </div>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={handleSaleFormClose}>Cancel</Button>
+            <Button size="sm" color="primary" onPress={handleSave} isLoading={createSale.isPending || updateSale.isPending}>
+              {editId ? 'Save Changes' : 'Add Sale'}
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
