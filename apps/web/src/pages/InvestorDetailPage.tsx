@@ -11,13 +11,9 @@ import {
   useInvestor, useAddPosition, useCreateCapitalCall, useMarkCapitalCallPaid,
   useCreateDistribution, useProjects,
 } from '../hooks/useApi';
-import { fmt, fmtDate, fmtPct } from '../utils/fmt';
+import { fmt, fmtDate, fmtPct, errMsg } from '../utils/fmt';
 import { StatCard, LoadingState, ErrorState, EmptyState } from '../components/ui';
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return typeof msg === 'string' ? msg : fallback;
-};
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'];
 const CALL_STATUS_COLORS: Record<string, 'default' | 'success' | 'danger'> = {

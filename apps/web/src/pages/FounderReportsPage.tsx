@@ -7,7 +7,7 @@ import {
 } from 'recharts';
 import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
 import { usePortfolioReport, useDebtReport, useSalesReport, useRevenueReport, useUnitSalesReport, useProjects, useCashFlowForecast, useCreateCashFlowEntry, useDeleteCashFlowEntry } from '../hooks/useApi';
-import { fmt, fmtDate } from '../utils/fmt';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState, EmptyState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
@@ -443,11 +443,6 @@ function CashFlowTab() {
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, any>>(EMPTY_ENTRY);
   const set = (f: string) => (e: any) => setForm((p) => ({ ...p, [f]: e.target.value }));
-
-  const errMsg = (err: unknown, fallback: string) => {
-    const msg = (err as any)?.response?.data?.message;
-    return typeof msg === 'string' ? msg : fallback;
-  };
 
   const f = forecast as any;
   const monthly = f?.monthly || [];

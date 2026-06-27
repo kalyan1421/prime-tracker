@@ -7,13 +7,9 @@ import {
 } from '@heroui/react';
 import { FiPlus } from 'react-icons/fi';
 import { useInvestors, useInvestorSummary, useCreateInvestor } from '../hooks/useApi';
-import { fmt, fmtDate } from '../utils/fmt';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { StatCard, LoadingState, ErrorState, EmptyState } from '../components/ui';
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return typeof msg === 'string' ? msg : fallback;
-};
 
 const EMPTY = { name: '', email: '', phone: '', entityName: '' };
 

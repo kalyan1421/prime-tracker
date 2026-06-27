@@ -37,10 +37,7 @@ const LOST_REASONS = [
   { key: 'OTHER',                  label: 'Other' },
 ];
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
+import { errMsg } from '../utils/fmt';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);

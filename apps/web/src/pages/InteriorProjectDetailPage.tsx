@@ -13,7 +13,7 @@ import {
   useInteriorProject, useAdvanceInteriorPhase, useApproveInterior, useUpdateInterior,
   useDeleteInterior, useAddInteriorInvoice, useVendors,
 } from '../hooks/useApi';
-import { fmt, fmtDate } from '../utils/fmt';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { LoadingState, ErrorState } from '../components/ui';
 import { SnagPanel } from '../components/SnagPanel';
 import { InteriorBOQPanel } from '../components/InteriorBOQPanel';
@@ -43,10 +43,6 @@ const STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'warning'
   COMPLETED: 'success', CANCELLED: 'danger',
 };
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
 
 export default function InteriorProjectDetailPage() {
   const { id } = useParams<{ id: string }>();

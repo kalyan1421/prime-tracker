@@ -17,16 +17,12 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   SALES: 'bg-blue-100 text-blue-700',
   FINANCIAL: 'bg-green-100 text-green-700',
 };
-import { fmt, fmtDate } from '../utils/fmt';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return typeof msg === 'string' ? msg : fallback;
-};
 
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
