@@ -6,7 +6,7 @@ import {
 import {
   FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield,
   FiMenu, FiPieChart, FiBell, FiUsers, FiCheck, FiTarget, FiBriefcase,
-  FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp,
+  FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp, FiTrendingDown,
 } from 'react-icons/fi';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
@@ -21,6 +21,7 @@ const BASE_NAV_ITEMS = [
   { label: 'Inventory', icon: FiPackage, path: '/inventory' },
   { label: 'Interior', icon: FiGrid, path: '/interior', permission: 'interior:view' },
   { label: 'Cash Flow', icon: FiTrendingUp, path: '/cashflow', permission: 'financial:view' },
+  { label: 'Receivables', icon: FiTrendingDown, path: '/receivables', permission: 'interior:finance' },
   { label: 'Tasks', icon: FiCheckSquare, path: '/tasks' },
   { label: 'Leads', icon: FiTarget, path: '/leads', permission: 'lead:view' },
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
