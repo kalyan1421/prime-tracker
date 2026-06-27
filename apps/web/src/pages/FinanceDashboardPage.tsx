@@ -9,6 +9,7 @@ import { useFinanceDashboard } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
+import ReceivablesWidget from '../components/ReceivablesWidget';
 
 const FINANCE_ROLES = ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP'];
 
@@ -162,7 +163,12 @@ export default function FinanceDashboardPage() {
         </CardBody>
       </Card>
 
-      {/* Zone D — Project Budget Variance Table */}
+      {/* Zone D — Upcoming Receivables */}
+      <div className="grid grid-cols-1 mb-6">
+        <ReceivablesWidget />
+      </div>
+
+      {/* Zone E — Project Budget Variance Table */}
       <Card shadow="sm">
         <CardHeader className="pb-2">
           <p className="font-semibold text-sm text-gray-600">Budget Variance by Project</p>
