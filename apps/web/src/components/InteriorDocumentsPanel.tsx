@@ -14,7 +14,7 @@ import {
   FiImage, FiAlertCircle, FiCheckCircle, FiFilter,
 } from 'react-icons/fi';
 import { useInteriorDocuments, useUploadDocument, useDeleteDocument } from '../hooks/useApi';
-import { fmtDate } from '../utils/fmt';
+import { fmtDate, errMsg } from '../utils/fmt';
 import { apiAssetUrl } from '../lib/api';
 
 // ─── types & config ───────────────────────────────────────────────────────────
@@ -49,11 +49,6 @@ function docIcon(mime = '') {
   if (mime.includes('pdf'))       return <FiFileText className="text-red-400" />;
   return <FiFile className="text-gray-400" />;
 }
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
 
 // ─── component ────────────────────────────────────────────────────────────────
 

@@ -14,6 +14,8 @@ import {
   FiFileText, FiClock,
 } from 'react-icons/fi';
 import { useUpdateLease } from '../hooks/useApi';
+import { errMsg } from '../utils/fmt';
+import { FormError } from './FormError';
 
 // ─── business type colours ────────────────────────────────────────────────────
 
@@ -46,11 +48,6 @@ const PRESET_HOURS = [
   'Mon–Sun, 10am–9pm',
   '24/7',
 ];
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
 
 // ─── parse / build helpers (module-level so useState lazy init can use them) ──
 
@@ -90,6 +87,7 @@ interface TenantProfilePanelProps {
 export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
   const updateLease = useUpdateLease();
   const [editing, setEditing] = useState(false);
+  const [tenantErr, setTenantErr] = useState<string | null>(null);
 
   // Lazy initializer parses notes immediately so businessType/tradingHours are
   // populated from the first render — avoids pills being all-gray on open.
@@ -130,10 +128,12 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
       designNotes:     p.designNotes,
     });
     setCustomHoursMode(isCustomHours(p.tradingHours));
+    setTenantErr(null);
     setEditing(true);
   };
 
   const handleSave = async () => {
+    setTenantErr(null);
     try {
       await updateLease.mutateAsync({
         id: lease.id,
@@ -147,6 +147,7 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
       addToast({ title: 'Tenant profile updated', color: 'success' });
       setEditing(false);
     } catch (e) {
+      setTenantErr(errMsg(e, 'Failed to update'));
       addToast({ title: errMsg(e, 'Failed to update'), color: 'danger' });
     }
   };
@@ -247,6 +248,8 @@ export function TenantProfilePanel({ lease }: TenantProfilePanelProps) {
           </Button>
         </div>
       </div>
+
+      <FormError message={tenantErr} />
 
       <div className="space-y-2.5">
         <div className="flex gap-2">

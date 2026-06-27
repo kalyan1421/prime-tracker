@@ -5,13 +5,9 @@ import {
 } from '@heroui/react';
 import { FiPlus, FiTrash2, FiPackage } from 'react-icons/fi';
 import { useInteriorTemplates, useCreateInteriorTemplate, useDeleteInteriorTemplate } from '../hooks/useApi';
-import { fmt } from '../utils/fmt';
+import { fmt, errMsg } from '../utils/fmt';
 import { useAuthStore } from '../store/authStore';
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
+import { FormError } from './FormError';
 
 type ItemRow = { description: string; category: string; quantity: string; unit: string; unitPrice: string };
 const EMPTY_ITEM: ItemRow = { description: '', category: '', quantity: '', unit: '', unitPrice: '' };
@@ -28,14 +24,19 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ name: '', description: '', defaultRatePerSqft: '' });
   const [items, setItems] = useState<ItemRow[]>([{ ...EMPTY_ITEM }]);
+  const [pkgErr, setPkgErr] = useState<string | null>(null);
 
   const setItem = (i: number, k: keyof ItemRow, v: string) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)));
 
-  const reset = () => { setForm({ name: '', description: '', defaultRatePerSqft: '' }); setItems([{ ...EMPTY_ITEM }]); setCreating(false); };
+  const reset = () => { setForm({ name: '', description: '', defaultRatePerSqft: '' }); setItems([{ ...EMPTY_ITEM }]); setCreating(false); setPkgErr(null); };
 
   const submit = async () => {
-    if (!form.name.trim()) return addToast({ title: 'Package name is required', color: 'warning' });
+    if (!form.name.trim()) {
+      setPkgErr('Package name is required');
+      return;
+    }
+    setPkgErr(null);
     const cleanItems = items
       .filter((it) => it.description.trim())
       .map((it) => ({
@@ -55,9 +56,12 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
       addToast({ title: 'Package created', color: 'success' });
       reset();
     } catch (e) {
+      setPkgErr(errMsg(e, 'Failed to create package'));
       addToast({ title: errMsg(e, 'Failed to create package'), color: 'danger' });
     }
   };
+
+  const nameInvalid = !!pkgErr && pkgErr.includes('Package name');
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside">
@@ -100,9 +104,13 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
           {/* Create form */}
           {canEdit && (creating ? (
             <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-3">
+              <FormError message={pkgErr} />
               <div className="flex flex-col sm:flex-row gap-2">
                 <Input size="sm" label="Package name" placeholder="e.g. Standard Retail Fit-out" value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="flex-1" />
+                  onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setPkgErr(null); }}
+                  isInvalid={nameInvalid}
+                  errorMessage={nameInvalid ? pkgErr ?? undefined : undefined}
+                  className="flex-1" />
                 <Input size="sm" type="number" label="Default rate / sqft" value={form.defaultRatePerSqft}
                   onChange={(e) => setForm((f) => ({ ...f, defaultRatePerSqft: e.target.value }))} className="sm:w-40" />
               </div>
