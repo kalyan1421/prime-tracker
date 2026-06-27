@@ -1,3 +1,8 @@
+export function errMsg(err: unknown, fallback: string): string {
+  const msg = (err as any)?.response?.data?.message;
+  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
+}
+
 export function fmt(n: number | null | undefined): string {
   if (n == null) return '$0';
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);

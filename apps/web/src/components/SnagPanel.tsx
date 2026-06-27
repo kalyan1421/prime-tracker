@@ -13,9 +13,11 @@ import {
 } from '@heroui/react';
 import {
   FiAlertCircle, FiCheckCircle, FiClock, FiFilter,
-  FiPlus, FiUser, FiMapPin, FiX,
+  FiPlus, FiUser, FiMapPin,
 } from 'react-icons/fi';
 import { useAddSnag, useResolveSnag, useUpdateSnag, useUsers } from '../hooks/useApi';
+import { errMsg } from '../utils/fmt';
+import { FormError } from './FormError';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -43,11 +45,6 @@ const STATUS_META: Record<SnagStatus, {
   RESOLVED:    { label: 'Resolved',    color: 'success', icon: <FiCheckCircle className="text-green-500" /> },
 };
 
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
-};
-
 const EMPTY_FORM = { description: '', room: '', assigneeId: '' };
 
 // ─── main component ───────────────────────────────────────────────────────────
@@ -68,9 +65,13 @@ export function SnagPanel({
   const [filter, setFilter] = useState<SnagStatus | 'ALL'>('ALL');
   const [adding, setAdding] = useState(false);
   const [form, setForm]     = useState(EMPTY_FORM);
+  const [snagErr, setSnagErr] = useState<string | null>(null);
+
   const set = (f: keyof typeof EMPTY_FORM) =>
-    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
       setForm((p) => ({ ...p, [f]: e.target.value }));
+      if (f === 'description') setSnagErr(null);
+    };
 
   // ── counts ──────────────────────────────────────────────────────────────────
   const total      = snags.length;
@@ -83,8 +84,11 @@ export function SnagPanel({
 
   // ── actions ─────────────────────────────────────────────────────────────────
   const handleAdd = async () => {
-    if (!form.description.trim())
-      return addToast({ title: 'Description is required', color: 'warning' });
+    if (!form.description.trim()) {
+      setSnagErr('Description is required');
+      return;
+    }
+    setSnagErr(null);
     try {
       await add.mutateAsync({
         id: projectId,
@@ -98,6 +102,7 @@ export function SnagPanel({
       setAdding(false);
       addToast({ title: 'Snag added', color: 'success' });
     } catch (e) {
+      setSnagErr(errMsg(e, 'Failed to add snag'));
       addToast({ title: errMsg(e, 'Failed to add snag'), color: 'danger' });
     }
   };
@@ -144,7 +149,7 @@ export function SnagPanel({
           <Button
             size="sm" variant="flat" color="primary"
             startContent={<FiPlus size={13} />}
-            onPress={() => setAdding((v) => !v)}
+            onPress={() => { setAdding((v) => !v); setSnagErr(null); setForm(EMPTY_FORM); }}
           >
             Add snag
           </Button>
@@ -167,10 +172,13 @@ export function SnagPanel({
       {/* ── add form ── */}
       {adding && (
         <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2.5">
+          <FormError message={snagErr} />
           <Textarea
             size="sm" label="Description" placeholder="e.g. Paint peel on west wall corner"
             value={form.description} onChange={set('description')}
             minRows={2}
+            isInvalid={!!snagErr && !form.description.trim()}
+            errorMessage="Required"
           />
           <div className="flex gap-2">
             <Input
@@ -188,7 +196,7 @@ export function SnagPanel({
             </Select>
           </div>
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="light" onPress={() => { setAdding(false); setForm(EMPTY_FORM); }}>
+            <Button size="sm" variant="light" onPress={() => { setAdding(false); setForm(EMPTY_FORM); setSnagErr(null); }}>
               Cancel
             </Button>
             <Button size="sm" color="primary" isLoading={add.isPending} onPress={handleAdd}>

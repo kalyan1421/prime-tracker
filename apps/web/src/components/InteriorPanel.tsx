@@ -11,8 +11,9 @@ import {
   useInteriorTemplates,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
-import { fmt, fmtDate } from '../utils/fmt';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { INTERIOR_PHASES } from '../constants/interior';
+import { FormError } from './FormError';
 
 export { INTERIOR_PHASES };
 
@@ -24,11 +25,6 @@ const PHASE_LABEL: Record<string, string> = {
   EXECUTION: 'Execution',
   SNAGGING: 'Snagging',
   HANDOVER: 'Handover',
-};
-
-const errMsg = (err: unknown, fallback: string) => {
-  const msg = (err as any)?.response?.data?.message;
-  return Array.isArray(msg) ? msg.join(', ') : typeof msg === 'string' ? msg : fallback;
 };
 
 function PhaseStepper({ current }: { current: string }) {
@@ -58,6 +54,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
   const create = useCreateInterior();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const canEditInterior = useAuthStore((s) => s.hasPermission('interior:edit'));
+  const [interiorErr, setInteriorErr] = useState<string | null>(null);
 
   // Prefill from the existing unit: name from its number, area from its sqft.
   const defaultForm = (): Record<string, string> => ({
@@ -69,12 +66,16 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
   const [form, setForm] = useState<Record<string, string>>(defaultForm);
 
   // Reset to the unit's defaults each time the dialog opens.
-  const openModal = () => { setForm(defaultForm()); onOpen(); };
+  const openModal = () => { setForm(defaultForm()); setInteriorErr(null); onOpen(); };
 
   const projects: any[] = Array.isArray(data) ? data : [];
 
   const submit = async () => {
-    if (!form.name.trim()) return addToast({ title: 'Name is required', color: 'warning' });
+    if (!form.name.trim()) {
+      setInteriorErr('Name is required');
+      return;
+    }
+    setInteriorErr(null);
     try {
       await create.mutateAsync({
         unitId,
@@ -88,6 +89,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
       setForm(defaultForm());
       onClose();
     } catch (e) {
+      setInteriorErr(errMsg(e, 'Failed to create'));
       addToast({ title: errMsg(e, 'Failed to create'), color: 'danger' });
     }
   };
@@ -129,10 +131,13 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
                 {unitSqft != null ? ` · ${Number(unitSqft).toLocaleString()} sqft` : ''} — edit as needed.
               </p>
             )}
+            <FormError message={interiorErr} />
             <Input
               label="Name" value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setInteriorErr(null); }}
               placeholder="e.g. Unit 204 fit-out"
+              isInvalid={!!interiorErr && !form.name.trim()}
+              errorMessage="Required"
             />
             {templates.length > 0 && (
               <Select
