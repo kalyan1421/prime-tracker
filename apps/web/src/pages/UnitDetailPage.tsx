@@ -18,7 +18,7 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   FINANCIAL: 'bg-green-100 text-green-700',
 };
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
-import { StatusBadge, LoadingState, ErrorState } from '../components/ui';
+import { StatusBadge, LoadingState, ErrorState, PermissionGate } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
@@ -509,13 +509,15 @@ export default function UnitDetailPage() {
       <UnitWaitlistPanel unitId={unitId!} />
 
       {/* Interior / Fit-Out */}
-      <div className="mb-5 sm:mb-6">
-        <InteriorPanel
-          unitId={unitId!}
-          unitNumber={(unit as any)?.unitNumber}
-          unitSqft={(unit as any)?.sqft != null ? Number((unit as any).sqft) : undefined}
-        />
-      </div>
+      <PermissionGate permission="interior:view">
+        <div className="mb-5 sm:mb-6">
+          <InteriorPanel
+            unitId={unitId!}
+            unitNumber={(unit as any)?.unitNumber}
+            unitSqft={(unit as any)?.sqft != null ? Number((unit as any).sqft) : undefined}
+          />
+        </div>
+      </PermissionGate>
 
       {/* Documents scoped to this unit */}
       <div className="mb-5 sm:mb-6">
@@ -1048,6 +1050,7 @@ function InlineComments({ unitId }: { unitId: string }) {
       <div className="flex flex-col sm:flex-row gap-2">
         <Select
           size="sm"
+          aria-label="Comment type"
           className="w-full sm:w-[140px]"
           selectedKeys={[commentType]}
           onSelectionChange={(keys) => { const v = Array.from(keys)[0] as string; if (v) setCommentType(v); }}
