@@ -31,6 +31,7 @@ import InteriorPortfolioPage from './pages/InteriorPortfolioPage';
 import InteriorProjectDetailPage from './pages/InteriorProjectDetailPage';
 import CashflowPage from './pages/CashflowPage';
 import BrokersPage from './pages/BrokersPage';
+import ReceivablesPage from './pages/ReceivablesPage';
 
 function ProtectedRoute({ children, permission }: { children: React.ReactNode; permission?: string }) {
   const { isAuthenticated, hasPermission } = useAuthStore();
@@ -89,6 +90,7 @@ export default function App() {
         <Route path="cashflow" element={<ProtectedRoute permission="financial:view"><CashflowPage /></ProtectedRoute>} />
         <Route path="interior/:id" element={<ProtectedRoute permission="interior:view"><InteriorProjectDetailPage /></ProtectedRoute>} />
         <Route path="brokers" element={<ProtectedRoute permission="broker:view"><BrokersPage /></ProtectedRoute>} />
+        <Route path="receivables" element={<ProtectedRoute permission="interior:finance"><ReceivablesPage /></ProtectedRoute>} />
         <Route path="settings/notifications" element={<SettingsPage />} />
         <Route path="dashboard/founder" element={<FounderDashboardPage />} />
         <Route path="dashboard/construction" element={<ConstructionDashboardPage />} />
