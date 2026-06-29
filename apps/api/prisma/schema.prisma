@@ -789,8 +789,9 @@ model Sale {
   // Commission is earned/stamped when the sale CLOSES.
   brokerId             String?
   broker               Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  brokerCommissionPct  Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
-  brokerCommissionAmt  Decimal?    @db.Decimal(14, 2) // computed + stored on close
+  brokerCommissionPct       Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
+  brokerCommissionAmt       Decimal?    @db.Decimal(14, 2) // computed + stored on close
+  brokerCommissionPaidAt    DateTime?   // set when commission is remitted to broker
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
   deletedAt            DateTime? // soft-delete

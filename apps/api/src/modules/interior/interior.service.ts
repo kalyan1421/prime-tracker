@@ -39,7 +39,7 @@ interface CreateInteriorInput {
   targetEnd?: string;
 }
 
-type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildingId'>> & {
+type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildingId' | 'packageTemplateId'>> & {
   status?: InteriorStatus;
 };
 
@@ -132,6 +132,18 @@ export class InteriorService {
     this.assertExactlyOneAnchor(input.unitId, input.buildingId);
     if (!input.name?.trim()) throw new BadRequestException('name is required');
     this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
+
+    // Enforce one active interior project per unit/building at a time.
+    const existingAnchorField = input.unitId ? { unitId: input.unitId } : { buildingId: input.buildingId };
+    const existing = await this.prisma.interiorProject.findFirst({
+      where: { ...existingAnchorField, deletedAt: null, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+      select: { id: true, name: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `An active interior project "${existing.name}" already exists for this ${input.unitId ? 'unit' : 'building'}. Complete or cancel it before starting a new one.`,
+      );
+    }
 
     // If a package template is chosen, default the rate from it and seed its BOQ lines.
     let templateItems: Array<{
@@ -233,9 +245,45 @@ export class InteriorService {
     });
   }
 
-  async removePackageTemplate(id: string) {
+  async updatePackageTemplate(id: string, input: {
+    name?: string; description?: string; defaultRatePerSqft?: number | null;
+  }) {
     const tpl = await this.prisma.interiorPackageTemplate.findFirst({ where: { id, deletedAt: null } });
     if (!tpl) throw new NotFoundException('Package template not found');
+    if (input.defaultRatePerSqft != null && input.defaultRatePerSqft < 0) {
+      throw new BadRequestException('defaultRatePerSqft cannot be negative');
+    }
+    return this.prisma.interiorPackageTemplate.update({
+      where: { id },
+      data: {
+        name: input.name?.trim() ?? undefined,
+        description: input.description !== undefined ? (input.description.trim() || null) : undefined,
+        defaultRatePerSqft: input.defaultRatePerSqft !== undefined ? input.defaultRatePerSqft : undefined,
+      },
+      include: { items: { orderBy: { sequence: 'asc' } }, _count: { select: { interiorProjects: true } } },
+    });
+  }
+
+  async removePackageTemplate(id: string) {
+    const tpl = await this.prisma.interiorPackageTemplate.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        _count: {
+          select: {
+            interiorProjects: {
+              where: { deletedAt: null, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+            },
+          },
+        },
+      },
+    });
+    if (!tpl) throw new NotFoundException('Package template not found');
+    const activeCount = tpl._count.interiorProjects;
+    if (activeCount > 0) {
+      throw new ConflictException(
+        `Cannot delete this package — ${activeCount} active interior project${activeCount !== 1 ? 's' : ''} still use it. Complete or cancel those fit-outs first.`,
+      );
+    }
     return this.prisma.interiorPackageTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
   }
 
@@ -477,6 +525,26 @@ export class InteriorService {
     return this.prisma.snagItem.update({
       where: { id: snagId },
       data: { status: 'RESOLVED', resolvedAt: new Date() },
+    });
+  }
+
+  async updateSnag(
+    snagId: string,
+    input: { status?: string; description?: string; room?: string; assigneeId?: string },
+  ) {
+    const snag = await this.prisma.snagItem.findUnique({ where: { id: snagId } });
+    if (!snag) throw new NotFoundException('Snag not found');
+    return this.prisma.snagItem.update({
+      where: { id: snagId },
+      data: {
+        ...(input.status !== undefined && {
+          status: input.status as any,
+          resolvedAt: input.status === 'RESOLVED' ? new Date() : (input.status === 'OPEN' ? null : undefined),
+        }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.room !== undefined && { room: input.room || null }),
+        ...(input.assigneeId !== undefined && { assigneeId: input.assigneeId || null }),
+      },
     });
   }
 

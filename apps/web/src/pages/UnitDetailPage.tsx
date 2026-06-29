@@ -4,11 +4,12 @@ import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useUploadDocument, useDeleteDocument,
+  useRenameDocument, useReplaceDocument,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -587,11 +588,22 @@ const UNIT_DOC_CATEGORIES = [
   'BROCHURE', 'FINANCIAL', 'GENERAL', 'OTHER',
 ] as const;
 
+type PreviewDoc = { url: string; name: string; kind: 'image' | 'pdf' | 'other' };
+
+function docPreviewKind(url: string): PreviewDoc['kind'] {
+  const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return 'image';
+  if (ext === 'pdf') return 'pdf';
+  return 'other';
+}
+
 function UnitDocumentsPanel({ unitId }: { unitId: string }) {
   const { data, isLoading } = useDocuments({ unitId });
   const docs: any[] = Array.isArray(data) ? data : [];
   const upload = useUploadDocument();
   const deleteDoc = useDeleteDocument();
+  const renameDoc = useRenameDocument();
+  const replaceDoc = useReplaceDocument();
   const { hasPermission } = useAuthStore();
   const canUpload = hasPermission('document:upload');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -599,6 +611,38 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
   const [displayName, setDisplayName] = useState('');
   const [showUploadForm, setShowUploadForm] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<PreviewDoc | null>(null);
+  // edit state
+  const editFileRef = useRef<HTMLInputElement>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [editErr, setEditErr] = useState<string | null>(null);
+
+  const openEdit = (d: any) => {
+    setEditId(d.id);
+    setEditName(d.fileName || d.name || '');
+    setEditFile(null);
+    setEditErr(null);
+  };
+  const cancelEdit = () => { setEditId(null); setEditFile(null); setEditErr(null); };
+
+  const handleSaveEdit = async () => {
+    if (!editName.trim()) { setEditErr('Name is required'); return; }
+    setEditErr(null);
+    try {
+      if (editFile) {
+        await replaceDoc.mutateAsync({ id: editId!, file: editFile, fileName: editName.trim() });
+        addToast({ title: 'Document replaced', color: 'success' });
+      } else {
+        await renameDoc.mutateAsync({ id: editId!, fileName: editName.trim() });
+        addToast({ title: 'Document renamed', color: 'success' });
+      }
+      cancelEdit();
+    } catch (e) {
+      setEditErr(errMsg(e, 'Failed to save'));
+    }
+  };
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -718,12 +762,92 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
         </div>
       )}
 
+      {/* Document preview modal */}
+      {preview && (
+        <Modal isOpen onClose={() => setPreview(null)} size="3xl" scrollBehavior="inside">
+          <ModalContent>
+            <ModalHeader className="flex items-center justify-between gap-2 pr-10">
+              <span className="text-sm font-semibold truncate">{preview.name}</span>
+              <a
+                href={preview.url} target="_blank" rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors shrink-0"
+              >
+                <FiExternalLink className="w-3.5 h-3.5" /> Open in new tab
+              </a>
+            </ModalHeader>
+            <ModalBody className="pb-6">
+              {preview.kind === 'image' ? (
+                <img
+                  src={preview.url} alt={preview.name}
+                  className="w-full rounded-lg object-contain max-h-[70vh]"
+                />
+              ) : (
+                <iframe
+                  src={preview.url} title={preview.name}
+                  className="w-full rounded-lg border border-gray-100"
+                  style={{ height: '70vh' }}
+                />
+              )}
+            </ModalBody>
+          </ModalContent>
+        </Modal>
+      )}
+
+      {/* hidden file input for replace */}
+      <input ref={editFileRef} type="file" className="hidden" onChange={(e) => {
+        const f = e.target.files?.[0];
+        if (f) setEditFile(f);
+        e.target.value = '';
+      }} />
+
       {!isLoading && docs.length > 0 && (
         <div className="space-y-0.5">
           {docs.map((d: any) => {
             const cat = d.category || 'OTHER';
             const color = DOC_CATEGORY_COLORS[cat] ?? DOC_CATEGORY_COLORS.OTHER;
             const sizeKb = d.fileSize ? Math.round(d.fileSize / 1024) : null;
+            const isEditing = editId === d.id;
+
+            if (isEditing) {
+              const saving = renameDoc.isPending || replaceDoc.isPending;
+              return (
+                <div key={d.id} className="rounded-lg border border-blue-100 bg-blue-50/40 p-3 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-blue-700 uppercase tracking-wide">Edit document</span>
+                    <div className="flex gap-1">
+                      <Button size="sm" isIconOnly variant="light" onPress={cancelEdit} aria-label="Cancel"><FiX className="w-3.5 h-3.5 text-gray-400" /></Button>
+                      <Button size="sm" isIconOnly color="primary" onPress={handleSaveEdit} isLoading={saving} aria-label="Save"><FiCheck className="w-3.5 h-3.5" /></Button>
+                    </div>
+                  </div>
+                  {editErr && <p className="text-xs text-red-500">{editErr}</p>}
+                  <Input
+                    size="sm" label="File name" value={editName}
+                    onChange={(e) => { setEditName(e.target.value); setEditErr(null); }}
+                    isInvalid={!!editErr}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm" variant="flat" color="default"
+                      onPress={() => editFileRef.current?.click()}
+                      startContent={<FiUpload className="w-3.5 h-3.5" />}
+                    >
+                      {editFile ? 'Change file' : 'Replace file'}
+                    </Button>
+                    {editFile
+                      ? <span className="text-xs text-gray-600 truncate max-w-[160px]">{editFile.name}</span>
+                      : <span className="text-xs text-gray-400">Current: {d.fileName}</span>
+                    }
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button size="sm" variant="light" onPress={cancelEdit}>Cancel</Button>
+                    <Button size="sm" color="primary" onPress={handleSaveEdit} isLoading={saving}>
+                      {editFile ? 'Replace & save' : 'Save name'}
+                    </Button>
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div key={d.id} className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-b-0 group">
                 <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
@@ -746,6 +870,19 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  {d.fileUrl && (() => {
+                    const kind = docPreviewKind(d.fileUrl);
+                    return kind !== 'other' ? (
+                      <button
+                        onClick={() => setPreview({ url: d.fileUrl, name: d.fileName || d.name, kind })}
+                        className="inline-flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 font-medium bg-violet-50 hover:bg-violet-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                        aria-label={`Preview ${d.fileName || d.name}`}
+                      >
+                        <FiEye className="w-3.5 h-3.5" />
+                        View
+                      </button>
+                    ) : null;
+                  })()}
                   {d.fileUrl && (
                     <a
                       href={d.fileUrl}
@@ -754,18 +891,27 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                       className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
                       aria-label={`Open ${d.fileName || d.name}`}
                     >
-                      <FiDownload className="w-3.5 h-3.5" />
+                      <FiExternalLink className="w-3.5 h-3.5" />
                       Open
                     </a>
                   )}
                   {canUpload && (
-                    <button
-                      onClick={() => handleDelete(d.id, d.fileName || d.name)}
-                      className="p-1.5 text-gray-300 hover:text-red-500 transition-colors rounded opacity-0 group-hover:opacity-100"
-                      title="Delete"
-                    >
-                      <FiTrash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => openEdit(d)}
+                        className="p-1.5 text-gray-300 hover:text-blue-500 transition-colors rounded opacity-0 group-hover:opacity-100"
+                        title="Edit"
+                      >
+                        <FiEdit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(d.id, d.fileName || d.name)}
+                        className="p-1.5 text-gray-300 hover:text-red-500 transition-colors rounded opacity-0 group-hover:opacity-100"
+                        title="Delete"
+                      >
+                        <FiTrash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

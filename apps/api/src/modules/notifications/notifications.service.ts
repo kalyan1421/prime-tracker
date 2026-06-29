@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { NotificationType } from '@prisma/client';
 import { Mailer, createMailer } from './mailer';
+import { NotificationsGateway } from './notifications.gateway';
 
 const ALL_TYPES = Object.values(NotificationType);
 
@@ -15,6 +16,7 @@ export class NotificationsService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    @Optional() private gateway: NotificationsGateway,
   ) {
     this.mailer = createMailer(this.config);
   }
@@ -44,6 +46,11 @@ export class NotificationsService {
     await this.prisma.notification.createMany({
       data: targetUserIds.map((userId) => ({ userId, type, title, body, link })),
     });
+
+    // Push real-time to connected clients
+    for (const uid of targetUserIds) {
+      this.gateway?.emitToUser(uid, 'notification', { type, title, body, link });
+    }
 
     // Send emails
     if (this.mailer) {

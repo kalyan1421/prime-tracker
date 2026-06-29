@@ -94,7 +94,7 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
                 <FiEdit2 className="text-gray-400 text-xs" />
               </Button>
             )}
-            {canDelete && p.status !== 'CANCELLED' && (
+            {canDelete && !p.deletedAt && (
               <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onDelete(p.id)} aria-label="Archive project">
                 <FiTrash2 className="text-xs" />
               </Button>
@@ -181,7 +181,7 @@ function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete }: {
               <FiEdit2 className="text-xs text-gray-400" />
             </Button>
           )}
-          {canDelete && p.status !== 'CANCELLED' && (
+          {canDelete && !p.deletedAt && (
             <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onDelete(p.id)} aria-label="Archive">
               <FiTrash2 className="text-xs" />
             </Button>
@@ -218,10 +218,11 @@ function ProjectCardSkeleton() {
 }
 
 export default function ProjectsPage() {
-  const { hasPermission } = useAuthStore();
+  const { hasPermission, user } = useAuthStore();
   const canCreate = hasPermission('project:create');
   const canEdit = hasPermission('project:edit');
   const canDelete = hasPermission('project:delete');
+  const canViewArchived = user?.role === 'SUPER_ADMIN' || user?.role === 'FOUNDER';
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -351,7 +352,7 @@ export default function ProjectsPage() {
     if (!deleteId) return;
     try {
       await deleteProject.mutateAsync(deleteId);
-      addToast({ title: 'Project archived', color: 'success' });
+      addToast({ title: 'Project removed', color: 'success' });
       onDeleteClose();
     } catch (err: any) {
       addToast({ title: extractErr(err, 'Failed to archive project'), color: 'danger' });
@@ -401,8 +402,12 @@ export default function ProjectsPage() {
           className="w-full sm:w-36"
           placeholder="All statuses"
           selectedKeys={statusFilter ? [statusFilter] : []}
-          onSelectionChange={(keys) => setStatusFilter((Array.from(keys)[0] as string) || '')}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            setStatusFilter(val === '__ALL__' ? '' : val || '');
+          }}
         >
+          <SelectItem key="__ALL__">All statuses</SelectItem>
           <SelectItem key="ACTIVE">Active</SelectItem>
           <SelectItem key="ON_HOLD">On Hold</SelectItem>
           <SelectItem key="COMPLETED">Completed</SelectItem>
@@ -414,10 +419,15 @@ export default function ProjectsPage() {
           className="w-full sm:w-44"
           placeholder="All phases"
           selectedKeys={phaseFilter ? [phaseFilter] : []}
-          onSelectionChange={(keys) => setPhaseFilter((Array.from(keys)[0] as string) || '')}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            setPhaseFilter(val === '__ALL__' ? '' : val || '');
+          }}
         >
-          {PHASES.map((ph) => (
-            <SelectItem key={ph}>{ph.replace(/_/g, ' ')}</SelectItem>
+          {(['__ALL__', ...PHASES] as string[]).map((ph) => (
+            <SelectItem key={ph} textValue={ph === '__ALL__' ? 'All phases' : ph.replace(/_/g, ' ')}>
+              {ph === '__ALL__' ? 'All phases' : ph.replace(/_/g, ' ')}
+            </SelectItem>
           ))}
         </Select>
         <Select
@@ -426,10 +436,15 @@ export default function ProjectsPage() {
           className="w-full sm:w-40"
           placeholder="All types"
           selectedKeys={typeFilter ? [typeFilter] : []}
-          onSelectionChange={(keys) => setTypeFilter((Array.from(keys)[0] as string) || '')}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            setTypeFilter(val === '__ALL__' ? '' : val || '');
+          }}
         >
-          {PROJECT_TYPES.map((t) => (
-            <SelectItem key={t}>{t.replace(/_/g, ' ')}</SelectItem>
+          {(['__ALL__', ...PROJECT_TYPES] as string[]).map((t) => (
+            <SelectItem key={t} textValue={t === '__ALL__' ? 'All types' : t.replace(/_/g, ' ')}>
+              {t === '__ALL__' ? 'All types' : t.replace(/_/g, ' ')}
+            </SelectItem>
           ))}
         </Select>
         <Select
@@ -438,24 +453,29 @@ export default function ProjectsPage() {
           className="w-full sm:w-40"
           placeholder="Sort by"
           selectedKeys={sortBy ? [sortBy] : []}
-          onSelectionChange={(keys) => setSortBy((Array.from(keys)[0] as string) || '')}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            setSortBy(val === '__DEFAULT__' ? '' : val || '');
+          }}
         >
+          <SelectItem key="__DEFAULT__">Default sort</SelectItem>
           <SelectItem key="name:asc" startContent={<FiArrowUp className="text-xs" />}>Name A→Z</SelectItem>
           <SelectItem key="name:desc" startContent={<FiArrowDown className="text-xs" />}>Name Z→A</SelectItem>
           <SelectItem key="createdAt:desc" startContent={<FiArrowDown className="text-xs" />}>Newest first</SelectItem>
           <SelectItem key="createdAt:asc" startContent={<FiArrowUp className="text-xs" />}>Oldest first</SelectItem>
           <SelectItem key="phase:asc" startContent={<FiArrowUp className="text-xs" />}>Phase</SelectItem>
         </Select>
-        {/* Slice 2: archive toggle — surfaces soft-deleted projects */}
-        <Button
-          size="sm"
-          variant={showArchived ? 'solid' : 'flat'}
-          color={showArchived ? 'warning' : 'default'}
-          onPress={() => setShowArchived((v) => !v)}
-          className="self-start sm:self-auto"
-        >
-          {showArchived ? '✓ Showing Archived' : 'Show Archived'}
-        </Button>
+        {canViewArchived && (
+          <Button
+            size="sm"
+            variant={showArchived ? 'solid' : 'flat'}
+            color={showArchived ? 'warning' : 'default'}
+            onPress={() => setShowArchived((v) => !v)}
+            className="self-start sm:self-auto"
+          >
+            {showArchived ? '✓ Showing Archived' : 'Show Archived'}
+          </Button>
+        )}
         <div className="flex rounded-lg border border-gray-200 overflow-hidden ml-auto">
           <Tooltip content="Grid view">
             <button
@@ -664,17 +684,20 @@ export default function ProjectsPage() {
       {/* Archive Confirmation */}
       <Modal isOpen={isDeleteOpen} onClose={onDeleteClose} isDismissable={false} size="sm">
         <ModalContent>
-          <ModalHeader>Archive Project</ModalHeader>
+          <ModalHeader>Remove Project</ModalHeader>
           <ModalBody>
             <p className="text-sm text-gray-600">
-              This will mark the project as <strong>CANCELLED</strong>. Buildings, units, and historical
-              data are preserved. You can restore it later by editing the project status.
+              This project will be removed from the project list. All buildings, units, financials, and
+              historical data are preserved — it will no longer appear in dashboards or reports.
+            </p>
+            <p className="text-xs text-gray-400 mt-2">
+              Founders and admins can view removed projects via the "Show Archived" toggle.
             </p>
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={onDeleteClose}>Go Back</Button>
             <Button size="sm" color="danger" onPress={handleDelete} isLoading={deleteProject.isPending}>
-              Yes, Archive
+              Yes, Remove
             </Button>
           </ModalFooter>
         </ModalContent>

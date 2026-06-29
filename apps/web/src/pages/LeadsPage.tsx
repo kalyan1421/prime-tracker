@@ -7,12 +7,12 @@ import {
 import {
   FiTarget, FiPlus, FiEdit2, FiTrash2, FiPhone, FiMail,
   FiMessageSquare, FiRefreshCw, FiSearch, FiClock, FiChevronRight,
-  FiHome, FiBarChart2, FiUser,
+  FiHome, FiBarChart2, FiUser, FiUsers,
 } from 'react-icons/fi';
 import {
   useLeads, useLeadActivities, useProjects, useUnits, useBuildings, useCampaigns, useUsers,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
-  useLead, useAddLeadInterest, useRemoveLeadInterest,
+  useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers,
 } from '../hooks/useApi';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, EmptyState } from '../components/ui';
@@ -627,6 +627,9 @@ export default function LeadsPage() {
   const [search, setSearch] = useState('');
   // assignee filter: '' = all, 'mine' = current user, 'unassigned' = no assignee, else a user id
   const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [brokerFilter, setBrokerFilter] = useState('');
+  const { data: brokersData } = useBrokers();
+  const brokers: any[] = (brokersData as any[]) || [];
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const [editLead, setEditLead] = useState<any>(null);
@@ -636,6 +639,7 @@ export default function LeadsPage() {
   const leadsQuery = {
     status: statusFilter || undefined,
     search: search || undefined,
+    brokerId: brokerFilter || undefined,
     ...(assigneeFilter === 'mine' && user?.id ? { assignedTo: user.id } : {}),
     ...(assigneeFilter === 'unassigned' ? { unassigned: true } : {}),
     ...(assigneeFilter && assigneeFilter !== 'mine' && assigneeFilter !== 'unassigned'
@@ -745,12 +749,26 @@ export default function LeadsPage() {
               <SelectItem key={opt.key}>{opt.label}</SelectItem>
             ))}
           </Select>
-          {(statusFilter || assigneeFilter) && (
+          {brokers.length > 0 && (
+            <Select
+              size="sm"
+              aria-label="Filter by broker"
+              placeholder="All brokers"
+              className="w-[160px]"
+              selectedKeys={brokerFilter ? [brokerFilter] : []}
+              onSelectionChange={(keys) => setBrokerFilter((Array.from(keys)[0] as string) || '')}
+            >
+              {brokers.map((b: any) => (
+                <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+              ))}
+            </Select>
+          )}
+          {(statusFilter || assigneeFilter || brokerFilter) && (
             <Button
               size="sm"
               variant="flat"
               startContent={<FiRefreshCw className="w-3 h-3" />}
-              onPress={() => { setStatusFilter(''); setAssigneeFilter(''); }}
+              onPress={() => { setStatusFilter(''); setAssigneeFilter(''); setBrokerFilter(''); }}
               aria-label="Clear filters"
             >
               Clear filters
@@ -861,6 +879,11 @@ export default function LeadsPage() {
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700">
                           <FiBarChart2 className="w-2.5 h-2.5" />
                           {lead.campaign.name}
+                        </span>
+                      )}
+                      {lead.broker && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          <FiUsers size={9} /> {lead.broker.name}
                         </span>
                       )}
                       {stale != null && (

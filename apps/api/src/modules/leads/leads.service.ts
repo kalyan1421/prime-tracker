@@ -15,10 +15,11 @@ export class LeadsService {
     unitId?: string;
     buildingId?: string;
     campaignId?: string;
+    brokerId?: string;
     search?: string;
     viewer?: { userId: string; role: string };
   } = {}) {
-    const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, search, viewer } = params;
+    const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, brokerId, search, viewer } = params;
 
     const where: Prisma.LeadWhereInput = {};
     if (projectId) where.projectId = projectId;
@@ -33,6 +34,7 @@ export class LeadsService {
     if (unitId) where.unitId = unitId;
     if (buildingId) where.buildingId = buildingId;
     if (campaignId) where.campaignId = campaignId;
+    if (brokerId) where.brokerId = brokerId;
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },

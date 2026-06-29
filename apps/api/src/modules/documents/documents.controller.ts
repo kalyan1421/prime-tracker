@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Delete, Param, Body, Query, Res,
+  Controller, Get, Post, Patch, Delete, Param, Body, Query, Res,
   UseGuards, UseInterceptors, Request, UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -68,6 +68,26 @@ export class DocumentsController {
     @Request() req: any,
   ) {
     return this.service.create(file, body, req.user.sub);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('document:upload')
+  @ApiOperation({ summary: 'Rename a document' })
+  rename(@Param('id') id: string, @Body() body: { fileName: string }) {
+    return this.service.rename(id, body.fileName);
+  }
+
+  @Post(':id/replace')
+  @RequirePermissions('document:upload')
+  @ApiOperation({ summary: 'Replace document file (and optionally rename)' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } }))
+  replace(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { fileName?: string },
+  ) {
+    return this.service.replaceFile(id, file, body.fileName);
   }
 
   @Delete(':id')

@@ -1,6 +1,6 @@
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import {
-  IsOptional, IsEnum, IsString, IsInt, Min, Max, IsIn, MaxLength,
+  IsOptional, IsEnum, IsString, IsInt, Min, Max, IsIn, MaxLength, IsBoolean,
 } from 'class-validator';
 import { ProjectStatus, ProjectPhase, ProjectType } from '@prisma/client';
 
@@ -28,4 +28,7 @@ export class ListProjectsDto {
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
   pageSize?: number;
+
+  @IsOptional() @Transform(({ value }) => value === 'true' || value === true) @IsBoolean()
+  archived?: boolean;
 }

@@ -30,7 +30,7 @@ export class LeadsController {
 
   @Get()
   @RequirePermissions('lead:view')
-  @ApiOperation({ summary: 'List leads (optionally filtered by project/status/assignee/unit)' })
+  @ApiOperation({ summary: 'List leads (optionally filtered by project/status/assignee/unit/broker)' })
   findAll(
     @Query('projectId') projectId?: string,
     @Query('status') status?: LeadStatus,
@@ -39,6 +39,7 @@ export class LeadsController {
     @Query('unitId') unitId?: string,
     @Query('buildingId') buildingId?: string,
     @Query('campaignId') campaignId?: string,
+    @Query('brokerId') brokerId?: string,
     @Query('search') search?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
@@ -46,7 +47,7 @@ export class LeadsController {
     return this.service.findAll({
       projectId, status, assignedTo,
       unassigned: unassigned === 'true' || unassigned === '1',
-      unitId, buildingId, campaignId, search,
+      unitId, buildingId, campaignId, brokerId, search,
       viewer: userId && role ? { userId, role } : undefined,
     });
   }

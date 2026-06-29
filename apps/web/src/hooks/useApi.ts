@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import api from '../lib/api';
+import { useAuthStore } from '../store/authStore';
 
 // ---- Dashboard ----
 export function useDashboard() {
@@ -83,6 +85,15 @@ export function useProject(id: string) {
     queryKey: ['project', id],
     queryFn: () => api.get(`/projects/${id}`).then((r) => r.data),
     enabled: !!id,
+  });
+}
+
+export function useProjectActivity(projectId: string, page = 1) {
+  return useQuery({
+    queryKey: ['project', 'activity', projectId, page],
+    queryFn: () => api.get(`/projects/${projectId}/activity`, { params: { page, limit: 60 } }).then((r) => r.data),
+    enabled: !!projectId,
+    staleTime: 30_000,
   });
 }
 
@@ -733,7 +744,7 @@ export function useNotifications(limit = 20) {
   return useQuery({
     queryKey: ['notifications', limit],
     queryFn: () => api.get('/notifications', { params: { limit } }).then((r) => r.data),
-    refetchInterval: 30000, // poll every 30s
+    staleTime: 30000, // socket push invalidates; this is the fallback refetch window
   });
 }
 
@@ -769,7 +780,7 @@ export function useLeadDashboard(params?: { projectId?: string }) {
   });
 }
 
-export function useLeads(params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string }) {
+export function useLeads(params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string; brokerId?: string }) {
   return useQuery({
     queryKey: ['leads', params],
     queryFn: () => api.get('/leads', { params }).then((r) => r.data),
@@ -1215,6 +1226,7 @@ export function useDocuments(params: { projectId?: string; unitId?: string; buil
     queryKey: ['documents', params],
     queryFn: () => api.get('/documents', { params }).then((r) => r.data),
     enabled: !!(params.projectId || params.unitId || params.interiorProjectId),
+    staleTime: 0, // S3 signed URLs must always be fresh — never serve from cache
   });
 }
 
@@ -1223,6 +1235,7 @@ export function useInteriorDocuments(interiorProjectId?: string) {
     queryKey: ['documents', { interiorProjectId }],
     queryFn: () => api.get('/documents', { params: { interiorProjectId } }).then((r) => r.data),
     enabled: !!interiorProjectId,
+    staleTime: 0,
   });
 }
 
@@ -1241,6 +1254,30 @@ export function useDeleteDocument() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete(`/documents/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+export function useRenameDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, fileName }: { id: string; fileName: string }) =>
+      api.patch(`/documents/${id}`, { fileName }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+export function useReplaceDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, file, fileName }: { id: string; file: File; fileName?: string }) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (fileName) fd.append('fileName', fileName);
+      return api.post(`/documents/${id}/replace`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then((r) => r.data);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   });
 }
@@ -1841,6 +1878,15 @@ export function useCreateInteriorTemplate() {
   });
 }
 
+export function useUpdateInteriorTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.patch(`/interior/templates/${id}`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
 export function useDeleteInteriorTemplate() {
   const qc = useQueryClient();
   return useMutation({
@@ -2093,6 +2139,26 @@ export function useDeleteBroker() {
   });
 }
 
+export function useBrokerSales(brokerId?: string) {
+  return useQuery({
+    queryKey: ['brokers', 'sales', brokerId],
+    queryFn: () => api.get(`/brokers/${brokerId}/sales`).then((r) => r.data),
+    enabled: !!brokerId,
+  });
+}
+
+export function useMarkBrokerCommissionPaid() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (saleId: string) =>
+      api.patch(`/brokers/sales/${saleId}/mark-commission-paid`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['brokers'] });
+      qc.invalidateQueries({ queryKey: ['sales'] });
+    },
+  });
+}
+
 // ============================================================================
 // Multi-unit interest / per-unit waitlist (Phase 4)
 // ============================================================================
@@ -2126,4 +2192,31 @@ export function useRemoveLeadInterest() {
     mutationFn: (interestId: string) => api.delete(`/leads/interests/${interestId}`).then((r) => r.data),
     onSuccess: () => invalidateInterest(qc),
   });
+}
+
+// ============================================================================
+// Real-time notifications via Socket.io (falls back to staleTime polling)
+// ============================================================================
+
+export function useNotificationsSocket() {
+  const qc = useQueryClient();
+  const token = useAuthStore.getState().accessToken;
+
+  useEffect(() => {
+    if (!token) return;
+    let socket: any;
+    import('socket.io-client').then(({ io }) => {
+      socket = io('/notifications', {
+        path: '/socket.io',
+        auth: { token },
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 2000,
+      });
+      socket.on('notification', () => {
+        qc.invalidateQueries({ queryKey: ['notifications'] });
+      });
+    });
+    return () => { socket?.disconnect(); };
+  }, [token, qc]);
 }

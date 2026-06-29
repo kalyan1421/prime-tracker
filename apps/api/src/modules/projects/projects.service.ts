@@ -13,6 +13,8 @@ export interface ListProjectsParams {
   sortOrder?: 'asc' | 'desc';
   page?: number;
   pageSize?: number;
+  /** When true (SUPER_ADMIN / FOUNDER only), include soft-deleted projects in results. */
+  archived?: boolean;
 }
 
 /**
@@ -34,6 +36,8 @@ export class ProjectsService {
 
   async findAll(params?: ListProjectsParams, viewer?: ProjectViewer) {
     const where: Prisma.ProjectWhereInput = {};
+    // Exclude soft-deleted projects unless the caller explicitly requests archived view.
+    if (!params?.archived) where.deletedAt = null;
     if (params?.status) where.status = params.status;
     if (params?.phase) where.phase = params.phase;
     if (params?.projectType) where.projectType = params.projectType;
@@ -261,11 +265,9 @@ export class ProjectsService {
 
   async delete(id: string) {
     await this.findById(id);
-    // Soft-delete: archive by setting status to CANCELLED. The Project row is
-    // preserved (audit log keeps integrity, FKs to buildings/units stay intact).
     return this.prisma.project.update({
       where: { id },
-      data: { status: 'CANCELLED' },
+      data: { deletedAt: new Date() },
     });
   }
 
@@ -309,7 +311,7 @@ export class ProjectsService {
         : {};
 
     const projects = await this.prisma.project.findMany({
-      where: { status: 'ACTIVE', ...scopeWhere },
+      where: { status: 'ACTIVE', deletedAt: null, ...scopeWhere },
       include: {
         budgetLines: true,
         actuals: true,
@@ -328,7 +330,7 @@ export class ProjectsService {
 
     // Lightweight: only the phase field is needed for phase-distribution counts.
     const allProjects = await this.prisma.project.findMany({
-      where: scopeWhere,
+      where: { deletedAt: null, ...scopeWhere },
       select: { phase: true },
     });
 
@@ -491,6 +493,376 @@ export class ProjectsService {
       recentMilestones,
       alerts: showFinancials ? alerts : alerts.filter((a) => a.type !== 'BUDGET_OVERRUN'),
       recentComments,
+    };
+  }
+
+  // ─────── Project Activity Log ───────
+
+  async getActivity(projectId: string, page = 1, limit = 60) {
+    // Verify project exists first
+    const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: { id: true } });
+    if (!project) throw new NotFoundException('Project not found');
+
+    const TAKE = 150; // fetch more than needed per source, sort/paginate after merge
+
+    const [
+      documents,
+      milestones,
+      leads,
+      sales,
+      leases,
+      tasks,
+      projectComments,
+      buildings,
+      units,
+      budgetLines,
+      members,
+    ] = await Promise.all([
+      // Documents attached to the project
+      this.prisma.document.findMany({
+        where: { projectId, deletedAt: null },
+        select: { id: true, fileName: true, category: true, createdAt: true, uploadedBy: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Milestones
+      this.prisma.milestone.findMany({
+        where: { projectId },
+        select: { id: true, title: true, status: true, createdAt: true, updatedAt: true, completedAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Leads (via unit→building or building directly)
+      this.prisma.lead.findMany({
+        where: {
+          OR: [
+            { unit: { building: { projectId } } },
+            { building: { projectId } },
+          ],
+        },
+        select: { id: true, name: true, status: true, createdAt: true, updatedAt: true, source: true },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Sales
+      this.prisma.sale.findMany({
+        where: {
+          OR: [
+            { unit: { building: { projectId } } },
+            { building: { projectId } },
+          ],
+        },
+        select: { id: true, buyer: true, status: true, createdAt: true, updatedAt: true, closingDate: true },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Leases
+      this.prisma.lease.findMany({
+        where: {
+          OR: [
+            { unit: { building: { projectId } } },
+            { building: { projectId } },
+          ],
+        },
+        select: { id: true, tenantName: true, status: true, createdAt: true, leaseStart: true },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Tasks
+      this.prisma.task.findMany({
+        where: { projectId },
+        select: { id: true, title: true, status: true, priority: true, createdAt: true, updatedAt: true, assignedUser: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Project-level comments
+      this.prisma.projectComment.findMany({
+        where: { projectId },
+        select: { id: true, content: true, commentType: true, createdAt: true, user: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Buildings
+      this.prisma.building.findMany({
+        where: { projectId, deletedAt: null },
+        select: { id: true, name: true, buildingType: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Units (via building)
+      this.prisma.unit.findMany({
+        where: { building: { projectId }, deletedAt: null },
+        select: { id: true, unitNumber: true, unitType: true, status: true, createdAt: true, building: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Budget lines
+      this.prisma.budgetLine.findMany({
+        where: { projectId },
+        select: { id: true, description: true, category: true, baselineAmt: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: TAKE,
+      }),
+
+      // Project members added
+      this.prisma.projectMember.findMany({
+        where: { projectId },
+        select: { id: true, role: true, addedAt: true, user: { select: { id: true, name: true, email: true } } },
+        orderBy: { addedAt: 'desc' },
+        take: TAKE,
+      }),
+    ]);
+
+    type Event = {
+      id: string;
+      type: string;
+      action: string;
+      label: string;
+      entityId: string;
+      entityName: string;
+      actorName: string | null;
+      timestamp: Date;
+      meta?: Record<string, unknown>;
+    };
+
+    const events: Event[] = [];
+
+    for (const d of documents) {
+      events.push({
+        id: `doc-${d.id}`,
+        type: 'document',
+        action: 'UPLOADED',
+        label: `Document uploaded: ${d.fileName}`,
+        entityId: d.id,
+        entityName: d.fileName,
+        actorName: d.uploadedBy?.name ?? null,
+        timestamp: d.createdAt,
+        meta: { category: d.category },
+      });
+    }
+
+    for (const m of milestones) {
+      events.push({
+        id: `ms-created-${m.id}`,
+        type: 'milestone',
+        action: 'CREATED',
+        label: `Milestone added: ${m.title}`,
+        entityId: m.id,
+        entityName: m.title,
+        actorName: null,
+        timestamp: m.createdAt,
+      });
+      if (m.status === 'COMPLETED' && m.completedAt) {
+        events.push({
+          id: `ms-done-${m.id}`,
+          type: 'milestone',
+          action: 'COMPLETED',
+          label: `Milestone completed: ${m.title}`,
+          entityId: m.id,
+          entityName: m.title,
+          actorName: null,
+          timestamp: m.completedAt,
+        });
+      }
+    }
+
+    for (const l of leads) {
+      const leadName = l.name ?? 'Unknown lead';
+      events.push({
+        id: `lead-created-${l.id}`,
+        type: 'lead',
+        action: 'ADDED',
+        label: `Lead added: ${leadName}`,
+        entityId: l.id,
+        entityName: leadName,
+        actorName: null,
+        timestamp: l.createdAt,
+        meta: { source: l.source },
+      });
+      if (l.status === 'CONVERTED') {
+        events.push({
+          id: `lead-conv-${l.id}`,
+          type: 'lead',
+          action: 'CONVERTED',
+          label: `Lead converted to sale: ${leadName}`,
+          entityId: l.id,
+          entityName: leadName,
+          actorName: null,
+          timestamp: l.updatedAt,
+        });
+      }
+      if (l.status === 'LOST' || l.status === 'DEAD') {
+        events.push({
+          id: `lead-lost-${l.id}`,
+          type: 'lead',
+          action: 'LOST',
+          label: `Lead lost: ${leadName}`,
+          entityId: l.id,
+          entityName: leadName,
+          actorName: null,
+          timestamp: l.updatedAt,
+        });
+      }
+    }
+
+    for (const s of sales) {
+      const buyerName = s.buyer ?? 'Unknown buyer';
+      events.push({
+        id: `sale-created-${s.id}`,
+        type: 'sale',
+        action: 'CREATED',
+        label: `Sale opened: ${buyerName}`,
+        entityId: s.id,
+        entityName: buyerName,
+        actorName: null,
+        timestamp: s.createdAt,
+        meta: { status: s.status },
+      });
+      if (s.status === 'CLOSED' && s.closingDate) {
+        events.push({
+          id: `sale-closed-${s.id}`,
+          type: 'sale',
+          action: 'CLOSED',
+          label: `Sale closed: ${buyerName}`,
+          entityId: s.id,
+          entityName: buyerName,
+          actorName: null,
+          timestamp: s.closingDate,
+        });
+      }
+    }
+
+    for (const le of leases) {
+      const tenantLabel = le.tenantName ?? 'Unknown tenant';
+      events.push({
+        id: `lease-${le.id}`,
+        type: 'lease',
+        action: 'CREATED',
+        label: `Lease created: ${tenantLabel}`,
+        entityId: le.id,
+        entityName: tenantLabel,
+        actorName: null,
+        timestamp: le.createdAt,
+        meta: { status: le.status },
+      });
+    }
+
+    for (const t of tasks) {
+      events.push({
+        id: `task-created-${t.id}`,
+        type: 'task',
+        action: 'CREATED',
+        label: `Task created: ${t.title}`,
+        entityId: t.id,
+        entityName: t.title,
+        actorName: t.assignedUser?.name ?? null,
+        timestamp: t.createdAt,
+        meta: { priority: t.priority },
+      });
+      if (t.status === 'DONE') {
+        events.push({
+          id: `task-done-${t.id}`,
+          type: 'task',
+          action: 'COMPLETED',
+          label: `Task completed: ${t.title}`,
+          entityId: t.id,
+          entityName: t.title,
+          actorName: t.assignedUser?.name ?? null,
+          timestamp: t.updatedAt,
+        });
+      }
+    }
+
+    for (const c of projectComments) {
+      events.push({
+        id: `comment-${c.id}`,
+        type: 'comment',
+        action: 'ADDED',
+        label: `Comment added`,
+        entityId: c.id,
+        entityName: c.content.slice(0, 80),
+        actorName: c.user?.name ?? null,
+        timestamp: c.createdAt,
+        meta: { commentType: c.commentType },
+      });
+    }
+
+    for (const b of buildings) {
+      events.push({
+        id: `bldg-${b.id}`,
+        type: 'building',
+        action: 'CREATED',
+        label: `Building added: ${b.name}`,
+        entityId: b.id,
+        entityName: b.name,
+        actorName: null,
+        timestamp: b.createdAt,
+        meta: { buildingType: b.buildingType },
+      });
+    }
+
+    for (const u of units) {
+      events.push({
+        id: `unit-${u.id}`,
+        type: 'unit',
+        action: 'CREATED',
+        label: `Unit added: ${u.unitNumber} (${u.building.name})`,
+        entityId: u.id,
+        entityName: u.unitNumber,
+        actorName: null,
+        timestamp: u.createdAt,
+        meta: { unitType: u.unitType, status: u.status },
+      });
+    }
+
+    for (const bl of budgetLines) {
+      events.push({
+        id: `budget-${bl.id}`,
+        type: 'budget',
+        action: 'ADDED',
+        label: `Budget line added: ${bl.description} (${bl.category})`,
+        entityId: bl.id,
+        entityName: bl.description,
+        actorName: null,
+        timestamp: bl.createdAt,
+        meta: { category: bl.category, amount: bl.baselineAmt },
+      });
+    }
+
+    for (const pm of members) {
+      const memberName = pm.user.name ?? pm.user.email;
+      events.push({
+        id: `member-${pm.id}`,
+        type: 'member',
+        action: 'JOINED',
+        label: `Team member added: ${memberName}`,
+        entityId: pm.id,
+        entityName: memberName,
+        actorName: null,
+        timestamp: pm.addedAt,
+        meta: { role: pm.role },
+      });
+    }
+
+    // Sort descending by timestamp
+    events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    const total = events.length;
+    const skip = (page - 1) * limit;
+    return {
+      events: events.slice(skip, skip + limit),
+      total,
+      page,
+      limit,
     };
   }
 }

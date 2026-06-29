@@ -50,7 +50,11 @@ export class ProjectsController {
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
   ) {
-    return this.projectsService.findAll(query, { userId, role });
+    const canViewArchived = role === 'SUPER_ADMIN' || role === 'FOUNDER';
+    return this.projectsService.findAll(
+      { ...query, archived: canViewArchived ? query.archived : undefined },
+      { userId, role },
+    );
   }
 
   @Get('slug/:slug')
@@ -62,6 +66,17 @@ export class ProjectsController {
     @CurrentUser('role') role: string,
   ) {
     return this.projectsService.findBySlug(slug, { userId, role });
+  }
+
+  @Get(':id/activity')
+  @RequirePermissions('project:view')
+  @ApiOperation({ summary: 'Project activity log (FOUNDER / SUPER_ADMIN only — enforced on frontend)' })
+  getActivity(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.projectsService.getActivity(id, Number(page) || 1, Number(limit) || 60);
   }
 
   @Get(':id')

@@ -187,12 +187,19 @@ export function SnagPanel({
               startContent={<FiMapPin size={13} className="text-gray-400" />}
             />
             <Select
-              size="sm" label="Assignee" placeholder="Unassigned"
+              size="sm"
+              label="Assignee"
+              aria-label="Assignee"
+              placeholder="Unassigned"
               selectedKeys={form.assigneeId ? [form.assigneeId] : []}
               onChange={set('assigneeId')}
               startContent={<FiUser size={13} className="text-gray-400" />}
             >
-              {users.map((u) => <SelectItem key={u.id}>{u.name}</SelectItem>)}
+              {users.map((u) => (
+                <SelectItem key={u.id} textValue={u.name || u.email}>
+                  {u.name || u.email}
+                </SelectItem>
+              ))}
             </Select>
           </div>
           <div className="flex justify-end gap-2">

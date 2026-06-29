@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors,
+  Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { BrokersService } from './brokers.service';
@@ -62,5 +62,20 @@ export class BrokersController {
   @RequirePermissions('broker:edit')
   remove(@Param('id') id: string) {
     return this.service.remove(id);
+  }
+
+  @Get(':id/sales')
+  @RequirePermissions('broker:view')
+  @ApiOperation({ summary: 'List sales attributed to a broker (up to 100, with unit context)' })
+  getSalesByBroker(@Param('id') id: string) {
+    return this.service.getSalesByBroker(id);
+  }
+
+  @Patch('sales/:saleId/mark-commission-paid')
+  @RequirePermissions('broker:edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark broker commission as paid on a sale' })
+  markCommissionPaid(@Param('saleId') saleId: string) {
+    return this.service.markCommissionPaid(saleId);
   }
 }

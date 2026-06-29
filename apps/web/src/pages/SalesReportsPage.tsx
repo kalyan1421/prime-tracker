@@ -1,14 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useReactToPrint } from 'react-to-print';
-import { Card, CardHeader, CardBody, Tabs, Tab, Button } from '@heroui/react';
-import { FiDownload } from 'react-icons/fi';
+import { Card, CardHeader, CardBody, Tabs, Tab, Button, Chip, addToast } from '@heroui/react';
+import { FiDownload, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import { useQueries } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import api from '../lib/api';
-import { useSalesReport, useRevenueReport, useLeads, useProjects, useUnitSalesReport } from '../hooks/useApi';
+import { useSalesReport, useRevenueReport, useLeads, useProjects, useUnitSalesReport, useBrokerReport, useBrokerSales, useMarkBrokerCommissionPaid } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
@@ -532,6 +532,229 @@ function UnitSalesReportTab() {
   );
 }
 
+function BrokerSalesRows({ brokerId }: { brokerId: string }) {
+  const { data, isLoading } = useBrokerSales(brokerId);
+  const markPaid = useMarkBrokerCommissionPaid();
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={6} className="py-3 px-4 pl-10 text-xs text-gray-400">Loading sales…</td>
+      </tr>
+    );
+  }
+
+  const sales = (data as any[]) || [];
+  if (sales.length === 0) {
+    return (
+      <tr>
+        <td colSpan={6} className="py-3 px-4 pl-10 text-xs text-gray-400">No sales for this broker</td>
+      </tr>
+    );
+  }
+
+  return (
+    <>
+      <tr className="bg-gray-50">
+        <td className="py-1 px-4 pl-10 text-xs font-semibold text-gray-500 uppercase">Unit / Project</td>
+        <td className="py-1 px-4 text-xs font-semibold text-gray-500 uppercase">Status</td>
+        <td className="py-1 px-4 text-right text-xs font-semibold text-gray-500 uppercase">Sale Value</td>
+        <td className="py-1 px-4 text-right text-xs font-semibold text-gray-500 uppercase">Commission</td>
+        <td className="py-1 px-4 text-left text-xs font-semibold text-gray-500 uppercase">Closed</td>
+        <td className="py-1 px-4 text-center text-xs font-semibold text-gray-500 uppercase">Paid?</td>
+      </tr>
+      {sales.map((s: any) => {
+        const unpaid = s.brokerCommissionAmt > 0 && !s.brokerCommissionPaidAt;
+        return (
+          <tr key={s.id} className="border-b border-gray-100 bg-white">
+            <td className="py-2 px-4 pl-10 text-xs">
+              <span className="font-medium text-gray-800">{s.unit?.unitNumber || s.building?.name || '—'}</span>
+              <span className="block text-gray-400">{s.project?.name || '—'}</span>
+            </td>
+            <td className="py-2 px-4 text-xs">
+              <StatusBadge status={s.status} />
+            </td>
+            <td className="py-2 px-4 text-right text-xs">{s.salePrice ? fmt(s.salePrice) : '—'}</td>
+            <td className="py-2 px-4 text-right text-xs font-medium">
+              {s.brokerCommissionAmt ? fmt(s.brokerCommissionAmt) : '—'}
+            </td>
+            <td className="py-2 px-4 text-xs text-gray-500">{s.closedAt ? fmtDate(s.closedAt) : '—'}</td>
+            <td className="py-2 px-4 text-center text-xs">
+              {s.brokerCommissionPaidAt ? (
+                <span className="text-green-600 font-medium">{fmtDate(s.brokerCommissionPaidAt)}</span>
+              ) : unpaid ? (
+                <Button
+                  size="sm"
+                  color="warning"
+                  variant="flat"
+                  isLoading={markPaid.isPending}
+                  onPress={() =>
+                    markPaid.mutate(s.id, {
+                      onSuccess: () => addToast({ title: 'Commission marked as paid', color: 'success' }),
+                      onError: () => addToast({ title: 'Failed to mark paid', color: 'danger' }),
+                    })
+                  }
+                >
+                  Mark Paid
+                </Button>
+              ) : (
+                <span className="text-gray-300">—</span>
+              )}
+            </td>
+          </tr>
+        );
+      })}
+    </>
+  );
+}
+
+function BrokerCommissionsTab() {
+  const { data, isLoading, error } = useBrokerReport();
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  if (isLoading) return <LoadingState message="Loading broker commissions…" />;
+  if (error) return <ErrorState />;
+
+  const brokers = (data as any[]) || [];
+
+  const totalEarned = brokers.reduce((s: number, b: any) => s + (b.commissionEarned ?? 0), 0);
+  const totalPaid = brokers.reduce((s: number, b: any) => s + (b.commissionPaid ?? 0), 0);
+  const totalOwed = totalEarned - totalPaid;
+  const totalPipeline = brokers.reduce((s: number, b: any) => s + (b.pipelineEst ?? 0), 0);
+
+  function conversionColor(pct: number): 'success' | 'warning' | 'danger' {
+    if (pct >= 30) return 'success';
+    if (pct >= 15) return 'warning';
+    return 'danger';
+  }
+
+  function toggleRow(id: string) {
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  return (
+    <div>
+      {/* Summary bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard
+          label="Commission Earned"
+          value={fmt(totalEarned)}
+          helpText="Across all closed sales"
+          colorScheme="green"
+          variant="revenue"
+        />
+        <StatCard
+          label="Commission Paid"
+          value={fmt(totalPaid)}
+          helpText="Already disbursed"
+          colorScheme="teal"
+          variant="revenue"
+        />
+        <StatCard
+          label="Commission Owed"
+          value={fmt(totalOwed)}
+          helpText="Earned but unpaid"
+          colorScheme={totalOwed > 0 ? 'orange' : 'gray'}
+          variant={totalOwed > 0 ? 'revenue' : 'neutral'}
+        />
+        <StatCard
+          label="Pipeline Est."
+          value={fmt(totalPipeline)}
+          helpText="From open deals"
+          colorScheme="brand"
+          variant="revenue"
+        />
+      </div>
+
+      {/* Main table */}
+      <Card shadow="sm">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-600">Broker Commission Breakdown</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          <div className="overflow-x-auto">
+            <div className="responsive-table-wrap">
+              <table className="w-full text-sm min-w-[900px]">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase w-6"></th>
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Broker</th>
+                    <th className="text-center py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Leads</th>
+                    <th className="text-center py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Closed</th>
+                    <th className="text-center py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Conv %</th>
+                    <th className="text-right py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Closed Value</th>
+                    <th className="text-right py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Earned</th>
+                    <th className="text-right py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Paid</th>
+                    <th className="text-right py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Owed</th>
+                    <th className="text-right py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Pipeline Est</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brokers.map((b: any) => {
+                    const owed = (b.commissionEarned ?? 0) - (b.commissionPaid ?? 0);
+                    const convPct = b.leadCount > 0
+                      ? Math.round((b.closedCount / b.leadCount) * 100)
+                      : 0;
+                    const isOpen = expanded[b.id] ?? false;
+
+                    return (
+                      <>
+                        <tr
+                          key={b.id}
+                          className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
+                          onClick={() => toggleRow(b.id)}
+                        >
+                          <td className="py-2 px-3 text-gray-400">
+                            {isOpen ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className="font-medium text-gray-800">{b.name}</span>
+                            {b.company && (
+                              <span className="block text-xs text-gray-400">{b.company}</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-center text-gray-600">{b.leadCount ?? 0}</td>
+                          <td className="py-2 px-3 text-center text-gray-600">{b.closedCount ?? 0}</td>
+                          <td className="py-2 px-3 text-center">
+                            <Chip
+                              size="sm"
+                              color={conversionColor(convPct)}
+                              variant="flat"
+                            >
+                              {convPct}%
+                            </Chip>
+                          </td>
+                          <td className="py-2 px-3 text-right">{fmt(b.closedValue ?? 0)}</td>
+                          <td className="py-2 px-3 text-right font-medium text-green-700">{fmt(b.commissionEarned ?? 0)}</td>
+                          <td className="py-2 px-3 text-right text-teal-600">{fmt(b.commissionPaid ?? 0)}</td>
+                          <td className={`py-2 px-3 text-right font-medium ${owed > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                            {fmt(owed)}
+                          </td>
+                          <td className="py-2 px-3 text-right text-blue-600">{fmt(b.pipelineEst ?? 0)}</td>
+                        </tr>
+                        {isOpen && (
+                          <BrokerSalesRows key={`sales-${b.id}`} brokerId={b.id} />
+                        )}
+                      </>
+                    );
+                  })}
+                  {brokers.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="text-center py-6 text-gray-400">
+                        No broker data available
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
 export default function SalesReportsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
@@ -571,6 +794,9 @@ export default function SalesReportsPage() {
           </Tab>
           <Tab key="unit-sales" title="Unit Sales Value">
             <UnitSalesReportTab />
+          </Tab>
+          <Tab key="broker-commissions" title="Broker Commissions">
+            <BrokerCommissionsTab />
           </Tab>
         </Tabs>
       </div>

@@ -29,9 +29,11 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.3.0",
+    "@nestjs/platform-socket.io": "^11.1.27",
     "@nestjs/schedule": "^4.0.0",
     "@nestjs/swagger": "^7.2.0",
     "@nestjs/throttler": "^5.1.0",
+    "@nestjs/websockets": "^11.1.27",
     "@prime-tracker/shared": "workspace:*",
     "@prisma/client": "^5.8.0",
     "@types/multer": "^2.0.0",
@@ -53,6 +55,7 @@
     "qrcode": "^1.5.3",
     "reflect-metadata": "^0.2.1",
     "rxjs": "^7.8.0",
+    "socket.io": "^4.8.3",
     "uuid": "^14.0.0"
   },
   "devDependencies": {

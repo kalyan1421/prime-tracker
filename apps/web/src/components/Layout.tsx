@@ -13,7 +13,7 @@ import { useAuthStore } from '../store/authStore';
 import { useDisclosure } from '@heroui/react';
 import api from '../lib/api';
 import MfaSetupModal from './MfaSetupModal';
-import { useNotifications, useMarkNotificationsRead } from '../hooks/useApi';
+import { useNotifications, useMarkNotificationsRead, useNotificationsSocket } from '../hooks/useApi';
 
 const BASE_NAV_ITEMS = [
   { label: 'Dashboard', icon: FiHome, pathKey: 'dashboard' },
@@ -285,6 +285,7 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { user, logout } = useAuthStore();
   const { isOpen: isMfaOpen, onOpen: onMfaOpen, onClose: onMfaClose } = useDisclosure();
   const { data: notifData } = useNotifications(20);
+  useNotificationsSocket(); // establishes real-time push; falls back to stale polling silently
 
   const notifications = (notifData?.notifications as any[]) || [];
   const unreadCount = notifications.filter((n: any) => !n.readAt).length;

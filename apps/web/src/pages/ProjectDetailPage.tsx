@@ -9,7 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
@@ -36,9 +36,9 @@ import {
   useProjectDraws, useCreateDraw, useUpdateDrawStatus, useDeleteDraw,
   useVendors, useCreateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
-  useDocuments, useUploadDocument, useDeleteDocument,
+  useDocuments, useUploadDocument, useDeleteDocument, useRenameDocument, useReplaceDocument,
   useUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
-  useProjectHealth, useSalesForecast, useExceptions,
+  useProjectHealth, useSalesForecast, useExceptions, useProjectActivity,
   useSetMilestoneDependency, useMilestonePhotos, useAttachMilestonePhoto, useDeleteMilestonePhoto,
   usePresignedUpload, useProjectDrawSchedules,
 } from '../hooks/useApi';
@@ -216,7 +216,7 @@ import {
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
-const TAB_MAP = ['overview', 'construction', 'budget', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments'];
+const TAB_MAP = ['overview', 'construction', 'budget', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments', 'activity'];
 
 const TAB_TITLE_MAP: Record<string, string> = {
   overview: 'Overview',
@@ -231,6 +231,7 @@ const TAB_TITLE_MAP: Record<string, string> = {
   documents: 'Documents',
   tasks: 'Tasks',
   comments: 'Comments',
+  activity: 'Activity Log',
 };
 
 const ALL_ROLES = [
@@ -251,6 +252,7 @@ const TAB_ROLES: Record<string, string[]> = {
   documents: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING', 'LEGAL'],
   tasks: ALL_ROLES,
   comments: ALL_ROLES,
+  activity: ['SUPER_ADMIN', 'FOUNDER'],
 };
 
 
@@ -369,6 +371,7 @@ export default function ProjectDetailPage() {
         {activeTab === 'documents' && <DocumentsTab projectId={id!} />}
         {activeTab === 'tasks' && <TasksPageInner projectId={id!} />}
         {activeTab === 'comments' && <ProjectCommentsTab projectId={id!} />}
+        {activeTab === 'activity' && <ProjectActivityTab projectId={id!} />}
       </div>
     </div>
   );
@@ -3046,13 +3049,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
                 key={`profile-${l.id}`}
                 className="rounded-xl border border-gray-200 bg-gray-50/40 p-4 hover:border-gray-300 transition-colors"
               >
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
-                    Unit {l.unit?.unitNumber || '—'}
-                  </span>
-                  <span className="text-xs text-gray-400 truncate">{l.tenantBrand || l.tenantName}</span>
-                </div>
-                <TenantProfilePanel lease={l} />
+                <TenantProfilePanel lease={l} unitNumber={l.unit?.unitNumber} />
               </div>
             ))}
           </div>
@@ -4150,7 +4147,7 @@ function RevenueTab({ projectId }: { projectId: string }) {
   return (
     <div className="mt-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mb-3">Revenue & Sales</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Closed Sales" value={fmt(closedSalesValue)} variant="revenue" colorScheme="green" />
         <StatCard label="Under Contract" value={String(underContractCount)} variant="revenue" colorScheme="brand" />
         <StatCard label="Monthly Lease Income" value={fmt(monthlyLease)} variant="revenue" colorScheme="teal" />
@@ -5383,11 +5380,19 @@ function DocumentsTab({ projectId }: { projectId: string }) {
   const { data: docs = [], isLoading } = useDocuments({ projectId });
   const uploadDoc = useUploadDocument();
   const deleteDoc = useDeleteDocument();
+  const renameDoc = useRenameDocument();
+  const replaceDoc = useReplaceDocument();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [filterCat, setFilterCat] = useState('ALL');
   const [uploadCategory, setUploadCategory] = useState('GENERAL');
   const [file, setFile] = useState<File | null>(null);
   const [displayName, setDisplayName] = useState('');
+  // edit state
+  const editFileRef = React.useRef<HTMLInputElement>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [editErr, setEditErr] = useState<string | null>(null);
 
   const filtered = filterCat === 'ALL' ? (docs as any[]) : (docs as any[]).filter((d: any) => d.category === filterCat);
 
@@ -5414,10 +5419,33 @@ function DocumentsTab({ projectId }: { projectId: string }) {
     } catch (e) { addToast({ title: errMsg(e, 'Delete failed'), color: 'danger' }); }
   };
 
+  const openEdit = (doc: any) => { setEditId(doc.id); setEditName(doc.fileName || ''); setEditFile(null); setEditErr(null); };
+  const cancelEdit = () => { setEditId(null); setEditFile(null); setEditErr(null); };
+
+  const handleSaveEdit = async () => {
+    if (!editName.trim()) { setEditErr('Name is required'); return; }
+    setEditErr(null);
+    try {
+      if (editFile) {
+        await replaceDoc.mutateAsync({ id: editId!, file: editFile, fileName: editName.trim() });
+        addToast({ title: 'Document replaced', color: 'success' });
+      } else {
+        await renameDoc.mutateAsync({ id: editId!, fileName: editName.trim() });
+        addToast({ title: 'Document renamed', color: 'success' });
+      }
+      cancelEdit();
+    } catch (e) { setEditErr(errMsg(e, 'Failed to save')); }
+  };
+
   if (isLoading) return <LoadingState />;
 
   return (
     <div className="space-y-4 pt-4">
+      {/* hidden file input for replace */}
+      <input ref={editFileRef} type="file" className="hidden" onChange={(e) => {
+        const f = e.target.files?.[0]; if (f) setEditFile(f); e.target.value = '';
+      }} />
+
       <div className="flex items-center justify-between">
         <div className="flex gap-2 flex-wrap">
           {['ALL', ...DOC_CATEGORIES].map((cat) => (
@@ -5440,28 +5468,56 @@ function DocumentsTab({ projectId }: { projectId: string }) {
           {filtered.map((doc: any) => (
             <Card key={doc.id} shadow="sm">
               <CardBody className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="text-2xl text-gray-400 mt-0.5">{docIcon(doc.mimeType)}</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{doc.fileName}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${DOC_CATEGORY_COLORS[doc.category] || 'bg-gray-100 text-gray-600'}`}>{doc.category}</span>
-                      {doc.fileSize && <span className="text-xs text-gray-400">{(doc.fileSize / 1024).toFixed(0)} KB</span>}
+                {editId === doc.id ? (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold text-blue-700 uppercase tracking-wide">Edit</span>
+                      <div className="flex gap-1">
+                        <Button size="sm" isIconOnly variant="light" onPress={cancelEdit} aria-label="Cancel"><FiX className="w-3 h-3 text-gray-400" /></Button>
+                        <Button size="sm" isIconOnly color="primary" onPress={handleSaveEdit} isLoading={renameDoc.isPending || replaceDoc.isPending} aria-label="Save"><FiCheck className="w-3 h-3" /></Button>
+                      </div>
                     </div>
-                    <p className="text-xs text-gray-400 mt-1">{doc.uploadedBy?.name} · {fmtDate(doc.createdAt)}</p>
+                    {editErr && <p className="text-xs text-red-500">{editErr}</p>}
+                    <Input size="sm" label="File name" value={editName} onChange={(e) => { setEditName(e.target.value); setEditErr(null); }} isInvalid={!!editErr} />
+                    <Button size="sm" variant="flat" className="w-full" onPress={() => editFileRef.current?.click()} startContent={<FiUpload className="w-3.5 h-3.5" />}>
+                      {editFile ? editFile.name : 'Replace file…'}
+                    </Button>
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm" variant="light" className="flex-1" onPress={cancelEdit}>Cancel</Button>
+                      <Button size="sm" color="primary" className="flex-1" onPress={handleSaveEdit} isLoading={renameDoc.isPending || replaceDoc.isPending}>
+                        {editFile ? 'Replace' : 'Save'}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <a href={apiAssetUrl(doc.fileUrl)} target="_blank" rel="noreferrer" className="flex-1">
-                    <Button size="sm" variant="flat" className="w-full" startContent={<FiFileText />}>View</Button>
-                  </a>
-                  <a href={apiAssetUrl(doc.fileUrl)} download={doc.fileName} className="flex-1">
-                    <Button size="sm" variant="flat" className="w-full" startContent={<FiDownload />}>Download</Button>
-                  </a>
-                  <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)}>
-                    <FiTrash2 />
-                  </Button>
-                </div>
+                ) : (
+                  <>
+                    <div className="flex items-start gap-3">
+                      <div className="text-2xl text-gray-400 mt-0.5">{docIcon(doc.mimeType)}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{doc.fileName}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${DOC_CATEGORY_COLORS[doc.category] || 'bg-gray-100 text-gray-600'}`}>{doc.category}</span>
+                          {doc.fileSize && <span className="text-xs text-gray-400">{(doc.fileSize / 1024).toFixed(0)} KB</span>}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1">{doc.uploadedBy?.name} · {fmtDate(doc.createdAt)}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <a href={apiAssetUrl(doc.fileUrl)} target="_blank" rel="noreferrer" className="flex-1">
+                        <Button size="sm" variant="flat" className="w-full" startContent={<FiFileText />}>View</Button>
+                      </a>
+                      <a href={apiAssetUrl(doc.fileUrl)} download={doc.fileName} className="flex-1">
+                        <Button size="sm" variant="flat" className="w-full" startContent={<FiDownload />}>Download</Button>
+                      </a>
+                      <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(doc)} aria-label="Edit">
+                        <FiEdit2 className="w-3.5 h-3.5 text-gray-400" />
+                      </Button>
+                      <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)}>
+                        <FiTrash2 />
+                      </Button>
+                    </div>
+                  </>
+                )}
               </CardBody>
             </Card>
           ))}
@@ -5497,6 +5553,424 @@ function DocumentsTab({ projectId }: { projectId: string }) {
           </ModalFooter>
         </ModalContent>
       </Modal>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Project Activity Log Tab  (SUPER_ADMIN / FOUNDER only)
+// ──────────────────────────────────────────────────────────────────────────────
+
+type EntityCfg = {
+  label: string;
+  icon: React.ElementType;
+  borderColor: string;
+  chipStyle: string;
+  filterActive: string;
+};
+
+const ENTITY_CFG: Record<string, EntityCfg> = {
+  document:  { label: 'Document',  icon: FiFile,         borderColor: 'border-l-blue-400',    chipStyle: 'bg-blue-50 text-blue-700 border border-blue-200',       filterActive: 'bg-blue-500 text-white' },
+  milestone: { label: 'Milestone', icon: FiFlag,         borderColor: 'border-l-amber-400',   chipStyle: 'bg-amber-50 text-amber-700 border border-amber-200',    filterActive: 'bg-amber-500 text-white' },
+  lead:      { label: 'Lead',      icon: FiTarget,       borderColor: 'border-l-purple-400',  chipStyle: 'bg-purple-50 text-purple-700 border border-purple-200', filterActive: 'bg-purple-500 text-white' },
+  sale:      { label: 'Sale',      icon: FiDollarSign,   borderColor: 'border-l-emerald-400', chipStyle: 'bg-emerald-50 text-emerald-700 border border-emerald-200', filterActive: 'bg-emerald-500 text-white' },
+  lease:     { label: 'Lease',     icon: FiKey,          borderColor: 'border-l-teal-400',    chipStyle: 'bg-teal-50 text-teal-700 border border-teal-200',       filterActive: 'bg-teal-500 text-white' },
+  task:      { label: 'Task',      icon: FiCheckSquare,  borderColor: 'border-l-orange-400',  chipStyle: 'bg-orange-50 text-orange-700 border border-orange-200', filterActive: 'bg-orange-500 text-white' },
+  comment:   { label: 'Comment',   icon: FiMessageSquare,borderColor: 'border-l-slate-300',   chipStyle: 'bg-slate-100 text-slate-600 border border-slate-200',   filterActive: 'bg-slate-700 text-white' },
+  building:  { label: 'Building',  icon: FiHome,         borderColor: 'border-l-indigo-400',  chipStyle: 'bg-indigo-50 text-indigo-700 border border-indigo-200', filterActive: 'bg-indigo-500 text-white' },
+  unit:      { label: 'Unit',      icon: FiLayers,       borderColor: 'border-l-cyan-400',    chipStyle: 'bg-cyan-50 text-cyan-700 border border-cyan-200',       filterActive: 'bg-cyan-500 text-white' },
+  budget:    { label: 'Budget',    icon: FiBarChart2,    borderColor: 'border-l-rose-400',    chipStyle: 'bg-rose-50 text-rose-700 border border-rose-200',       filterActive: 'bg-rose-500 text-white' },
+  member:    { label: 'Team',      icon: FiUsers,        borderColor: 'border-l-violet-400',  chipStyle: 'bg-violet-50 text-violet-700 border border-violet-200', filterActive: 'bg-violet-500 text-white' },
+};
+
+const ACTION_CFG: Record<string, { label: string; style: string }> = {
+  UPLOADED:  { label: 'Uploaded',  style: 'bg-blue-500 text-white' },
+  CREATED:   { label: 'Created',   style: 'bg-slate-700 text-white' },
+  ADDED:     { label: 'Added',     style: 'bg-slate-700 text-white' },
+  COMPLETED: { label: 'Completed', style: 'bg-emerald-500 text-white' },
+  CONVERTED: { label: 'Converted', style: 'bg-emerald-600 text-white' },
+  LOST:      { label: 'Lost',      style: 'bg-red-500 text-white' },
+  CLOSED:    { label: 'Closed',    style: 'bg-emerald-600 text-white' },
+  JOINED:    { label: 'Joined',    style: 'bg-violet-500 text-white' },
+};
+
+const STATUS_CHIP_STYLE: Record<string, string> = {
+  ACTIVE: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  AVAILABLE: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  COMPLETED: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  CLOSED: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  DONE: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  LEASED: 'bg-teal-50 text-teal-700 border border-teal-200',
+  SOLD: 'bg-purple-50 text-purple-700 border border-purple-200',
+  OCCUPIED: 'bg-sky-50 text-sky-700 border border-sky-200',
+  OWNER_OCCUPIED: 'bg-sky-50 text-sky-700 border border-sky-200',
+  UNDER_CONTRACT: 'bg-amber-50 text-amber-700 border border-amber-200',
+  LOI_SIGNED: 'bg-amber-50 text-amber-700 border border-amber-200',
+  LEASE_PENDING: 'bg-amber-50 text-amber-700 border border-amber-200',
+  NEGOTIATING: 'bg-amber-50 text-amber-700 border border-amber-200',
+  IN_PROGRESS: 'bg-sky-50 text-sky-700 border border-sky-200',
+  UNDER_CONSTRUCTION: 'bg-orange-50 text-orange-600 border border-orange-200',
+  DRAFT: 'bg-slate-50 text-slate-500 border border-slate-200',
+  PROSPECT: 'bg-slate-50 text-slate-600 border border-slate-200',
+  NEW: 'bg-slate-50 text-slate-600 border border-slate-200',
+  TODO: 'bg-slate-50 text-slate-500 border border-slate-200',
+  NOT_STARTED: 'bg-slate-50 text-slate-500 border border-slate-200',
+  CONTACTED: 'bg-blue-50 text-blue-600 border border-blue-200',
+  QUALIFIED: 'bg-indigo-50 text-indigo-600 border border-indigo-200',
+  PROPOSAL_SENT: 'bg-violet-50 text-violet-600 border border-violet-200',
+  LOST: 'bg-red-50 text-red-600 border border-red-200',
+  DEAD: 'bg-red-50 text-red-400 border border-red-100',
+  CANCELLED: 'bg-red-50 text-red-500 border border-red-200',
+  TERMINATED: 'bg-red-50 text-red-600 border border-red-200',
+  EXPIRED: 'bg-orange-50 text-orange-600 border border-orange-200',
+  OVERDUE: 'bg-red-50 text-red-600 border border-red-200',
+  BLOCKED: 'bg-rose-50 text-rose-600 border border-rose-200',
+  URGENT: 'bg-red-100 text-red-700 border border-red-200',
+  HIGH: 'bg-orange-100 text-orange-700 border border-orange-200',
+  MEDIUM: 'bg-amber-100 text-amber-700 border border-amber-200',
+  LOW: 'bg-slate-100 text-slate-600 border border-slate-200',
+};
+
+// Status legend: shown as a bar when a type filter is active
+const STATUS_LEGENDS: Record<string, { label: string; style: string }[]> = {
+  lead: [
+    { label: 'New',           style: 'bg-slate-100 text-slate-600' },
+    { label: 'Contacted',     style: 'bg-blue-100 text-blue-600' },
+    { label: 'Qualified',     style: 'bg-indigo-100 text-indigo-600' },
+    { label: 'Proposal Sent', style: 'bg-violet-100 text-violet-600' },
+    { label: 'Negotiating',   style: 'bg-amber-100 text-amber-700' },
+    { label: 'Converted',     style: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Lost',          style: 'bg-red-100 text-red-600' },
+    { label: 'Dead',          style: 'bg-red-50 text-red-400' },
+  ],
+  sale: [
+    { label: 'Prospect',       style: 'bg-slate-100 text-slate-600' },
+    { label: 'LOI Signed',     style: 'bg-blue-100 text-blue-600' },
+    { label: 'Under Contract', style: 'bg-amber-100 text-amber-700' },
+    { label: 'Closed',         style: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Cancelled',      style: 'bg-red-100 text-red-500' },
+  ],
+  lease: [
+    { label: 'Draft',          style: 'bg-slate-100 text-slate-500' },
+    { label: 'Active',         style: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Expired',        style: 'bg-orange-100 text-orange-600' },
+    { label: 'Terminated',     style: 'bg-red-100 text-red-600' },
+    { label: 'Owner Occupied', style: 'bg-sky-100 text-sky-600' },
+  ],
+  task: [
+    { label: 'Todo',        style: 'bg-slate-100 text-slate-500' },
+    { label: 'In Progress', style: 'bg-sky-100 text-sky-600' },
+    { label: 'Done',        style: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Cancelled',   style: 'bg-slate-100 text-slate-400' },
+  ],
+  milestone: [
+    { label: 'Not Started', style: 'bg-slate-100 text-slate-500' },
+    { label: 'In Progress', style: 'bg-sky-100 text-sky-600' },
+    { label: 'Completed',   style: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Overdue',     style: 'bg-red-100 text-red-600' },
+    { label: 'Blocked',     style: 'bg-rose-100 text-rose-600' },
+  ],
+  unit: [
+    { label: 'Available',          style: 'bg-emerald-100 text-emerald-700' },
+    { label: 'Under Contract',     style: 'bg-amber-100 text-amber-700' },
+    { label: 'Lease Pending',      style: 'bg-amber-100 text-amber-700' },
+    { label: 'Leased',             style: 'bg-teal-100 text-teal-700' },
+    { label: 'Sold',               style: 'bg-purple-100 text-purple-700' },
+    { label: 'Occupied',           style: 'bg-sky-100 text-sky-600' },
+    { label: 'Under Construction', style: 'bg-orange-100 text-orange-600' },
+  ],
+};
+
+function formatRelativeTime(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const now = Date.now();
+  const diff = now - d.getTime();
+  const mins = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days = Math.floor(diff / 86_400_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatAbsoluteTime(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
+
+const ALL_ACTIVITY_TYPES = Object.keys(ENTITY_CFG);
+
+function ProjectActivityTab({ projectId }: { projectId: string }) {
+  const [page, setPage] = useState(1);
+  const [typeFilter, setTypeFilter] = useState<string>('');
+  const { data, isLoading, error } = useProjectActivity(projectId, page);
+
+  const events: any[] = data?.events ?? [];
+  const total: number = data?.total ?? 0;
+  const totalPages = Math.ceil(total / 60);
+
+  const typeCounts = React.useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const ev of events) c[ev.type] = (c[ev.type] ?? 0) + 1;
+    return c;
+  }, [events]);
+
+  const filtered = typeFilter ? events.filter((e: any) => e.type === typeFilter) : events;
+
+  const grouped: { dateLabel: string; items: any[] }[] = React.useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const ev of filtered) {
+      const d = new Date(ev.timestamp);
+      const key = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(ev);
+    }
+    return Array.from(map.entries()).map(([dateLabel, items]) => ({ dateLabel, items }));
+  }, [filtered]);
+
+  const legend = typeFilter ? (STATUS_LEGENDS[typeFilter] ?? null) : null;
+
+  return (
+    <div className="space-y-0">
+      {/* ── Header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-start gap-4 justify-between mb-5">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <p className="text-base font-bold text-slate-900 tracking-tight">Project Activity Log</p>
+            {!isLoading && total > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-900 text-white tabular-nums">
+                {total}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Every action across leads, docs, milestones, tasks &amp; more
+          </p>
+        </div>
+
+        {/* ── Filter chips ── */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={() => setTypeFilter('')}
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-all duration-150 ${
+              !typeFilter ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            All
+            {!typeFilter && total > 0 && (
+              <span className="ml-0.5 text-[10px] font-bold opacity-60">{total}</span>
+            )}
+          </button>
+          {ALL_ACTIVITY_TYPES.map((t) => {
+            const cfg = ENTITY_CFG[t];
+            const count = typeCounts[t] ?? 0;
+            const Icon = cfg.icon;
+            return (
+              <button
+                key={t}
+                onClick={() => setTypeFilter(typeFilter === t ? '' : t)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-all duration-150 ${
+                  typeFilter === t ? cfg.filterActive + ' shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+              >
+                <Icon size={10} />
+                {cfg.label}
+                {count > 0 && (
+                  <span className={`ml-0.5 text-[10px] font-bold ${typeFilter === t ? 'opacity-60' : 'opacity-50'}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Status legend bar — answers "mention all statuses on bar" ── */}
+      {legend && (
+        <div className="flex items-center gap-2 flex-wrap mb-4 px-3 py-2.5 bg-slate-50 rounded-lg border border-slate-100">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">
+            Status key
+          </span>
+          <span className="w-px h-3 bg-slate-200 shrink-0" />
+          {legend.map((s, i) => (
+            <React.Fragment key={s.label}>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${s.style}`}>
+                {s.label}
+              </span>
+              {i < legend.length - 1 && (
+                <span className="text-slate-300 text-[10px]">→</span>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+
+      {/* ── Loading skeleton ── */}
+      {isLoading && (
+        <div className="space-y-2">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="border-l-4 border-l-slate-200 bg-white rounded-r-lg border border-slate-100 px-3 py-3 animate-pulse">
+              <div className="flex justify-between mb-2">
+                <div className="flex gap-2">
+                  <div className="h-5 w-16 bg-slate-100 rounded-full" />
+                  <div className="h-5 w-12 bg-slate-100 rounded-full" />
+                  <div className="h-5 w-24 bg-slate-100 rounded" />
+                </div>
+                <div className="h-4 w-14 bg-slate-100 rounded" />
+              </div>
+              <div className="h-3.5 bg-slate-100 rounded w-2/3 mb-2.5 ml-5" />
+              <div className="flex gap-2 ml-5">
+                <div className="h-4 w-16 bg-slate-100 rounded-full" />
+                <div className="h-4 w-14 bg-slate-100 rounded-full" />
+                <div className="h-4 w-20 bg-slate-100 rounded-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Error ── */}
+      {!isLoading && error && (
+        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+          Failed to load activity log. Please try again.
+        </div>
+      )}
+
+      {/* ── Empty ── */}
+      {!isLoading && !error && filtered.length === 0 && (
+        <div className="text-center py-14">
+          <FiActivity size={32} className="mx-auto text-slate-300 mb-3" />
+          <p className="text-sm font-medium text-slate-400">No activity recorded yet</p>
+          <p className="text-xs text-slate-300 mt-1">Events will appear here as the project progresses</p>
+        </div>
+      )}
+
+      {/* ── Timeline ── */}
+      {!isLoading && grouped.length > 0 && (
+        <div className="space-y-6">
+          {grouped.map(({ dateLabel, items }) => (
+            <div key={dateLabel}>
+              {/* Day header */}
+              <div className="flex items-center gap-2.5 mb-2.5">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">
+                  {dateLabel}
+                </span>
+                <div className="h-px flex-1 bg-slate-100" />
+                <span className="text-[10px] font-semibold text-slate-300 whitespace-nowrap tabular-nums">
+                  {items.length} {items.length === 1 ? 'event' : 'events'}
+                </span>
+              </div>
+
+              {/* Event cards */}
+              <div className="space-y-2">
+                {items.map((ev: any) => {
+                  const cfg = ENTITY_CFG[ev.type] ?? ENTITY_CFG['document'];
+                  const actionCfg = ACTION_CFG[ev.action] ?? { label: ev.action, style: 'bg-slate-600 text-white' };
+                  const Icon = cfg.icon;
+
+                  // Status chip: prefer meta.status, fall back to meta.priority
+                  const statusValue: string | null = ev.meta?.status ?? ev.meta?.priority ?? null;
+                  const statusStyle = statusValue
+                    ? (STATUS_CHIP_STYLE[statusValue] ?? 'bg-slate-100 text-slate-600 border border-slate-200')
+                    : null;
+                  const statusLabel = statusValue
+                    ? String(statusValue).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())
+                    : null;
+
+                  // Secondary meta (category, source, role, type, amount)
+                  const metaItems: string[] = [];
+                  if (ev.meta?.category) metaItems.push(String(ev.meta.category).replace(/_/g, ' ').toLowerCase());
+                  if (ev.meta?.source) metaItems.push('via ' + String(ev.meta.source).replace(/_/g, ' ').toLowerCase());
+                  if (ev.meta?.commentType) metaItems.push(String(ev.meta.commentType).toLowerCase() + ' comment');
+                  if (ev.meta?.buildingType) metaItems.push(String(ev.meta.buildingType).replace(/_/g, ' ').toLowerCase());
+                  if (ev.meta?.unitType) metaItems.push(String(ev.meta.unitType).replace(/_/g, ' ').toLowerCase());
+                  if (ev.meta?.role) metaItems.push(String(ev.meta.role).replace(/_/g, ' ').toLowerCase());
+                  if (ev.meta?.amount != null) metaItems.push('$' + Number(ev.meta.amount).toLocaleString());
+
+                  return (
+                    <div
+                      key={ev.id}
+                      className={`border-l-4 ${cfg.borderColor} bg-white rounded-r-lg border border-l-0 border-slate-100 px-3 py-2.5 hover:border-slate-200 hover:shadow-sm transition-all duration-150`}
+                    >
+                      {/* Row 1: icon + entity name + timestamp */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Icon size={13} className="text-slate-400 shrink-0 mt-px" />
+                          <span className="text-sm font-semibold text-slate-800 truncate">
+                            {ev.entityName}
+                          </span>
+                        </div>
+                        <span
+                          className="text-[11px] font-mono text-slate-400 whitespace-nowrap shrink-0 tabular-nums"
+                          title={formatAbsoluteTime(ev.timestamp)}
+                        >
+                          {formatRelativeTime(ev.timestamp)}
+                        </span>
+                      </div>
+
+                      {/* Row 2: description label */}
+                      <p className="text-xs text-slate-500 mt-0.5 mb-2 line-clamp-1 pl-[19px]">
+                        {ev.label}
+                      </p>
+
+                      {/* Row 3: type + action + status + meta + actor */}
+                      <div className="flex items-center gap-1.5 flex-wrap pl-[19px]">
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${cfg.chipStyle}`}>
+                          {cfg.label}
+                        </span>
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${actionCfg.style}`}>
+                          {actionCfg.label}
+                        </span>
+                        {statusLabel && statusStyle && (
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${statusStyle}`}>
+                            {statusLabel}
+                          </span>
+                        )}
+                        {metaItems.map((m, idx) => (
+                          <span key={idx} className="text-[10px] text-slate-400 font-medium">
+                            {m}
+                          </span>
+                        ))}
+                        {ev.actorName && (
+                          <>
+                            <span className="flex-1" />
+                            <span className="text-[11px] text-slate-400 whitespace-nowrap">
+                              by <span className="font-semibold text-slate-600">{ev.actorName}</span>
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Pagination ── */}
+      {totalPages > 1 && !isLoading && (
+        <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-4">
+          <span className="text-xs font-mono text-slate-400 tabular-nums">
+            {page} / {totalPages} · {total} events
+          </span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="flat" isDisabled={page <= 1} onPress={() => setPage((p) => p - 1)}>
+              ← Prev
+            </Button>
+            <Button size="sm" variant="flat" isDisabled={page >= totalPages} onPress={() => setPage((p) => p + 1)}>
+              Next →
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

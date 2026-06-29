@@ -91,7 +91,9 @@ export NVM_DIR=/home/ubuntu/.nvm
 source "\$NVM_DIR/nvm.sh" 2>/dev/null || source /root/.nvm/nvm.sh 2>/dev/null || true
 export PATH=\$PATH:/home/ubuntu/.local/share/pnpm:/usr/local/bin
 
-set -e
+# pipefail so a failed step piped into tail (e.g. prisma migrate deploy) aborts
+# the deploy instead of being masked by tail's exit code.
+set -eo pipefail
 cd /home/ubuntu/prime-tracker
 
 git config --global --add safe.directory /home/ubuntu/prime-tracker 2>/dev/null || true

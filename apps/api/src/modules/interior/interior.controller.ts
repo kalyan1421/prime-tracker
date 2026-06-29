@@ -48,6 +48,16 @@ export class InteriorController {
     return this.service.createPackageTemplate(body);
   }
 
+  @Patch('templates/:tid')
+  @RequirePermissions('interior:edit')
+  @ApiOperation({ summary: 'Update package template name/description/rate' })
+  updateTemplate(
+    @Param('tid') tid: string,
+    @Body() body: { name?: string; description?: string; defaultRatePerSqft?: number | null },
+  ) {
+    return this.service.updatePackageTemplate(tid, body);
+  }
+
   @Delete('templates/:tid')
   @RequirePermissions('interior:edit')
   removeTemplate(@Param('tid') tid: string) {
@@ -107,7 +117,6 @@ export class InteriorController {
       ratePerSqft?: number;
       area?: number;
       contractValue?: number;
-      packageTemplateId?: string;
       startDate?: string;
       targetEnd?: string;
     },
@@ -190,5 +199,15 @@ export class InteriorController {
   @RequirePermissions('interior:edit')
   resolveSnag(@Param('snagId') snagId: string) {
     return this.service.resolveSnag(snagId);
+  }
+
+  @Patch('snags/:snagId')
+  @RequirePermissions('interior:edit')
+  @ApiOperation({ summary: 'Update snag status, description, room, or assignee' })
+  updateSnag(
+    @Param('snagId') snagId: string,
+    @Body() body: { status?: string; description?: string; room?: string; assigneeId?: string },
+  ) {
+    return this.service.updateSnag(snagId, body);
   }
 }

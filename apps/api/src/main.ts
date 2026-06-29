@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import helmet from 'helmet';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -35,6 +36,9 @@ async function bootstrap() {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
+
+  // WebSocket adapter (Socket.IO)
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   // Static files for uploaded documents
   app.useStaticAssets(path.join(process.cwd(), 'uploads'), { prefix: '/uploads' });

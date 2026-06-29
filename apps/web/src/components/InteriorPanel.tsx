@@ -5,10 +5,12 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   useDisclosure, addToast,
 } from '@heroui/react';
-import { FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiExternalLink } from 'react-icons/fi';
 import {
-  useInteriorProjects, useCreateInterior, useAdvanceInteriorPhase, useApproveInterior,
-  useInteriorTemplates,
+  FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiExternalLink, FiEdit2, FiX, FiCheck,
+} from 'react-icons/fi';
+import {
+  useInteriorProjects, useCreateInterior, useUpdateInterior,
+  useAdvanceInteriorPhase, useApproveInterior, useInteriorTemplates, useUsers,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
@@ -26,6 +28,8 @@ const PHASE_LABEL: Record<string, string> = {
   SNAGGING: 'Snagging',
   HANDOVER: 'Handover',
 };
+
+const CONTRACT_TYPES = ['PER_SQFT', 'FIXED', 'COST_PLUS'] as const;
 
 function PhaseStepper({ current }: { current: string }) {
   const idx = INTERIOR_PHASES.indexOf(current as any);
@@ -50,47 +54,60 @@ function PhaseStepper({ current }: { current: string }) {
 export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string; unitNumber?: string; unitSqft?: number }) {
   const { data, isLoading } = useInteriorProjects({ unitId });
   const { data: templatesData } = useInteriorTemplates();
+  const { data: usersData } = useUsers();
   const templates: any[] = Array.isArray(templatesData) ? templatesData : [];
+  const users: any[] = Array.isArray(usersData) ? usersData : [];
   const create = useCreateInterior();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const canEditInterior = useAuthStore((s) => s.hasPermission('interior:edit'));
   const [interiorErr, setInteriorErr] = useState<string | null>(null);
 
-  // Prefill from the existing unit: name from its number, area from its sqft.
-  const defaultForm = (): Record<string, string> => ({
-    name: unitNumber ? `Unit ${unitNumber} fit-out` : '',
-    ratePerSqft: '',
-    area: unitSqft != null ? String(unitSqft) : '',
-    packageTemplateId: '',
-  });
-  const [form, setForm] = useState<Record<string, string>>(defaultForm);
-
-  // Reset to the unit's defaults each time the dialog opens.
-  const openModal = () => { setForm(defaultForm()); setInteriorErr(null); onOpen(); };
-
   const projects: any[] = Array.isArray(data) ? data : [];
 
+  // An active (non-cancelled, non-completed) project already exists → block create
+  const activeProject = projects.find(
+    (p) => p.status !== 'COMPLETED' && p.status !== 'CANCELLED',
+  );
+  const canCreate = canEditInterior && !activeProject;
+
+  const defaultForm = (): Record<string, string> => ({
+    name: unitNumber ? `Unit ${unitNumber} fit-out` : '',
+    packageTemplateId: '',
+    contractType: 'PER_SQFT',
+    ratePerSqft: '',
+    area: unitSqft != null ? String(unitSqft) : '',
+    contractValue: '',
+    pmId: '',
+    startDate: '',
+    targetEnd: '',
+  });
+  const [form, setForm] = useState<Record<string, string>>(defaultForm);
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const openModal = () => { setForm(defaultForm()); setInteriorErr(null); onOpen(); };
+
   const submit = async () => {
-    if (!form.name.trim()) {
-      setInteriorErr('Name is required');
-      return;
-    }
+    if (!form.name.trim()) { setInteriorErr('Name is required'); return; }
     setInteriorErr(null);
     try {
       await create.mutateAsync({
         unitId,
         name: form.name.trim(),
-        contractType: 'PER_SQFT',
+        contractType: form.contractType || 'PER_SQFT',
         ratePerSqft: form.ratePerSqft ? Number(form.ratePerSqft) : undefined,
         area: form.area ? Number(form.area) : undefined,
+        contractValue: form.contractValue ? Number(form.contractValue) : undefined,
         packageTemplateId: form.packageTemplateId || undefined,
+        pmId: form.pmId || undefined,
+        startDate: form.startDate || undefined,
+        targetEnd: form.targetEnd || undefined,
       });
       addToast({ title: 'Interior project created', color: 'success' });
       setForm(defaultForm());
       onClose();
     } catch (e) {
       setInteriorErr(errMsg(e, 'Failed to create'));
-      addToast({ title: errMsg(e, 'Failed to create'), color: 'danger' });
     }
   };
 
@@ -103,10 +120,13 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
             Interior / Fit-Out {projects.length > 0 && `(${projects.length})`}
           </p>
         </div>
-        {canEditInterior && (
+        {canCreate && (
           <Button size="sm" variant="flat" color="primary" startContent={<FiPlus />} onPress={openModal}>
             Start fit-out
           </Button>
+        )}
+        {canEditInterior && activeProject && (
+          <Chip size="sm" variant="flat" color="warning">1 active</Chip>
         )}
       </CardHeader>
       <CardBody className="pt-0 space-y-3">
@@ -117,11 +137,12 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
           </p>
         )}
         {projects.map((p) => (
-          <InteriorProjectCard key={p.id} project={p} />
+          <InteriorProjectCard key={p.id} project={p} templates={templates} users={users} />
         ))}
       </CardBody>
 
-      <Modal isOpen={isOpen} onClose={onClose}>
+      {/* Create modal */}
+      <Modal isOpen={isOpen} onClose={onClose} size="lg">
         <ModalContent>
           <ModalHeader>Start interior fit-out</ModalHeader>
           <ModalBody className="space-y-3">
@@ -132,6 +153,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
               </p>
             )}
             <FormError message={interiorErr} />
+
             <Input
               label="Name" value={form.name}
               onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setInteriorErr(null); }}
@@ -139,6 +161,8 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
               isInvalid={!!interiorErr && !form.name.trim()}
               errorMessage="Required"
             />
+
+            {/* Package template */}
             {templates.length > 0 && (
               <Select
                 label="Package (optional)"
@@ -150,7 +174,6 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
                   setForm((f) => ({
                     ...f,
                     packageTemplateId: id,
-                    // Seed rate from the package default when the user hasn't typed one.
                     ratePerSqft: f.ratePerSqft || (tpl?.defaultRatePerSqft != null ? String(tpl.defaultRatePerSqft) : ''),
                   }));
                 }}
@@ -167,21 +190,47 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
                 This package's BOQ lines will be copied into the new fit-out's scope.
               </p>
             )}
-            <div className="flex gap-3">
-              <Input
-                type="number" label="Rate / sqft ($)" value={form.ratePerSqft}
-                onChange={(e) => setForm((f) => ({ ...f, ratePerSqft: e.target.value }))}
-              />
-              <Input
-                type="number" label="Area (sqft)" value={form.area}
-                onChange={(e) => setForm((f) => ({ ...f, area: e.target.value }))}
-              />
+
+            {/* Contract */}
+            <div className="grid grid-cols-3 gap-2">
+              <Select
+                size="sm" label="Contract type"
+                selectedKeys={[form.contractType]}
+                onChange={(e) => setForm((f) => ({ ...f, contractType: e.target.value }))}
+              >
+                {CONTRACT_TYPES.map((ct) => (
+                  <SelectItem key={ct} textValue={ct}>{ct.replace('_', ' ')}</SelectItem>
+                ))}
+              </Select>
+              <Input size="sm" type="number" label="Rate / sqft ($)" value={form.ratePerSqft} onChange={set('ratePerSqft')} />
+              <Input size="sm" type="number" label="Area (sqft)" value={form.area} onChange={set('area')} />
             </div>
-            {form.ratePerSqft && form.area && (
+            {form.contractType === 'FIXED' && (
+              <Input size="sm" type="number" label="Fixed contract value ($)" value={form.contractValue} onChange={set('contractValue')} />
+            )}
+            {form.ratePerSqft && form.area && form.contractType === 'PER_SQFT' && (
               <p className="text-xs text-gray-500">
                 Contract value ≈ {fmt(Number(form.ratePerSqft) * Number(form.area))}
               </p>
             )}
+
+            {/* PM + Dates */}
+            {users.length > 0 && (
+              <Select
+                size="sm" label="Project manager (optional)"
+                placeholder="Unassigned"
+                selectedKeys={form.pmId ? [form.pmId] : []}
+                onChange={(e) => setForm((f) => ({ ...f, pmId: e.target.value }))}
+              >
+                {users.map((u) => (
+                  <SelectItem key={u.id} textValue={u.name ?? u.email}>{u.name ?? u.email}</SelectItem>
+                ))}
+              </Select>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <Input size="sm" type="date" label="Start date" value={form.startDate} onChange={set('startDate')} />
+              <Input size="sm" type="date" label="Target handover" value={form.targetEnd} onChange={set('targetEnd')} />
+            </div>
           </ModalBody>
           <ModalFooter>
             <Button variant="light" onPress={onClose}>Cancel</Button>
@@ -193,12 +242,67 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
   );
 }
 
-function InteriorProjectCard({ project }: { project: any }) {
+function InteriorProjectCard({ project, templates, users }: { project: any; templates: any[]; users: any[] }) {
   const advance = useAdvanceInteriorPhase();
   const approve = useApproveInterior();
+  const update = useUpdateInterior();
   const canEdit = useAuthStore((s) => s.hasPermission('interior:edit'));
   const idx = INTERIOR_PHASES.indexOf(project.phase);
   const next = idx >= 0 && idx < INTERIOR_PHASES.length - 1 ? INTERIOR_PHASES[idx + 1] : null;
+
+  const [editing, setEditing] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: project.name ?? '',
+    contractType: project.contractType ?? 'PER_SQFT',
+    ratePerSqft: project.ratePerSqft != null ? String(project.ratePerSqft) : '',
+    area: project.area != null ? String(project.area) : '',
+    contractValue: project.contractValue != null ? String(project.contractValue) : '',
+    pmId: project.pm?.id ?? '',
+    startDate: project.startDate ? String(project.startDate).slice(0, 10) : '',
+    targetEnd: project.targetEnd ? String(project.targetEnd).slice(0, 10) : '',
+  });
+  const setEdit = (k: keyof typeof editForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setEditForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const openEdit = () => {
+    setEditForm({
+      name: project.name ?? '',
+      contractType: project.contractType ?? 'PER_SQFT',
+      ratePerSqft: project.ratePerSqft != null ? String(project.ratePerSqft) : '',
+      area: project.area != null ? String(project.area) : '',
+      contractValue: project.contractValue != null ? String(project.contractValue) : '',
+      pmId: project.pm?.id ?? '',
+      startDate: project.startDate ? String(project.startDate).slice(0, 10) : '',
+      targetEnd: project.targetEnd ? String(project.targetEnd).slice(0, 10) : '',
+    });
+    setEditErr(null);
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editForm.name.trim()) { setEditErr('Name is required'); return; }
+    setEditErr(null);
+    try {
+      await update.mutateAsync({
+        id: project.id,
+        data: {
+          name: editForm.name.trim(),
+          contractType: editForm.contractType || undefined,
+          ratePerSqft: editForm.ratePerSqft ? Number(editForm.ratePerSqft) : undefined,
+          area: editForm.area ? Number(editForm.area) : undefined,
+          contractValue: editForm.contractValue ? Number(editForm.contractValue) : undefined,
+          pmId: editForm.pmId || null,
+          startDate: editForm.startDate || undefined,
+          targetEnd: editForm.targetEnd || undefined,
+        },
+      });
+      addToast({ title: 'Fit-out updated', color: 'success' });
+      setEditing(false);
+    } catch (e) {
+      setEditErr(errMsg(e, 'Failed to update'));
+    }
+  };
 
   const doAdvance = async () => {
     if (!next) return;
@@ -206,26 +310,102 @@ function InteriorProjectCard({ project }: { project: any }) {
       await advance.mutateAsync({ id: project.id, target: next });
       addToast({ title: `Advanced to ${PHASE_LABEL[next]}`, color: 'success' });
     } catch (e) {
-      // Surfaces the gate messages: shell-not-complete / missing city-approval or handover doc.
       addToast({ title: errMsg(e, 'Cannot advance'), color: 'danger' });
     }
   };
 
+  if (editing) {
+    return (
+      <div className="rounded-xl border border-amber-100 bg-amber-50/40 p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Edit fit-out</span>
+          <div className="flex gap-1">
+            <Button size="sm" isIconOnly variant="light" aria-label="Cancel" onPress={() => setEditing(false)}>
+              <FiX className="w-3.5 h-3.5 text-gray-400" />
+            </Button>
+            <Button size="sm" isIconOnly color="primary" aria-label="Save" isLoading={update.isPending} onPress={saveEdit}>
+              <FiCheck className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+        <FormError message={editErr} />
+
+        <Input
+          size="sm" label="Name" value={editForm.name}
+          onChange={(e) => { setEditForm((f) => ({ ...f, name: e.target.value })); setEditErr(null); }}
+          isInvalid={!!editErr && editErr.includes('Name')}
+        />
+
+        <div className="grid grid-cols-3 gap-2">
+          <Select
+            size="sm" label="Contract type"
+            selectedKeys={[editForm.contractType]}
+            onChange={(e) => setEditForm((f) => ({ ...f, contractType: e.target.value }))}
+          >
+            {CONTRACT_TYPES.map((ct) => (
+              <SelectItem key={ct} textValue={ct}>{ct.replace('_', ' ')}</SelectItem>
+            ))}
+          </Select>
+          <Input size="sm" type="number" label="Rate / sqft ($)" value={editForm.ratePerSqft} onChange={setEdit('ratePerSqft')} />
+          <Input size="sm" type="number" label="Area (sqft)" value={editForm.area} onChange={setEdit('area')} />
+        </div>
+        {editForm.contractType === 'FIXED' && (
+          <Input size="sm" type="number" label="Fixed contract value ($)" value={editForm.contractValue} onChange={setEdit('contractValue')} />
+        )}
+
+        {users.length > 0 && (
+          <Select
+            size="sm" label="Project manager"
+            placeholder="Unassigned"
+            selectedKeys={editForm.pmId ? [editForm.pmId] : []}
+            onChange={(e) => setEditForm((f) => ({ ...f, pmId: e.target.value }))}
+          >
+            {users.map((u) => (
+              <SelectItem key={u.id} textValue={u.name ?? u.email}>{u.name ?? u.email}</SelectItem>
+            ))}
+          </Select>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <Input size="sm" type="date" label="Start date" value={editForm.startDate} onChange={setEdit('startDate')} />
+          <Input size="sm" type="date" label="Target handover" value={editForm.targetEnd} onChange={setEdit('targetEnd')} />
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <Button size="sm" variant="light" onPress={() => setEditing(false)}>Cancel</Button>
+          <Button size="sm" color="primary" isLoading={update.isPending} onPress={saveEdit}>Save changes</Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-gray-100 p-3 space-y-3">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="font-medium text-sm">{project.name}</p>
           <p className="text-xs text-gray-400">
             {project.contractType === 'PER_SQFT' && project.contractValue
               ? `${fmt(Number(project.contractValue))} · per sqft`
               : project.status}
+            {project.pm?.name && ` · PM: ${project.pm.name}`}
             {project.handoverAt && ` · handed over ${fmtDate(project.handoverAt)}`}
           </p>
+          {(project.startDate || project.targetEnd) && (
+            <p className="text-xs text-gray-400">
+              {project.startDate ? fmtDate(project.startDate) : '—'} → {project.targetEnd ? fmtDate(project.targetEnd) : '—'}
+            </p>
+          )}
         </div>
-        <Chip size="sm" color={project.status === 'COMPLETED' ? 'success' : 'primary'} variant="flat">
-          {project.status}
-        </Chip>
+        <div className="flex items-center gap-1 shrink-0">
+          <Chip size="sm" color={project.status === 'COMPLETED' ? 'success' : 'primary'} variant="flat">
+            {project.status}
+          </Chip>
+          {canEdit && project.status !== 'COMPLETED' && project.status !== 'CANCELLED' && (
+            <Button size="sm" isIconOnly variant="light" aria-label="Edit fit-out" onPress={openEdit}>
+              <FiEdit2 className="w-3.5 h-3.5 text-gray-400" />
+            </Button>
+          )}
+        </div>
       </div>
 
       <PhaseStepper current={project.phase} />
@@ -255,8 +435,6 @@ function InteriorProjectCard({ project }: { project: any }) {
         </div>
       )}
 
-      {/* Full workspace: scope, invoices, snags, documents live on the detail page
-          (the per-unit card only carries quick status + phase actions). */}
       <Link
         to={`/interior/${project.id}`}
         className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
