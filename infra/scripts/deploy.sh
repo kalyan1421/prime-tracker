@@ -86,8 +86,7 @@ deploy_api() {
   echo "   [3/4] Git pull + extract dist + install + migrate + restart PM2..."
   # Write to a temp file (heredoc at statement level avoids bash 3.2 single-quote
   # parsing bug inside $(...) command substitution).
-  local _tmpscript
-  _tmpscript=$(mktemp /tmp/prime-deploy-api-XXXXXX.sh)
+  local _tmpscript="/tmp/prime-deploy-api-$$.sh"
   cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
 export HOME=/home/ubuntu
@@ -152,8 +151,7 @@ deploy_web() {
   echo "   $(du -sh /tmp/web-dist.tar.gz | cut -f1) uploaded"
 
   echo "   [3/3] Deploying web on EC2..."
-  local _tmpscript
-  _tmpscript=$(mktemp /tmp/prime-deploy-web-XXXXXX.sh)
+  local _tmpscript="/tmp/prime-deploy-web-$$.sh"
   cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
 export HOME=/root
