@@ -84,37 +84,39 @@ deploy_api() {
   echo "   $(du -sh /tmp/api-dist.tar.gz | cut -f1) uploaded"
 
   echo "   [3/4] Git pull + extract dist + install + migrate + restart PM2..."
-  ssm_script "prime-deploy-api" "$(cat <<SCRIPT
+  # Write to a temp file (heredoc at statement level avoids bash 3.2 single-quote
+  # parsing bug inside $(...) command substitution).
+  local _tmpscript
+  _tmpscript=$(mktemp /tmp/prime-deploy-api-XXXXXX.sh)
+  cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
 export HOME=/home/ubuntu
 export NVM_DIR=/home/ubuntu/.nvm
 source "\$NVM_DIR/nvm.sh" 2>/dev/null || source /root/.nvm/nvm.sh 2>/dev/null || true
 export PATH=\$PATH:/home/ubuntu/.local/share/pnpm:/usr/local/bin
 
-# pipefail so a failed step piped into tail (e.g. prisma migrate deploy) aborts
-# the deploy instead of being masked by tail's exit code.
 set -eo pipefail
 cd /home/ubuntu/prime-tracker
 
 git config --global --add safe.directory /home/ubuntu/prime-tracker 2>/dev/null || true
-git fetch origin $GIT_BRANCH
-git reset --hard origin/$GIT_BRANCH
+git fetch origin ${GIT_BRANCH}
+git reset --hard origin/${GIT_BRANCH}
 echo "=== Pulled: \$(git log --oneline -1) ==="
 
 pnpm install --frozen-lockfile 2>&1 | tail -5
 
-aws s3 cp s3://$DEPLOY_BUCKET/deploy/api-dist.tar.gz /tmp/api-dist.tar.gz --region $AWS_REGION
+aws s3 cp s3://${DEPLOY_BUCKET}/deploy/api-dist.tar.gz /tmp/api-dist.tar.gz --region ${AWS_REGION}
 tar -xzf /tmp/api-dist.tar.gz -C apps/api/
 echo "=== Dist extracted ==="
 
-for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \\
+for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
           JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD; do
-  V=\$(aws ssm get-parameter --name /prime-tracker/\$P --with-decryption \\
-        --region $AWS_REGION --query Parameter.Value --output text 2>/dev/null || echo '')
+  V=\$(aws ssm get-parameter --name /prime-tracker/\$P --with-decryption \
+        --region ${AWS_REGION} --query Parameter.Value --output text 2>/dev/null || echo "")
   echo "\$P=\$V"
 done > apps/api/.env
-printf 'NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=$APP_URL\nCORS_ORIGINS=$APP_URL\nAPP_BASE_URL=$APP_URL\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\n' >> apps/api/.env
-printf 'DIRECT_URL=%s\n' "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
+printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\n" >> apps/api/.env
+printf "DIRECT_URL=%s\n" "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
 chmod 600 apps/api/.env
 echo "=== .env written ==="
 
@@ -124,10 +126,12 @@ pnpm --filter @prime-tracker/api exec prisma migrate deploy 2>&1 | tail -8
 sudo -u ubuntu pm2 restart prime-api --update-env 2>&1 || pm2 restart prime-api --update-env 2>&1
 
 sleep 6
-curl -sf http://localhost:3001/api/health && echo && echo "=== API_OK ===" || \\
+curl -sf http://localhost:3001/api/health && echo && echo "=== API_OK ===" || \
   (echo "=== API_FAILED ===" && pm2 logs prime-api --lines 20 --nostream && exit 1)
-SCRIPT
-)"
+ENDSCRIPT
+
+  ssm_script "prime-deploy-api" "$(cat "$_tmpscript")"
+  rm -f "$_tmpscript"
 
   echo "   [4/4] API deploy complete ✓"
 }
@@ -148,20 +152,24 @@ deploy_web() {
   echo "   $(du -sh /tmp/web-dist.tar.gz | cut -f1) uploaded"
 
   echo "   [3/3] Deploying web on EC2..."
-  ssm_script "prime-deploy-web" "$(cat <<SCRIPT
+  local _tmpscript
+  _tmpscript=$(mktemp /tmp/prime-deploy-web-XXXXXX.sh)
+  cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
 export HOME=/root
 set -e
 
-aws s3 cp s3://$DEPLOY_BUCKET/deploy/web-dist.tar.gz /tmp/web-dist.tar.gz --region $AWS_REGION
+aws s3 cp s3://${DEPLOY_BUCKET}/deploy/web-dist.tar.gz /tmp/web-dist.tar.gz --region ${AWS_REGION}
 sudo mkdir -p /var/www/prime-web
 sudo tar -xzf /tmp/web-dist.tar.gz --strip-components=1 -C /var/www/prime-web 2>&1 | grep -v LIBARCHIVE || true
 sudo chown -R ubuntu:ubuntu /var/www/prime-web
 sudo nginx -s reload
 echo "=== Web deployed ==="
-curl -sf -o /dev/null -w "%{http_code}" $APP_URL/ | grep -q 200 && echo "WEB_OK" || echo "WEB: check manually"
-SCRIPT
-)"
+curl -sf -o /dev/null -w "%{http_code}" ${APP_URL}/ | grep -q 200 && echo "WEB_OK" || echo "WEB: check manually"
+ENDSCRIPT
+
+  ssm_script "prime-deploy-web" "$(cat "$_tmpscript")"
+  rm -f "$_tmpscript"
 
   echo "   Web deploy complete ✓"
 }
