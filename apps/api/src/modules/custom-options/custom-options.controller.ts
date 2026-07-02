@@ -1,0 +1,73 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { CustomOptionsService } from './custom-options.service';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { MfaGuard } from '../../common/guards/mfa.guard';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+
+@ApiTags('Custom Options')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionsGuard, MfaGuard)
+@Controller('custom-options')
+export class CustomOptionsController {
+  constructor(private service: CustomOptionsService) {}
+
+  @Get('categories')
+  @RequirePermissions('project:view')
+  @ApiOperation({ summary: 'List all option categories' })
+  getCategories() {
+    return this.service.findAllCategories();
+  }
+
+  @Get('defaults')
+  @RequirePermissions('settings:manage')
+  @ApiOperation({ summary: 'Get system default values by category' })
+  getDefaults() {
+    return this.service.getSystemDefaults();
+  }
+
+  @Get()
+  @RequirePermissions('project:view')
+  @ApiOperation({ summary: 'List options for a category (system + custom)' })
+  findByCategory(@Query('category') category: string) {
+    return this.service.findByCategory(category);
+  }
+
+  @Post()
+  @RequirePermissions('settings:manage')
+  @ApiOperation({ summary: 'Create a custom option' })
+  create(
+    @Body() body: { category: string; value: string; label: string; color?: string; sortOrder?: number },
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.create({ ...body, createdById: userId });
+  }
+
+  @Patch(':id')
+  @RequirePermissions('settings:manage')
+  @ApiOperation({ summary: 'Update a custom option label/color/sortOrder' })
+  update(
+    @Param('id') id: string,
+    @Body() body: { label?: string; color?: string; sortOrder?: number; isActive?: boolean },
+  ) {
+    return this.service.update(id, body);
+  }
+
+  @Delete(':id')
+  @RequirePermissions('settings:manage')
+  @ApiOperation({ summary: 'Soft-delete a custom option' })
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
+  }
+}

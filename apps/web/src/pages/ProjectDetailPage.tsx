@@ -40,7 +40,7 @@ import {
   useUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
   useProjectHealth, useSalesForecast, useExceptions, useProjectActivity,
   useSetMilestoneDependency, useMilestonePhotos, useAttachMilestonePhoto, useDeleteMilestonePhoto,
-  usePresignedUpload, useProjectDrawSchedules,
+  usePresignedUpload, useProjectDrawSchedules, useCustomOptions,
 } from '../hooks/useApi';
 import { TasksPageInner } from './TasksPage';
 import { HealthScoreRing } from '../components/HealthScoreRing';
@@ -589,6 +589,8 @@ function OverviewTab({ project: p }: { project: any }) {
   const updateProject = useUpdateProject();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>(EMPTY_PROJECT);
+  const { data: projectStatusOpts = [] } = useCustomOptions('project_status');
+  const { data: projectPhaseOpts = [] } = useCustomOptions('project_phase');
 
   const openEdit = () => {
     setForm({
@@ -782,8 +784,8 @@ function OverviewTab({ project: p }: { project: any }) {
                   if (val) setForm((f) => ({ ...f, status: val }));
                 }}
               >
-                {['ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'].map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {projectStatusOpts.map((o) => (
+                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                 ))}
               </Select>
               <Select
@@ -795,8 +797,8 @@ function OverviewTab({ project: p }: { project: any }) {
                   if (val) setForm((f) => ({ ...f, phase: val }));
                 }}
               >
-                {['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'].map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {projectPhaseOpts.map((o) => (
+                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="Start Date" type="date" value={form.startDate} onChange={set('startDate')} />
@@ -1541,7 +1543,6 @@ function FinancialsTab({ projectId }: { projectId: string }) {
 
 // ---- Units Tab ----
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
-const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 
 const EMPTY_UNIT = {
   unitNumber: '', buildingId: '', unitType: 'RETAIL', sqft: '', status: 'AVAILABLE',
@@ -1653,6 +1654,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const isOverrideRole = role === 'SUPER_ADMIN' || role === 'FOUNDER';
   // Sales has unit:edit but is restricted server-side to status only — model that here too.
   const canFullEdit = hasPermission('unit:edit') && !isSales;
+  const { data: unitStatusOpts = [] } = useCustomOptions('unit_status');
+  const UNIT_STATUSES = unitStatusOpts.map((o) => o.value);
+  const UNIT_STATUS_LABELS: Record<string, string> = Object.fromEntries(unitStatusOpts.map((o) => [o.value, o.label]));
   const canStatusEdit = hasPermission('unit:edit'); // Sales falls into this branch
   const canDelete = hasPermission('unit:edit') && !isSales;
   const canCreate = canFullEdit;
@@ -2215,8 +2219,8 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                   if (val) setForm((f) => ({ ...f, status: val }));
                 }}
               >
-                {UNIT_STATUSES.map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {unitStatusOpts.map((o) => (
+                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                 ))}
               </Select>
               <Input
@@ -2407,6 +2411,8 @@ function MilestonesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useMilestones(projectId);
   const { data: usersData } = useUsers();
   const { data: drawSchedules = [] } = useProjectDrawSchedules(projectId);
+  const { data: projectPhaseOpts = [] } = useCustomOptions('project_phase');
+  const { data: milestoneStatusOpts = [] } = useCustomOptions('milestone_status');
   const createMilestone = useCreateMilestone();
   const updateMilestone = useUpdateMilestone();
   const deleteMilestone = useDeleteMilestone();
@@ -2663,8 +2669,8 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                   if (val) setForm((f) => ({ ...f, phase: val }));
                 }}
               >
-                {['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'].map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {projectPhaseOpts.map((o) => (
+                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="Due Date" isRequired type="date" value={form.dueDate} onChange={set('dueDate')} />
@@ -2677,8 +2683,8 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                   if (val) setForm((f) => ({ ...f, status: val }));
                 }}
               >
-                {['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'OVERDUE', 'BLOCKED'].map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {milestoneStatusOpts.map((o) => (
+                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                 ))}
               </Select>
               <Select
@@ -3078,6 +3084,7 @@ const LOST_REASONS = [
 
 function SalesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useSalesPipeline(projectId);
+  const { data: saleStatusOpts = [] } = useCustomOptions('sale_status');
   const { data: forecast } = useSalesForecast(projectId);
   const { data: unitsData } = useUnits(projectId);
   const createSale = useCreateSale();
@@ -3419,8 +3426,8 @@ function SalesTab({ projectId }: { projectId: string }) {
                   if (val) setForm((f) => ({ ...f, status: val }));
                 }}
               >
-                {['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT', 'CLOSED', 'CANCELLED'].map((v) => (
-                  <SelectItem key={v} textValue={v.replace(/_/g, ' ')}>{v.replace(/_/g, ' ')}</SelectItem>
+                {saleStatusOpts.map((o) => (
+                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="LOI Date" type="date" value={form.loiDate} onChange={set('loiDate')} />
@@ -3521,6 +3528,7 @@ const EMPTY_BUILDING = { name: '', totalSqft: '', stories: '', buildingType: '',
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('building:edit');
+  const { data: projectPhaseOpts = [] } = useCustomOptions('project_phase');
 
   const { data, isLoading, error } = useBuildings(projectId);
   const createBuilding = useCreateBuilding();
@@ -3861,8 +3869,8 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                     if (val) setForm((f) => ({ ...f, phase: val }));
                   }}
                 >
-                  {['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'].map((v) => (
-                    <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                  {projectPhaseOpts.map((o) => (
+                    <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                   ))}
                 </Select>
               </div>
@@ -4162,7 +4170,6 @@ function RevenueTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Project Leads Tab ----
-const LEAD_STATUSES_TAB = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
 const LEAD_SOURCES_TAB = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
 const SOURCE_LABELS_TAB: Record<string, string> = {
   WEBSITE: 'Website', REFERRAL: 'Referral', SOCIAL_MEDIA: 'Social Media',
@@ -4188,6 +4195,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const deleteLead = useDeleteLead();
   const addActivity = useAddLeadActivity();
   const convertLead = useConvertLead();
+  const { data: leadStatusOpts = [] } = useCustomOptions('lead_status');
 
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [showForm, setShowForm] = useState(false);
@@ -4680,7 +4688,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 {LEAD_SOURCES_TAB.map((s) => <SelectItem key={s} textValue={SOURCE_LABELS_TAB[s] || s}>{SOURCE_LABELS_TAB[s] || s}</SelectItem>)}
               </Select>
               <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => setF('status', Array.from(k)[0] as string)}>
-                {LEAD_STATUSES_TAB.map((s) => <SelectItem key={s} textValue={s.replace('_', ' ')}>{s.replace('_', ' ')}</SelectItem>)}
+                {leadStatusOpts.map((o) => <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>)}
               </Select>
               <Select
                 size="sm"

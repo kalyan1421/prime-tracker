@@ -467,6 +467,15 @@ export function useUpdateUserRole() {
   });
 }
 
+export function useUpdateUserRoles() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, roles }: { id: string; roles: string[] }) =>
+      api.patch(`/users/${id}/roles`, { roles }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
 export function useToggleUserActive() {
   const qc = useQueryClient();
   return useMutation({
@@ -2219,4 +2228,64 @@ export function useNotificationsSocket() {
     });
     return () => { socket?.disconnect(); };
   }, [token, qc]);
+}
+
+// ============================================================================
+// Custom Options (admin-configurable dropdown values)
+// ============================================================================
+
+export function useCustomOptions(category: string) {
+  return useQuery({
+    queryKey: ['custom-options', category],
+    queryFn: () => api.get('/custom-options', { params: { category } }).then((r) => r.data as CustomOption[]),
+    staleTime: 5 * 60 * 1000, // cache for 5 min — changes infrequently
+    enabled: !!category,
+  });
+}
+
+export function useCustomOptionsCategories() {
+  return useQuery({
+    queryKey: ['custom-options-categories'],
+    queryFn: () => api.get('/custom-options/categories').then((r) => r.data as string[]),
+  });
+}
+
+export function useCreateCustomOption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { category: string; value: string; label: string; color?: string; sortOrder?: number }) =>
+      api.post('/custom-options', data).then((r) => r.data),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['custom-options', vars.category] });
+      qc.invalidateQueries({ queryKey: ['custom-options-categories'] });
+    },
+  });
+}
+
+export function useUpdateCustomOption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string; label?: string; color?: string; sortOrder?: number }) =>
+      api.patch(`/custom-options/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-options'] }),
+  });
+}
+
+export function useDeleteCustomOption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/custom-options/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-options'] }),
+  });
+}
+
+export interface CustomOption {
+  id: string;
+  category: string;
+  value: string;
+  label: string;
+  color?: string | null;
+  sortOrder: number;
+  isSystem: boolean;
+  isActive: boolean;
 }

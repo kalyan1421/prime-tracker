@@ -1,8 +1,7 @@
 import {
-  IsString, IsNotEmpty, IsOptional, IsEnum,
+  IsString, IsNotEmpty, IsOptional,
   IsNumber, IsPositive, IsDateString, MaxLength,
 } from 'class-validator';
-import { SaleStatus } from '@prisma/client';
 
 export class CreateSaleDto {
   @IsString() @IsNotEmpty()
@@ -25,8 +24,8 @@ export class CreateSaleDto {
   @IsOptional() @IsNumber() @IsPositive()
   depositAmt?: number;
 
-  @IsOptional() @IsEnum(SaleStatus)
-  status?: SaleStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
   @IsOptional() @IsDateString()
   loiDate?: string;

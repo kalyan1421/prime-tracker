@@ -13,28 +13,33 @@ export class UsersService {
   async create(data: { email: string; name: string; role?: UserRole }) {
     const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
     if (existing) throw new ConflictException('User with this email already exists');
+    const primaryRole = data.role || 'VIEWER';
     return this.prisma.user.create({
       data: {
         email: data.email,
         name: data.name,
-        role: data.role || 'VIEWER',
+        role: primaryRole,
+        roles: [primaryRole],
       },
     });
   }
 
+  private userSelect = {
+    id: true,
+    email: true,
+    name: true,
+    avatarUrl: true,
+    role: true,
+    roles: true,
+    isActive: true,
+    mfaEnabled: true,
+    lastLoginAt: true,
+    createdAt: true,
+  } as const;
+
   async findAll() {
     return this.prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        avatarUrl: true,
-        role: true,
-        isActive: true,
-        mfaEnabled: true,
-        lastLoginAt: true,
-        createdAt: true,
-      },
+      select: this.userSelect,
       orderBy: { name: 'asc' },
     });
   }
@@ -42,17 +47,7 @@ export class UsersService {
   async findById(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        avatarUrl: true,
-        role: true,
-        isActive: true,
-        mfaEnabled: true,
-        lastLoginAt: true,
-        createdAt: true,
-      },
+      select: this.userSelect,
     });
     if (!user) throw new NotFoundException('User not found');
     return user;
@@ -63,19 +58,16 @@ export class UsersService {
     const actor = await this.prisma.user.findUniqueOrThrow({ where: { id: actorId } });
     const oldRole = user.role;
 
-    // SUPER_ADMIN can only be assigned by another SUPER_ADMIN
     if (role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
       throw new ForbiddenException('Only a Super Admin can assign the Super Admin role');
     }
-
-    // Prevent non-SUPER_ADMIN from modifying a SUPER_ADMIN's role
     if (user.role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
       throw new ForbiddenException('Only a Super Admin can modify another Super Admin');
     }
 
     const updated = await this.prisma.user.update({
       where: { id },
-      data: { role },
+      data: { role, roles: [role] },
     });
 
     await this.audit.log({
@@ -85,6 +77,39 @@ export class UsersService {
       entityId: id,
       oldValues: { role: oldRole },
       newValues: { role },
+    });
+
+    return updated;
+  }
+
+  async updateRoles(id: string, roles: UserRole[], actorId: string) {
+    if (!roles.length) throw new BadRequestException('At least one role is required');
+
+    const user = await this.findById(id);
+    const actor = await this.prisma.user.findUniqueOrThrow({ where: { id: actorId } });
+
+    const hasSuperAdmin = roles.includes('SUPER_ADMIN' as UserRole);
+    if (hasSuperAdmin && actor.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only a Super Admin can assign the Super Admin role');
+    }
+    if (user.role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only a Super Admin can modify another Super Admin');
+    }
+
+    // Primary role = first in the list (determines groupBy / display)
+    const primaryRole = roles[0];
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: { role: primaryRole, roles },
+    });
+
+    await this.audit.log({
+      userId: actorId,
+      action: 'ROLE_CHANGE',
+      entity: 'User',
+      entityId: id,
+      oldValues: { roles: user.roles },
+      newValues: { roles },
     });
 
     return updated;

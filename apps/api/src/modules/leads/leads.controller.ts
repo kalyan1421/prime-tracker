@@ -7,7 +7,7 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
-import { LeadStatus, LeadSource, LeadActivityType } from '@prisma/client';
+import { LeadSource, LeadActivityType } from '@prisma/client';
 
 @ApiTags('Leads')
 @ApiBearerAuth()
@@ -33,7 +33,7 @@ export class LeadsController {
   @ApiOperation({ summary: 'List leads (optionally filtered by project/status/assignee/unit/broker)' })
   findAll(
     @Query('projectId') projectId?: string,
-    @Query('status') status?: LeadStatus,
+    @Query('status') status?: string,
     @Query('assignedTo') assignedTo?: string,
     @Query('unassigned') unassigned?: string,
     @Query('unitId') unitId?: string,
@@ -80,7 +80,7 @@ export class LeadsController {
       email?: string;
       phone?: string;
       source: LeadSource;
-      status?: LeadStatus;
+      status?: string;
       unitId?: string;
       buildingId?: string;
       unitInterest?: string;
@@ -109,7 +109,7 @@ export class LeadsController {
       email?: string;
       phone?: string;
       source?: LeadSource;
-      status?: LeadStatus;
+      status?: string;
       unitId?: string | null;
       buildingId?: string | null;
       unitInterest?: string;

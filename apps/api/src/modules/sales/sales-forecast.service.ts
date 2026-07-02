@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import type { SaleStatus } from '@prisma/client';
 
 /**
  * Probability-weighted revenue forecast for the sales pipeline.
@@ -29,7 +28,7 @@ const DEFAULT_PROBABILITIES: Record<string, number> = {
 export interface PipelineForecast {
   totalPipelineValue: number;     // unweighted sum
   weightedForecast: number;       // probability-adjusted
-  byStage: Array<{ stage: SaleStatus; count: number; value: number; weighted: number; probability: number }>;
+  byStage: Array<{ stage: string; count: number; value: number; weighted: number; probability: number }>;
   closedYtd: number;              // separate — already booked revenue
 }
 
@@ -49,7 +48,7 @@ export class SalesForecastService {
     });
 
     // Aggregate per stage
-    const byStageMap = new Map<SaleStatus, { count: number; value: number }>();
+    const byStageMap = new Map<string, { count: number; value: number }>();
     let closedYtd = 0;
     const yearStart = new Date(new Date().getFullYear(), 0, 1);
 

@@ -43,12 +43,13 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('User not whitelisted or deactivated');
     }
 
-    const role = user.role as UserRole;
+    const roles = (user.roles?.length ? user.roles : [user.role]) as UserRole[];
     return {
       sub: user.id,
       email: user.email,
-      role,
-      permissions: ROLE_PERMISSIONS[role] ?? [],
+      role: user.role,
+      roles,
+      permissions: [...new Set(roles.flatMap((r) => ROLE_PERMISSIONS[r] ?? []))],
       mfaVerified: payload.mfaVerified ?? false,
     };
   }

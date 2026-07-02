@@ -1,12 +1,12 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { Prisma, ProjectPhase, ProjectStatus, ProjectType } from '@prisma/client';
+import { Prisma, ProjectType } from '@prisma/client';
 import { isProjectScopedRole } from '@prime-tracker/shared';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 
 export interface ListProjectsParams {
-  status?: ProjectStatus;
-  phase?: ProjectPhase;
+  status?: string;
+  phase?: string;
   projectType?: ProjectType;
   search?: string;
   sortBy?: 'name' | 'phase' | 'budget' | 'createdAt' | 'updatedAt';
@@ -160,8 +160,8 @@ export class ProjectsService {
     address?: string;
     acreage?: number;
     approvedBudget?: number;
-    status?: ProjectStatus;
-    phase?: ProjectPhase;
+    status?: string;
+    phase?: string;
     projectType?: ProjectType;
     description?: string;
     startDate?: string;
@@ -211,8 +211,8 @@ export class ProjectsService {
     address?: string;
     acreage?: number;
     approvedBudget?: number;
-    status?: ProjectStatus;
-    phase?: ProjectPhase;
+    status?: string;
+    phase?: string;
     projectType?: ProjectType;
     description?: string;
     startDate?: string;

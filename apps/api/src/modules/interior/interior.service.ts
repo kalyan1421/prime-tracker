@@ -10,7 +10,6 @@ import type {
   InteriorPhase,
   InteriorStatus,
   Prisma,
-  ProjectPhase,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
@@ -21,7 +20,7 @@ import { canTransition, getPhaseGate } from './interior-state-machine';
  * The soft parallel gate (INTERIOR_MODULE_DESIGN §0.2) blocks PROCUREMENT/EXECUTION
  * until the anchor building has reached one of these.
  */
-const SHELL_COMPLETE_PHASES: ProjectPhase[] = ['LEASE_UP', 'STABILIZED', 'SOLD_REFI'];
+const SHELL_COMPLETE_PHASES: string[] = ['LEASE_UP', 'STABILIZED', 'SOLD_REFI'];
 
 interface CreateInteriorInput {
   unitId?: string;

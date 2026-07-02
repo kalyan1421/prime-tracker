@@ -2,7 +2,7 @@ import {
   Injectable, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { BuildingType, ProjectPhase } from '@prisma/client';
+import { BuildingType } from '@prisma/client';
 import { ProjectPhaseService } from './project-phase.service';
 import { StorageService } from '../../common/storage/storage.service';
 
@@ -58,7 +58,7 @@ export class BuildingsService {
     totalSqft?: number;
     stories?: number;
     buildingType?: BuildingType;
-    phase?: ProjectPhase;
+    phase?: string;
     coverPhotoPath?: string;
   }) {
     const project = await this.prisma.project.findUnique({
@@ -84,7 +84,7 @@ export class BuildingsService {
     totalSqft?: number;
     stories?: number;
     buildingType?: BuildingType;
-    phase?: ProjectPhase;
+    phase?: string;
     coverPhotoPath?: string;
   }) {
     const existing = await this.findById(id);

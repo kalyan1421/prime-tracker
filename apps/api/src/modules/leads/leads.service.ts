@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
-import { LeadStatus, LeadSource, LeadActivityType, Prisma } from '@prisma/client';
+import { LeadSource, LeadActivityType, Prisma } from '@prisma/client';
 
 @Injectable()
 export class LeadsService {
@@ -9,7 +9,7 @@ export class LeadsService {
 
   async findAll(params: {
     projectId?: string;
-    status?: LeadStatus;
+    status?: string;
     assignedTo?: string;
     unassigned?: boolean;
     unitId?: string;
@@ -143,7 +143,7 @@ export class LeadsService {
     email?: string;
     phone?: string;
     source: LeadSource;
-    status?: LeadStatus;
+    status?: string;
     unitId?: string;
     buildingId?: string;
     unitInterest?: string;
@@ -219,7 +219,7 @@ export class LeadsService {
     email?: string;
     phone?: string;
     source?: LeadSource;
-    status?: LeadStatus;
+    status?: string;
     unitId?: string | null;
     buildingId?: string | null;
     unitInterest?: string;

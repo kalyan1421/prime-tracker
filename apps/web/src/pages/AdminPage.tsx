@@ -5,13 +5,15 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   useDisclosure, addToast,
 } from '@heroui/react';
-import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiGrid, FiMinus, FiEye } from 'react-icons/fi';
+import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiGrid, FiMinus, FiEye, FiSliders } from 'react-icons/fi';
 import {
-  useUsers, useUpdateUserRole, useToggleUserActive, useCreateUser, useUpdateUser, useDeleteUser,
+  useUsers, useUpdateUserRole, useUpdateUserRoles, useToggleUserActive, useCreateUser, useUpdateUser, useDeleteUser,
   useAuditLog, useQBStatus, useQBSync,
   useOrganizations, useOrganization, useCreateOrganization, useUpdateOrganization,
   useDeactivateOrganization, useAddOrgMember, useRemoveOrgMember,
   useRoleCounts, useRoleDefinitions,
+  useCustomOptions, useCreateCustomOption, useDeleteCustomOption,
+  type CustomOption,
 } from '../hooks/useApi';
 import { fmtDate } from '../utils/fmt';
 import { StatusBadge, LoadingState, ErrorState } from '../components/ui';
@@ -39,6 +41,9 @@ export default function AdminPage() {
         <Tab key="organizations" title={<div className="flex items-center gap-1"><FiGrid /><span>Organizations</span></div>}>
           <OrganizationsPanel />
         </Tab>
+        <Tab key="options" title={<div className="flex items-center gap-1"><FiSliders /><span>Options</span></div>}>
+          <OptionsPanel />
+        </Tab>
       </Tabs>
     </div>
   );
@@ -65,10 +70,93 @@ const ROLE_CHIP_COLOR: Record<string, 'primary' | 'success' | 'secondary' | 'war
   VIEWER: 'default',
 };
 
+// Role categories for the multi-role picker grid
+const ROLE_CATEGORIES = [
+  {
+    label: 'Leadership',
+    color: 'bg-blue-50 border-blue-200',
+    chipColor: 'primary' as const,
+    roles: ['FOUNDER', 'EXECUTIVE'],
+  },
+  {
+    label: 'Finance',
+    color: 'bg-emerald-50 border-emerald-200',
+    chipColor: 'success' as const,
+    roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
+  },
+  {
+    label: 'Operations',
+    color: 'bg-amber-50 border-amber-200',
+    chipColor: 'warning' as const,
+    roles: ['PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING'],
+  },
+  {
+    label: 'Support',
+    color: 'bg-slate-50 border-slate-200',
+    chipColor: 'default' as const,
+    roles: ['LEGAL', 'VIEWER'],
+  },
+];
+
+function MultiRolePicker({
+  selectedRoles,
+  onChange,
+  availableRoles,
+}: {
+  selectedRoles: string[];
+  onChange: (roles: string[]) => void;
+  availableRoles: string[];
+}) {
+  const toggle = (role: string) => {
+    if (selectedRoles.includes(role)) {
+      const next = selectedRoles.filter((r) => r !== role);
+      if (next.length === 0) return; // must keep at least one
+      onChange(next);
+    } else {
+      onChange([...selectedRoles, role]);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {ROLE_CATEGORIES.map((cat) => {
+        const visibleRoles = cat.roles.filter((r) => availableRoles.includes(r));
+        if (!visibleRoles.length) return null;
+        return (
+          <div key={cat.label}>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">{cat.label}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {visibleRoles.map((role) => {
+                const active = selectedRoles.includes(role);
+                return (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => toggle(role)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all duration-150 ${
+                      active
+                        ? 'bg-slate-800 text-white border-slate-800 shadow-sm'
+                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400 hover:text-slate-700'
+                    }`}
+                  >
+                    {active && <FiCheck className="w-3 h-3" />}
+                    {role.replace(/_/g, ' ')}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function UsersPanel() {
   const { user: currentUser } = useAuthStore();
   const { data, isLoading, error } = useUsers();
   const updateRole = useUpdateUserRole();
+  const updateRoles = useUpdateUserRoles();
   const toggleActive = useToggleUserActive();
   const createUser = useCreateUser();
   const updateUser = useUpdateUser();
@@ -81,6 +169,9 @@ function UsersPanel() {
   const [editForm, setEditForm] = useState({ name: '', email: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', email: '', role: 'VIEWER' });
+  // local state for the multi-role picker (mirrors selectedUser.roles until saved)
+  const [pendingRoles, setPendingRoles] = useState<string[]>([]);
+  const [rolesChanged, setRolesChanged] = useState(false);
 
   const { isOpen: isCreateOpen, onOpen: onCreateOpen, onClose: onCreateClose } = useDisclosure();
   const { isOpen: isEditOpen, onOpen: onEditOpen, onClose: onEditClose } = useDisclosure();
@@ -157,6 +248,27 @@ function UsersPanel() {
   const openSidePanel = (u: any) => {
     setSelectedUser(u);
     setShowDeleteConfirm(false);
+    const initialRoles = u.roles?.length ? u.roles : [u.role];
+    setPendingRoles(initialRoles);
+    setRolesChanged(false);
+  };
+
+  const handleRolesPendingChange = (roles: string[]) => {
+    setPendingRoles(roles);
+    const current = selectedUser?.roles?.length ? selectedUser.roles : [selectedUser?.role];
+    setRolesChanged(JSON.stringify([...roles].sort()) !== JSON.stringify([...current].sort()));
+  };
+
+  const handleSaveRoles = async () => {
+    if (!selectedUser || !pendingRoles.length) return;
+    try {
+      await updateRoles.mutateAsync({ id: selectedUser.id, roles: pendingRoles });
+      setSelectedUser((u: any) => ({ ...u, roles: pendingRoles, role: pendingRoles[0] }));
+      setRolesChanged(false);
+      addToast({ title: 'Roles updated', color: 'success' });
+    } catch {
+      addToast({ title: 'Failed to update roles', color: 'danger' });
+    }
   };
 
   return (
@@ -234,9 +346,13 @@ function UsersPanel() {
                       </td>
                       <td className="py-2 px-2 text-gray-600 text-xs truncate max-w-[180px]">{u.email}</td>
                       <td className="py-2 px-2">
-                        <Chip size="sm" variant="flat" color={ROLE_CHIP_COLOR[u.role] || 'default'}>
-                          {u.role?.replace(/_/g, ' ')}
-                        </Chip>
+                        <div className="flex flex-wrap gap-1">
+                          {(u.roles?.length ? u.roles : [u.role]).map((r: string) => (
+                            <Chip key={r} size="sm" variant="flat" color={ROLE_CHIP_COLOR[r] || 'default'}>
+                              {r?.replace(/_/g, ' ')}
+                            </Chip>
+                          ))}
+                        </div>
                       </td>
                       <td className="py-2 px-2">
                         <Chip size="sm" variant="flat" color={u.isActive ? 'success' : 'danger'}>
@@ -318,31 +434,43 @@ function UsersPanel() {
                   <p className="font-semibold text-gray-800">{selectedUser.name}</p>
                   <p className="text-xs text-gray-500">{selectedUser.email}</p>
                 </div>
-                <div className="flex gap-2">
-                  <Chip size="sm" variant="flat" color={ROLE_CHIP_COLOR[selectedUser.role] || 'default'}>
-                    {selectedUser.role?.replace(/_/g, ' ')}
-                  </Chip>
+                <div className="flex flex-wrap gap-1 justify-center">
+                  {(pendingRoles.length ? pendingRoles : [selectedUser.role]).map((r: string) => (
+                    <Chip key={r} size="sm" variant="flat" color={ROLE_CHIP_COLOR[r] || 'default'}>
+                      {r?.replace(/_/g, ' ')}
+                    </Chip>
+                  ))}
                   <Chip size="sm" variant="flat" color={selectedUser.isActive ? 'success' : 'danger'}>
                     {selectedUser.isActive ? 'Active' : 'Disabled'}
                   </Chip>
                 </div>
               </div>
 
-              {/* Role selector */}
+              {/* Multi-role picker */}
               <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Role</p>
-                <Select
-                  size="sm"
-                  selectedKeys={selectedUser.role ? [selectedUser.role] : []}
-                  onSelectionChange={(keys) => {
-                    const val = Array.from(keys)[0] as string;
-                    if (val) handleRoleChange(selectedUser.id, val);
-                  }}
-                >
-                  {availableRoles.map((r) => (
-                    <SelectItem key={r}>{r.replace(/_/g, ' ')}</SelectItem>
-                  ))}
-                </Select>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-gray-500 uppercase">Roles</p>
+                  {rolesChanged && (
+                    <Button
+                      size="sm"
+                      color="primary"
+                      variant="flat"
+                      onPress={handleSaveRoles}
+                      isLoading={updateRoles.isPending}
+                      className="h-6 text-xs px-2"
+                    >
+                      Save roles
+                    </Button>
+                  )}
+                </div>
+                <MultiRolePicker
+                  selectedRoles={pendingRoles}
+                  onChange={handleRolesPendingChange}
+                  availableRoles={availableRoles}
+                />
+                <p className="text-[10px] text-gray-400 mt-2">
+                  Click to toggle · First selected = primary role
+                </p>
               </div>
 
               {/* Status toggle */}
@@ -1324,6 +1452,190 @@ function RolesPanel() {
           </CardBody>
         </Card>
       )}
+    </div>
+  );
+}
+
+// ---- Options Panel ----
+
+const CATEGORY_META: Record<string, { label: string; description: string }> = {
+  project_status: { label: 'Project Status',    description: 'Status values for projects (Active, On Hold, etc.)' },
+  project_phase:  { label: 'Project Phase',     description: 'Phases in the project lifecycle' },
+  unit_status:    { label: 'Unit Status',        description: 'Status values for individual units' },
+  sale_status:    { label: 'Sale Status',        description: 'Stages in the sales pipeline' },
+  lead_status:    { label: 'Lead Status',        description: 'Lead funnel stages' },
+  milestone_status:{ label: 'Milestone Status', description: 'Milestone progress states' },
+  lease_status:   { label: 'Lease Status',       description: 'Lease lifecycle states' },
+  task_status:    { label: 'Task Status',        description: 'Task board column states' },
+  task_priority:  { label: 'Task Priority',      description: 'Priority levels for tasks' },
+};
+
+const COLOR_OPTIONS = [
+  { value: 'default',   label: 'Gray'   },
+  { value: 'primary',   label: 'Blue'   },
+  { value: 'secondary', label: 'Purple' },
+  { value: 'success',   label: 'Green'  },
+  { value: 'warning',   label: 'Orange' },
+  { value: 'danger',    label: 'Red'    },
+];
+
+function slugify(s: string) {
+  return s.trim().toUpperCase().replace(/\s+/g, '_').replace(/[^A-Z0-9_]/g, '');
+}
+
+function CategoryOptions({ category }: { category: string }) {
+  const { data: options = [], isLoading } = useCustomOptions(category);
+  const createOpt = useCreateCustomOption();
+  const deleteOpt = useDeleteCustomOption();
+
+  const [newLabel, setNewLabel] = useState('');
+  const [newColor, setNewColor] = useState('default');
+  const [adding, setAdding] = useState(false);
+
+  const handleAdd = async () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    const value = slugify(label);
+    if (options.some((o: CustomOption) => o.value === value)) {
+      addToast({ title: 'A option with that value already exists', color: 'warning' });
+      return;
+    }
+    try {
+      await createOpt.mutateAsync({ category, value, label, color: newColor });
+      setNewLabel('');
+      setNewColor('default');
+      setAdding(false);
+      addToast({ title: 'Option added', color: 'success' });
+    } catch {
+      addToast({ title: 'Failed to add option', color: 'danger' });
+    }
+  };
+
+  if (isLoading) return <div className="py-6 text-center text-gray-400">Loading…</div>;
+
+  return (
+    <div className="space-y-2">
+      {options.map((opt: CustomOption) => (
+        <div
+          key={opt.id}
+          className={`flex items-center justify-between px-3 py-2 rounded-lg border ${opt.isSystem ? 'bg-gray-50 border-gray-200' : 'bg-white border-blue-100'}`}
+        >
+          <div className="flex items-center gap-3">
+            <Chip
+              size="sm"
+              color={(opt.color as any) || 'default'}
+              variant="flat"
+            >
+              {opt.label}
+            </Chip>
+            <span className="text-xs text-gray-400 font-mono">{opt.value}</span>
+            {opt.isSystem && (
+              <Chip size="sm" variant="flat" color="default" className="text-[10px]">system</Chip>
+            )}
+          </div>
+          {!opt.isSystem && (
+            <Button
+              size="sm"
+              isIconOnly
+              variant="light"
+              color="danger"
+              onPress={async () => {
+                try {
+                  await deleteOpt.mutateAsync(opt.id);
+                  addToast({ title: 'Option removed', color: 'success' });
+                } catch {
+                  addToast({ title: 'Cannot remove this option', color: 'danger' });
+                }
+              }}
+            >
+              <FiTrash2 size={13} />
+            </Button>
+          )}
+        </div>
+      ))}
+
+      {adding ? (
+        <div className="flex gap-2 pt-1 flex-wrap">
+          <Input
+            size="sm"
+            placeholder="Label (e.g. Interior Fit-Out)"
+            value={newLabel}
+            onValueChange={setNewLabel}
+            className="flex-1 min-w-[180px]"
+            autoFocus
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); if (e.key === 'Escape') setAdding(false); }}
+          />
+          <Select
+            size="sm"
+            selectedKeys={[newColor]}
+            onSelectionChange={(keys) => setNewColor(Array.from(keys)[0] as string)}
+            className="w-32"
+            aria-label="Color"
+          >
+            {COLOR_OPTIONS.map((c) => (
+              <SelectItem key={c.value} textValue={c.label}>{c.label}</SelectItem>
+            ))}
+          </Select>
+          <Button size="sm" color="primary" onPress={handleAdd} isLoading={createOpt.isPending}>Add</Button>
+          <Button size="sm" variant="light" onPress={() => { setAdding(false); setNewLabel(''); }}>Cancel</Button>
+        </div>
+      ) : (
+        <Button
+          size="sm"
+          variant="light"
+          color="primary"
+          startContent={<FiPlus />}
+          onPress={() => setAdding(true)}
+          className="mt-1"
+        >
+          Add option
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function OptionsPanel() {
+  const categories = Object.keys(CATEGORY_META);
+  const [selected, setSelected] = useState(categories[0]);
+
+  return (
+    <div className="mt-4 flex flex-col sm:flex-row gap-4">
+      {/* Left sidebar — category list */}
+      <Card className="sm:w-56 shrink-0">
+        <CardBody className="p-2">
+          <p className="text-xs text-gray-400 font-medium px-2 py-1 uppercase tracking-wide">Categories</p>
+          <div className="space-y-0.5">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setSelected(cat)}
+                className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${
+                  selected === cat
+                    ? 'bg-blue-50 text-blue-700 font-medium'
+                    : 'text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {CATEGORY_META[cat]?.label ?? cat}
+              </button>
+            ))}
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Right — options for selected category */}
+      <div className="flex-1">
+        <Card>
+          <CardHeader className="flex flex-col items-start gap-0.5 pb-2">
+            <h3 className="font-semibold text-base">{CATEGORY_META[selected]?.label}</h3>
+            <p className="text-xs text-gray-500">{CATEGORY_META[selected]?.description}</p>
+            <p className="text-xs text-gray-400 mt-1">System options (gray) are always present. Custom options can be added and removed.</p>
+          </CardHeader>
+          <CardBody className="pt-0">
+            <CategoryOptions category={selected} />
+          </CardBody>
+        </Card>
+      </div>
     </div>
   );
 }

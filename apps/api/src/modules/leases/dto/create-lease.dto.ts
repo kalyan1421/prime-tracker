@@ -1,5 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsEnum, IsDateString, MaxLength, Min, IsInt } from 'class-validator';
-import { LeaseStatus } from '@prisma/client';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsDateString, MaxLength, Min, IsInt } from 'class-validator';
 
 export class CreateLeaseDto {
   // Sprint 1: leases are polymorphic — exactly one of (unitId, buildingId) is required.
@@ -48,8 +47,8 @@ export class CreateLeaseDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   securityDeposit?: number;
 
-  @IsOptional() @IsEnum(LeaseStatus)
-  status?: LeaseStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
@@ -92,8 +91,8 @@ export class UpdateLeaseDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   securityDeposit?: number;
 
-  @IsOptional() @IsEnum(LeaseStatus)
-  status?: LeaseStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;

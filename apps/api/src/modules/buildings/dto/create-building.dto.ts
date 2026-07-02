@@ -2,7 +2,7 @@ import {
   IsString, IsNotEmpty, MinLength, MaxLength,
   IsOptional, IsNumber, IsPositive, IsInt, Min, Max, IsEnum,
 } from 'class-validator';
-import { BuildingType, ProjectPhase } from '@prisma/client';
+import { BuildingType } from '@prisma/client';
 
 export class CreateBuildingDto {
   @IsString() @IsNotEmpty()
@@ -20,8 +20,8 @@ export class CreateBuildingDto {
   @IsOptional() @IsEnum(BuildingType)
   buildingType?: BuildingType;
 
-  @IsOptional() @IsEnum(ProjectPhase)
-  phase?: ProjectPhase;
+  @IsOptional() @IsString()
+  phase?: string;
 
   @IsOptional() @IsString()
   coverPhotoPath?: string;

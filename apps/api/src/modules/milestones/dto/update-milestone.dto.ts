@@ -1,8 +1,7 @@
 import {
-  IsString, IsOptional, IsEnum,
+  IsString, IsOptional,
   IsDateString, IsInt, Min, MaxLength,
 } from 'class-validator';
-import { ProjectPhase, MilestoneStatus } from '@prisma/client';
 
 export class UpdateMilestoneDto {
   @IsOptional() @IsString()
@@ -17,14 +16,14 @@ export class UpdateMilestoneDto {
   @IsOptional() @IsString() @MaxLength(2000)
   description?: string;
 
-  @IsOptional() @IsEnum(ProjectPhase)
-  phase?: ProjectPhase;
+  @IsOptional() @IsString()
+  phase?: string;
 
   @IsOptional() @IsDateString()
   dueDate?: string;
 
-  @IsOptional() @IsEnum(MilestoneStatus)
-  status?: MilestoneStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
   @IsOptional() @IsString()
   ownerId?: string;

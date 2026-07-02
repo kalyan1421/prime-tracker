@@ -1,12 +1,12 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
-import { Prisma, CampaignChannel, CampaignStatus, CampaignSpendSource, LeadStatus } from '@prisma/client';
+import { Prisma, CampaignChannel, CampaignStatus, CampaignSpendSource } from '@prisma/client';
 
 // Stage probabilities (matches the May 5 walkthrough's sales pipeline weighting).
 // Lead status → win-probability used in CPL/CPA calculations. NEGOTIATING is the
 // highest active stage; CONVERTED leads are a separate path through sales.
-const LEAD_STAGE_PROBABILITY: Partial<Record<LeadStatus, number>> = {
+const LEAD_STAGE_PROBABILITY: Record<string, number> = {
   NEW:           0.05,
   CONTACTED:     0.15,
   QUALIFIED:     0.30,
@@ -276,7 +276,7 @@ export class CampaignsService {
     return campaigns.map((c) => {
       const totalSpend = c.spend.reduce((sum, s) => sum + Number(s.amount), 0);
       const leadCount = c.leads.length;
-      const byStatus: Partial<Record<LeadStatus, number>> = {};
+      const byStatus: Record<string, number> = {};
       let weightedLeads = 0;
       let convertedRevenue = 0;
       let convertedCount = 0;

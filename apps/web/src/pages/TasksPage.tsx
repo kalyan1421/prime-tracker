@@ -14,13 +14,10 @@ import {
     useTasks, useTask, useCreateTask, useUpdateTask, useDeleteTask,
     useTaskComments, useCreateTaskComment, useDeleteTaskComment,
     useUploadTaskAttachment, useDeleteTaskAttachment,
-    useProjects, useBuildings, useUnits, useUsers,
+    useProjects, useBuildings, useUnits, useUsers, useCustomOptions,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { apiAssetUrl } from '../lib/api';
-
-const STATUS_OPTIONS = ['TODO', 'IN_PROGRESS', 'DONE', 'CANCELLED'] as const;
-const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as const;
 
 function statusColor(status: string) {
     switch (status) {
@@ -64,6 +61,8 @@ export default function TasksPage({ projectId: propProjectId }: { projectId?: st
 
 export function TasksPageInner({ projectId: propProjectId }: { projectId?: string }) {
     const { user } = useAuthStore();
+    const { data: taskStatusOpts = [] } = useCustomOptions('task_status');
+    const { data: taskPriorityOpts = [] } = useCustomOptions('task_priority');
     const [search, setSearch] = useState('');
     const [filterProject, setFilterProject] = useState(propProjectId ?? '');
     const [filterStatus, setFilterStatus] = useState('');
@@ -149,8 +148,8 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         size="sm"
                         id="filter-status"
                     >
-                        {STATUS_OPTIONS.map((s) => (
-                            <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>
+                        {taskStatusOpts.map((o) => (
+                            <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                         ))}
                     </Select>
                     <Select
@@ -161,8 +160,8 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         size="sm"
                         id="filter-priority"
                     >
-                        {PRIORITY_OPTIONS.map((p) => (
-                            <SelectItem key={p}>{p}</SelectItem>
+                        {taskPriorityOpts.map((o) => (
+                            <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                         ))}
                     </Select>
                     <Select
@@ -347,6 +346,8 @@ function TaskSidePanel({
     projects: any[];
 }) {
     const { user } = useAuthStore();
+    const { data: panelStatusOpts = [] } = useCustomOptions('task_status');
+    const { data: panelPriorityOpts = [] } = useCustomOptions('task_priority');
     const { data: task, isLoading: loadingTask } = useTask(taskId);
 
     const { data: comments = [], isLoading: loadingComments } = useTaskComments(taskId);
@@ -476,16 +477,16 @@ function TaskSidePanel({
                     )}
                     <div className="flex items-center gap-2 mt-2 flex-wrap">
                         {/* Quick status change */}
-                        {STATUS_OPTIONS.map((s) => (
+                        {panelStatusOpts.map((o) => (
                             <button
-                                key={s}
-                                onClick={() => handleStatusChange(s)}
-                                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${task.status === s
+                                key={o.value}
+                                onClick={() => handleStatusChange(o.value)}
+                                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${task.status === o.value
                                     ? 'bg-blue-600 text-white border-blue-600'
                                     : 'border-gray-200 text-gray-500 hover:border-gray-400'
                                     }`}
                             >
-                                {s.replace('_', ' ')}
+                                {o.label}
                             </button>
                         ))}
                     </div>
@@ -531,7 +532,7 @@ function TaskSidePanel({
                                 size="sm"
                                 id="edit-task-status"
                             >
-                                {STATUS_OPTIONS.map((s) => <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>)}
+                                {panelStatusOpts.map((o) => <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>)}
                             </Select>
                             <Select
                                 label="Priority"
@@ -540,7 +541,7 @@ function TaskSidePanel({
                                 size="sm"
                                 id="edit-task-priority"
                             >
-                                {PRIORITY_OPTIONS.map((p) => <SelectItem key={p}>{p}</SelectItem>)}
+                                {panelPriorityOpts.map((o) => <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>)}
                             </Select>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -789,6 +790,8 @@ function CreateTaskModal({
     currentUserId: string;
 }) {
     const createTask = useCreateTask();
+    const { data: taskStatusOpts = [] } = useCustomOptions('task_status');
+    const { data: taskPriorityOpts = [] } = useCustomOptions('task_priority');
     const [form, setForm] = useState({
         title: '',
         description: '',
@@ -926,7 +929,7 @@ function CreateTaskModal({
                             onSelectionChange={(keys) => setForm((f) => ({ ...f, priority: Array.from(keys)[0] as string ?? 'MEDIUM' }))}
                             id="new-task-priority"
                         >
-                            {PRIORITY_OPTIONS.map((p) => <SelectItem key={p}>{p}</SelectItem>)}
+                            {taskPriorityOpts.map((o) => <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>)}
                         </Select>
                         <Select
                             label="Status"
@@ -934,7 +937,7 @@ function CreateTaskModal({
                             onSelectionChange={(keys) => setForm((f) => ({ ...f, status: Array.from(keys)[0] as string ?? 'TODO' }))}
                             id="new-task-status"
                         >
-                            {STATUS_OPTIONS.map((s) => <SelectItem key={s}>{s.replace('_', ' ')}</SelectItem>)}
+                            {taskStatusOpts.map((o) => <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>)}
                         </Select>
                         <Input
                             type="date"

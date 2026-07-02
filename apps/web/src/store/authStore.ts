@@ -7,6 +7,7 @@ export interface AuthUser {
   name: string;
   avatarUrl?: string;
   role: string;
+  roles: string[];
   permissions: string[];
   mfaEnabled: boolean;
   mfaVerified: boolean;

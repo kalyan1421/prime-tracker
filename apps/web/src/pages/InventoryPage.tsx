@@ -5,15 +5,13 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
 } from '@heroui/react';
 import { FiSearch, FiFilter, FiPackage, FiExternalLink, FiEdit2 } from 'react-icons/fi';
-import { useInventory, useProjects, useUpdateUnitStatus } from '../hooks/useApi';
+import { useInventory, useProjects, useUpdateUnitStatus, useCustomOptions } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState } from '../components/ui';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { useAuthStore } from '../store/authStore';
 
 const PAGE_SIZE = 20;
-
-const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'LEASE_PENDING', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -30,6 +28,9 @@ export default function InventoryPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('unit:edit');
+  const { data: unitStatusOpts = [] } = useCustomOptions('unit_status');
+  const UNIT_STATUSES = unitStatusOpts.map((o) => o.value);
+  const UNIT_STATUS_LABELS: Record<string, string> = Object.fromEntries(unitStatusOpts.map((o) => [o.value, o.label]));
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -125,7 +126,7 @@ export default function InventoryPage() {
             } ${STATUS_COLORS[s] || 'bg-gray-100 text-gray-800'} hover:opacity-80`}
           >
             <div className="text-2xl font-bold">{statusCounts[s] || 0}</div>
-            <div className="text-xs mt-0.5 font-medium">{s.replace(/_/g, ' ')}</div>
+            <div className="text-xs mt-0.5 font-medium">{UNIT_STATUS_LABELS[s] || s.replace(/_/g, ' ')}</div>
           </button>
         ))}
       </div>
@@ -158,8 +159,8 @@ export default function InventoryPage() {
               selectedKeys={statusFilter ? [statusFilter] : []}
               onSelectionChange={(keys) => setStatusFilter(Array.from(keys)[0] as string || '')}
             >
-              {UNIT_STATUSES.map((s) => (
-                <SelectItem key={s}>{s.replace(/_/g, ' ')}</SelectItem>
+              {unitStatusOpts.map((o) => (
+                <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
               ))}
             </Select>
             <Select
@@ -349,8 +350,8 @@ export default function InventoryPage() {
                     if (val) setStatusTarget((s) => s ? { ...s, newStatus: val } : null);
                   }}
                 >
-                  {UNIT_STATUSES.map((s) => (
-                    <SelectItem key={s} textValue={s.replace(/_/g, ' ')}>{s.replace(/_/g, ' ')}</SelectItem>
+                  {unitStatusOpts.map((o) => (
+                    <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                   ))}
                 </Select>
                 <p className="text-xs text-gray-400">To update tenant or buyer details, open the unit and edit the Lease or Sale.</p>

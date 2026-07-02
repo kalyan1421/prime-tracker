@@ -12,14 +12,13 @@ import {
 import {
   useLeads, useLeadActivities, useProjects, useUnits, useBuildings, useCampaigns, useUsers,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
-  useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers,
+  useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers, useCustomOptions,
 } from '../hooks/useApi';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, EmptyState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 const LEAD_SOURCES = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
-const LEAD_STATUSES = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
 const ACTIVITY_TYPES = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP', 'NOTE', 'STATUS_CHANGE'];
 
 const STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
@@ -384,6 +383,7 @@ function LeadFormModal({
 }) {
   const { data: projects } = useProjects();
   const { data: users } = useUsers();
+  const { data: leadStatusOpts = [] } = useCustomOptions('lead_status');
   const createLead = useCreateLead();
   const updateLead = useUpdateLead();
   const isEdit = !!lead;
@@ -524,8 +524,8 @@ function LeadFormModal({
               selectedKeys={new Set([form.status])}
               onSelectionChange={(keys) => set('status', Array.from(keys)[0] as string)}
             >
-              {LEAD_STATUSES.map((s) => (
-                <SelectItem key={s} textValue={s.replace('_', ' ')}>{s.replace('_', ' ')}</SelectItem>
+              {leadStatusOpts.map((o) => (
+                <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
               ))}
             </Select>
             <Select
@@ -623,6 +623,9 @@ function LeadFormModal({
 
 export default function LeadsPage() {
   const { hasPermission, user } = useAuthStore();
+  const { data: leadStatusOpts = [] } = useCustomOptions('lead_status');
+  const LEAD_STATUSES = leadStatusOpts.map((o) => o.value);
+  const LEAD_STATUS_LABELS: Record<string, string> = Object.fromEntries(leadStatusOpts.map((o) => [o.value, o.label]));
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
   // assignee filter: '' = all, 'mine' = current user, 'unassigned' = no assignee, else a user id
@@ -807,10 +810,10 @@ export default function LeadsPage() {
                     : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
                 }`}
                 aria-pressed={active}
-                aria-label={`Filter by ${s.replace('_', ' ')}, ${count} leads`}
+                aria-label={`Filter by ${LEAD_STATUS_LABELS[s] || s.replace('_', ' ')}, ${count} leads`}
               >
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />
-                {s.replace('_', ' ')}
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${t?.dot ?? 'bg-gray-400'}`} aria-hidden="true" />
+                {LEAD_STATUS_LABELS[s] || s.replace('_', ' ')}
                 <span className="tabular-nums opacity-80">{count}</span>
               </button>
             );

@@ -79,6 +79,17 @@ export class UsersController {
     return this.usersService.updateRole(id, body.role, actorId);
   }
 
+  @Patch(':id/roles')
+  @RequirePermissions('user:manage')
+  @ApiOperation({ summary: 'Set multiple roles for a user' })
+  updateRoles(
+    @Param('id') id: string,
+    @Body() body: { roles: UserRole[] },
+    @CurrentUser('sub') actorId: string,
+  ) {
+    return this.usersService.updateRoles(id, body.roles, actorId);
+  }
+
   @Patch(':id/status')
   @RequirePermissions('user:manage')
   @RequireMfa()

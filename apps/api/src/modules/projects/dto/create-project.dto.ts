@@ -2,7 +2,7 @@ import {
   IsString, IsNotEmpty, MinLength, MaxLength, Matches,
   IsOptional, IsEnum, IsNumber, IsPositive, IsDateString, Min,
 } from 'class-validator';
-import { ProjectStatus, ProjectPhase, ProjectType } from '@prisma/client';
+import { ProjectType } from '@prisma/client';
 
 export class CreateProjectDto {
   @IsString() @IsNotEmpty() @MinLength(2) @MaxLength(120)
@@ -26,11 +26,11 @@ export class CreateProjectDto {
   @IsOptional() @IsNumber() @Min(0)
   approvedBudget?: number;
 
-  @IsOptional() @IsEnum(ProjectStatus)
-  status?: ProjectStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
-  @IsOptional() @IsEnum(ProjectPhase)
-  phase?: ProjectPhase;
+  @IsOptional() @IsString()
+  phase?: string;
 
   @IsOptional() @IsEnum(ProjectType)
   projectType?: ProjectType;

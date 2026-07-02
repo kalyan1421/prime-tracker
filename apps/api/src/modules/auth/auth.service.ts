@@ -71,8 +71,9 @@ export class AuthService {
       metadata: { provider: 'password' },
     });
 
+    const effectiveRoles = (user.roles?.length ? user.roles : [user.role]) as UserRole[];
+    const permissions = [...new Set(effectiveRoles.flatMap((r) => ROLE_PERMISSIONS[r] ?? []))];
     const tokens = await this.generateTokens(user.id, user.email, user.role as UserRole, false);
-    const permissions = ROLE_PERMISSIONS[user.role as UserRole] || [];
 
     return {
       ...tokens,
@@ -82,6 +83,7 @@ export class AuthService {
         name: user.name,
         avatarUrl: user.avatarUrl,
         role: user.role,
+        roles: effectiveRoles,
         permissions,
         mfaEnabled: user.mfaEnabled,
         mfaVerified: false,
@@ -142,18 +144,20 @@ export class AuthService {
       metadata: { provider: 'google' },
     });
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role as UserRole, false);
-    const permissions = ROLE_PERMISSIONS[user.role as UserRole] || [];
+    const effectiveRoles2 = (user.roles?.length ? user.roles : [user.role]) as UserRole[];
+    const permissions2 = [...new Set(effectiveRoles2.flatMap((r) => ROLE_PERMISSIONS[r] ?? []))];
+    const tokens2 = await this.generateTokens(user.id, user.email, user.role as UserRole, false);
 
     return {
-      ...tokens,
+      ...tokens2,
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
         avatarUrl: user.avatarUrl,
         role: user.role,
-        permissions,
+        roles: effectiveRoles2,
+        permissions: permissions2,
         mfaEnabled: user.mfaEnabled,
         mfaVerified: false,
       },

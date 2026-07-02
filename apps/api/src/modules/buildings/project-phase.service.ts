@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import type { ProjectPhase } from '@prisma/client';
 
 /**
  * Derives Project.phase from its buildings.
@@ -16,7 +15,7 @@ import type { ProjectPhase } from '@prisma/client';
  * keeps it in sync whenever a building's phase changes.
  */
 
-const PHASE_ORDER: Record<ProjectPhase, number> = {
+const PHASE_ORDER: Record<string, number> = {
   PRE_DEVELOPMENT: 0,
   PERMITTING: 1,
   CONSTRUCTION: 2,
@@ -30,13 +29,13 @@ export class ProjectPhaseService {
   constructor(private prisma: PrismaService) {}
 
   /** Recompute Project.phase from buildings. Call after any building update. */
-  async recompute(projectId: string): Promise<ProjectPhase> {
+  async recompute(projectId: string): Promise<string> {
     const buildings = await this.prisma.building.findMany({
       where: { projectId },
       select: { phase: true },
     });
 
-    let maxPhase: ProjectPhase = 'PRE_DEVELOPMENT';
+    let maxPhase: string = 'PRE_DEVELOPMENT';
     for (const b of buildings) {
       if (PHASE_ORDER[b.phase] > PHASE_ORDER[maxPhase]) maxPhase = b.phase;
     }

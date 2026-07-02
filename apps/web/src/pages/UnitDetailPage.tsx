@@ -400,10 +400,10 @@ export default function UnitDetailPage() {
       })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
-        {/* Active Lease — hidden for SOLD units */}
+        {/* Active Lease / Tenant Profile — hidden for SOLD units */}
         {u.status !== 'SOLD' && <Section
           icon={<FiHome className="w-4 h-4 text-blue-600" />}
-          title="Active Lease"
+          title="Tenant"
           action={canEditLease ? (
             activeLease ? (
               <button
@@ -424,15 +424,76 @@ export default function UnitDetailPage() {
           ) : undefined}
         >
           {activeLease ? (
-            <dl className="text-sm divide-y divide-gray-100">
-              <Row label="Tenant"><span className="font-medium text-gray-900">{activeLease.tenantName}</span></Row>
-              <Row label="Monthly Rent"><span className="font-semibold text-emerald-600 tabular-nums">{fmt(activeLease.monthlyRent)}</span></Row>
-              <Row label="Start"><span className="text-gray-700">{fmtDate(activeLease.leaseStart)}</span></Row>
-              <Row label="End"><span className="text-gray-700">{fmtDate(activeLease.leaseEnd)}</span></Row>
-              {activeLease.status && activeLease.status !== 'ACTIVE' && (
-                <Row label="Status"><span className="text-gray-700">{activeLease.status}</span></Row>
-              )}
-            </dl>
+            <div className="space-y-4">
+              {/* Tenant identity block */}
+              <div className="flex items-start gap-3 pb-4 border-b border-gray-100">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0">
+                  <span className="text-white text-sm font-bold">
+                    {(activeLease.tenantBrand || activeLease.tenantName || '?').charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-gray-900 text-sm leading-tight truncate">
+                    {activeLease.tenantBrand || activeLease.tenantName}
+                  </p>
+                  {activeLease.tenantBrand && activeLease.tenantBrand !== activeLease.tenantName && (
+                    <p className="text-xs text-gray-500 truncate">{activeLease.tenantName}</p>
+                  )}
+                  {activeLease.tenantLegalName && activeLease.tenantLegalName !== activeLease.tenantName && (
+                    <p className="text-[11px] text-gray-400 italic truncate">{activeLease.tenantLegalName}</p>
+                  )}
+                  {activeLease.tenantContact && (
+                    <p className="text-xs text-blue-600 mt-0.5 truncate">{activeLease.tenantContact}</p>
+                  )}
+                </div>
+                <div className="shrink-0">
+                  {activeLease.status && activeLease.status !== 'ACTIVE' ? (
+                    <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                      {activeLease.status}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                      Active
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Financial highlight */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-emerald-50 px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold">Monthly Rent</p>
+                  <p className="text-lg font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(activeLease.monthlyRent)}</p>
+                  {activeLease.rentPerSqft && (
+                    <p className="text-[10px] text-emerald-600">${Number(activeLease.rentPerSqft).toFixed(2)}/sqft/mo</p>
+                  )}
+                </div>
+                {activeLease.securityDeposit && (
+                  <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Deposit</p>
+                    <p className="text-lg font-bold text-slate-700 tabular-nums mt-0.5">{fmt(activeLease.securityDeposit)}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Lease timeline */}
+              <dl className="text-sm divide-y divide-gray-100">
+                <Row label="Start"><span className="text-gray-700">{fmtDate(activeLease.leaseStart)}</span></Row>
+                <Row label="End">
+                  <span className={`${new Date(activeLease.leaseEnd) < new Date() ? 'text-red-600' : 'text-gray-700'}`}>
+                    {fmtDate(activeLease.leaseEnd)}
+                  </span>
+                </Row>
+                {activeLease.termMonths && (
+                  <Row label="Term"><span className="text-gray-700">{activeLease.termMonths} months</span></Row>
+                )}
+                {activeLease.escalationPct && (
+                  <Row label="Escalation">
+                    <span className="text-gray-700">{Number(activeLease.escalationPct).toFixed(1)}% every {activeLease.escalationFreq || 12} mo</span>
+                  </Row>
+                )}
+              </dl>
+            </div>
           ) : (
             <EmptyRow icon={<FiHome className="w-5 h-5" />} text="No active lease" />
           )}

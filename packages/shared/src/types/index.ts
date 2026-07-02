@@ -230,6 +230,9 @@ export const PERMISSIONS = {
 
   // Organizations
   ORG_MANAGE: 'org:manage',
+
+  // Custom Options (admin-configurable dropdown values)
+  SETTINGS_MANAGE: 'settings:manage',
 } as const;
 
 // ---- Role → Permission Mapping ----
@@ -276,6 +279,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.SALE_DISCOUNT_APPROVE,
     PERMISSIONS.DAILYLOG_VIEW,
     PERMISSIONS.BROKER_VIEW,
+    PERMISSIONS.SETTINGS_MANAGE,
   ],
   [UserRole.FINANCE]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -514,6 +518,14 @@ export function isProjectScopedRole(role: UserRole | string): boolean {
   return (PROJECT_SCOPED_ROLES as string[]).includes(role as string);
 }
 
+/**
+ * A user with multiple roles is globally scoped if ANY role is global.
+ * Only restrict to assigned projects when ALL roles are project-scoped.
+ */
+export function isMultiRoleProjectScoped(roles: (UserRole | string)[]): boolean {
+  return roles.every((r) => isProjectScopedRole(r));
+}
+
 // ---- Role Metadata ----
 
 export const ROLE_META: Record<UserRole, { label: string; description: string; category: 'admin' | 'leadership' | 'finance' | 'operations' | 'support' }> = {
@@ -624,6 +636,7 @@ export interface TokenPayload {
   sub: string;
   email: string;
   role: UserRole;
+  roles: UserRole[];
   permissions: string[];
   mfaVerified: boolean;
 }

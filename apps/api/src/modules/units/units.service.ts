@@ -4,12 +4,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
-import { UnitStatus, UserRole } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 
 // ---- Status state machine ----
 // Defines which transitions are legal. Empty array = terminal (no further moves).
 // SUPER_ADMIN/FOUNDER can override — see canOverride() below.
-const STATUS_TRANSITIONS: Record<UnitStatus, UnitStatus[]> = {
+const STATUS_TRANSITIONS: Record<string, string[]> = {
   AVAILABLE:           ['UNDER_CONTRACT', 'LEASE_PENDING', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
   UNDER_CONTRACT:      ['AVAILABLE', 'LEASED', 'SOLD'],
   // LEASE_PENDING: signed lease, tenant not yet moved in. Can flip to LEASED (move-in)
@@ -129,10 +129,11 @@ export class UnitsService {
       );
     }
 
-    // The combined number must be distinct from every existing unit (incl. archived sources,
-    // whose rows still occupy the (building, number) unique key).
-    const clash = await this.prisma.unit.findUnique({
-      where: { buildingId_unitNumber: { buildingId: input.buildingId, unitNumber: number } },
+    // The combined number must be distinct from every other live unit in the building.
+    // Archived (soft-deleted) units — including ones merged away by a prior combine —
+    // no longer reserve their number; see create()'s note on the partial unique index.
+    const clash = await this.prisma.unit.findFirst({
+      where: { buildingId: input.buildingId, unitNumber: number, deletedAt: null },
     });
     if (clash) {
       throw new ConflictException(
@@ -173,7 +174,7 @@ export class UnitsService {
     buildingId: string;
     unitNumber: string;
     unitType: string;
-    status?: UnitStatus;
+    status?: string;
     sqft?: number;
     askingRent?: number;
     askingPrice?: number;
@@ -198,9 +199,11 @@ export class UnitsService {
     const unitNumber = input.unitNumber?.trim();
     if (!unitNumber) throw new BadRequestException('Unit number is required');
 
-    // Surface the composite-unique-constraint failure with a friendly message
-    const existing = await this.prisma.unit.findUnique({
-      where: { buildingId_unitNumber: { buildingId: input.buildingId, unitNumber } },
+    // Surface the composite-unique-constraint failure with a friendly message.
+    // The DB constraint is a partial index (WHERE "deletedAt" IS NULL) so a soft-deleted
+    // unit with this number must not block reuse — filter it out here too.
+    const existing = await this.prisma.unit.findFirst({
+      where: { buildingId: input.buildingId, unitNumber, deletedAt: null },
     });
     if (existing) {
       throw new ConflictException(
@@ -241,7 +244,7 @@ export class UnitsService {
     input: {
       unitNumber?: string;
       unitType?: string;
-      status?: UnitStatus;
+      status?: string;
       sqft?: number;
       askingRent?: number;
       askingPrice?: number;
@@ -265,14 +268,13 @@ export class UnitsService {
     // Normalize so whitespace-only differences don't create near-duplicate numbers.
     if (input.unitNumber != null) input.unitNumber = input.unitNumber.trim();
 
-    // unitNumber change → uniqueness check
+    // unitNumber change → uniqueness check (ignore soft-deleted units — see create())
     if (input.unitNumber && input.unitNumber !== unit.unitNumber) {
-      const conflict = await this.prisma.unit.findUnique({
+      const conflict = await this.prisma.unit.findFirst({
         where: {
-          buildingId_unitNumber: {
-            buildingId: unit.buildingId,
-            unitNumber: input.unitNumber,
-          },
+          buildingId: unit.buildingId,
+          unitNumber: input.unitNumber,
+          deletedAt: null,
         },
       });
       if (conflict) {
@@ -284,7 +286,7 @@ export class UnitsService {
 
     // Status transition guard
     if (input.status && input.status !== unit.status) {
-      this.assertValidStatusTransition(unit.status as UnitStatus, input.status, userRole);
+      this.assertValidStatusTransition(unit.status, input.status, userRole);
     }
 
     // Time-on-market: maintain `availableSince` automatically.
@@ -307,7 +309,7 @@ export class UnitsService {
     });
   }
 
-  async updateStatus(id: string, status: UnitStatus, userRole: UserRole) {
+  async updateStatus(id: string, status: string, userRole: UserRole) {
     return this.update(id, { status }, userRole);
   }
 
@@ -337,7 +339,7 @@ export class UnitsService {
   // ---- Cross-Project Inventory ----
 
   async findInventory(filters: {
-    status?: UnitStatus;
+    status?: string;
     unitType?: string;
     projectId?: string;
     search?: string;
@@ -424,8 +426,8 @@ export class UnitsService {
   // ---- Helpers ----
 
   private assertValidStatusTransition(
-    from: UnitStatus,
-    to: UnitStatus,
+    from: string,
+    to: string,
     userRole: UserRole,
   ) {
     // Founder/SuperAdmin can override the state machine for corrections

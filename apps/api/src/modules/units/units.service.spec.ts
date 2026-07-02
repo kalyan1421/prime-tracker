@@ -3,7 +3,8 @@ import { UserRole } from '@prisma/client';
 import { UnitsService } from './units.service';
 
 const mockPrisma: any = {
-  unit: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
+  unit: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
+  building: { findUnique: jest.fn() },
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
 };
 
@@ -72,7 +73,7 @@ describe('UnitsService.combine', () => {
 
   it('rejects a combined number that clashes with an existing unit', async () => {
     mockPrisma.unit.findMany.mockResolvedValue(srcUnits);
-    mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1' }); // number already taken
+    mockPrisma.unit.findFirst.mockResolvedValue({ id: 'u1' }); // number already taken
     await expect(
       service.combine({ buildingId: 'b1', sourceUnitIds: ['u1', 'u2'], unitNumber: '101' }, PM),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -80,7 +81,7 @@ describe('UnitsService.combine', () => {
 
   it('creates the combined unit (summed area) and soft-archives the sources', async () => {
     mockPrisma.unit.findMany.mockResolvedValue(srcUnits);
-    mockPrisma.unit.findUnique.mockResolvedValue(null);
+    mockPrisma.unit.findFirst.mockResolvedValue(null);
     mockPrisma.unit.create.mockResolvedValue({ id: 'c1', unitNumber: '101+102' });
     mockPrisma.unit.updateMany.mockResolvedValue({ count: 2 });
 
@@ -97,6 +98,37 @@ describe('UnitsService.combine', () => {
         where: { id: { in: ['u1', 'u2'] } },
         data: expect.objectContaining({ mergedIntoId: 'c1', deletedAt: expect.any(Date) }),
       }),
+    );
+  });
+});
+
+describe('UnitsService.create', () => {
+  let service: UnitsService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.building.findUnique.mockResolvedValue({ id: 'b1', project: { status: 'ACTIVE' } });
+  });
+
+  it('rejects a unit number that clashes with a live unit', async () => {
+    mockPrisma.unit.findFirst.mockResolvedValue({ id: 'existing' });
+    await expect(
+      service.create({ buildingId: 'b1', unitNumber: '504', unitType: 'RETAIL' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(mockPrisma.unit.create).not.toHaveBeenCalled();
+  });
+
+  it('allows reusing a unit number that only exists on a soft-deleted (e.g. merged-away) unit', async () => {
+    // The uniqueness lookup filters deletedAt: null, so an archived '504' must not surface here.
+    mockPrisma.unit.findFirst.mockResolvedValue(null);
+    mockPrisma.unit.create.mockResolvedValue({ id: 'new', buildingId: 'b1', unitNumber: '504' });
+
+    const res: any = await service.create({ buildingId: 'b1', unitNumber: '504', unitType: 'RETAIL' });
+
+    expect(res.id).toBe('new');
+    expect(mockPrisma.unit.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { buildingId: 'b1', unitNumber: '504', deletedAt: null } }),
     );
   });
 });

@@ -1,8 +1,7 @@
 import {
-  IsString, IsOptional, IsEnum,
+  IsString, IsOptional,
   IsNumber, IsPositive, IsDateString, MaxLength,
 } from 'class-validator';
-import { SaleStatus } from '@prisma/client';
 
 export class UpdateSaleDto {
   @IsOptional() @IsString() @MaxLength(200)
@@ -14,8 +13,8 @@ export class UpdateSaleDto {
   @IsOptional() @IsNumber() @IsPositive()
   depositAmt?: number;
 
-  @IsOptional() @IsEnum(SaleStatus)
-  status?: SaleStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
   @IsOptional() @IsDateString()
   loiDate?: string;

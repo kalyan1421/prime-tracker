@@ -2,14 +2,14 @@ import { Type, Transform } from 'class-transformer';
 import {
   IsOptional, IsEnum, IsString, IsInt, Min, Max, IsIn, MaxLength, IsBoolean,
 } from 'class-validator';
-import { ProjectStatus, ProjectPhase, ProjectType } from '@prisma/client';
+import { ProjectType } from '@prisma/client';
 
 export class ListProjectsDto {
-  @IsOptional() @IsEnum(ProjectStatus)
-  status?: ProjectStatus;
+  @IsOptional() @IsString()
+  status?: string;
 
-  @IsOptional() @IsEnum(ProjectPhase)
-  phase?: ProjectPhase;
+  @IsOptional() @IsString()
+  phase?: string;
 
   @IsOptional() @IsEnum(ProjectType)
   projectType?: ProjectType;

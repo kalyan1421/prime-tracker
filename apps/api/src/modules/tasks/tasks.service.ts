@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { TaskStatus, TaskPriority, Prisma, UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 
 @Injectable()
 export class TasksService {
@@ -13,8 +13,8 @@ export class TasksService {
         buildingId?: string;
         unitId?: string;
         assignedTo?: string;
-        status?: TaskStatus;
-        priority?: TaskPriority;
+        status?: string;
+        priority?: string;
         search?: string;
     } = {}) {
         const { projectId, buildingId, unitId, assignedTo, status, priority, search } = params;
@@ -76,8 +76,8 @@ export class TasksService {
         unitId?: string;
         title: string;
         description?: string;
-        status?: TaskStatus;
-        priority?: TaskPriority;
+        status?: string;
+        priority?: string;
         dueDate?: string;
         assignedTo?: string;
     }, createdBy: string) {
@@ -108,8 +108,8 @@ export class TasksService {
     async update(id: string, data: {
         title?: string;
         description?: string;
-        status?: TaskStatus;
-        priority?: TaskPriority;
+        status?: string;
+        priority?: string;
         dueDate?: string | null;
         assignedTo?: string | null;
         buildingId?: string | null;
