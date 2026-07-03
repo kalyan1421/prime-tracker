@@ -122,6 +122,12 @@ echo "=== .env written ==="
 export DATABASE_URL=\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)
 pnpm --filter @prime-tracker/api exec prisma migrate deploy 2>&1 | tail -8
 
+# pnpm's build-script approval gate silently blocks Prisma's postinstall hook on this box,
+# so \`pnpm install\` above does NOT regenerate the client — it's easy to end up running
+# migrations against the DB while PM2 keeps serving a stale client that doesn't know about
+# the new columns/fields (500s on every query touching them). Regenerate explicitly.
+pnpm --filter @prime-tracker/api exec prisma generate 2>&1 | tail -8
+
 sudo -u ubuntu pm2 restart prime-api --update-env 2>&1 || pm2 restart prime-api --update-env 2>&1
 
 sleep 6
