@@ -57,6 +57,12 @@ export class DrawsController {
     return this.draws.submitToLender(id, userId, body?.comment);
   }
 
+  @Post(':id/return-for-info')
+  @RequirePermissions('draw:edit')
+  returnForInfo(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
+    return this.draws.returnForInfo(id, userId, body?.comment);
+  }
+
   @Post(':id/mark-funded')
   @RequirePermissions('draw:approve')
   markFunded(
