@@ -5,6 +5,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import { CreateVendorDto } from './dto/create-vendor.dto';
+import { UpdateVendorDto } from './dto/update-vendor.dto';
 
 @ApiTags('Vendors')
 @ApiBearerAuth()
@@ -22,12 +24,12 @@ export class VendorsController {
   @Post()
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Create vendor' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateVendorDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Update vendor' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateVendorDto) { return this.service.update(id, body); }
 
   @Delete(':id')
   @RequirePermissions('vendor:edit')

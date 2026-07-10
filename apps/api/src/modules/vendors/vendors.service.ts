@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CreateVendorDto } from './dto/create-vendor.dto';
+import { UpdateVendorDto } from './dto/update-vendor.dto';
 
 @Injectable()
 export class VendorsService {
@@ -9,7 +11,7 @@ export class VendorsService {
     return this.prisma.vendor.findMany({ orderBy: { name: 'asc' } });
   }
 
-  async create(data: any) {
+  async create(data: CreateVendorDto) {
     return this.prisma.vendor.create({
       data: {
         name: data.name,
@@ -21,7 +23,7 @@ export class VendorsService {
     });
   }
 
-  async update(id: string, data: any) {
+  async update(id: string, data: UpdateVendorDto) {
     const vendor = await this.prisma.vendor.findUnique({ where: { id } });
     if (!vendor) throw new NotFoundException('Vendor not found');
     return this.prisma.vendor.update({ where: { id }, data });

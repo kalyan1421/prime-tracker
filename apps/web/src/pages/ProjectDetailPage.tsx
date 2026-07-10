@@ -34,7 +34,7 @@ import {
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
   useProjectDraws, useCreateDraw, useUpdateDrawStatus, useDeleteDraw,
-  useVendors, useCreateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
+  useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
   useDocuments, useUploadDocument, useDeleteDocument, useRenameDocument, useReplaceDocument,
   useUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
@@ -367,7 +367,7 @@ export default function ProjectDetailPage() {
         {activeTab === 'milestones' && <MilestonesTab projectId={id!} />}
         {activeTab === 'leads' && <ProjectLeadsTab projectId={id!} />}
         {activeTab === 'draws' && <DrawsTab projectId={id!} />}
-        {activeTab === 'vendors' && <VendorsTab projectId={id!} role={role} />}
+        {activeTab === 'vendors' && <VendorsTab projectId={id!} />}
         {activeTab === 'documents' && <DocumentsTab projectId={id!} />}
         {activeTab === 'tasks' && <TasksPageInner projectId={id!} />}
         {activeTab === 'comments' && <ProjectCommentsTab projectId={id!} />}
@@ -5130,9 +5130,11 @@ const CO_STATUS_COLORS: Record<string, 'default' | 'success' | 'danger'> = {
 const EMPTY_CONTRACT = { vendorId: '', description: '', originalAmount: '', status: 'ACTIVE', startDate: '', endDate: '' };
 const EMPTY_CO = { description: '', amount: '' };
 const EMPTY_PAYMENT = { amount: '', paidDate: '', notes: '' };
+const EMPTY_VENDOR = { name: '', contactName: '', email: '', phone: '', trade: '' };
 
-function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
-  const canEdit = ['FOUNDER', 'FINANCE', 'PROJECT_MANAGER'].includes(role);
+function VendorsTab({ projectId }: { projectId: string }) {
+  const { hasPermission } = useAuthStore();
+  const canEdit = hasPermission('vendor:edit');
   const { data: contracts = [], isLoading } = useContracts(projectId);
   const { data: summary } = useContractSummary(projectId);
   const { data: vendors = [] } = useVendors();
@@ -5141,17 +5143,62 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
   const addCO = useAddChangeOrder();
   const approveCO = useApproveChangeOrder();
   const addPayment = useAddContractPayment();
+  const createVendor = useCreateVendor();
+  const updateVendor = useUpdateVendor();
   const { isOpen: isContractOpen, onOpen: onContractOpen, onClose: onContractClose } = useDisclosure();
   const { isOpen: isCOOpen, onOpen: onCOOpen, onClose: onCOClose } = useDisclosure();
   const { isOpen: isPmtOpen, onOpen: onPmtOpen, onClose: onPmtClose } = useDisclosure();
+  const { isOpen: isVendorOpen, onOpen: onVendorOpen, onClose: onVendorClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>(EMPTY_CONTRACT);
   const [coForm, setCOForm] = useState<Record<string, string>>(EMPTY_CO);
   const [pmtForm, setPmtForm] = useState<Record<string, string>>(EMPTY_PAYMENT);
+  const [vendorForm, setVendorForm] = useState<Record<string, string>>(EMPTY_VENDOR);
+  const [editVendorId, setEditVendorId] = useState<string | null>(null);
   const [selectedContractId, setSelectedContractId] = useState('');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const set = (f: string) => (e: any) => setForm((p) => ({ ...p, [f]: e.target.value }));
   const setCO = (f: string) => (e: any) => setCOForm((p) => ({ ...p, [f]: e.target.value }));
   const setPmt = (f: string) => (e: any) => setPmtForm((p) => ({ ...p, [f]: e.target.value }));
+  const setVendor = (f: string) => (e: any) => setVendorForm((p) => ({ ...p, [f]: e.target.value }));
+
+  const openCreateVendor = () => {
+    setEditVendorId(null);
+    setVendorForm(EMPTY_VENDOR);
+    onVendorOpen();
+  };
+
+  const openEditVendor = (v: any) => {
+    setEditVendorId(v.id);
+    setVendorForm({
+      name: v.name || '',
+      contactName: v.contactName || '',
+      email: v.email || '',
+      phone: v.phone || '',
+      trade: v.trade || '',
+    });
+    onVendorOpen();
+  };
+
+  const handleSaveVendor = async () => {
+    try {
+      const payload = {
+        name: vendorForm.name.trim(),
+        contactName: vendorForm.contactName.trim() || undefined,
+        email: vendorForm.email.trim() || undefined,
+        phone: vendorForm.phone.trim() || undefined,
+        trade: vendorForm.trade.trim() || undefined,
+      };
+      if (editVendorId) {
+        await updateVendor.mutateAsync({ id: editVendorId, ...payload });
+        addToast({ title: 'Vendor updated', color: 'success' });
+      } else {
+        await createVendor.mutateAsync(payload);
+        addToast({ title: 'Vendor created', color: 'success' });
+      }
+      setVendorForm(EMPTY_VENDOR);
+      onVendorClose();
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to save vendor'), color: 'danger' }); }
+  };
 
   const toggleExpand = (id: string) => setExpandedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -5194,6 +5241,41 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
         <StatCard label="Paid to Date" value={fmt(s?.totalPaid || 0)} variant="revenue" />
         <StatCard label="% Complete" value={fmtPct(s?.pctComplete || 0)} variant="neutral" />
       </div>
+
+      <Card shadow="sm">
+        <CardHeader className="flex justify-between items-center">
+          <span className="font-semibold text-sm">Vendors</span>
+          {canEdit && <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreateVendor}>Add Vendor</Button>}
+        </CardHeader>
+        <CardBody className="p-0">
+          {(vendors as any[]).length === 0 ? (
+            <div className="p-6"><EmptyState message="No vendors yet" /></div>
+          ) : (
+            <div className="divide-y">
+              {(vendors as any[]).map((v: any) => (
+                <div key={v.id} className="p-3 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{v.name}</span>
+                      {v.trade && <span className="text-xs text-gray-400">{v.trade}</span>}
+                    </div>
+                    <div className="flex gap-3 mt-0.5 text-xs text-gray-500">
+                      {v.contactName && <span>{v.contactName}</span>}
+                      {v.email && <span>{v.email}</span>}
+                      {v.phone && <span>{v.phone}</span>}
+                    </div>
+                  </div>
+                  {canEdit && (
+                    <Button size="sm" variant="light" isIconOnly onPress={() => openEditVendor(v)}>
+                      <FiEdit2 />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardBody>
+      </Card>
 
       <Card shadow="sm">
         <CardHeader className="flex justify-between items-center">
@@ -5358,6 +5440,31 @@ function VendorsTab({ projectId, role }: { projectId: string; role: string }) {
           <ModalFooter>
             <Button variant="flat" onPress={onPmtClose}>Cancel</Button>
             <Button color="primary" onPress={handleSavePayment} isLoading={addPayment.isPending}>Record</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Add/Edit Vendor Modal */}
+      <Modal isOpen={isVendorOpen} onClose={onVendorClose} size="md">
+        <ModalContent>
+          <ModalHeader>{editVendorId ? 'Edit Vendor' : 'New Vendor'}</ModalHeader>
+          <ModalBody className="space-y-3">
+            <Input label="Name" isRequired value={vendorForm.name} onChange={setVendor('name')} />
+            <Input label="Contact Name" value={vendorForm.contactName} onChange={setVendor('contactName')} />
+            <Input label="Email" type="email" value={vendorForm.email} onChange={setVendor('email')} />
+            <Input label="Phone" value={vendorForm.phone} onChange={setVendor('phone')} />
+            <Input label="Trade" value={vendorForm.trade} onChange={setVendor('trade')} />
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={onVendorClose}>Cancel</Button>
+            <Button
+              color="primary"
+              isDisabled={!vendorForm.name.trim()}
+              isLoading={createVendor.isPending || updateVendor.isPending}
+              onPress={handleSaveVendor}
+            >
+              {editVendorId ? 'Save' : 'Create'}
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
