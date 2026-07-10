@@ -10,6 +10,7 @@ import {
   useDraw, useDrawChecklist, useDrawWorkflow, useAttachDrawDocument, useRemoveDrawDocument,
   usePresignedUpload,
 } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
 
 /**
  * Detail modal for a single Draw Request.
@@ -48,6 +49,12 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
   const attachDoc = useAttachDrawDocument();
   const removeDoc = useRemoveDrawDocument();
   const presigned = usePresignedUpload();
+  const { hasPermission } = useAuthStore();
+  // draw:edit gates submit/return/cancel/document uploads; draw:approve gates
+  // approve-internal/mark-funded/reject — mirrors the backend RBAC split in
+  // draws.controller.ts (see class-level comment there).
+  const canEdit = hasPermission('draw:edit');
+  const canApprove = hasPermission('draw:approve');
 
   const [comment, setComment] = useState('');
   const [rejectReason, setRejectReason] = useState('');
@@ -61,15 +68,17 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
   const documents = (d.documents ?? []) as AttachedDocument[];
   const checklistItems = checklist as ChecklistItem[];
 
-  // Available workflow actions per state — mirrors backend draw-state-machine.ts
+  // Available workflow actions per state — mirrors backend draw-state-machine.ts,
+  // gated by permission so read-only roles (e.g. CONSTRUCTION, draw:view only) never
+  // see action buttons they'd be rejected for by the API.
   const can = {
-    submit:          status === 'DRAFT',
-    approveInternal: status === 'SUBMITTED',
-    submitToLender:  status === 'APPROVED' && !d.submittedToLenderAt,
-    markFunded:      status === 'APPROVED',
-    reject:          ['DRAFT', 'SUBMITTED', 'APPROVED'].includes(status ?? ''),
-    returnForInfo:   status === 'SUBMITTED',
-    cancel:          ['DRAFT', 'SUBMITTED', 'APPROVED'].includes(status ?? ''),
+    submit:          canEdit && status === 'DRAFT',
+    approveInternal: canApprove && status === 'SUBMITTED',
+    submitToLender:  canEdit && status === 'APPROVED' && !d.submittedToLenderAt,
+    markFunded:      canApprove && status === 'APPROVED',
+    reject:          canApprove && ['DRAFT', 'SUBMITTED', 'APPROVED'].includes(status ?? ''),
+    returnForInfo:   canEdit && status === 'SUBMITTED',
+    cancel:          canEdit && ['DRAFT', 'SUBMITTED', 'APPROVED'].includes(status ?? ''),
   };
 
   const fire = (mutation: any, args: any, successText: string) => {
@@ -131,7 +140,8 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
               <Tab key="workflow" title="Workflow">
                 <DrawApprovalStepper approvals={approvals} />
 
-                {/* Action panel */}
+                {/* Action panel — hidden entirely for view-only roles (e.g. CONSTRUCTION) */}
+                {(can.submit || can.approveInternal || can.submitToLender || can.markFunded || can.returnForInfo) && (
                 <div className="mt-6 border-t border-gray-100 pt-4">
                   <Textarea
                     size="sm"
@@ -182,33 +192,42 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
                     {can.returnForInfo && (
                       <Button
                         size="sm" variant="flat" startContent={<FiCornerUpLeft />}
-                        onPress={() => addToast({ title: 'Return-for-info: not yet wired (use Reject for now)', color: 'warning' })}
+                        onPress={() => fire(workflow.returnForInfo, { id: drawId, comment }, 'Returned for info')}
+                        isLoading={workflow.returnForInfo.isPending}
                       >
                         Return for info
                       </Button>
                     )}
                   </div>
                 </div>
+                )}
 
-                {/* Reject panel — separated, requires reason */}
-                {can.reject && (
+                {/* Reject panel — separated, requires reason. Cancel sits alongside it but
+                    is gated independently (draw:edit) since it's not an approval action. */}
+                {(can.reject || can.cancel) && (
                   <div className="mt-6 border-t border-gray-100 pt-4">
-                    <p className="text-xs font-semibold text-red-600 uppercase mb-2">Reject draw</p>
-                    <Input
-                      size="sm"
-                      placeholder="Reason for rejection (required)"
-                      value={rejectReason}
-                      onChange={(e) => setRejectReason(e.target.value)}
-                    />
+                    {can.reject && (
+                      <>
+                        <p className="text-xs font-semibold text-red-600 uppercase mb-2">Reject draw</p>
+                        <Input
+                          size="sm"
+                          placeholder="Reason for rejection (required)"
+                          value={rejectReason}
+                          onChange={(e) => setRejectReason(e.target.value)}
+                        />
+                      </>
+                    )}
                     <div className="flex gap-2 mt-2">
-                      <Button
-                        size="sm" color="danger" variant="flat" startContent={<FiXCircle />}
-                        isDisabled={!rejectReason.trim()}
-                        onPress={() => fire(workflow.reject, { id: drawId, reason: rejectReason }, 'Draw rejected')}
-                        isLoading={workflow.reject.isPending}
-                      >
-                        Reject
-                      </Button>
+                      {can.reject && (
+                        <Button
+                          size="sm" color="danger" variant="flat" startContent={<FiXCircle />}
+                          isDisabled={!rejectReason.trim()}
+                          onPress={() => fire(workflow.reject, { id: drawId, reason: rejectReason }, 'Draw rejected')}
+                          isLoading={workflow.reject.isPending}
+                        >
+                          Reject
+                        </Button>
+                      )}
                       {can.cancel && (
                         <Button
                           size="sm" variant="light" color="danger"
@@ -229,6 +248,7 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
                   checklist={checklistItems}
                   attachments={documents}
                   uploading={presigned.isPending || attachDoc.isPending}
+                  readOnly={!canEdit}
                   onUpload={handleUpload}
                   onRemove={(id) => {
                     removeDoc.mutate(id, {

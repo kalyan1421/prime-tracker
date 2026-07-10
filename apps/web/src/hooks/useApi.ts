@@ -1671,6 +1671,7 @@ export function useDrawWorkflow() {
     submitToLender:  useMutation({ mutationFn: drawAction('submit-to-lender'), onSuccess: (_d, v) => inv(v.id) }),
     markFunded:      useMutation({ mutationFn: drawAction('mark-funded'),      onSuccess: (_d, v) => inv(v.id) }),
     reject:          useMutation({ mutationFn: drawAction('reject'),           onSuccess: (_d, v) => inv(v.id) }),
+    returnForInfo:   useMutation({ mutationFn: drawAction('return-for-info'), onSuccess: (_d, v) => inv(v.id) }),
     cancel:          useMutation({ mutationFn: drawAction('cancel'),           onSuccess: (_d, v) => inv(v.id) }),
   };
 }

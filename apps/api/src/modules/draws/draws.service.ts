@@ -31,6 +31,10 @@ export class DrawsService {
     return this.transition(drawId, 'approveInternal', actorId, 'INTERNAL_FOUNDER', 'APPROVED', comment);
   }
 
+  async returnForInfo(drawId: string, actorId: string, comment?: string) {
+    return this.transition(drawId, 'returnForInfo', actorId, 'INTERNAL_FOUNDER', 'RETURNED_FOR_INFO', comment);
+  }
+
   async submitToLender(drawId: string, actorId: string, comment?: string) {
     // Records that finance forwarded to lender. State stays APPROVED.
     const draw = await this.findById(drawId);

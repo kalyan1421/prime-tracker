@@ -33,7 +33,8 @@ import {
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding,
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
-  useProjectDraws, useCreateDraw, useUpdateDrawStatus, useDeleteDraw,
+  useProjectDraws, useCreateDraw, useDeleteDraw,
+  useDrawSchedule, useUpsertDrawScheduleLine, useDeleteDrawScheduleLine,
   useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
   useDocuments, useUploadDocument, useDeleteDocument, useRenameDocument, useReplaceDocument,
@@ -247,7 +248,7 @@ const TAB_ROLES: Record<string, string[]> = {
   units: ALL_ROLES,
   milestones: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'PROJECT_MANAGER', 'CONSTRUCTION', 'VIEWER'],
   leads: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'],
-  draws: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER'],
+  draws: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER', 'CONSTRUCTION'],
   vendors: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER', 'CONSTRUCTION', 'LEGAL'],
   documents: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING', 'LEGAL'],
   tasks: ALL_ROLES,
@@ -4887,30 +4888,22 @@ const DRAW_STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'se
   REJECTED: 'danger',
 };
 
-const NEXT_DRAW_STATUS: Record<string, string> = {
-  DRAFT: 'SUBMITTED',
-  SUBMITTED: 'APPROVED',
-  APPROVED: 'FUNDED',
-};
-
 const EMPTY_DRAW = { loanId: '', requestedAmount: '', notes: '' };
+const EMPTY_SCHEDULE_LINE = { drawNumber: '', plannedAmount: '', plannedDate: '', description: '' };
 
 function DrawsTab({ projectId }: { projectId: string }) {
   const { data: draws = [], isLoading } = useProjectDraws(projectId);
   const { data: loans = [] } = useLoans(projectId);
   const createDraw = useCreateDraw();
-  const updateStatus = useUpdateDrawStatus();
   const deleteDraw = useDeleteDraw();
+  const { hasPermission } = useAuthStore();
+  // Same permission the API requires for POST /loans/:loanId/draws, DELETE /loans/draws/:id,
+  // and the draw-schedule mutating routes — one gate for every mutating action in this tab.
+  const canEdit = hasPermission('draw:edit');
 
   const { isOpen, onOpen, onClose } = useDisclosure();
-  const { isOpen: isAdvanceOpen, onOpen: onAdvanceOpen, onClose: onAdvanceClose } = useDisclosure();
-  const { isOpen: isRejectOpen, onOpen: onRejectOpen, onClose: onRejectClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_DRAW);
-  const [advanceDraw, setAdvanceDraw] = useState<any>(null);
-  const [approvedAmount, setApprovedAmount] = useState('');
-  const [rejectDraw, setRejectDraw] = useState<any>(null);
-  const [rejectionReason, setRejectionReason] = useState('');
   // Slice 8 — detail modal with stepper + checklist + workflow buttons
   const [detailDrawId, setDetailDrawId] = useState<string | null>(null);
 
@@ -4930,45 +4923,64 @@ function DrawsTab({ projectId }: { projectId: string }) {
     } catch (e) { addToast({ title: errMsg(e, 'Failed to create draw'), color: 'danger' }); }
   };
 
-  const openAdvance = (draw: any) => {
-    setAdvanceDraw(draw);
-    setApprovedAmount(String(draw.requestedAmount || draw.amount || ''));
-    onAdvanceOpen();
-  };
-
-  const handleAdvance = async () => {
-    if (!advanceDraw) return;
-    const next = NEXT_DRAW_STATUS[advanceDraw.status];
-    if (!next) return;
-    try {
-      const payload: any = { id: advanceDraw.id, status: next, projectId };
-      if (next === 'APPROVED') payload.approvedAmount = parseFloat(approvedAmount) || undefined;
-      await updateStatus.mutateAsync(payload);
-      addToast({ title: `Draw moved to ${next}`, color: 'success' });
-      onAdvanceClose();
-    } catch (e) { addToast({ title: errMsg(e, 'Failed to update status'), color: 'danger' }); }
-  };
-
-  const openReject = (draw: any) => {
-    setRejectDraw(draw);
-    setRejectionReason('');
-    onRejectOpen();
-  };
-
-  const handleReject = async () => {
-    if (!rejectDraw || !rejectionReason.trim()) return;
-    try {
-      await updateStatus.mutateAsync({ id: rejectDraw.id, status: 'REJECTED', projectId, rejectionReason });
-      addToast({ title: 'Draw rejected', color: 'warning' });
-      onRejectClose();
-    } catch (e) { addToast({ title: errMsg(e, 'Failed to reject draw'), color: 'danger' }); }
-  };
-
   const handleDelete = async (draw: any) => {
     try {
       await deleteDraw.mutateAsync({ id: draw.id, projectId });
       addToast({ title: 'Draw deleted', color: 'success' });
     } catch (e) { addToast({ title: errMsg(e, 'Failed to delete draw'), color: 'danger' }); }
+  };
+
+  // ---- Draw Schedule sub-view ----
+  const loanList = loans as any[];
+  const [scheduleLoanId, setScheduleLoanId] = useState<string>('');
+  const effectiveScheduleLoanId = scheduleLoanId || loanList[0]?.id || '';
+  const { data: schedule = [] } = useDrawSchedule(effectiveScheduleLoanId);
+  const upsertScheduleLine = useUpsertDrawScheduleLine();
+  const deleteScheduleLine = useDeleteDrawScheduleLine();
+
+  const { isOpen: isScheduleOpen, onOpen: onScheduleOpen, onClose: onScheduleClose } = useDisclosure();
+  const [scheduleForm, setScheduleForm] = useState<Record<string, string>>(EMPTY_SCHEDULE_LINE);
+  const [editingScheduleLine, setEditingScheduleLine] = useState<any>(null);
+  const setSchedule = (f: string) => (e: any) => setScheduleForm((p) => ({ ...p, [f]: e.target.value }));
+
+  const scheduleList = (schedule as any[]).slice().sort((a, b) => a.drawNumber - b.drawNumber);
+
+  const openAddScheduleLine = () => {
+    setEditingScheduleLine(null);
+    setScheduleForm({ ...EMPTY_SCHEDULE_LINE, drawNumber: String(scheduleList.length + 1) });
+    onScheduleOpen();
+  };
+
+  const openEditScheduleLine = (line: any) => {
+    setEditingScheduleLine(line);
+    setScheduleForm({
+      drawNumber: String(line.drawNumber),
+      plannedAmount: String(line.plannedAmount ?? ''),
+      plannedDate: line.plannedDate ? String(line.plannedDate).slice(0, 10) : '',
+      description: line.description || '',
+    });
+    onScheduleOpen();
+  };
+
+  const handleSaveScheduleLine = async () => {
+    try {
+      await upsertScheduleLine.mutateAsync({
+        loanId: effectiveScheduleLoanId,
+        drawNumber: parseInt(scheduleForm.drawNumber, 10),
+        plannedAmount: parseFloat(scheduleForm.plannedAmount) || 0,
+        plannedDate: scheduleForm.plannedDate,
+        description: scheduleForm.description || undefined,
+      });
+      addToast({ title: editingScheduleLine ? 'Schedule line updated' : 'Schedule line added', color: 'success' });
+      onScheduleClose();
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to save schedule line'), color: 'danger' }); }
+  };
+
+  const handleDeleteScheduleLine = async (line: any) => {
+    try {
+      await deleteScheduleLine.mutateAsync({ id: line.id, loanId: effectiveScheduleLoanId });
+      addToast({ title: 'Schedule line deleted', color: 'success' });
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to delete schedule line'), color: 'danger' }); }
   };
 
   if (isLoading) return <LoadingState />;
@@ -4984,7 +4996,9 @@ function DrawsTab({ projectId }: { projectId: string }) {
       <Card shadow="sm">
         <CardHeader className="flex justify-between items-center">
           <span className="font-semibold text-sm">Draw Requests</span>
-          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onOpen}>Add Draw</Button>
+          {canEdit && (
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onOpen}>Add Draw</Button>
+          )}
         </CardHeader>
         <CardBody className="p-0">
           {drawList.length === 0 ? (
@@ -5021,7 +5035,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
                         <Button size="sm" variant="flat" onPress={() => setDetailDrawId(d.id)}>
                           Open
                         </Button>
-                        {d.status === 'DRAFT' && (
+                        {canEdit && d.status === 'DRAFT' && (
                           <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(d)}>
                             <FiTrash2 />
                           </Button>
@@ -5056,54 +5070,98 @@ function DrawsTab({ projectId }: { projectId: string }) {
         </ModalContent>
       </Modal>
 
-      {/* Advance / Approve Modal */}
-      <Modal isOpen={isAdvanceOpen} onClose={onAdvanceClose} size="sm">
-        <ModalContent>
-          <ModalHeader>
-            Confirm: Move to {advanceDraw ? NEXT_DRAW_STATUS[advanceDraw.status] : ''}
-          </ModalHeader>
-          <ModalBody className="space-y-3">
-            <p className="text-sm text-gray-600">
-              Draw #{advanceDraw?.drawNumber} — Requested {fmt(Number(advanceDraw?.requestedAmount || 0))}
-            </p>
-            {advanceDraw?.status === 'SUBMITTED' && (
-              <Input
-                label="Approved Amount ($)"
-                type="number"
-                value={approvedAmount}
-                onChange={(e) => setApprovedAmount(e.target.value)}
-                description="Leave unchanged to approve full requested amount"
-              />
+      {/* Draw Schedule sub-view — planned draws per loan, feeds the Milestones "Linked Draw" picker */}
+      <Card shadow="sm">
+        <CardHeader className="flex justify-between items-center flex-wrap gap-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="font-semibold text-sm">Draw Schedule</span>
+            {loanList.length > 1 && (
+              <Select
+                size="sm"
+                className="w-56"
+                aria-label="Loan"
+                selectedKeys={effectiveScheduleLoanId ? [effectiveScheduleLoanId] : []}
+                onSelectionChange={(k) => setScheduleLoanId(Array.from(k)[0] as string)}
+              >
+                {loanList.map((l: any) => (
+                  <SelectItem key={l.id}>{l.lender || l.loanType}</SelectItem>
+                ))}
+              </Select>
             )}
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="flat" onPress={onAdvanceClose}>Cancel</Button>
-            <Button color="primary" onPress={handleAdvance} isLoading={updateStatus.isPending}>
-              Confirm
+          </div>
+          {canEdit && (
+            <Button size="sm" color="primary" variant="flat" startContent={<FiPlus />} onPress={openAddScheduleLine} isDisabled={!effectiveScheduleLoanId}>
+              Add Line
             </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+          )}
+        </CardHeader>
+        <CardBody className="p-0">
+          {!effectiveScheduleLoanId ? (
+            <div className="p-6"><EmptyState message="No loan available for this project yet" /></div>
+          ) : scheduleList.length === 0 ? (
+            <div className="p-6"><EmptyState message="No draw schedule lines yet" /></div>
+          ) : (
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[520px]">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  {['#', 'Planned Amount', 'Planned Date', 'Description', 'Actions'].map((h) => (
+                    <th key={h} className="px-4 py-2 text-left text-xs font-semibold text-gray-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {scheduleList.map((line: any) => (
+                  <tr key={line.id} className="border-b last:border-0 hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-500">#{line.drawNumber}</td>
+                    <td className="px-4 py-3 font-mono">{fmt(Number(line.plannedAmount || 0))}</td>
+                    <td className="px-4 py-3 text-gray-500">{fmtDate(line.plannedDate)}</td>
+                    <td className="px-4 py-3 text-gray-500 max-w-[220px] truncate">{line.description || '—'}</td>
+                    <td className="px-4 py-3">
+                      {canEdit && (
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="flat" isIconOnly onPress={() => openEditScheduleLine(line)}>
+                            <FiEdit2 />
+                          </Button>
+                          <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDeleteScheduleLine(line)}>
+                            <FiTrash2 />
+                          </Button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          )}
+        </CardBody>
+      </Card>
 
-      {/* Reject Modal */}
-      <Modal isOpen={isRejectOpen} onClose={onRejectClose} size="sm">
+      {/* Add / Edit Schedule Line Modal */}
+      <Modal isOpen={isScheduleOpen} onClose={onScheduleClose} size="md">
         <ModalContent>
-          <ModalHeader>Reject Draw #{rejectDraw?.drawNumber}</ModalHeader>
-          <ModalBody>
-            <Textarea
-              label="Rejection Reason"
-              placeholder="Explain why this draw is being rejected..."
-              isRequired
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              minRows={3}
+          <ModalHeader>{editingScheduleLine ? `Edit Schedule Line #${editingScheduleLine.drawNumber}` : 'Add Schedule Line'}</ModalHeader>
+          <ModalBody className="space-y-3">
+            <Input
+              label="Draw #"
+              type="number"
+              value={scheduleForm.drawNumber}
+              onChange={setSchedule('drawNumber')}
+              isDisabled={!!editingScheduleLine}
+              description={editingScheduleLine ? 'Draw number cannot be changed once created' : undefined}
             />
+            <Input label="Planned Amount ($)" type="number" value={scheduleForm.plannedAmount} onChange={setSchedule('plannedAmount')} />
+            <Input label="Planned Date" type="date" value={scheduleForm.plannedDate} onChange={setSchedule('plannedDate')} />
+            <Textarea label="Description" value={scheduleForm.description} onChange={setSchedule('description')} minRows={2} />
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={onRejectClose}>Cancel</Button>
-            <Button color="danger" onPress={handleReject} isLoading={updateStatus.isPending}
-              isDisabled={!rejectionReason.trim()}>
-              Reject Draw
+            <Button variant="flat" onPress={onScheduleClose}>Cancel</Button>
+            <Button
+              color="primary"
+              onPress={handleSaveScheduleLine}
+              isLoading={upsertScheduleLine.isPending}
+              isDisabled={!scheduleForm.drawNumber || !scheduleForm.plannedAmount || !scheduleForm.plannedDate}
+            >
+              Save
             </Button>
           </ModalFooter>
         </ModalContent>
