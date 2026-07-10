@@ -389,6 +389,27 @@ export function useLoans(projectId: string) {
   });
 }
 
+export function useCreateLoan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/loans', data).then((r) => r.data),
+    onSuccess: (_r, v: any) => {
+      qc.invalidateQueries({ queryKey: ['loans', v.projectId] });
+    },
+  });
+}
+
+export function useUpdateLoan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string;[k: string]: unknown }) =>
+      api.put(`/loans/${id}`, data).then((r) => r.data),
+    onSuccess: (_r, v: any) => {
+      qc.invalidateQueries({ queryKey: ['loans', v.projectId] });
+    },
+  });
+}
+
 export function useMonthlyPayments(projectId: string) {
   return useQuery({
     queryKey: ['monthly-payments', projectId],

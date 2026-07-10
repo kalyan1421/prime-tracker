@@ -20,7 +20,7 @@ import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
 import {
   useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
-  useRentRoll, useSalesPipeline, useLoans, useCommitments, useBuildings,
+  useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useCommitments, useBuildings,
   useBudgetLines,
   useUpdateProject,
   useCreateUnit, useUpdateUnit, useUpdateUnitStatus, useDeleteUnit,
@@ -4891,23 +4891,38 @@ const DRAW_STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'se
 const EMPTY_DRAW = { loanId: '', requestedAmount: '', notes: '' };
 const EMPTY_SCHEDULE_LINE = { drawNumber: '', plannedAmount: '', plannedDate: '', description: '' };
 
+const LOAN_TYPES = ['CONSTRUCTION', 'PERMANENT', 'BRIDGE', 'MEZZANINE', 'SBA'];
+
+const EMPTY_LOAN = {
+  loanType: 'CONSTRUCTION', lender: '', principalAmt: '', interestRate: '', termMonths: '',
+  maturityDate: '', currentBalance: '', monthlyPayment: '', notes: '',
+};
+
 function DrawsTab({ projectId }: { projectId: string }) {
   const { data: draws = [], isLoading } = useProjectDraws(projectId);
   const { data: loans = [] } = useLoans(projectId);
   const createDraw = useCreateDraw();
   const deleteDraw = useDeleteDraw();
+  const createLoan = useCreateLoan();
+  const updateLoan = useUpdateLoan();
   const { hasPermission } = useAuthStore();
   // Same permission the API requires for POST /loans/:loanId/draws, DELETE /loans/draws/:id,
   // and the draw-schedule mutating routes — one gate for every mutating action in this tab.
   const canEdit = hasPermission('draw:edit');
+  const canEditLoans = hasPermission('loan:edit');
 
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const { isOpen: isLoanOpen, onOpen: onLoanOpen, onClose: onLoanClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_DRAW);
   // Slice 8 — detail modal with stepper + checklist + workflow buttons
   const [detailDrawId, setDetailDrawId] = useState<string | null>(null);
 
+  const [loanForm, setLoanForm] = useState<Record<string, string>>(EMPTY_LOAN);
+  const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
+
   const set = (f: string) => (e: any) => setForm((p) => ({ ...p, [f]: e.target.value }));
+  const setLoanField = (f: string) => (e: any) => setLoanForm((p) => ({ ...p, [f]: e.target.value }));
 
   const drawList = draws as any[];
   const totalDraws = drawList.length;
@@ -4928,6 +4943,54 @@ function DrawsTab({ projectId }: { projectId: string }) {
       await deleteDraw.mutateAsync({ id: draw.id, projectId });
       addToast({ title: 'Draw deleted', color: 'success' });
     } catch (e) { addToast({ title: errMsg(e, 'Failed to delete draw'), color: 'danger' }); }
+  };
+
+  const openAddLoan = () => {
+    setEditingLoanId(null);
+    setLoanForm(EMPTY_LOAN);
+    onLoanOpen();
+  };
+
+  const openEditLoan = (loan: any) => {
+    setEditingLoanId(loan.id);
+    setLoanForm({
+      loanType: loan.loanType || 'CONSTRUCTION',
+      lender: loan.lender || '',
+      principalAmt: loan.principalAmt != null ? String(loan.principalAmt) : '',
+      interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
+      termMonths: loan.termMonths != null ? String(loan.termMonths) : '',
+      maturityDate: loan.maturityDate ? loan.maturityDate.slice(0, 10) : '',
+      currentBalance: loan.currentBalance != null ? String(loan.currentBalance) : '',
+      monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
+      notes: loan.notes || '',
+    });
+    onLoanOpen();
+  };
+
+  const handleSaveLoan = async () => {
+    const payload: Record<string, unknown> = {
+      loanType: loanForm.loanType,
+      lender: loanForm.lender,
+      principalAmt: parseFloat(loanForm.principalAmt) || 0,
+      interestRate: parseFloat(loanForm.interestRate) || 0,
+      termMonths: parseInt(loanForm.termMonths, 10) || 0,
+      maturityDate: loanForm.maturityDate || undefined,
+      currentBalance: loanForm.currentBalance ? parseFloat(loanForm.currentBalance) : undefined,
+      monthlyPayment: loanForm.monthlyPayment ? parseFloat(loanForm.monthlyPayment) : undefined,
+      notes: loanForm.notes || undefined,
+    };
+    try {
+      if (editingLoanId) {
+        await updateLoan.mutateAsync({ id: editingLoanId, projectId, ...payload });
+        addToast({ title: 'Loan updated', color: 'success' });
+      } else {
+        await createLoan.mutateAsync({ projectId, ...payload });
+        addToast({ title: 'Loan created', color: 'success' });
+      }
+      setLoanForm(EMPTY_LOAN);
+      setEditingLoanId(null);
+      onLoanClose();
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to save loan'), color: 'danger' }); }
   };
 
   // ---- Draw Schedule sub-view ----
@@ -4992,6 +5055,49 @@ function DrawsTab({ projectId }: { projectId: string }) {
         <StatCard label="Funded Total" value={fmt(funded)} variant="construction" />
         <StatCard label="Pending" value={fmt(pending)} variant="neutral" />
       </div>
+
+      <Card shadow="sm">
+        <CardHeader className="flex justify-between items-center">
+          <span className="font-semibold text-sm">Loans</span>
+          {canEditLoans && (
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openAddLoan}>Add Loan</Button>
+          )}
+        </CardHeader>
+        <CardBody className="p-0">
+          {(loans as any[]).length === 0 ? (
+            <div className="p-6"><EmptyState message="No loans yet — add a loan before creating draw requests" /></div>
+          ) : (
+            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[640px]">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  {['Lender', 'Type', 'Principal', 'Rate', 'Term', 'Maturity', ...(canEditLoans ? ['Actions'] : [])].map((h) => (
+                    <th key={h} className="px-4 py-2 text-left text-xs font-semibold text-gray-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(loans as any[]).map((l: any) => (
+                  <tr key={l.id} className="border-b last:border-0 hover:bg-gray-50">
+                    <td className="px-4 py-3">{l.lender}</td>
+                    <td className="px-4 py-3"><Chip size="sm" variant="flat">{l.loanType}</Chip></td>
+                    <td className="px-4 py-3 font-mono">{fmt(Number(l.principalAmt || 0))}</td>
+                    <td className="px-4 py-3">{l.interestRate != null ? `${l.interestRate}%` : '—'}</td>
+                    <td className="px-4 py-3">{l.termMonths} mo</td>
+                    <td className="px-4 py-3 text-gray-500">{l.maturityDate ? fmtDate(l.maturityDate) : '—'}</td>
+                    {canEditLoans && (
+                      <td className="px-4 py-3">
+                        <Button size="sm" variant="light" isIconOnly onPress={() => openEditLoan(l)}>
+                          <FiEdit2 />
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          )}
+        </CardBody>
+      </Card>
 
       <Card shadow="sm">
         <CardHeader className="flex justify-between items-center">
@@ -5174,6 +5280,49 @@ function DrawsTab({ projectId }: { projectId: string }) {
         onClose={() => setDetailDrawId(null)}
         projectId={projectId}
       />
+
+      {/* Add/Edit Loan Modal */}
+      <Modal isOpen={isLoanOpen} onClose={onLoanClose} size="lg">
+        <ModalContent>
+          <ModalHeader>{editingLoanId ? 'Edit Loan' : 'Add Loan'}</ModalHeader>
+          <ModalBody className="space-y-3">
+            <Select
+              label="Loan Type"
+              selectedKeys={[loanForm.loanType]}
+              onSelectionChange={(k) => setLoanForm((p) => ({ ...p, loanType: Array.from(k)[0] as string }))}
+            >
+              {LOAN_TYPES.map((t) => (
+                <SelectItem key={t}>{t}</SelectItem>
+              ))}
+            </Select>
+            <Input label="Lender" value={loanForm.lender} onChange={setLoanField('lender')} isRequired />
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Principal Amount ($)" type="number" value={loanForm.principalAmt} onChange={setLoanField('principalAmt')} isRequired />
+              <Input label="Interest Rate (%)" type="number" value={loanForm.interestRate} onChange={setLoanField('interestRate')} isRequired />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Term (months)" type="number" value={loanForm.termMonths} onChange={setLoanField('termMonths')} isRequired />
+              <Input label="Maturity Date" type="date" value={loanForm.maturityDate} onChange={setLoanField('maturityDate')} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Current Balance ($)" type="number" value={loanForm.currentBalance} onChange={setLoanField('currentBalance')} />
+              <Input label="Monthly Payment ($)" type="number" value={loanForm.monthlyPayment} onChange={setLoanField('monthlyPayment')} />
+            </div>
+            <Textarea label="Notes" value={loanForm.notes} onChange={setLoanField('notes')} minRows={2} />
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={onLoanClose}>Cancel</Button>
+            <Button
+              color="primary"
+              onPress={handleSaveLoan}
+              isLoading={createLoan.isPending || updateLoan.isPending}
+              isDisabled={!loanForm.lender || !loanForm.principalAmt || !loanForm.interestRate || !loanForm.termMonths}
+            >
+              {editingLoanId ? 'Save' : 'Create'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }
