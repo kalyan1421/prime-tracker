@@ -1,5 +1,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../store/authStore';
+import { useMfaStepUpStore } from '../store/mfaStepUpStore';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -71,6 +72,47 @@ api.interceptors.response.use(
       return Promise.reject(refreshError);
     } finally {
       isRefreshing = false;
+    }
+  },
+);
+
+// Handle 403 "MFA required" → pause, prompt for TOTP step-up, then retry
+// This is a *separate* interceptor from the 401 one above: axios chains
+// response interceptors, so when the 401 handler rejects because the status
+// isn't 401 (or `_retry` is already set), that rejection flows into this
+// handler next. Nothing about the 401/refresh flow is touched.
+const MFA_REQUIRED_MESSAGE = 'MFA verification required for this action. Please verify your TOTP code.';
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error: AxiosError) => {
+    const originalRequest = error.config as
+      | (InternalAxiosRequestConfig & { _mfaRetry?: boolean })
+      | undefined;
+
+    const isMfaStepUpRequired =
+      error.response?.status === 403 &&
+      (error.response?.data as { message?: string } | undefined)?.message === MFA_REQUIRED_MESSAGE;
+
+    if (!isMfaStepUpRequired || !originalRequest || originalRequest._mfaRetry) {
+      return Promise.reject(error);
+    }
+
+    // Mark so a repeat 403 on the retried request doesn't loop forever.
+    originalRequest._mfaRetry = true;
+
+    try {
+      // Pauses here until a human supplies a valid TOTP code via
+      // MfaStepUpModal and calls resolveMfaStepUp() — or rejects if the
+      // user cancels / has no MFA enrolled. If a step-up is already
+      // pending for another request, this just joins that same queue.
+      await useMfaStepUpStore.getState().requestStepUp();
+      // Fresh access token is picked up automatically by the request
+      // interceptor above, which reads useAuthStore.getState().accessToken
+      // on every call.
+      return api(originalRequest);
+    } catch (mfaError) {
+      return Promise.reject(mfaError);
     }
   },
 );

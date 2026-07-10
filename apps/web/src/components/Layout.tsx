@@ -13,6 +13,7 @@ import { useAuthStore } from '../store/authStore';
 import { useDisclosure } from '@heroui/react';
 import api from '../lib/api';
 import MfaSetupModal from './MfaSetupModal';
+import MfaStepUpModal from './MfaStepUpModal';
 import { useNotifications, useMarkNotificationsRead, useNotificationsSocket } from '../hooks/useApi';
 
 const BASE_NAV_ITEMS = [
@@ -429,6 +430,7 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      <MfaStepUpModal />
     </div>
   );
 }
