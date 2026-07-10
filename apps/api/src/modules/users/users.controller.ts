@@ -3,15 +3,14 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { MfaGuard } from '../../common/guards/mfa.guard';
-import { RequirePermissions, RequireMfa, CurrentUser } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { UserRole } from '@prisma/client';
 import { ROLE_PERMISSIONS, ROLE_META, PERMISSION_CATEGORIES } from '@prime-tracker/shared';
 import { UserRole as SharedUserRole } from '@prime-tracker/shared';
 
 @ApiTags('Users')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard, MfaGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
@@ -69,8 +68,7 @@ export class UsersController {
 
   @Patch(':id/role')
   @RequirePermissions('user:manage')
-  @RequireMfa()
-  @ApiOperation({ summary: 'Change user role (MFA required)' })
+  @ApiOperation({ summary: 'Change user role' })
   updateRole(
     @Param('id') id: string,
     @Body() body: { role: UserRole },
@@ -92,8 +90,7 @@ export class UsersController {
 
   @Patch(':id/status')
   @RequirePermissions('user:manage')
-  @RequireMfa()
-  @ApiOperation({ summary: 'Activate/deactivate user (MFA required)' })
+  @ApiOperation({ summary: 'Activate/deactivate user' })
   toggleActive(
     @Param('id') id: string,
     @Body() body: { isActive: boolean },

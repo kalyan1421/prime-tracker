@@ -4,14 +4,13 @@ import { LoansService } from './loans.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { MfaGuard } from '../../common/guards/mfa.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions, RequireMfa } from '../../common/decorators/index';
+import { RequirePermissions } from '../../common/decorators/index';
 import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawStatusDto, UpsertDrawScheduleDto } from './dto/create-loan.dto';
 
 @ApiTags('Loans')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard, MfaGuard, ProjectAccessGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('loans')
 export class LoansController {
@@ -31,14 +30,12 @@ export class LoansController {
 
   @Post()
   @RequirePermissions('loan:edit')
-  @RequireMfa()
-  @ApiOperation({ summary: 'Create loan with encrypted fields (MFA required)' })
+  @ApiOperation({ summary: 'Create loan with encrypted fields' })
   create(@Body() body: CreateLoanDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('loan:edit')
-  @RequireMfa()
-  @ApiOperation({ summary: 'Update loan, re-encrypts sensitive fields (MFA required)' })
+  @ApiOperation({ summary: 'Update loan, re-encrypts sensitive fields' })
   update(@Param('id') id: string, @Body() body: UpdateLoanDto) { return this.service.update(id, body); }
 
   // ---- Draw Management ----

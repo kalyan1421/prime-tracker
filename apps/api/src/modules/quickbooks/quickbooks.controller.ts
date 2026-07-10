@@ -5,8 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { QuickbooksService } from './quickbooks.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { MfaGuard } from '../../common/guards/mfa.guard';
-import { RequirePermissions, RequireMfa, CurrentUser } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 
 @ApiTags('QuickBooks')
 @Controller('quickbooks')
@@ -53,9 +52,8 @@ export class QuickbooksController {
 
   @Post('sync')
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, PermissionsGuard, MfaGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('quickbooks:manage')
-  @RequireMfa()
   async syncAll(@CurrentUser('sub') userId: string) {
     const connection = await this.service.getConnection();
     if (!connection) return { error: 'No QuickBooks connection' };
