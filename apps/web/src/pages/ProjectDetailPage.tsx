@@ -5297,16 +5297,16 @@ function DrawsTab({ projectId }: { projectId: string }) {
             </Select>
             <Input label="Lender" value={loanForm.lender} onChange={setLoanField('lender')} isRequired />
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Principal Amount ($)" type="number" value={loanForm.principalAmt} onChange={setLoanField('principalAmt')} isRequired />
-              <Input label="Interest Rate (%)" type="number" value={loanForm.interestRate} onChange={setLoanField('interestRate')} isRequired />
+              <Input label="Principal Amount ($)" type="number" step="0.01" value={loanForm.principalAmt} onChange={setLoanField('principalAmt')} isRequired />
+              <Input label="Interest Rate (%)" type="number" step="0.0001" value={loanForm.interestRate} onChange={setLoanField('interestRate')} isRequired />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <Input label="Term (months)" type="number" value={loanForm.termMonths} onChange={setLoanField('termMonths')} isRequired />
               <Input label="Maturity Date" type="date" value={loanForm.maturityDate} onChange={setLoanField('maturityDate')} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Current Balance ($)" type="number" value={loanForm.currentBalance} onChange={setLoanField('currentBalance')} />
-              <Input label="Monthly Payment ($)" type="number" value={loanForm.monthlyPayment} onChange={setLoanField('monthlyPayment')} />
+              <Input label="Current Balance ($)" type="number" step="0.01" value={loanForm.currentBalance} onChange={setLoanField('currentBalance')} />
+              <Input label="Monthly Payment ($)" type="number" step="0.01" value={loanForm.monthlyPayment} onChange={setLoanField('monthlyPayment')} />
             </div>
             <Textarea label="Notes" value={loanForm.notes} onChange={setLoanField('notes')} minRows={2} />
           </ModalBody>
