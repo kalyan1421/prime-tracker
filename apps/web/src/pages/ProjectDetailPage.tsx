@@ -5163,7 +5163,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
           <ModalBody className="space-y-3">
             <Select label="Loan" selectedKeys={form.loanId ? [form.loanId] : []} onSelectionChange={(k) => setForm((p) => ({ ...p, loanId: Array.from(k)[0] as string }))}>
               {(loans as any[]).map((l: any) => (
-                <SelectItem key={l.id}>{l.lender || l.loanType} — {fmt(Number(l.principalAmt || 0))}</SelectItem>
+                <SelectItem key={l.id} textValue={`${l.lender || l.loanType} — ${fmt(Number(l.principalAmt || 0))}`}>{l.lender || l.loanType} — {fmt(Number(l.principalAmt || 0))}</SelectItem>
               ))}
             </Select>
             <Input label="Requested Amount ($)" type="number" value={form.requestedAmount} onChange={set('requestedAmount')} />
@@ -5190,7 +5190,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
                 onSelectionChange={(k) => setScheduleLoanId(Array.from(k)[0] as string)}
               >
                 {loanList.map((l: any) => (
-                  <SelectItem key={l.id}>{l.lender || l.loanType}</SelectItem>
+                  <SelectItem key={l.id} textValue={l.lender || l.loanType}>{l.lender || l.loanType}</SelectItem>
                 ))}
               </Select>
             )}

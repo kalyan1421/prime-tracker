@@ -1076,7 +1076,9 @@ export function useProjectDraws(projectId: string) {
 export function useCreateDraw() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ loanId, ...data }: { loanId: string; projectId: string;[k: string]: unknown }) =>
+    // projectId is only used for cache invalidation below — it must NOT go in the
+    // POST body (CreateDrawDto uses forbidNonWhitelisted → "property projectId should not exist").
+    mutationFn: ({ loanId, projectId: _projectId, ...data }: { loanId: string; projectId: string;[k: string]: unknown }) =>
       api.post(`/loans/${loanId}/draws`, data).then((r) => r.data),
     onSuccess: (_r, v: any) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
   });
