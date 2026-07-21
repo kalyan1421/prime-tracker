@@ -69,6 +69,12 @@ export class LoansService {
       if (!b) throw new NotFoundException('Building not found');
       data.projectId = b.projectId;
     }
+    // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
+    // DateTime column needs a full ISO-8601 datetime — pass a Date object so Prisma
+    // serializes it correctly instead of erroring "premature end of input".
+    if (typeof data.maturityDate === 'string') {
+      data.maturityDate = new Date(data.maturityDate);
+    }
     const encrypted = this.encryption.encryptFields(data as any, ['lender', 'principalAmt', 'interestRate', 'currentBalance']);
     return this.prisma.loan.create({ data: { ...data, encryptedFields: encrypted.encryptedFields } });
   }
@@ -92,6 +98,9 @@ export class LoansService {
         select: { buildingId: true },
       });
       if (!u) throw new NotFoundException('Unit not found');
+    }
+    if (typeof data.maturityDate === 'string') {
+      data.maturityDate = new Date(data.maturityDate);
     }
 
     const sensitiveFields = ['lender', 'principalAmt', 'interestRate', 'currentBalance'];
