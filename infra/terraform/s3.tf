@@ -58,7 +58,12 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["GET", "PUT", "HEAD"]
-    allowed_origins = ["https://app.${var.domain_name}"]
+    allowed_origins = each.key == "documents" ? [
+      "https://app.${var.domain_name}", local.nip_io_app_origin,
+      "http://localhost:5173", "http://localhost:3001",
+      ] : [
+      "https://app.${var.domain_name}", local.nip_io_app_origin,
+    ]
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }
