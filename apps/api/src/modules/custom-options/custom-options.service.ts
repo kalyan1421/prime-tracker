@@ -71,6 +71,21 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'HIGH',   label: 'High',   color: 'danger'   },
     { value: 'URGENT', label: 'Urgent', color: 'danger'   },
   ],
+  // Was a hardcoded BudgetCategory Prisma enum on BudgetLine/Commitment/Actual — converted
+  // to this system so orgs can add their own categories. 'OTHER' must stay a system default:
+  // QuickBooks sync (quickbooks.service.ts) hardcodes it for unmapped transactions.
+  budget_category: [
+    { value: 'LAND_ACQUISITION', label: 'Land Acquisition', color: 'secondary' },
+    { value: 'SITE_WORK',        label: 'Site Work',        color: 'warning'   },
+    { value: 'HARD_COSTS',       label: 'Hard Costs',       color: 'primary'   },
+    { value: 'SOFT_COSTS',       label: 'Soft Costs',       color: 'primary'   },
+    { value: 'FINANCING',        label: 'Financing',        color: 'secondary' },
+    { value: 'PERMITS_FEES',     label: 'Permits & Fees',   color: 'warning'   },
+    { value: 'CONTINGENCY',      label: 'Contingency',      color: 'danger'    },
+    { value: 'MARKETING',        label: 'Marketing',        color: 'success'   },
+    { value: 'LEGAL',            label: 'Legal',            color: 'secondary' },
+    { value: 'OTHER',            label: 'Other',            color: 'default'   },
+  ],
 };
 
 @Injectable()

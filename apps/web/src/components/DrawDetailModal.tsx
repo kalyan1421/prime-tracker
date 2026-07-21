@@ -31,6 +31,9 @@ interface Props {
   /** project name used for filing uploads under the right Supabase folder */
   projectName?: string;
   projectId?: string;
+  /** Which tab to open on — e.g. 'documents' right after creating a draw, so the
+   * user lands straight on the upload step instead of Workflow. */
+  defaultTab?: 'workflow' | 'documents' | 'details';
 }
 
 const DRAW_STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
@@ -42,7 +45,7 @@ const DRAW_STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'war
   CANCELLED: 'danger',
 };
 
-export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectId }: Props) {
+export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectId, defaultTab }: Props) {
   const { data: draw, isLoading } = useDraw(drawId ?? undefined);
   const { data: checklist = [] } = useDrawChecklist(drawId ?? undefined);
   const workflow = useDrawWorkflow();
@@ -122,6 +125,9 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
           {d.loan?.lender && (
             <p className="text-xs text-gray-500 font-normal">{d.loan.lender}</p>
           )}
+          {defaultTab === 'documents' && (
+            <p className="text-xs text-primary-600 font-normal">Draw created — attach supporting documents below</p>
+          )}
         </ModalHeader>
 
         <ModalBody className="p-0">
@@ -129,8 +135,10 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
             <div className="p-6 text-center text-gray-400 text-sm">Loading draw…</div>
           ) : (
             <Tabs
+              key={drawId}
               color="primary"
               size="sm"
+              defaultSelectedKey={defaultTab ?? 'workflow'}
               classNames={{
                 tabList: 'overflow-x-auto scrollbar-none flex-nowrap px-6 pt-3',
                 panel: 'px-6 py-4',

@@ -2,7 +2,7 @@ import {
   Injectable, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { BudgetCategory } from '@prisma/client';
+import { resolveProjectScope } from '../../common/utils/resolve-project-scope';
 
 @Injectable()
 export class BudgetsService {
@@ -16,6 +16,22 @@ export class BudgetsService {
     });
   }
 
+  async findByBuilding(buildingId: string) {
+    if (!buildingId) throw new BadRequestException('buildingId required');
+    return this.prisma.budgetLine.findMany({
+      where: { buildingId },
+      orderBy: [{ category: 'asc' }, { description: 'asc' }],
+    });
+  }
+
+  async findByUnit(unitId: string) {
+    if (!unitId) throw new BadRequestException('unitId required');
+    return this.prisma.budgetLine.findMany({
+      where: { unitId },
+      orderBy: [{ category: 'asc' }, { description: 'asc' }],
+    });
+  }
+
   async findById(id: string) {
     const line = await this.prisma.budgetLine.findUnique({ where: { id } });
     if (!line) throw new NotFoundException('Budget line not found');
@@ -24,13 +40,34 @@ export class BudgetsService {
 
   async getFinancialSummary(projectId: string) {
     if (!projectId) throw new BadRequestException('projectId required');
+    return this.summarize(projectId, { projectId });
+  }
 
+  // Building/unit summaries reuse the exact project-summary shape (budget, actual,
+  // committed, forecast, variance, byCategory) so the same UI component renders all
+  // three — just scoped to that building's/unit's own budget lines, actuals, and
+  // commitments instead of the whole project.
+  async getBuildingSummary(buildingId: string) {
+    if (!buildingId) throw new BadRequestException('buildingId required');
+    const building = await this.prisma.building.findUnique({ where: { id: buildingId }, select: { projectId: true } });
+    if (!building) throw new NotFoundException('Building not found');
+    return this.summarize(building.projectId, { buildingId });
+  }
+
+  async getUnitSummary(unitId: string) {
+    if (!unitId) throw new BadRequestException('unitId required');
+    const unit = await this.prisma.unit.findUnique({ where: { id: unitId }, select: { building: { select: { projectId: true } } } });
+    if (!unit) throw new NotFoundException('Unit not found');
+    return this.summarize(unit.building.projectId, { unitId });
+  }
+
+  private async summarize(projectId: string, scope: { projectId: string } | { buildingId: string } | { unitId: string }) {
     const [budgets, actuals, commitments] = await Promise.all([
-      this.prisma.budgetLine.findMany({ where: { projectId } }),
+      this.prisma.budgetLine.findMany({ where: scope }),
       // Exclude interior/TI actuals — they are reported inside the interior module,
       // not against the main project's budget (would otherwise inflate variance).
-      this.prisma.actual.findMany({ where: { projectId, interiorProjectId: null } }),
-      this.prisma.commitment.findMany({ where: { projectId } }),
+      this.prisma.actual.findMany({ where: { ...scope, interiorProjectId: null } }),
+      this.prisma.commitment.findMany({ where: scope }),
     ]);
 
     const budgetTotal = budgets.reduce(
@@ -82,7 +119,9 @@ export class BudgetsService {
 
   async create(input: {
     projectId: string;
-    category: BudgetCategory;
+    buildingId?: string;
+    unitId?: string;
+    category: string;
     description: string;
     baselineAmt: number;
     revisedAmt?: number;
@@ -98,9 +137,13 @@ export class BudgetsService {
       throw new ConflictException('Cannot add budget lines to an archived project');
     }
 
+    const { buildingId, unitId } = await resolveProjectScope(this.prisma, input.projectId, input.buildingId, input.unitId);
+
     return this.prisma.budgetLine.create({
       data: {
         projectId: input.projectId,
+        buildingId,
+        unitId,
         category: input.category,
         description: input.description,
         baselineAmt: input.baselineAmt,
@@ -111,16 +154,29 @@ export class BudgetsService {
   }
 
   async update(id: string, input: {
-    category?: BudgetCategory;
+    buildingId?: string | null;
+    unitId?: string | null;
+    category?: string;
     description?: string;
     baselineAmt?: number;
     revisedAmt?: number;
     notes?: string;
   }) {
-    await this.findById(id);
+    const line = await this.findById(id);
+    const data: Record<string, unknown> = { ...input };
+
+    // Re-scoping: resolve against the line's own project, same as create(). A field
+    // mentioned in the payload at all (real id or explicit null) reassigns scope;
+    // omitting both leaves the existing scope untouched.
+    if (input.buildingId !== undefined || input.unitId !== undefined) {
+      const resolved = await resolveProjectScope(this.prisma, line.projectId, input.buildingId ?? undefined, input.unitId ?? undefined);
+      data.buildingId = resolved.buildingId ?? null;
+      data.unitId = resolved.unitId ?? null;
+    }
+
     return this.prisma.budgetLine.update({
       where: { id },
-      data: input,
+      data,
     });
   }
 

@@ -256,6 +256,9 @@ model Building {
   leases           Lease[]
   leads            Lead[]
   loans            Loan[]
+  budgetLines      BudgetLine[]
+  commitments      Commitment[]
+  actuals          Actual[]
   interiorProjects InteriorProject[]
   dailyLogs        DailyLog[]
 
@@ -299,6 +302,9 @@ model Unit {
   sales            Sale[]
   comments         UnitComment[]
   loans            Loan[]
+  budgetLines      BudgetLine[]
+  commitments      Commitment[]
+  actuals          Actual[]
   documents        Document[]
   tasks            Task[]
   clients          Client[]
@@ -445,7 +451,23 @@ model BudgetLine {
   id          String         @id @default(cuid())
   projectId   String
   project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  category    BudgetCategory
+  // Optional building/unit scoping so a project's budget can carry dedicated lines per
+  // building or unit (e.g. Building 1 sitework vs Building 2 sitework), not just one
+  // project-wide bucket. Mirrors the Loan polymorphic pattern. A line with neither set
+  // is a project-level line — the existing/default case. projectId is always populated
+  // regardless of scope so project-level rollups (findByProject, getFinancialSummary)
+  // keep working unchanged.
+  buildingId  String?
+  building    Building?      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId      String?
+  unit        Unit?          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  // Free-text category key backed by CustomOption (category="budget_category") — the same
+  // system-defaults-plus-org-custom-values pattern already used for project/unit/sale/lead
+  // status and phase. Was a hardcoded BudgetCategory enum; converted so orgs can add their
+  // own categories (e.g. "TENANT_IMPROVEMENTS") without a schema change. The 10 former enum
+  // values are seeded as system defaults in custom-options.service.ts so existing data and
+  // QuickBooks sync (which hardcodes category: 'OTHER') keep working unchanged.
+  category    String
   description String
   // baselineAmt is the original (revision 1) amount, kept here for fast reads.
   // revisedAmt mirrors the *latest* BudgetRevision.amount for fast reads.
@@ -460,6 +482,8 @@ model BudgetLine {
   revisions BudgetRevision[]
 
   @@index([projectId, category])
+  @@index([buildingId])
+  @@index([unitId])
   @@index([deletedAt])
   @@map("budget_lines")
 }
@@ -496,35 +520,30 @@ enum BudgetChangeReason {
   OTHER
 }
 
-enum BudgetCategory {
-  LAND_ACQUISITION
-  SITE_WORK
-  HARD_COSTS
-  SOFT_COSTS
-  FINANCING
-  PERMITS_FEES
-  CONTINGENCY
-  MARKETING
-  LEGAL
-  OTHER
-}
-
 model Commitment {
   id           String         @id @default(cuid())
   projectId    String
   project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Optional building/unit scoping — same pattern as BudgetLine/Loan. Neither set = a
+  // project-level commitment (existing/default case).
+  buildingId   String?
+  building     Building?      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId       String?
+  unit         Unit?          @relation(fields: [unitId], references: [id], onDelete: Cascade)
   vendor       String
   description  String
   contractAmt  Decimal        @db.Decimal(14, 2)
   paidToDate   Decimal        @default(0) @db.Decimal(14, 2)
   retainage    Decimal        @default(0) @db.Decimal(14, 2)
-  category     BudgetCategory
+  category     String
   contractDate DateTime?
   notes        String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
   @@index([projectId])
+  @@index([buildingId])
+  @@index([unitId])
   @@map("commitments")
 }
 
@@ -532,11 +551,18 @@ model Actual {
   id           String         @id @default(cuid())
   projectId    String
   project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Optional building/unit scoping — same pattern as BudgetLine/Loan/Commitment. Neither
+  // set = a project-level actual (existing/default case, including all QuickBooks-synced
+  // rows, which have no building/unit concept upstream).
+  buildingId   String?
+  building     Building?      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId       String?
+  unit         Unit?          @relation(fields: [unitId], references: [id], onDelete: Cascade)
   // Interior/TI spend is recorded as an Actual but reported inside the interior module —
   // this tags those rows so the main project's budget/variance/KPI views can exclude them.
   interiorProjectId String?
   interiorProject   InteriorProject? @relation(fields: [interiorProjectId], references: [id], onDelete: SetNull)
-  category     BudgetCategory
+  category     String
   description  String
   amount       Decimal        @db.Decimal(14, 2)
   txnDate      DateTime
@@ -549,6 +575,8 @@ model Actual {
   @@index([projectId, category])
   @@index([interiorProjectId])
   @@index([qbTxnId])
+  @@index([buildingId])
+  @@index([unitId])
   @@map("actuals")
 }
 

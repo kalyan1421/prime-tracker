@@ -360,6 +360,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_VIEW,
     PERMISSIONS.PAYMENT_APPROVE,
     PERMISSIONS.DOCUMENT_VIEW,
+    // AR/AP manages draw requests (draw:edit above) and needs to attach the lender's
+    // required supporting docs (lien waivers, invoices) — draw:edit alone let them see
+    // the upload control but every upload 403'd since it hits document:upload separately.
+    PERMISSIONS.DOCUMENT_UPLOAD,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_FINANCE,

@@ -1,12 +1,20 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsDateString, IsOptional, IsEnum, MaxLength } from 'class-validator';
-import { BudgetCategory } from '@prisma/client';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsDateString, IsOptional, MaxLength } from 'class-validator';
 
 export class CreateActualDto {
   @IsString() @IsNotEmpty()
   projectId!: string;
 
-  @IsEnum(BudgetCategory)
-  category!: BudgetCategory;
+  @IsOptional() @IsString()
+  buildingId?: string;
+
+  @IsOptional() @IsString()
+  unitId?: string;
+
+  // Free-text key backed by CustomOption (category="budget_category") — see BudgetLine
+  // schema comment. QuickBooks sync hardcodes 'OTHER' for unmapped transactions, which
+  // stays a valid system default.
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  category!: string;
 
   @IsString() @IsNotEmpty() @MaxLength(500)
   description!: string;
@@ -22,8 +30,14 @@ export class CreateActualDto {
 }
 
 export class UpdateActualDto {
-  @IsOptional() @IsEnum(BudgetCategory)
-  category?: BudgetCategory;
+  @IsOptional() @IsString()
+  buildingId?: string | null;
+
+  @IsOptional() @IsString()
+  unitId?: string | null;
+
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100)
+  category?: string;
 
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500)
   description?: string;

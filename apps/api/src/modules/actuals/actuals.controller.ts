@@ -18,8 +18,16 @@ export class ActualsController {
 
   @Get()
   @RequirePermissions('financial:view')
-  @ApiOperation({ summary: 'List actuals by project' })
-  findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
+  @ApiOperation({ summary: 'List actuals by project, building, or unit' })
+  findByProject(
+    @Query('projectId') projectId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('unitId') unitId?: string,
+  ) {
+    if (unitId) return this.service.findByUnit(unitId);
+    if (buildingId) return this.service.findByBuilding(buildingId);
+    return this.service.findByProject(projectId);
+  }
 
   @Get('unmapped')
   @RequirePermissions('financial:view')

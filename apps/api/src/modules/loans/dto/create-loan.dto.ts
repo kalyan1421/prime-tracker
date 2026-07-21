@@ -43,6 +43,18 @@ export class CreateLoanDto {
 }
 
 export class UpdateLoanDto {
+  // Sprint 1 backend supported building/unit linkage on create but never exposed it
+  // on update — a loan created at the wrong level had no way to be re-linked short of
+  // delete-and-recreate. Allow explicit null to clear a linkage (e.g. detach from a unit).
+  @IsOptional() @IsString()
+  projectId?: string;
+
+  @IsOptional() @IsString()
+  buildingId?: string | null;
+
+  @IsOptional() @IsString()
+  unitId?: string | null;
+
   @IsOptional() @IsEnum(LoanType)
   loanType?: LoanType;
 
@@ -72,6 +84,20 @@ export class UpdateLoanDto {
 }
 
 export class CreateDrawDto {
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
+  requestedAmount?: number;
+
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
+  amount?: number;
+
+  @IsOptional() @IsDateString()
+  requestDate?: string;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  notes?: string;
+}
+
+export class UpdateDrawDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
   requestedAmount?: number;
 

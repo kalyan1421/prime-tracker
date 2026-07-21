@@ -33,7 +33,7 @@ import {
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding,
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
-  useProjectDraws, useCreateDraw, useDeleteDraw,
+  useProjectDraws, useCreateDraw, useUpdateDraw, useDeleteDraw,
   useDrawSchedule, useUpsertDrawScheduleLine, useDeleteDrawScheduleLine,
   useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
@@ -819,18 +819,17 @@ function OverviewTab({ project: p }: { project: any }) {
 }
 
 // ---- Financials Tab ----
-const BUDGET_CATEGORIES = [
-  'LAND_ACQUISITION', 'SITE_WORK', 'HARD_COSTS', 'SOFT_COSTS', 'FINANCING',
-  'PERMITS_FEES', 'CONTINGENCY', 'MARKETING', 'LEGAL', 'OTHER',
-];
+// Budget categories used to be a fixed list here — they're now org-customizable via
+// the CustomOption system (category="budget_category"), fetched with useCustomOptions.
 
 const EMPTY_BUDGET = {
   category: 'HARD_COSTS', description: '', baselineAmt: '', revisedAmt: '', notes: '',
+  buildingId: '', unitId: '',
 };
 
 const EMPTY_COMMITMENT = {
   vendor: '', description: '', category: 'HARD_COSTS', contractAmt: '',
-  paidToDate: '', retainage: '', contractDate: '', notes: '',
+  paidToDate: '', retainage: '', contractDate: '', notes: '', buildingId: '', unitId: '',
 };
 
 function FinancialsTab({ projectId }: { projectId: string }) {
@@ -843,6 +842,9 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   const { data: loans } = useLoans(projectId);
   const { data: budgetData } = useBudgetLines(projectId);
   const { data: actualsData } = useActuals(projectId);
+  const { data: buildings = [] } = useBuildings(projectId);
+  const { data: units = [] } = useUnits(projectId);
+  const { data: budgetCategories = [] } = useCustomOptions('budget_category');
 
   // Slice 5: per-line variance — sum actuals + commitments by category, then
   // divide proportionally across lines in that category by their share of budget.
@@ -910,6 +912,8 @@ function FinancialsTab({ projectId }: { projectId: string }) {
       baselineAmt: b.baselineAmt?.toString() || '',
       revisedAmt: b.revisedAmt?.toString() || '',
       notes: b.notes || '',
+      buildingId: b.buildingId || '',
+      unitId: b.unitId || '',
     });
     setBudgetFormErrors({});
     onBudgetFormOpen();
@@ -955,6 +959,10 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         baselineAmt,
         revisedAmt: budgetForm.revisedAmt ? parseFloat(budgetForm.revisedAmt) : undefined,
         notes: budgetForm.notes.trim() || undefined,
+        // Empty selection clears the scope on edit (explicit null); on create, omit it
+        // and the line stays project-level.
+        buildingId: budgetForm.buildingId || (budgetEditId ? null : undefined),
+        unitId: budgetForm.unitId || (budgetEditId ? null : undefined),
       };
       if (budgetEditId) {
         // Update DTO omits projectId
@@ -995,6 +1003,8 @@ function FinancialsTab({ projectId }: { projectId: string }) {
       retainage: c.retainage?.toString() || '',
       contractDate: c.contractDate ? c.contractDate.slice(0, 10) : '',
       notes: c.notes || '',
+      buildingId: c.buildingId || '',
+      unitId: c.unitId || '',
     });
     onCommitFormOpen();
   };
@@ -1012,6 +1022,8 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         retainage: commitForm.retainage ? parseFloat(commitForm.retainage) : 0,
         contractDate: commitForm.contractDate ? new Date(commitForm.contractDate).toISOString() : undefined,
         notes: commitForm.notes || undefined,
+        buildingId: commitForm.buildingId || (commitEditId ? null : undefined),
+        unitId: commitForm.unitId || (commitEditId ? null : undefined),
       };
       if (commitEditId) {
         await updateCommitment.mutateAsync({ id: commitEditId, data: payload });
@@ -1415,8 +1427,8 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                 isInvalid={!!budgetFormErrors.category}
                 errorMessage={budgetFormErrors.category}
               >
-                {BUDGET_CATEGORIES.map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {(budgetCategories as any[]).map((opt: any) => (
+                  <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
                 ))}
               </Select>
               <Input
@@ -1424,6 +1436,32 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                 value={budgetForm.description} onChange={setBudget('description')}
                 isInvalid={!!budgetFormErrors.description} errorMessage={budgetFormErrors.description}
               />
+              <Select
+                size="sm"
+                label="Building (optional)"
+                selectedKeys={budgetForm.buildingId ? [budgetForm.buildingId] : []}
+                onSelectionChange={(k) => {
+                  const buildingId = (Array.from(k)[0] as string) || '';
+                  setBudgetForm((f) => ({ ...f, buildingId, unitId: '' }));
+                }}
+                description="Leave blank for a project-level line"
+              >
+                {(buildings as any[]).map((b: any) => (
+                  <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+                ))}
+              </Select>
+              <Select
+                size="sm"
+                label="Unit (optional)"
+                selectedKeys={budgetForm.unitId ? [budgetForm.unitId] : []}
+                onSelectionChange={(k) => setBudgetForm((f) => ({ ...f, unitId: (Array.from(k)[0] as string) || '' }))}
+                isDisabled={!budgetForm.buildingId}
+                description={!budgetForm.buildingId ? 'Select a building first' : undefined}
+              >
+                {(units as any[]).filter((u: any) => (u.buildingId || u.building?.id) === budgetForm.buildingId).map((u: any) => (
+                  <SelectItem key={u.id} textValue={u.unitNumber}>{u.unitNumber}</SelectItem>
+                ))}
+              </Select>
               <Input
                 size="sm" label="Baseline Amount" isRequired type="number" min={0} step="0.01"
                 value={budgetForm.baselineAmt} onChange={setBudget('baselineAmt')}
@@ -1507,14 +1545,40 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                   if (val) setCommitForm((f) => ({ ...f, category: val }));
                 }}
               >
-                {BUDGET_CATEGORIES.map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {(budgetCategories as any[]).map((opt: any) => (
+                  <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
                 ))}
               </Select>
               <Input size="sm" label="Contract Amount" isRequired type="number" value={commitForm.contractAmt} onChange={setCommit('contractAmt')} />
               <Input size="sm" label="Paid to Date" type="number" value={commitForm.paidToDate} onChange={setCommit('paidToDate')} />
               <Input size="sm" label="Retainage" type="number" value={commitForm.retainage} onChange={setCommit('retainage')} />
               <Input size="sm" label="Contract Date" type="date" value={commitForm.contractDate} onChange={setCommit('contractDate')} />
+              <Select
+                size="sm"
+                label="Building (optional)"
+                selectedKeys={commitForm.buildingId ? [commitForm.buildingId] : []}
+                onSelectionChange={(k) => {
+                  const buildingId = (Array.from(k)[0] as string) || '';
+                  setCommitForm((f) => ({ ...f, buildingId, unitId: '' }));
+                }}
+                description="Leave blank for a project-level commitment"
+              >
+                {(buildings as any[]).map((b: any) => (
+                  <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+                ))}
+              </Select>
+              <Select
+                size="sm"
+                label="Unit (optional)"
+                selectedKeys={commitForm.unitId ? [commitForm.unitId] : []}
+                onSelectionChange={(k) => setCommitForm((f) => ({ ...f, unitId: (Array.from(k)[0] as string) || '' }))}
+                isDisabled={!commitForm.buildingId}
+                description={!commitForm.buildingId ? 'Select a building first' : undefined}
+              >
+                {(units as any[]).filter((u: any) => (u.buildingId || u.building?.id) === commitForm.buildingId).map((u: any) => (
+                  <SelectItem key={u.id} textValue={u.unitNumber}>{u.unitNumber}</SelectItem>
+                ))}
+              </Select>
               <Input size="sm" label="Notes" value={commitForm.notes} onChange={setCommit('notes')} />
             </div>
           </ModalBody>
@@ -4888,20 +4952,23 @@ const DRAW_STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'se
   REJECTED: 'danger',
 };
 
-const EMPTY_DRAW = { loanId: '', requestedAmount: '', notes: '' };
+const EMPTY_DRAW = { loanId: '', requestedAmount: '', requestDate: '', notes: '' };
 const EMPTY_SCHEDULE_LINE = { drawNumber: '', plannedAmount: '', plannedDate: '', description: '' };
 
 const LOAN_TYPES = ['CONSTRUCTION', 'PERMANENT', 'BRIDGE', 'MEZZANINE', 'SBA'];
 
 const EMPTY_LOAN = {
   loanType: 'CONSTRUCTION', lender: '', principalAmt: '', interestRate: '', termMonths: '',
-  maturityDate: '', currentBalance: '', monthlyPayment: '', notes: '',
+  maturityDate: '', currentBalance: '', monthlyPayment: '', notes: '', buildingId: '', unitId: '',
 };
 
 function DrawsTab({ projectId }: { projectId: string }) {
   const { data: draws = [], isLoading } = useProjectDraws(projectId);
   const { data: loans = [] } = useLoans(projectId);
+  const { data: buildings = [] } = useBuildings(projectId);
+  const { data: units = [] } = useUnits(projectId);
   const createDraw = useCreateDraw();
+  const updateDraw = useUpdateDraw();
   const deleteDraw = useDeleteDraw();
   const createLoan = useCreateLoan();
   const updateLoan = useUpdateLoan();
@@ -4915,8 +4982,12 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const { isOpen: isLoanOpen, onOpen: onLoanOpen, onClose: onLoanClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_DRAW);
+  const [editingDrawId, setEditingDrawId] = useState<string | null>(null);
   // Slice 8 — detail modal with stepper + checklist + workflow buttons
   const [detailDrawId, setDetailDrawId] = useState<string | null>(null);
+  // 'documents' right after creating a draw so the modal lands on the upload step;
+  // 'workflow' (the modal's own default) for every other way of opening it.
+  const [detailDrawDefaultTab, setDetailDrawDefaultTab] = useState<'workflow' | 'documents' | undefined>(undefined);
 
   const [loanForm, setLoanForm] = useState<Record<string, string>>(EMPTY_LOAN);
   const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
@@ -4929,13 +5000,53 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const funded = drawList.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
   const pending = drawList.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
 
+  const openAddDraw = () => {
+    setEditingDrawId(null);
+    setForm(EMPTY_DRAW);
+    onOpen();
+  };
+
+  const openDrawDetail = (id: string, tab?: 'workflow' | 'documents') => {
+    setDetailDrawDefaultTab(tab);
+    setDetailDrawId(id);
+  };
+
+  const openEditDraw = (draw: any) => {
+    setEditingDrawId(draw.id);
+    setForm({
+      loanId: draw.loanId || '',
+      requestedAmount: String(draw.requestedAmount ?? draw.amount ?? ''),
+      requestDate: draw.requestDate ? String(draw.requestDate).slice(0, 10) : '',
+      notes: draw.notes || '',
+    });
+    onOpen();
+  };
+
   const handleSave = async () => {
     try {
-      await createDraw.mutateAsync({ loanId: form.loanId, projectId, requestedAmount: form.requestedAmount, notes: form.notes });
-      addToast({ title: 'Draw request created', color: 'success' });
-      setForm(EMPTY_DRAW);
-      onClose();
-    } catch (e) { addToast({ title: errMsg(e, 'Failed to create draw'), color: 'danger' }); }
+      if (editingDrawId) {
+        await updateDraw.mutateAsync({
+          id: editingDrawId,
+          projectId,
+          requestedAmount: form.requestedAmount ? parseFloat(form.requestedAmount) : undefined,
+          requestDate: form.requestDate || undefined,
+          notes: form.notes,
+        });
+        addToast({ title: 'Draw request updated', color: 'success' });
+        setForm(EMPTY_DRAW);
+        setEditingDrawId(null);
+        onClose();
+      } else {
+        const created = await createDraw.mutateAsync({ loanId: form.loanId, projectId, requestedAmount: form.requestedAmount, notes: form.notes });
+        addToast({ title: 'Draw request created', color: 'success' });
+        setForm(EMPTY_DRAW);
+        onClose();
+        // Land straight on the Documents tab so the user can attach the lender's
+        // required docs (lien waiver, invoice, etc.) right after creating the draw,
+        // instead of having to find and reopen it from the table.
+        openDrawDetail(created.id, 'documents');
+      }
+    } catch (e) { addToast({ title: errMsg(e, `Failed to ${editingDrawId ? 'update' : 'create'} draw`), color: 'danger' }); }
   };
 
   const handleDelete = async (draw: any) => {
@@ -4963,6 +5074,8 @@ function DrawsTab({ projectId }: { projectId: string }) {
       currentBalance: loan.currentBalance != null ? String(loan.currentBalance) : '',
       monthlyPayment: loan.monthlyPayment != null ? String(loan.monthlyPayment) : '',
       notes: loan.notes || '',
+      buildingId: loan.buildingId || '',
+      unitId: loan.unitId || '',
     });
     onLoanOpen();
   };
@@ -4978,6 +5091,10 @@ function DrawsTab({ projectId }: { projectId: string }) {
       currentBalance: loanForm.currentBalance ? parseFloat(loanForm.currentBalance) : undefined,
       monthlyPayment: loanForm.monthlyPayment ? parseFloat(loanForm.monthlyPayment) : undefined,
       notes: loanForm.notes || undefined,
+      // Empty selection clears the linkage on edit (explicit null); on create, just omit it
+      // and let the project-level linkage stand.
+      buildingId: loanForm.buildingId || (editingLoanId ? null : undefined),
+      unitId: loanForm.unitId || (editingLoanId ? null : undefined),
     };
     try {
       if (editingLoanId) {
@@ -5070,7 +5187,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
             <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[640px]">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  {['Lender', 'Type', 'Principal', 'Rate', 'Term', 'Maturity', ...(canEditLoans ? ['Actions'] : [])].map((h) => (
+                  {['Lender', 'Type', 'Linked To', 'Principal', 'Rate', 'Term', 'Maturity', ...(canEditLoans ? ['Actions'] : [])].map((h) => (
                     <th key={h} className="px-4 py-2 text-left text-xs font-semibold text-gray-500">{h}</th>
                   ))}
                 </tr>
@@ -5080,6 +5197,9 @@ function DrawsTab({ projectId }: { projectId: string }) {
                   <tr key={l.id} className="border-b last:border-0 hover:bg-gray-50">
                     <td className="px-4 py-3">{l.lender}</td>
                     <td className="px-4 py-3"><Chip size="sm" variant="flat">{l.loanType}</Chip></td>
+                    <td className="px-4 py-3 text-gray-500">
+                      {l.unit ? `${l.unit.building?.name || ''} - ${l.unit.unitNumber}` : l.building?.name || 'Project-level'}
+                    </td>
                     <td className="px-4 py-3 font-mono">{fmt(Number(l.principalAmt || 0))}</td>
                     <td className="px-4 py-3">{l.interestRate != null ? `${l.interestRate}%` : '—'}</td>
                     <td className="px-4 py-3">{l.termMonths} mo</td>
@@ -5103,7 +5223,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
         <CardHeader className="flex justify-between items-center">
           <span className="font-semibold text-sm">Draw Requests</span>
           {canEdit && (
-            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onOpen}>Add Draw</Button>
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openAddDraw}>Add Draw</Button>
           )}
         </CardHeader>
         <CardBody className="p-0">
@@ -5123,7 +5243,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
                   <tr
                     key={d.id}
                     className="border-b last:border-0 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => setDetailDrawId(d.id)}
+                    onClick={() => openDrawDetail(d.id)}
                   >
                     <td className="px-4 py-3 text-gray-500">#{d.drawNumber}</td>
                     <td className="px-4 py-3">{d.loan?.lender || d.loan?.loanType || '—'}</td>
@@ -5138,13 +5258,18 @@ function DrawsTab({ projectId }: { projectId: string }) {
                     <td className="px-4 py-3 text-gray-500">{fmtDate(d.requestDate)}</td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex gap-1">
-                        <Button size="sm" variant="flat" onPress={() => setDetailDrawId(d.id)}>
+                        <Button size="sm" variant="flat" onPress={() => openDrawDetail(d.id)}>
                           Open
                         </Button>
                         {canEdit && d.status === 'DRAFT' && (
-                          <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(d)}>
-                            <FiTrash2 />
-                          </Button>
+                          <>
+                            <Button size="sm" variant="light" isIconOnly onPress={() => openEditDraw(d)}>
+                              <FiEdit2 />
+                            </Button>
+                            <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(d)}>
+                              <FiTrash2 />
+                            </Button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -5156,22 +5281,31 @@ function DrawsTab({ projectId }: { projectId: string }) {
         </CardBody>
       </Card>
 
-      {/* Create Draw Modal */}
+      {/* Create/Edit Draw Modal */}
       <Modal isOpen={isOpen} onClose={onClose} size="md">
         <ModalContent>
-          <ModalHeader>Add Draw Request</ModalHeader>
+          <ModalHeader>{editingDrawId ? 'Edit Draw Request' : 'Add Draw Request'}</ModalHeader>
           <ModalBody className="space-y-3">
-            <Select label="Loan" selectedKeys={form.loanId ? [form.loanId] : []} onSelectionChange={(k) => setForm((p) => ({ ...p, loanId: Array.from(k)[0] as string }))}>
+            <Select
+              label="Loan"
+              selectedKeys={form.loanId ? [form.loanId] : []}
+              onSelectionChange={(k) => setForm((p) => ({ ...p, loanId: Array.from(k)[0] as string }))}
+              isDisabled={!!editingDrawId}
+              description={editingDrawId ? 'Loan cannot be changed once a draw is created' : undefined}
+            >
               {(loans as any[]).map((l: any) => (
                 <SelectItem key={l.id} textValue={`${l.lender || l.loanType} — ${fmt(Number(l.principalAmt || 0))}`}>{l.lender || l.loanType} — {fmt(Number(l.principalAmt || 0))}</SelectItem>
               ))}
             </Select>
             <Input label="Requested Amount ($)" type="number" value={form.requestedAmount} onChange={set('requestedAmount')} />
+            <Input label="Request Date" type="date" value={form.requestDate} onChange={set('requestDate')} />
             <Textarea label="Notes" value={form.notes} onChange={set('notes')} minRows={2} />
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={onClose}>Cancel</Button>
-            <Button color="primary" onPress={handleSave} isLoading={createDraw.isPending}>Create</Button>
+            <Button color="primary" onPress={handleSave} isLoading={createDraw.isPending || updateDraw.isPending}>
+              {editingDrawId ? 'Save' : 'Create'}
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -5277,8 +5411,9 @@ function DrawsTab({ projectId }: { projectId: string }) {
       <DrawDetailModal
         drawId={detailDrawId}
         isOpen={!!detailDrawId}
-        onClose={() => setDetailDrawId(null)}
+        onClose={() => { setDetailDrawId(null); setDetailDrawDefaultTab(undefined); }}
         projectId={projectId}
+        defaultTab={detailDrawDefaultTab}
       />
 
       {/* Add/Edit Loan Modal */}
@@ -5296,6 +5431,32 @@ function DrawsTab({ projectId }: { projectId: string }) {
               ))}
             </Select>
             <Input label="Lender" value={loanForm.lender} onChange={setLoanField('lender')} isRequired />
+            <div className="grid grid-cols-2 gap-3">
+              <Select
+                label="Building (optional)"
+                selectedKeys={loanForm.buildingId ? [loanForm.buildingId] : []}
+                onSelectionChange={(k) => {
+                  const buildingId = (Array.from(k)[0] as string) || '';
+                  setLoanForm((p) => ({ ...p, buildingId, unitId: '' }));
+                }}
+                description="Leave blank for a project-level loan"
+              >
+                {(buildings as any[]).map((b: any) => (
+                  <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+                ))}
+              </Select>
+              <Select
+                label="Unit (optional)"
+                selectedKeys={loanForm.unitId ? [loanForm.unitId] : []}
+                onSelectionChange={(k) => setLoanForm((p) => ({ ...p, unitId: (Array.from(k)[0] as string) || '' }))}
+                isDisabled={!loanForm.buildingId}
+                description={!loanForm.buildingId ? 'Select a building first' : undefined}
+              >
+                {(units as any[]).filter((u: any) => (u.buildingId || u.building?.id) === loanForm.buildingId).map((u: any) => (
+                  <SelectItem key={u.id} textValue={u.unitNumber}>{u.unitNumber}</SelectItem>
+                ))}
+              </Select>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <Input label="Principal Amount ($)" type="number" step="0.01" value={loanForm.principalAmt} onChange={setLoanField('principalAmt')} isRequired />
               <Input label="Interest Rate (%)" type="number" step="0.0001" value={loanForm.interestRate} onChange={setLoanField('interestRate')} isRequired />

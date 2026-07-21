@@ -18,8 +18,16 @@ export class CommitmentsController {
 
   @Get()
   @RequirePermissions('financial:view')
-  @ApiOperation({ summary: 'List commitments (contracts/POs) by project' })
-  findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
+  @ApiOperation({ summary: 'List commitments (contracts/POs) by project, building, or unit' })
+  findByProject(
+    @Query('projectId') projectId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('unitId') unitId?: string,
+  ) {
+    if (unitId) return this.service.findByUnit(unitId);
+    if (buildingId) return this.service.findByBuilding(buildingId);
+    return this.service.findByProject(projectId);
+  }
 
   @Get(':id')
   @RequirePermissions('financial:view')

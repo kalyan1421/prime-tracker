@@ -6,7 +6,7 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
-import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawStatusDto, UpsertDrawScheduleDto } from './dto/create-loan.dto';
+import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawDto, UpdateDrawStatusDto, UpsertDrawScheduleDto } from './dto/create-loan.dto';
 
 @ApiTags('Loans')
 @ApiBearerAuth()
@@ -57,6 +57,13 @@ export class LoansController {
   @ApiOperation({ summary: 'Create a draw request for a loan' })
   createDraw(@Param('loanId') loanId: string, @Body() body: CreateDrawDto, @Request() req: any) {
     return this.service.createDraw(loanId, body, req.user.sub);
+  }
+
+  @Patch('draws/:id')
+  @RequirePermissions('draw:edit')
+  @ApiOperation({ summary: 'Edit a DRAFT draw request (amount, requestDate, notes)' })
+  updateDraw(@Param('id') id: string, @Body() body: UpdateDrawDto) {
+    return this.service.updateDraw(id, body);
   }
 
   @Patch('draws/:id/status')

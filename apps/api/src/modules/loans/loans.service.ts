@@ -75,6 +75,25 @@ export class LoansService {
 
   async update(id: string, data: Prisma.LoanUncheckedUpdateInput) {
     await this.findById(id);
+
+    // Re-linking to a building: derive projectId the same way create() does, so the
+    // loan doesn't fall out of project-scoped queries/dashboards.
+    if (data.buildingId) {
+      const b = await this.prisma.building.findUnique({
+        where: { id: data.buildingId as string },
+        select: { projectId: true },
+      });
+      if (!b) throw new NotFoundException('Building not found');
+      if (!data.projectId) data.projectId = b.projectId;
+    }
+    if (data.unitId) {
+      const u = await this.prisma.unit.findUnique({
+        where: { id: data.unitId as string },
+        select: { buildingId: true },
+      });
+      if (!u) throw new NotFoundException('Unit not found');
+    }
+
     const sensitiveFields = ['lender', 'principalAmt', 'interestRate', 'currentBalance'];
     const hasSensitive = sensitiveFields.some((f) => (data as any)[f] !== undefined);
     if (hasSensitive) {
@@ -205,6 +224,23 @@ export class LoansService {
     }
 
     return updated;
+  }
+
+  async updateDraw(id: string, data: { amount?: number; requestedAmount?: number; requestDate?: string; notes?: string }) {
+    const draw = await this.prisma.drawRequest.findUnique({ where: { id } });
+    if (!draw) throw new NotFoundException('Draw request not found');
+    if (draw.status !== DrawStatus.DRAFT) {
+      throw new BadRequestException('Only DRAFT draws can be edited');
+    }
+
+    const updateData: Prisma.DrawRequestUpdateInput = {};
+    if (data.requestedAmount !== undefined) updateData.requestedAmount = data.requestedAmount;
+    if (data.amount !== undefined) updateData.amount = data.amount;
+    else if (data.requestedAmount !== undefined) updateData.amount = data.requestedAmount;
+    if (data.requestDate !== undefined) updateData.requestDate = new Date(data.requestDate);
+    if (data.notes !== undefined) updateData.notes = data.notes;
+
+    return this.prisma.drawRequest.update({ where: { id }, data: updateData });
   }
 
   async deleteDraw(id: string) {

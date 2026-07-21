@@ -9,7 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useUploadDocument, useDeleteDocument,
-  useRenameDocument, useReplaceDocument,
+  useRenameDocument, useReplaceDocument, useUnitFinancialSummary,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -103,6 +103,8 @@ export default function UnitDetailPage() {
   const { hasPermission } = useAuthStore();
   const canEditUnit = hasPermission('unit:edit');
   const canEditLease = hasPermission('lease:edit');
+  const canViewBudget = hasPermission('budget:view');
+  const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [leaseModalOpen, setLeaseModalOpen] = useState(false);
@@ -516,6 +518,22 @@ export default function UnitDetailPage() {
             <EmptyRow icon={<FiCreditCard className="w-5 h-5" />} text="No linked loans" />
           )}
         </Section>
+
+        {/* Budget — budget/committed/actual/remaining scoped to this unit */}
+        {canViewBudget && (
+          <Section icon={<FiCreditCard className="w-4 h-4 text-emerald-600" />} title="Budget">
+            <dl className="text-sm divide-y divide-gray-100">
+              <Row label="Budget"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.budgetTotal ?? 0))}</span></Row>
+              <Row label="Committed"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.committedTotal ?? 0))}</span></Row>
+              <Row label="Actual"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.actualTotal ?? 0))}</span></Row>
+              <Row label="Remaining">
+                <span className={`tabular-nums font-medium ${Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                  {fmt(Number((budgetSummary as any)?.variance ?? 0))}
+                </span>
+              </Row>
+            </dl>
+          </Section>
+        )}
       </div>
 
       {/* Notes — always visible so users can add notes even when empty */}

@@ -22,15 +22,27 @@ export class BudgetsController {
 
   @Get()
   @RequirePermissions('budget:view')
-  @ApiOperation({ summary: 'List budget lines by project' })
-  findByProject(@Query('projectId') projectId: string) {
+  @ApiOperation({ summary: 'List budget lines by projectId, buildingId, or unitId' })
+  findByProject(
+    @Query('projectId') projectId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('unitId') unitId?: string,
+  ) {
+    if (unitId) return this.service.findByUnit(unitId);
+    if (buildingId) return this.service.findByBuilding(buildingId);
     return this.service.findByProject(projectId);
   }
 
   @Get('summary')
   @RequirePermissions('budget:view')
-  @ApiOperation({ summary: 'Financial summary: budget vs actual vs committed vs forecast by category' })
-  getFinancialSummary(@Query('projectId') projectId: string) {
+  @ApiOperation({ summary: 'Financial summary: budget vs actual vs committed vs forecast by category — by project, building, or unit' })
+  getFinancialSummary(
+    @Query('projectId') projectId: string,
+    @Query('buildingId') buildingId?: string,
+    @Query('unitId') unitId?: string,
+  ) {
+    if (unitId) return this.service.getUnitSummary(unitId);
+    if (buildingId) return this.service.getBuildingSummary(buildingId);
     return this.service.getFinancialSummary(projectId);
   }
 

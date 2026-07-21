@@ -1468,6 +1468,7 @@ const CATEGORY_META: Record<string, { label: string; description: string }> = {
   lease_status:   { label: 'Lease Status',       description: 'Lease lifecycle states' },
   task_status:    { label: 'Task Status',        description: 'Task board column states' },
   task_priority:  { label: 'Task Priority',      description: 'Priority levels for tasks' },
+  budget_category:{ label: 'Budget Category',    description: 'Categories for budget lines, commitments, and actuals' },
 };
 
 const COLOR_OPTIONS = [

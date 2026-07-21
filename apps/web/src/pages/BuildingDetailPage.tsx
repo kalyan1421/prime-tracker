@@ -5,8 +5,9 @@ import {
   FiArrowLeft, FiHome, FiUsers, FiDollarSign, FiKey, FiCreditCard, FiFileText, FiClock,
 } from 'react-icons/fi';
 import {
-  useBuilding, useUnits, useLeases, useLoans, useDocuments,
+  useBuilding, useUnits, useLeases, useLoans, useDocuments, useBuildingFinancialSummary,
 } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, StatCard } from '../components/ui';
 
@@ -40,11 +41,15 @@ const fmtMoney = (n: number) => {
 export default function BuildingDetailPage() {
   const { id: projectId, buildingId } = useParams<{ id: string; buildingId: string }>();
 
+  const { hasPermission } = useAuthStore();
+  const canViewBudget = hasPermission('budget:view');
+
   const { data: building, isLoading: bLoading, error: bError } = useBuilding(buildingId!);
   const { data: allUnits } = useUnits(projectId || '');
   const { data: allLeases } = useLeases(projectId || '');
   const { data: allLoans } = useLoans(projectId || '');
   const { data: docs } = useDocuments({ buildingId });
+  const { data: budgetSummary } = useBuildingFinancialSummary(canViewBudget ? (buildingId || '') : '');
 
   const units = useMemo(() => {
     return ((allUnits as any[]) || []).filter((u) => u.buildingId === buildingId);
@@ -124,6 +129,30 @@ export default function BuildingDetailPage() {
         <StatCard label="Monthly rent" value={fmtMoney(monthlyRent)} helpText={`${activeLeases.length} active lease${activeLeases.length === 1 ? '' : 's'}`} />
         <StatCard label="Loan balance" value={loanBalance > 0 ? fmtMoney(loanBalance) : '—'} helpText={`${loans.length} loan${loans.length === 1 ? '' : 's'}`} />
       </div>
+
+      {/* Budget summary — budget/committed/actual/remaining scoped to this building */}
+      {canViewBudget && (
+        <Card shadow="sm">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <FiDollarSign className="text-emerald-600" />
+              <p className="font-semibold text-sm text-gray-700">Budget</p>
+            </div>
+          </CardHeader>
+          <CardBody className="pt-0">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="Budget" value={fmtMoney(Number((budgetSummary as any)?.budgetTotal ?? 0))} />
+              <StatCard label="Committed" value={fmtMoney(Number((budgetSummary as any)?.committedTotal ?? 0))} />
+              <StatCard label="Actual" value={fmtMoney(Number((budgetSummary as any)?.actualTotal ?? 0))} />
+              <StatCard
+                label="Remaining"
+                value={fmtMoney(Number((budgetSummary as any)?.variance ?? 0))}
+                colorScheme={Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'success' : 'danger'}
+              />
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* Unit grid + Lease timeline */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

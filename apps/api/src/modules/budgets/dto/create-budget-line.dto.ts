@@ -1,15 +1,25 @@
 import {
   IsString, IsNotEmpty, MinLength, MaxLength,
-  IsOptional, IsEnum, IsNumber, Min,
+  IsOptional, IsNumber, Min,
 } from 'class-validator';
-import { BudgetCategory } from '@prisma/client';
 
 export class CreateBudgetLineDto {
   @IsString() @IsNotEmpty()
   projectId!: string;
 
-  @IsEnum(BudgetCategory)
-  category!: BudgetCategory;
+  // Optional building/unit scoping — see BudgetLine schema comment. Neither set = the
+  // existing project-level line.
+  @IsOptional() @IsString()
+  buildingId?: string;
+
+  @IsOptional() @IsString()
+  unitId?: string;
+
+  // Free-text key backed by CustomOption (category="budget_category") — see schema
+  // comment. Not validated against the live option list here, same as Unit/Sale/Lead
+  // status elsewhere: the picker on the frontend is the only source of values in practice.
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  category!: string;
 
   @IsString() @IsNotEmpty() @MinLength(1) @MaxLength(200)
   description!: string;

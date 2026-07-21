@@ -1,9 +1,14 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsEnum, IsDateString, MaxLength, Min } from 'class-validator';
-import { BudgetCategory } from '@prisma/client';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsDateString, MaxLength, Min } from 'class-validator';
 
 export class CreateCommitmentDto {
   @IsString() @IsNotEmpty()
   projectId!: string;
+
+  @IsOptional() @IsString()
+  buildingId?: string;
+
+  @IsOptional() @IsString()
+  unitId?: string;
 
   @IsString() @IsNotEmpty() @MaxLength(200)
   vendor!: string;
@@ -20,8 +25,10 @@ export class CreateCommitmentDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   retainage?: number;
 
-  @IsEnum(BudgetCategory)
-  category!: BudgetCategory;
+  // Free-text key backed by CustomOption (category="budget_category") — see BudgetLine
+  // schema comment.
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  category!: string;
 
   @IsOptional() @IsDateString()
   contractDate?: string;
@@ -31,6 +38,12 @@ export class CreateCommitmentDto {
 }
 
 export class UpdateCommitmentDto {
+  @IsOptional() @IsString()
+  buildingId?: string | null;
+
+  @IsOptional() @IsString()
+  unitId?: string | null;
+
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200)
   vendor?: string;
 
@@ -46,8 +59,8 @@ export class UpdateCommitmentDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   retainage?: number;
 
-  @IsOptional() @IsEnum(BudgetCategory)
-  category?: BudgetCategory;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100)
+  category?: string;
 
   @IsOptional() @IsDateString()
   contractDate?: string;

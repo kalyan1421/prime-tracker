@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { resolveProjectScope } from '../../common/utils/resolve-project-scope';
 
 @Injectable()
 export class CommitmentsService {
@@ -10,6 +11,14 @@ export class CommitmentsService {
     return this.prisma.commitment.findMany({ where: { projectId }, orderBy: { vendor: 'asc' } });
   }
 
+  async findByBuilding(buildingId: string) {
+    return this.prisma.commitment.findMany({ where: { buildingId }, orderBy: { vendor: 'asc' } });
+  }
+
+  async findByUnit(unitId: string) {
+    return this.prisma.commitment.findMany({ where: { unitId }, orderBy: { vendor: 'asc' } });
+  }
+
   async findById(id: string) {
     const c = await this.prisma.commitment.findUnique({ where: { id } });
     if (!c) throw new NotFoundException('Commitment not found');
@@ -17,11 +26,22 @@ export class CommitmentsService {
   }
 
   async create(data: Prisma.CommitmentUncheckedCreateInput) {
-    return this.prisma.commitment.create({ data });
+    const { buildingId, unitId } = await resolveProjectScope(this.prisma, data.projectId, data.buildingId ?? undefined, data.unitId ?? undefined);
+    return this.prisma.commitment.create({ data: { ...data, buildingId, unitId } });
   }
 
   async update(id: string, data: Prisma.CommitmentUncheckedUpdateInput) {
-    await this.findById(id);
+    const c = await this.findById(id);
+    if (data.buildingId !== undefined || data.unitId !== undefined) {
+      const resolved = await resolveProjectScope(
+        this.prisma,
+        c.projectId,
+        (data.buildingId as string | null | undefined) ?? undefined,
+        (data.unitId as string | null | undefined) ?? undefined,
+      );
+      data.buildingId = resolved.buildingId ?? null;
+      data.unitId = resolved.unitId ?? null;
+    }
     return this.prisma.commitment.update({ where: { id }, data });
   }
 

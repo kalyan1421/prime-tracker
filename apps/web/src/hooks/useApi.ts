@@ -106,12 +106,44 @@ export function useFinancialSummary(projectId: string) {
   });
 }
 
+export function useBuildingFinancialSummary(buildingId: string) {
+  return useQuery({
+    queryKey: ['financials', 'building', buildingId],
+    queryFn: () => api.get('/budgets/summary', { params: { buildingId } }).then((r) => r.data),
+    enabled: !!buildingId,
+  });
+}
+
+export function useUnitFinancialSummary(unitId: string) {
+  return useQuery({
+    queryKey: ['financials', 'unit', unitId],
+    queryFn: () => api.get('/budgets/summary', { params: { unitId } }).then((r) => r.data),
+    enabled: !!unitId,
+  });
+}
+
 // ---- Budget Lines ----
 export function useBudgetLines(projectId: string) {
   return useQuery({
     queryKey: ['budgets', projectId],
     queryFn: () => api.get('/budgets', { params: { projectId } }).then((r) => r.data),
     enabled: !!projectId,
+  });
+}
+
+export function useBuildingBudgetLines(buildingId: string) {
+  return useQuery({
+    queryKey: ['budgets', 'building', buildingId],
+    queryFn: () => api.get('/budgets', { params: { buildingId } }).then((r) => r.data),
+    enabled: !!buildingId,
+  });
+}
+
+export function useUnitBudgetLines(unitId: string) {
+  return useQuery({
+    queryKey: ['budgets', 'unit', unitId],
+    queryFn: () => api.get('/budgets', { params: { unitId } }).then((r) => r.data),
+    enabled: !!unitId,
   });
 }
 
@@ -1081,6 +1113,24 @@ export function useCreateDraw() {
     mutationFn: ({ loanId, projectId: _projectId, ...data }: { loanId: string; projectId: string;[k: string]: unknown }) =>
       api.post(`/loans/${loanId}/draws`, data).then((r) => r.data),
     onSuccess: (_r, v: any) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
+  });
+}
+
+export function useUpdateDraw() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id, projectId: _projectId, ...data
+    }: {
+      id: string;
+      projectId: string;
+      amount?: number;
+      requestedAmount?: number;
+      requestDate?: string;
+      notes?: string;
+    }) =>
+      api.patch(`/loans/draws/${id}`, data).then((r) => r.data),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
   });
 }
 
