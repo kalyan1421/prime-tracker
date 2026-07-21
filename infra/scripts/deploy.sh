@@ -114,7 +114,7 @@ for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
         --region ${AWS_REGION} --query Parameter.Value --output text 2>/dev/null || echo "")
   echo "\$P=\$V"
 done > apps/api/.env
-printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\n" >> apps/api/.env
+printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\n" >> apps/api/.env
 printf "DIRECT_URL=%s\n" "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
 chmod 600 apps/api/.env
 echo "=== .env written ==="
