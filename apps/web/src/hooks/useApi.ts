@@ -122,6 +122,14 @@ export function useUnitFinancialSummary(unitId: string) {
   });
 }
 
+export function useBudgetByBuildingUnitReport(projectId: string) {
+  return useQuery({
+    queryKey: ['financials', 'report', projectId],
+    queryFn: () => api.get('/budgets/report', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
+  });
+}
+
 // ---- Budget Lines ----
 export function useBudgetLines(projectId: string) {
   return useQuery({

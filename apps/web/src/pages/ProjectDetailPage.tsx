@@ -19,7 +19,7 @@ import { CancelSaleModal } from '../components/CancelSaleModal';
 import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
 import {
-  useProject, useFinancialSummary, useMilestones, useUnits, useLeases, useActuals,
+  useProject, useFinancialSummary, useBudgetByBuildingUnitReport, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useCommitments, useBuildings,
   useBudgetLines,
   useUpdateProject,
@@ -832,11 +832,91 @@ const EMPTY_COMMITMENT = {
   paidToDate: '', retainage: '', contractDate: '', notes: '', buildingId: '', unitId: '',
 };
 
+/** Budget/committed/actual/remaining rollup for every building and unit in a project, side-by-side. */
+function BuildingUnitBudgetReport({ report, canViewFinancial }: { report: any; canViewFinancial: boolean }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const buildings = (report?.buildings || []) as any[];
+  const unassigned = report?.unassigned;
+
+  const varianceCell = (v: number) => (
+    <td className={`py-2 px-2 text-right tabular-nums ${v >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(v)}</td>
+  );
+
+  const row = (opts: { key: string; label: string; sub?: string; indent?: boolean; bold?: boolean; row: any; onToggle?: () => void; isExpanded?: boolean; hasChildren?: boolean }) => (
+    <tr key={opts.key} className="border-b border-gray-50">
+      <td className={`py-2 px-2 ${opts.indent ? 'pl-8' : ''}`}>
+        <div className="flex items-center gap-1.5">
+          {opts.hasChildren ? (
+            <button type="button" onClick={opts.onToggle} className="text-gray-400 hover:text-gray-600" aria-label={opts.isExpanded ? 'Collapse' : 'Expand'}>
+              {opts.isExpanded ? <FiChevronDown className="w-3.5 h-3.5" /> : <FiChevronRight className="w-3.5 h-3.5" />}
+            </button>
+          ) : opts.indent ? <span className="w-3.5" /> : null}
+          <span className={opts.bold ? 'font-semibold text-gray-700' : 'text-gray-600'}>{opts.label}</span>
+          {opts.sub && <span className="text-xs text-gray-400">{opts.sub}</span>}
+        </div>
+      </td>
+      <td className="py-2 px-2 text-right tabular-nums">{fmt(opts.row.budgetTotal)}</td>
+      {canViewFinancial && <td className="py-2 px-2 text-right tabular-nums">{fmt(opts.row.actualTotal)}</td>}
+      {canViewFinancial && <td className="py-2 px-2 text-right tabular-nums">{fmt(opts.row.committedTotal)}</td>}
+      {canViewFinancial && <td className="py-2 px-2 text-right tabular-nums">{fmt(opts.row.remaining)}</td>}
+      {canViewFinancial && varianceCell(opts.row.variance)}
+      {canViewFinancial && <td className="py-2 px-2 text-right text-xs text-gray-500">{fmtPct(opts.row.variancePercent)}</td>}
+    </tr>
+  );
+
+  if (buildings.length === 0) {
+    return <EmptyState title="No buildings" message="Add a building to see budget tracking by building/unit." />;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[720px]">
+        <thead>
+          <tr className="border-b border-gray-200">
+            <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Building / Unit</th>
+            <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Budget</th>
+            {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Actual</th>}
+            {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Committed</th>}
+            {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Remaining</th>}
+            {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Variance</th>}
+            {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">% Used</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {buildings.map((b: any) => {
+            const isOpen = !!expanded[b.id];
+            const units = (b.units || []) as any[];
+            return (
+              <React.Fragment key={b.id}>
+                {row({
+                  key: b.id, label: b.name, bold: true, row: b,
+                  hasChildren: units.length > 0,
+                  isExpanded: isOpen,
+                  onToggle: () => setExpanded((e) => ({ ...e, [b.id]: !e[b.id] })),
+                })}
+                {isOpen && units.map((u: any) => row({
+                  key: u.id, label: `Unit ${u.unitNumber}`, indent: true, row: u,
+                }))}
+              </React.Fragment>
+            );
+          })}
+          {unassigned && (unassigned.budgetTotal || unassigned.actualTotal || unassigned.committedTotal) ? (
+            row({ key: 'unassigned', label: 'Project-level (unassigned)', sub: 'not tied to a building/unit', row: unassigned })
+          ) : null}
+          {report?.project && row({ key: 'total', label: 'Project Total', bold: true, row: report.project })}
+        </tbody>
+      </table></div>
+    </div>
+  );
+}
+
 function FinancialsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   const canEditBudget = hasPermission('budget:edit');
+  const canViewFinancial = hasPermission('financial:view');
 
   const { data, isLoading, error } = useFinancialSummary(projectId);
+  const { data: buildingUnitReport } = useBudgetByBuildingUnitReport(projectId);
   const { data: commitments } = useCommitments(projectId);
   const { data: monthlyPaymentsData } = useMonthlyPayments(projectId);
   const { data: loans } = useLoans(projectId);
@@ -887,6 +967,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   const [budgetForm, setBudgetForm] = useState<Record<string, string>>(EMPTY_BUDGET);
   const [budgetFormErrors, setBudgetFormErrors] = useState<Record<string, string>>({});
   const [budgetEditId, setBudgetEditId] = useState<string | null>(null);
+  const [isCustomBudgetCategory, setIsCustomBudgetCategory] = useState(false);
   const [budgetDeleteTarget, setBudgetDeleteTarget] = useState<{ id: string; category: string; description: string; amount: number } | null>(null);
 
   // Commitment CRUD state
@@ -901,13 +982,15 @@ function FinancialsTab({ projectId }: { projectId: string }) {
     setBudgetEditId(null);
     setBudgetForm({ ...EMPTY_BUDGET });
     setBudgetFormErrors({});
+    setIsCustomBudgetCategory(false);
     onBudgetFormOpen();
   };
 
   const openBudgetEdit = (b: any) => {
     setBudgetEditId(b.id);
+    const category = b.category || 'HARD_COSTS';
     setBudgetForm({
-      category: b.category || 'HARD_COSTS',
+      category,
       description: b.description || '',
       baselineAmt: b.baselineAmt?.toString() || '',
       revisedAmt: b.revisedAmt?.toString() || '',
@@ -916,6 +999,9 @@ function FinancialsTab({ projectId }: { projectId: string }) {
       unitId: b.unitId || '',
     });
     setBudgetFormErrors({});
+    // If the existing category isn't one of the known options (e.g. a category that
+    // was later deactivated in Admin, or entered as free text), open in custom-text mode.
+    setIsCustomBudgetCategory(!(budgetCategories as any[]).some((opt: any) => opt.value === category));
     onBudgetFormOpen();
   };
 
@@ -1268,6 +1354,19 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         </CardBody>
       </Card>
 
+      {/* Budget Tracking by Building/Unit */}
+      <Card shadow="sm" className="mb-6">
+        <CardHeader className="pb-0">
+          <div>
+            <p className="font-semibold text-sm text-gray-600">Budget Tracking by Building/Unit</p>
+            <p className="text-xs text-gray-400 mt-0.5">Budget, committed, and actual costs for every building and unit — click a building to expand its units.</p>
+          </div>
+        </CardHeader>
+        <CardBody>
+          <BuildingUnitBudgetReport report={buildingUnitReport} canViewFinancial={canViewFinancial} />
+        </CardBody>
+      </Card>
+
       {/* Loans */}
       <PermissionGate permission="loan:view">
         {loans && (loans as any[]).length > 0 && (
@@ -1414,23 +1513,52 @@ function FinancialsTab({ projectId }: { projectId: string }) {
           <ModalHeader>{budgetEditId ? 'Edit Budget Line' : 'Add Budget Line'}</ModalHeader>
           <ModalBody>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Select
-                size="sm"
-                label="Category"
-                isRequired
-                selectedKeys={budgetForm.category ? [budgetForm.category] : []}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setBudgetForm((f) => ({ ...f, category: val }));
-                  if (budgetFormErrors.category) setBudgetFormErrors((errs) => ({ ...errs, category: '' }));
-                }}
-                isInvalid={!!budgetFormErrors.category}
-                errorMessage={budgetFormErrors.category}
-              >
-                {(budgetCategories as any[]).map((opt: any) => (
-                  <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
-                ))}
-              </Select>
+              <div>
+                {isCustomBudgetCategory ? (
+                  <Input
+                    size="sm"
+                    label="Category"
+                    isRequired
+                    placeholder="e.g. Interior Fit-Out"
+                    value={budgetForm.category}
+                    onChange={(e) => {
+                      setBudget('category')(e);
+                      if (budgetFormErrors.category) setBudgetFormErrors((errs) => ({ ...errs, category: '' }));
+                    }}
+                    isInvalid={!!budgetFormErrors.category}
+                    errorMessage={budgetFormErrors.category}
+                  />
+                ) : (
+                  <Select
+                    size="sm"
+                    label="Category"
+                    isRequired
+                    selectedKeys={budgetForm.category ? [budgetForm.category] : []}
+                    onSelectionChange={(keys) => {
+                      const val = Array.from(keys)[0] as string;
+                      if (val) setBudgetForm((f) => ({ ...f, category: val }));
+                      if (budgetFormErrors.category) setBudgetFormErrors((errs) => ({ ...errs, category: '' }));
+                    }}
+                    isInvalid={!!budgetFormErrors.category}
+                    errorMessage={budgetFormErrors.category}
+                  >
+                    {(budgetCategories as any[]).map((opt: any) => (
+                      <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
+                    ))}
+                  </Select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomBudgetCategory((v) => !v);
+                    setBudgetForm((f) => ({ ...f, category: '' }));
+                    if (budgetFormErrors.category) setBudgetFormErrors((errs) => ({ ...errs, category: '' }));
+                  }}
+                  className="mt-1 text-[11px] text-blue-600 hover:underline"
+                >
+                  {isCustomBudgetCategory ? 'Choose from list instead' : '+ Add custom category'}
+                </button>
+              </div>
               <Input
                 size="sm" label="Description" isRequired
                 value={budgetForm.description} onChange={setBudget('description')}

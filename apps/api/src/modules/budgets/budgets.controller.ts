@@ -46,6 +46,13 @@ export class BudgetsController {
     return this.service.getFinancialSummary(projectId);
   }
 
+  @Get('report')
+  @RequirePermissions('budget:view')
+  @ApiOperation({ summary: 'Budget/committed/actual/variance rollup for every building and unit in a project, for side-by-side comparison' })
+  getBuildingUnitReport(@Query('projectId') projectId: string) {
+    return this.service.getBuildingUnitReport(projectId);
+  }
+
   @Post()
   @RequirePermissions('budget:edit')
   @ApiOperation({ summary: 'Create budget line' })
