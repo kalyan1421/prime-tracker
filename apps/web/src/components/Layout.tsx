@@ -1,4 +1,5 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
   Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem,
   Chip, Tooltip, Button, Badge, Popover, PopoverTrigger, PopoverContent,
@@ -402,6 +403,7 @@ export default function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   // Mobile drawer state (only matters below lg)
   const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
 
   const handleToggle = () => {
     // The hamburger does double duty: toggles desktop sidebar, opens mobile drawer.
@@ -427,7 +429,12 @@ export default function Layout() {
           className="flex-1 overflow-auto p-4 md:p-6 bg-gray-50"
           style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1rem)' }}
         >
-          <Outlet />
+          {/* Per-page boundary: a render throw on one page shows the fallback in the
+              content area only — the sidebar/topbar stay intact. Keyed by pathname so
+              navigating to another route remounts it and clears the caught error. */}
+          <ErrorBoundary key={location.pathname} section="page">
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
       <MfaStepUpModal />
