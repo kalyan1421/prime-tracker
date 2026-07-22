@@ -3,12 +3,15 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { DashboardService } from '../dashboard/dashboard.service';
 import { ProjectHealthService } from '../project-health/project-health.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 /**
  * Cross-feature event handlers — the wires connecting our 7 features.
  *
  *   milestone.completed       → if linkedDrawSchedule, auto-create DrawRequest{ DRAFT }
- *   drawRequest.funded        → auto-create Actual rows, invalidate dashboards + health
+ *   drawRequest.submitted     → notify approvers (Super Admin/Founder/Executive/Finance)
+ *   drawRequest.approved      → notify Finance/leadership the draw is ready for the lender
+ *   drawRequest.funded        → auto-create Actual rows, invalidate dashboards + health, notify
  *   drawRequest.fundingOverdue→ create Notification for Finance+Founder
  *   budget.varianceExceeded   → create Notification, invalidate project health cache
  *
@@ -25,14 +28,50 @@ export class DrawEventHandlers implements OnModuleInit {
     private bus: EventBus,
     private dashboard: DashboardService,
     private health: ProjectHealthService,
+    private notifications: NotificationsService,
   ) {}
 
   onModuleInit() {
     this.bus.on('milestone.completed', (e) => this.onMilestoneCompleted(e));
+    this.bus.on('drawRequest.submitted', (e) => this.onDrawSubmitted(e));
+    this.bus.on('drawRequest.approved', (e) => this.onDrawApproved(e));
     this.bus.on('drawRequest.funded', (e) => this.onDrawFunded(e));
     this.bus.on('drawRequest.fundingOverdue', (e) => this.onFundingOverdue(e));
     this.bus.on('budget.varianceExceeded', (e) => this.onVarianceExceeded(e));
     this.bus.on('unit.staleAvailable', () => this.dashboard.invalidate());
+  }
+
+  /**
+   * Shared fetch for the shape notifyDrawRequest needs. Reads projectId/project off
+   * DrawRequest itself (not through loan) — a loan can be building-level only
+   * (loan.projectId null), but DrawRequest.projectId is always resolved.
+   */
+  private async findDrawForNotification(drawId: string) {
+    return this.prisma.drawRequest.findUnique({
+      where: { id: drawId },
+      select: {
+        drawNumber: true,
+        loanId: true,
+        projectId: true,
+        project: { select: { name: true } },
+      },
+    });
+  }
+
+  private async onDrawSubmitted(e: { drawId: string; step: string }) {
+    // Same event type also fires for "forwarded to lender" (loans.service.ts
+    // submitToLender, step: LENDER_SUBMITTED) — only the internal-review submission
+    // needs an approver notification.
+    if (e.step !== 'INTERNAL_REVIEW') return;
+    const draw = await this.findDrawForNotification(e.drawId);
+    if (!draw?.projectId || !draw.project) return;
+    await this.notifications.notifyDrawRequest({ status: 'SUBMITTED', ...draw, projectId: draw.projectId, project: draw.project });
+  }
+
+  private async onDrawApproved(e: { drawId: string; approverId: string }) {
+    const draw = await this.findDrawForNotification(e.drawId);
+    if (!draw?.projectId || !draw.project) return;
+    await this.notifications.notifyDrawRequest({ status: 'APPROVED', ...draw, projectId: draw.projectId, project: draw.project });
   }
 
   /**
@@ -114,6 +153,11 @@ export class DrawEventHandlers implements OnModuleInit {
 
     this.dashboard.invalidate();
     this.health.invalidate(e.projectId);
+
+    const draw = await this.findDrawForNotification(e.drawId);
+    if (draw?.projectId && draw.project) {
+      await this.notifications.notifyDrawRequest({ status: 'FUNDED', ...draw, projectId: draw.projectId, project: draw.project });
+    }
   }
 
   private async onFundingOverdue(e: { drawId: string; daysOverdue: number }) {

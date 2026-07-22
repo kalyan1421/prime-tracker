@@ -3,10 +3,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { resolveProjectScope } from '../../common/utils/resolve-project-scope';
+import { BudgetRevisionService } from './budget-revision.service';
 
 @Injectable()
 export class BudgetsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private revisions: BudgetRevisionService) {}
 
   async findByProject(projectId: string) {
     if (!projectId) throw new BadRequestException('projectId required');
@@ -213,7 +214,7 @@ export class BudgetsService {
     baselineAmt: number;
     revisedAmt?: number;
     notes?: string;
-  }) {
+  }, createdById: string) {
     // Verify project exists + not archived
     const project = await this.prisma.project.findUnique({
       where: { id: input.projectId },
@@ -226,7 +227,7 @@ export class BudgetsService {
 
     const { buildingId, unitId } = await resolveProjectScope(this.prisma, input.projectId, input.buildingId, input.unitId);
 
-    return this.prisma.budgetLine.create({
+    const line = await this.prisma.budgetLine.create({
       data: {
         projectId: input.projectId,
         buildingId,
@@ -238,6 +239,20 @@ export class BudgetsService {
         notes: input.notes,
       },
     });
+
+    // Per BudgetRevisionService's documented lifecycle: creating a line starts its
+    // append-only revision trail at #1, with the baseline as the initial amount.
+    // Without this, the Budget Change Log stays empty forever — nothing else ever
+    // logs a line's creation.
+    await this.revisions.createRevision({
+      budgetLineId: line.id,
+      amount: Number(input.revisedAmt ?? input.baselineAmt),
+      reason: 'Initial budget line created',
+      changeReason: 'OTHER',
+      createdById,
+    });
+
+    return line;
   }
 
   async update(id: string, input: {

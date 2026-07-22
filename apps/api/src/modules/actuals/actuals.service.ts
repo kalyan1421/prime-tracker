@@ -38,6 +38,12 @@ export class ActualsService {
 
   async create(data: Prisma.ActualUncheckedCreateInput) {
     const { buildingId, unitId } = await resolveProjectScope(this.prisma, data.projectId, data.buildingId ?? undefined, data.unitId ?? undefined);
+    // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
+    // DateTime column needs a full ISO-8601 datetime — pass a Date object so Prisma
+    // serializes it correctly instead of erroring "premature end of input".
+    if (typeof data.txnDate === 'string') {
+      data.txnDate = new Date(data.txnDate);
+    }
     return this.prisma.actual.create({ data: { ...data, buildingId, unitId } });
   }
 
@@ -53,6 +59,9 @@ export class ActualsService {
       );
       data.buildingId = resolved.buildingId ?? null;
       data.unitId = resolved.unitId ?? null;
+    }
+    if (typeof data.txnDate === 'string') {
+      data.txnDate = new Date(data.txnDate);
     }
     return this.prisma.actual.update({ where: { id }, data });
   }

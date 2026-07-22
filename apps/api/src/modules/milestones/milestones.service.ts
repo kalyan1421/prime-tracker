@@ -54,12 +54,17 @@ export class MilestonesService {
   }
 
   async create(data: Prisma.MilestoneUncheckedCreateInput) {
+    // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
+    // DateTime column needs a full ISO-8601 datetime — pass a Date object so Prisma
+    // serializes it correctly instead of erroring "premature end of input".
+    if (typeof data.dueDate === 'string') data.dueDate = new Date(data.dueDate);
     return this.prisma.milestone.create({ data });
   }
 
   async update(id: string, data: Prisma.MilestoneUncheckedUpdateInput) {
     const existing = await this.findById(id);
     const wasCompleted = existing.status === 'COMPLETED';
+    if (typeof data.dueDate === 'string') data.dueDate = new Date(data.dueDate);
 
     // Auto-stamp completedAt the first time a milestone is marked COMPLETED.
     if (data.status === 'COMPLETED' && !existing.completedAt && !data.completedAt) {

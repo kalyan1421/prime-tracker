@@ -24,11 +24,15 @@ export class DrawsService {
   // ─────── Transitions ───────
 
   async submit(drawId: string, actorId: string, comment?: string) {
-    return this.transition(drawId, 'submit', actorId, 'INTERNAL_FINANCE', 'APPROVED', comment);
+    const updated = await this.transition(drawId, 'submit', actorId, 'INTERNAL_FINANCE', 'APPROVED', comment);
+    this.bus.emit({ type: 'drawRequest.submitted', drawId, step: 'INTERNAL_REVIEW' });
+    return updated;
   }
 
   async approveInternal(drawId: string, actorId: string, comment?: string) {
-    return this.transition(drawId, 'approveInternal', actorId, 'INTERNAL_FOUNDER', 'APPROVED', comment);
+    const updated = await this.transition(drawId, 'approveInternal', actorId, 'INTERNAL_FOUNDER', 'APPROVED', comment);
+    this.bus.emit({ type: 'drawRequest.approved', drawId, approverId: actorId });
+    return updated;
   }
 
   async returnForInfo(drawId: string, actorId: string, comment?: string) {

@@ -86,6 +86,15 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'LEGAL',            label: 'Legal',            color: 'secondary' },
     { value: 'OTHER',            label: 'Other',            color: 'default'   },
   ],
+  // Was a hardcoded LoanType Prisma enum on Loan — converted so orgs can add their own
+  // loan types (e.g. "SBA 504") without a schema change.
+  loan_type: [
+    { value: 'CONSTRUCTION', label: 'Construction', color: 'warning'   },
+    { value: 'PERMANENT',    label: 'Permanent',    color: 'primary'   },
+    { value: 'BRIDGE',       label: 'Bridge',       color: 'secondary' },
+    { value: 'MEZZANINE',    label: 'Mezzanine',    color: 'danger'    },
+    { value: 'SBA',          label: 'SBA',          color: 'success'   },
+  ],
 };
 
 @Injectable()

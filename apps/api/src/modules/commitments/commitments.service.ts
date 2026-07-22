@@ -27,6 +27,12 @@ export class CommitmentsService {
 
   async create(data: Prisma.CommitmentUncheckedCreateInput) {
     const { buildingId, unitId } = await resolveProjectScope(this.prisma, data.projectId, data.buildingId ?? undefined, data.unitId ?? undefined);
+    // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
+    // DateTime column needs a full ISO-8601 datetime — pass a Date object so Prisma
+    // serializes it correctly instead of erroring "premature end of input".
+    if (typeof data.contractDate === 'string') {
+      data.contractDate = new Date(data.contractDate);
+    }
     return this.prisma.commitment.create({ data: { ...data, buildingId, unitId } });
   }
 
@@ -41,6 +47,9 @@ export class CommitmentsService {
       );
       data.buildingId = resolved.buildingId ?? null;
       data.unitId = resolved.unitId ?? null;
+    }
+    if (typeof data.contractDate === 'string') {
+      data.contractDate = new Date(data.contractDate);
     }
     return this.prisma.commitment.update({ where: { id }, data });
   }

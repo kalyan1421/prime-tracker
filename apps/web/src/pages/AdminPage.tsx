@@ -5,7 +5,7 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   useDisclosure, addToast,
 } from '@heroui/react';
-import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiGrid, FiMinus, FiEye, FiSliders } from 'react-icons/fi';
+import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiGrid, FiMinus, FiEye, FiEyeOff, FiSliders, FiLock } from 'react-icons/fi';
 import {
   useUsers, useUpdateUserRole, useUpdateUserRoles, useToggleUserActive, useCreateUser, useUpdateUser, useDeleteUser,
   useAuditLog, useQBStatus, useQBSync,
@@ -168,7 +168,10 @@ function UsersPanel() {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [editForm, setEditForm] = useState({ name: '', email: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', email: '', role: 'VIEWER' });
+  const [createForm, setCreateForm] = useState({ name: '', email: '', roles: ['VIEWER'] as string[], password: '', confirmPassword: '' });
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const createPasswordMismatch = createForm.password.length > 0 && createForm.password !== createForm.confirmPassword;
+  const createPasswordTooShort = createForm.password.length > 0 && createForm.password.length < 8;
   // local state for the multi-role picker (mirrors selectedUser.roles until saved)
   const [pendingRoles, setPendingRoles] = useState<string[]>([]);
   const [rolesChanged, setRolesChanged] = useState(false);
@@ -211,13 +214,20 @@ function UsersPanel() {
   };
 
   const handleCreateUser = async () => {
+    if (createPasswordMismatch || createPasswordTooShort) return;
     try {
-      await createUser.mutateAsync(createForm);
+      await createUser.mutateAsync({
+        name: createForm.name,
+        email: createForm.email,
+        roles: createForm.roles,
+        password: createForm.password || undefined,
+      });
       addToast({ title: 'User created', color: 'success' });
       onCreateClose();
-      setCreateForm({ name: '', email: '', role: 'VIEWER' });
-    } catch {
-      addToast({ title: 'Failed to create user', color: 'danger' });
+      setCreateForm({ name: '', email: '', roles: ['VIEWER'], password: '', confirmPassword: '' });
+      setShowCreatePassword(false);
+    } catch (err: any) {
+      addToast({ title: err?.response?.data?.message || 'Failed to create user', color: 'danger' });
     }
   };
 
@@ -558,19 +568,54 @@ function UsersPanel() {
                 value={createForm.email}
                 onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))}
               />
-              <Select
-                size="sm"
-                label="Role"
-                selectedKeys={createForm.role ? [createForm.role] : []}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setCreateForm((f) => ({ ...f, role: val }));
-                }}
-              >
-                {availableRoles.map((r) => (
-                  <SelectItem key={r}>{r.replace(/_/g, ' ')}</SelectItem>
-                ))}
-              </Select>
+              <div>
+                <p className="text-xs font-medium text-gray-600 mb-1.5">Roles</p>
+                <MultiRolePicker
+                  selectedRoles={createForm.roles}
+                  onChange={(roles) => setCreateForm((f) => ({ ...f, roles }))}
+                  availableRoles={availableRoles}
+                />
+              </div>
+              <div className="border-t border-gray-100 pt-3">
+                <p className="text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1.5">
+                  <FiLock className="text-gray-400" /> Password (optional)
+                </p>
+                <div className="flex flex-col gap-2">
+                  <Input
+                    size="sm"
+                    label="Password"
+                    type={showCreatePassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={createForm.password}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
+                    isInvalid={createPasswordTooShort}
+                    errorMessage={createPasswordTooShort ? 'Minimum 8 characters' : undefined}
+                    endContent={
+                      <button
+                        type="button"
+                        onClick={() => setShowCreatePassword((v) => !v)}
+                        className="text-gray-400 hover:text-gray-600"
+                        aria-label={showCreatePassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showCreatePassword ? <FiEyeOff /> : <FiEye />}
+                      </button>
+                    }
+                  />
+                  <Input
+                    size="sm"
+                    label="Confirm Password"
+                    type={showCreatePassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={createForm.confirmPassword}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+                    isInvalid={createPasswordMismatch}
+                    errorMessage={createPasswordMismatch ? 'Passwords do not match' : undefined}
+                  />
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1.5">
+                  Leave blank to allow Google Sign-In only. Set a password to also enable email/password login.
+                </p>
+              </div>
             </div>
           </ModalBody>
           <ModalFooter>
@@ -580,6 +625,7 @@ function UsersPanel() {
               color="primary"
               onPress={handleCreateUser}
               isLoading={createUser.isPending}
+              isDisabled={!createForm.name || !createForm.email || !createForm.roles.length || createPasswordMismatch || createPasswordTooShort}
             >
               Create User
             </Button>
@@ -1469,6 +1515,7 @@ const CATEGORY_META: Record<string, { label: string; description: string }> = {
   task_status:    { label: 'Task Status',        description: 'Task board column states' },
   task_priority:  { label: 'Task Priority',      description: 'Priority levels for tasks' },
   budget_category:{ label: 'Budget Category',    description: 'Categories for budget lines, commitments, and actuals' },
+  loan_type:      { label: 'Loan Type',          description: 'Types of loans (Construction, Permanent, Bridge, etc.)' },
 };
 
 const COLOR_OPTIONS = [

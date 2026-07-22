@@ -20,7 +20,7 @@ import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
 import {
   useProject, useFinancialSummary, useBudgetByBuildingUnitReport, useMilestones, useUnits, useLeases, useActuals,
-  useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useCommitments, useBuildings,
+  useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useDeleteLoan, useCommitments, useBuildings,
   useBudgetLines,
   useUpdateProject,
   useCreateUnit, useUpdateUnit, useUpdateUnitStatus, useDeleteUnit,
@@ -833,7 +833,11 @@ const EMPTY_COMMITMENT = {
 };
 
 /** Budget/committed/actual/remaining rollup for every building and unit in a project, side-by-side. */
-function BuildingUnitBudgetReport({ report, canViewFinancial }: { report: any; canViewFinancial: boolean }) {
+function BuildingUnitBudgetReport({ report, canViewFinancial, onSelectBuilding, onSelectUnit }: {
+  report: any; canViewFinancial: boolean;
+  onSelectBuilding?: (buildingId: string) => void;
+  onSelectUnit?: (buildingId: string, unitId: string) => void;
+}) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const buildings = (report?.buildings || []) as any[];
   const unassigned = report?.unassigned;
@@ -842,7 +846,7 @@ function BuildingUnitBudgetReport({ report, canViewFinancial }: { report: any; c
     <td className={`py-2 px-2 text-right tabular-nums ${v >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(v)}</td>
   );
 
-  const row = (opts: { key: string; label: string; sub?: string; indent?: boolean; bold?: boolean; row: any; onToggle?: () => void; isExpanded?: boolean; hasChildren?: boolean }) => (
+  const row = (opts: { key: string; label: string; sub?: string; indent?: boolean; bold?: boolean; row: any; onToggle?: () => void; isExpanded?: boolean; hasChildren?: boolean; onSelect?: () => void }) => (
     <tr key={opts.key} className="border-b border-gray-50">
       <td className={`py-2 px-2 ${opts.indent ? 'pl-8' : ''}`}>
         <div className="flex items-center gap-1.5">
@@ -851,7 +855,18 @@ function BuildingUnitBudgetReport({ report, canViewFinancial }: { report: any; c
               {opts.isExpanded ? <FiChevronDown className="w-3.5 h-3.5" /> : <FiChevronRight className="w-3.5 h-3.5" />}
             </button>
           ) : opts.indent ? <span className="w-3.5" /> : null}
-          <span className={opts.bold ? 'font-semibold text-gray-700' : 'text-gray-600'}>{opts.label}</span>
+          {opts.onSelect ? (
+            <button
+              type="button"
+              onClick={opts.onSelect}
+              className={`hover:underline hover:text-blue-600 text-left ${opts.bold ? 'font-semibold text-gray-700' : 'text-gray-600'}`}
+              title={`Filter budget to ${opts.label}`}
+            >
+              {opts.label}
+            </button>
+          ) : (
+            <span className={opts.bold ? 'font-semibold text-gray-700' : 'text-gray-600'}>{opts.label}</span>
+          )}
           {opts.sub && <span className="text-xs text-gray-400">{opts.sub}</span>}
         </div>
       </td>
@@ -893,9 +908,11 @@ function BuildingUnitBudgetReport({ report, canViewFinancial }: { report: any; c
                   hasChildren: units.length > 0,
                   isExpanded: isOpen,
                   onToggle: () => setExpanded((e) => ({ ...e, [b.id]: !e[b.id] })),
+                  onSelect: onSelectBuilding ? () => onSelectBuilding(b.id) : undefined,
                 })}
                 {isOpen && units.map((u: any) => row({
                   key: u.id, label: `Unit ${u.unitNumber}`, indent: true, row: u,
+                  onSelect: onSelectUnit ? () => onSelectUnit(b.id, u.id) : undefined,
                 }))}
               </React.Fragment>
             );
@@ -915,15 +932,31 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   const canEditBudget = hasPermission('budget:edit');
   const canViewFinancial = hasPermission('financial:view');
 
-  const { data, isLoading, error } = useFinancialSummary(projectId);
-  const { data: buildingUnitReport } = useBudgetByBuildingUnitReport(projectId);
-  const { data: commitments } = useCommitments(projectId);
-  const { data: monthlyPaymentsData } = useMonthlyPayments(projectId);
-  const { data: loans } = useLoans(projectId);
-  const { data: budgetData } = useBudgetLines(projectId);
-  const { data: actualsData } = useActuals(projectId);
   const { data: buildings = [] } = useBuildings(projectId);
   const { data: units = [] } = useUnits(projectId);
+
+  // Building/unit filter — scopes every panel below (stat cards, chart, tables) down
+  // to one building or unit. "" means unfiltered/project-wide (existing behavior).
+  const [filterBuildingId, setFilterBuildingId] = useState('');
+  const [filterUnitId, setFilterUnitId] = useState('');
+  const scopeBuildingId = filterBuildingId || undefined;
+  const scopeUnitId = filterUnitId || undefined;
+  const unitsInFilterBuilding = useMemo(
+    () => (units as any[]).filter((u: any) => u.buildingId === filterBuildingId),
+    [units, filterBuildingId],
+  );
+  const filterBuilding = (buildings as any[]).find((b: any) => b.id === filterBuildingId);
+  const filterUnit = unitsInFilterBuilding.find((u: any) => u.id === filterUnitId);
+  const clearFilter = () => { setFilterBuildingId(''); setFilterUnitId(''); };
+  const selectFilterBuilding = (buildingId: string) => { setFilterBuildingId(buildingId); setFilterUnitId(''); };
+
+  const { data, isLoading, error } = useFinancialSummary(projectId, scopeBuildingId, scopeUnitId);
+  const { data: buildingUnitReport } = useBudgetByBuildingUnitReport(projectId);
+  const { data: commitments } = useCommitments(projectId, scopeBuildingId, scopeUnitId);
+  const { data: monthlyPaymentsData } = useMonthlyPayments(projectId);
+  const { data: loans } = useLoans(projectId);
+  const { data: budgetData } = useBudgetLines(projectId, scopeBuildingId, scopeUnitId);
+  const { data: actualsData } = useActuals(projectId, scopeBuildingId, scopeUnitId);
   const { data: budgetCategories = [] } = useCustomOptions('budget_category');
 
   // Slice 5: per-line variance — sum actuals + commitments by category, then
@@ -1178,6 +1211,46 @@ function FinancialsTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="mt-4">
+      {/* Building/Unit filter — scopes every panel below (stat cards, chart, tables) */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <Select
+          size="sm"
+          label="Building"
+          className="max-w-[220px]"
+          selectedKeys={[filterBuildingId || '__ALL__']}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            selectFilterBuilding(val === '__ALL__' ? '' : val);
+          }}
+        >
+          {[{ id: '__ALL__', name: 'All Buildings' }, ...(buildings as any[])].map((b: any) => (
+            <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+          ))}
+        </Select>
+        {filterBuildingId && (
+          <Select
+            size="sm"
+            label="Unit"
+            className="max-w-[220px]"
+            selectedKeys={[filterUnitId || '__ALL__']}
+            onSelectionChange={(keys) => {
+              const val = Array.from(keys)[0] as string;
+              setFilterUnitId(val === '__ALL__' ? '' : val);
+            }}
+          >
+            {[{ id: '__ALL__', unitNumber: null }, ...unitsInFilterBuilding].map((u: any) => {
+              const label = u.id === '__ALL__' ? `All Units in ${filterBuilding?.name ?? 'building'}` : `Unit ${u.unitNumber}`;
+              return <SelectItem key={u.id} textValue={label}>{label}</SelectItem>;
+            })}
+          </Select>
+        )}
+        {(filterBuildingId || filterUnitId) && (
+          <Chip variant="flat" color="primary" onClose={clearFilter}>
+            Filtered to {filterUnit ? `Unit ${filterUnit.unitNumber}` : filterBuilding?.name}
+          </Chip>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Budget" value={fmt(fin.budgetTotal)} colorScheme="brand" variant="construction" />
         {/* Actuals/Committed/Variance are spend data — financial:view only (PM sees budget only). */}
@@ -1359,11 +1432,16 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         <CardHeader className="pb-0">
           <div>
             <p className="font-semibold text-sm text-gray-600">Budget Tracking by Building/Unit</p>
-            <p className="text-xs text-gray-400 mt-0.5">Budget, committed, and actual costs for every building and unit — click a building to expand its units.</p>
+            <p className="text-xs text-gray-400 mt-0.5">Budget, committed, and actual costs for every building and unit — click the chevron to expand units, click a name to filter this whole page to it.</p>
           </div>
         </CardHeader>
         <CardBody>
-          <BuildingUnitBudgetReport report={buildingUnitReport} canViewFinancial={canViewFinancial} />
+          <BuildingUnitBudgetReport
+            report={buildingUnitReport}
+            canViewFinancial={canViewFinancial}
+            onSelectBuilding={selectFilterBuilding}
+            onSelectUnit={(buildingId, unitId) => { setFilterBuildingId(buildingId); setFilterUnitId(unitId); }}
+          />
         </CardBody>
       </Card>
 
@@ -5083,8 +5161,6 @@ const DRAW_STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'se
 const EMPTY_DRAW = { loanId: '', requestedAmount: '', requestDate: '', notes: '' };
 const EMPTY_SCHEDULE_LINE = { drawNumber: '', plannedAmount: '', plannedDate: '', description: '' };
 
-const LOAN_TYPES = ['CONSTRUCTION', 'PERMANENT', 'BRIDGE', 'MEZZANINE', 'SBA'];
-
 const EMPTY_LOAN = {
   loanType: 'CONSTRUCTION', lender: '', principalAmt: '', interestRate: '', termMonths: '',
   maturityDate: '', currentBalance: '', monthlyPayment: '', notes: '', buildingId: '', unitId: '',
@@ -5095,11 +5171,13 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const { data: loans = [] } = useLoans(projectId);
   const { data: buildings = [] } = useBuildings(projectId);
   const { data: units = [] } = useUnits(projectId);
+  const { data: loanTypes = [] } = useCustomOptions('loan_type');
   const createDraw = useCreateDraw();
   const updateDraw = useUpdateDraw();
   const deleteDraw = useDeleteDraw();
   const createLoan = useCreateLoan();
   const updateLoan = useUpdateLoan();
+  const deleteLoan = useDeleteLoan();
   const { hasPermission } = useAuthStore();
   // Same permission the API requires for POST /loans/:loanId/draws, DELETE /loans/draws/:id,
   // and the draw-schedule mutating routes — one gate for every mutating action in this tab.
@@ -5108,6 +5186,8 @@ function DrawsTab({ projectId }: { projectId: string }) {
 
   const { isOpen, onOpen, onClose } = useDisclosure();
   const { isOpen: isLoanOpen, onOpen: onLoanOpen, onClose: onLoanClose } = useDisclosure();
+  const { isOpen: isLoanDeleteOpen, onOpen: onLoanDeleteOpen, onClose: onLoanDeleteClose } = useDisclosure();
+  const [loanDeleteTarget, setLoanDeleteTarget] = useState<{ id: string; lender: string; principalAmt: number } | null>(null);
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_DRAW);
   const [editingDrawId, setEditingDrawId] = useState<string | null>(null);
@@ -5119,6 +5199,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
 
   const [loanForm, setLoanForm] = useState<Record<string, string>>(EMPTY_LOAN);
   const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
+  const [isCustomLoanType, setIsCustomLoanType] = useState(false);
 
   const set = (f: string) => (e: any) => setForm((p) => ({ ...p, [f]: e.target.value }));
   const setLoanField = (f: string) => (e: any) => setLoanForm((p) => ({ ...p, [f]: e.target.value }));
@@ -5187,13 +5268,15 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const openAddLoan = () => {
     setEditingLoanId(null);
     setLoanForm(EMPTY_LOAN);
+    setIsCustomLoanType(false);
     onLoanOpen();
   };
 
   const openEditLoan = (loan: any) => {
     setEditingLoanId(loan.id);
+    const loanType = loan.loanType || 'CONSTRUCTION';
     setLoanForm({
-      loanType: loan.loanType || 'CONSTRUCTION',
+      loanType,
       lender: loan.lender || '',
       principalAmt: loan.principalAmt != null ? String(loan.principalAmt) : '',
       interestRate: loan.interestRate != null ? String(loan.interestRate) : '',
@@ -5205,6 +5288,9 @@ function DrawsTab({ projectId }: { projectId: string }) {
       buildingId: loan.buildingId || '',
       unitId: loan.unitId || '',
     });
+    // If the existing type isn't one of the known options (e.g. deactivated in Admin,
+    // or entered as free text), open the form in custom-text mode.
+    setIsCustomLoanType(!(loanTypes as any[]).some((opt: any) => opt.value === loanType));
     onLoanOpen();
   };
 
@@ -5236,6 +5322,21 @@ function DrawsTab({ projectId }: { projectId: string }) {
       setEditingLoanId(null);
       onLoanClose();
     } catch (e) { addToast({ title: errMsg(e, 'Failed to save loan'), color: 'danger' }); }
+  };
+
+  const openLoanDelete = (loan: any) => {
+    setLoanDeleteTarget({ id: loan.id, lender: loan.lender, principalAmt: Number(loan.principalAmt || 0) });
+    onLoanDeleteOpen();
+  };
+
+  const handleDeleteLoan = async () => {
+    if (!loanDeleteTarget) return;
+    try {
+      await deleteLoan.mutateAsync({ id: loanDeleteTarget.id, projectId });
+      addToast({ title: 'Loan deleted', color: 'success' });
+      onLoanDeleteClose();
+      setLoanDeleteTarget(null);
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to delete loan'), color: 'danger' }); }
   };
 
   // ---- Draw Schedule sub-view ----
@@ -5334,9 +5435,14 @@ function DrawsTab({ projectId }: { projectId: string }) {
                     <td className="px-4 py-3 text-gray-500">{l.maturityDate ? fmtDate(l.maturityDate) : '—'}</td>
                     {canEditLoans && (
                       <td className="px-4 py-3">
-                        <Button size="sm" variant="light" isIconOnly onPress={() => openEditLoan(l)}>
-                          <FiEdit2 />
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="light" isIconOnly onPress={() => openEditLoan(l)} aria-label="Edit loan">
+                            <FiEdit2 />
+                          </Button>
+                          <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openLoanDelete(l)} aria-label="Delete loan">
+                            <FiTrash2 />
+                          </Button>
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -5549,15 +5655,37 @@ function DrawsTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>{editingLoanId ? 'Edit Loan' : 'Add Loan'}</ModalHeader>
           <ModalBody className="space-y-3">
-            <Select
-              label="Loan Type"
-              selectedKeys={[loanForm.loanType]}
-              onSelectionChange={(k) => setLoanForm((p) => ({ ...p, loanType: Array.from(k)[0] as string }))}
-            >
-              {LOAN_TYPES.map((t) => (
-                <SelectItem key={t}>{t}</SelectItem>
-              ))}
-            </Select>
+            <div>
+              {isCustomLoanType ? (
+                <Input
+                  label="Loan Type"
+                  isRequired
+                  placeholder="e.g. SBA 504"
+                  value={loanForm.loanType}
+                  onChange={setLoanField('loanType')}
+                />
+              ) : (
+                <Select
+                  label="Loan Type"
+                  selectedKeys={loanForm.loanType ? [loanForm.loanType] : []}
+                  onSelectionChange={(k) => setLoanForm((p) => ({ ...p, loanType: Array.from(k)[0] as string }))}
+                >
+                  {(loanTypes as any[]).map((opt: any) => (
+                    <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
+                  ))}
+                </Select>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCustomLoanType((v) => !v);
+                  setLoanForm((p) => ({ ...p, loanType: '' }));
+                }}
+                className="mt-1 text-[11px] text-blue-600 hover:underline"
+              >
+                {isCustomLoanType ? 'Choose from list instead' : '+ Add custom loan type'}
+              </button>
+            </div>
             <Input label="Lender" value={loanForm.lender} onChange={setLoanField('lender')} isRequired />
             <div className="grid grid-cols-2 gap-3">
               <Select
@@ -5609,6 +5737,23 @@ function DrawsTab({ projectId }: { projectId: string }) {
             >
               {editingLoanId ? 'Save' : 'Create'}
             </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Delete Loan Confirm */}
+      <Modal isOpen={isLoanDeleteOpen} onClose={onLoanDeleteClose} size="sm">
+        <ModalContent>
+          <ModalHeader>Delete Loan</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-gray-600">
+              Delete the loan from <span className="font-medium text-gray-800">{loanDeleteTarget?.lender}</span>
+              {' '}({fmt(loanDeleteTarget?.principalAmt ?? 0)})? This can't be undone from here.
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={onLoanDeleteClose}>Cancel</Button>
+            <Button color="danger" onPress={handleDeleteLoan} isLoading={deleteLoan.isPending}>Delete</Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

@@ -601,7 +601,11 @@ model Loan {
   building        Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitId          String?
   unit            Unit?     @relation(fields: [unitId], references: [id])
-  loanType        LoanType
+  // Free-text key backed by CustomOption (category="loan_type") — same pattern as
+  // BudgetLine.category. Was a hardcoded LoanType enum; converted so orgs can add their
+  // own types (e.g. "SBA 504") without a schema change. The 5 former enum values are
+  // seeded as system defaults in custom-options.service.ts.
+  loanType        String
   lender          String // encrypted
   principalAmt    Decimal   @db.Decimal(14, 2) // encrypted at app level
   interestRate    Decimal   @db.Decimal(6, 4) // encrypted at app level
@@ -624,14 +628,6 @@ model Loan {
   @@index([deletedAt])
   @@index([maturityDate])
   @@map("loans")
-}
-
-enum LoanType {
-  CONSTRUCTION
-  PERMANENT
-  BRIDGE
-  MEZZANINE
-  SBA
 }
 
 model DrawRequest {
@@ -1167,6 +1163,7 @@ enum NotificationType {
   COMMENT_FINANCIAL
   COMMENT_SALES
   COMMENT_MARKETING
+  DRAW_REQUEST_SUBMITTED
   DRAW_REQUEST_APPROVED
   DRAW_REQUEST_FUNDED
   BUDGET_VARIANCE

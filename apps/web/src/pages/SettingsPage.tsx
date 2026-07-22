@@ -9,6 +9,7 @@ const TYPE_LABELS: Record<string, { label: string; description: string; group: s
   LEASE_EXPIRING_30:    { label: 'Lease Expiring (30 days)', description: 'When a tenant lease expires within 30 days', group: 'Leases' },
   LEASE_EXPIRING_7:     { label: 'Lease Expiring (7 days)', description: 'When a tenant lease expires within 7 days', group: 'Leases' },
   LOAN_MATURITY_60:     { label: 'Loan Maturing (60 days)', description: 'When a loan matures within 60 days', group: 'Financial' },
+  DRAW_REQUEST_SUBMITTED:{ label: 'Draw Request Needs Approval', description: 'When a draw request is submitted and needs your sign-off', group: 'Financial' },
   DRAW_REQUEST_APPROVED:{ label: 'Draw Request Approved',   description: 'When a draw request is approved internally', group: 'Financial' },
   DRAW_REQUEST_FUNDED:  { label: 'Draw Request Funded',     description: 'When a draw request is funded by the lender', group: 'Financial' },
   BUDGET_VARIANCE:      { label: 'Budget Variance Alert',   description: 'When project spending exceeds budget by more than 10%', group: 'Financial' },

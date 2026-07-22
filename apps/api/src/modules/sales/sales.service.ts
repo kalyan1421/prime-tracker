@@ -80,6 +80,12 @@ export class SalesService {
         throw new BadRequestException('Building does not belong to this project');
       }
     }
+    // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
+    // DateTime columns need a full ISO-8601 datetime — pass Date objects so Prisma
+    // serializes them correctly instead of erroring "premature end of input".
+    for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
+      if (typeof data[field] === 'string') (data as any)[field] = new Date(data[field] as unknown as string);
+    }
     return this.prisma.sale.create({
       data: { ...data, lastActivityAt: new Date() },
     });
@@ -87,6 +93,9 @@ export class SalesService {
 
   async update(id: string, data: Prisma.SaleUncheckedUpdateInput) {
     const sale = await this.findById(id);
+    for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
+      if (typeof data[field] === 'string') (data as any)[field] = new Date(data[field] as unknown as string);
+    }
 
     // Slice 6: lostReason is captured on cancel — defaulted to OTHER if the caller
     // omits it so legacy clients don't break. The forced-picker UX lives in the

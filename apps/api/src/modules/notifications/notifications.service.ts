@@ -196,15 +196,27 @@ export class NotificationsService {
     });
   }
 
-  async notifyDrawRequest(draw: { status: string; loanId: string; loan: { projectId: string; project: { name: string } } }) {
-    if (!['APPROVED', 'FUNDED'].includes(draw.status)) return;
-    const type = draw.status === 'APPROVED' ? NotificationType.DRAW_REQUEST_APPROVED : NotificationType.DRAW_REQUEST_FUNDED;
+  async notifyDrawRequest(draw: {
+    status: 'SUBMITTED' | 'APPROVED' | 'FUNDED';
+    drawNumber: number;
+    projectId: string;
+    project: { name: string };
+  }) {
+    // SUBMITTED needs the people who can actually act on it (draw:approve); APPROVED/FUNDED
+    // are FYI-only so ACCOUNTING (view-only on draws) is included there but not here.
+    const config: Record<string, { type: NotificationType; roles: string[]; verb: string }> = {
+      SUBMITTED: { type: NotificationType.DRAW_REQUEST_SUBMITTED, roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE'], verb: 'submitted for approval' },
+      APPROVED:  { type: NotificationType.DRAW_REQUEST_APPROVED,  roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'], verb: 'approved' },
+      FUNDED:    { type: NotificationType.DRAW_REQUEST_FUNDED,    roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'], verb: 'funded' },
+    };
+    const cfg = config[draw.status];
+    if (!cfg) return;
     await this.sendToRoles({
-      roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'],
-      type,
-      title: `Draw Request ${draw.status}`,
-      body: `A draw request for project ${draw.loan.project.name} has been ${draw.status.toLowerCase()}.`,
-      link: `/projects/${draw.loan.projectId}/financials`,
+      roles: cfg.roles,
+      type: cfg.type,
+      title: `Draw Request ${draw.status === 'SUBMITTED' ? 'Needs Approval' : draw.status}`,
+      body: `Draw #${draw.drawNumber} for project ${draw.project.name} has been ${cfg.verb}.`,
+      link: `/projects/${draw.projectId}/draws`,
     });
   }
 

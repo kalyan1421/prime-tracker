@@ -98,10 +98,13 @@ export function useProjectActivity(projectId: string, page = 1) {
 }
 
 // ---- Financial Summary ----
-export function useFinancialSummary(projectId: string) {
+// buildingId/unitId scope the summary to one building or unit — used by the Budget
+// tab's filter (backend prioritizes unitId > buildingId > projectId, same as the
+// dedicated useBuildingFinancialSummary/useUnitFinancialSummary hooks below).
+export function useFinancialSummary(projectId: string, buildingId?: string, unitId?: string) {
   return useQuery({
-    queryKey: ['financials', projectId],
-    queryFn: () => api.get('/budgets/summary', { params: { projectId } }).then((r) => r.data),
+    queryKey: ['financials', projectId, buildingId, unitId],
+    queryFn: () => api.get('/budgets/summary', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
     enabled: !!projectId,
   });
 }
@@ -131,10 +134,12 @@ export function useBudgetByBuildingUnitReport(projectId: string) {
 }
 
 // ---- Budget Lines ----
-export function useBudgetLines(projectId: string) {
+// buildingId/unitId narrow a project-wide list down to one building or unit — used by
+// the Budget tab's filter. Omit both for the project-wide list (existing behavior).
+export function useBudgetLines(projectId: string, buildingId?: string, unitId?: string) {
   return useQuery({
-    queryKey: ['budgets', projectId],
-    queryFn: () => api.get('/budgets', { params: { projectId } }).then((r) => r.data),
+    queryKey: ['budgets', projectId, buildingId, unitId],
+    queryFn: () => api.get('/budgets', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
     enabled: !!projectId,
   });
 }
@@ -450,6 +455,16 @@ export function useUpdateLoan() {
   });
 }
 
+export function useDeleteLoan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string; projectId: string }) => api.delete(`/loans/${id}`).then((r) => r.data),
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ['loans', v.projectId] });
+    },
+  });
+}
+
 export function useMonthlyPayments(projectId: string) {
   return useQuery({
     queryKey: ['monthly-payments', projectId],
@@ -459,10 +474,10 @@ export function useMonthlyPayments(projectId: string) {
 }
 
 // ---- Commitments ----
-export function useCommitments(projectId: string) {
+export function useCommitments(projectId: string, buildingId?: string, unitId?: string) {
   return useQuery({
-    queryKey: ['commitments', projectId],
-    queryFn: () => api.get('/commitments', { params: { projectId } }).then((r) => r.data),
+    queryKey: ['commitments', projectId, buildingId, unitId],
+    queryFn: () => api.get('/commitments', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
     enabled: !!projectId,
   });
 }
@@ -1784,10 +1799,10 @@ export function useRemoveDrawDocument() {
 }
 
 // Actuals (POSTed expenses) — for variance computation
-export function useActuals(projectId: string | undefined) {
+export function useActuals(projectId: string | undefined, buildingId?: string, unitId?: string) {
   return useQuery({
-    queryKey: ['actuals', projectId],
-    queryFn: () => api.get('/actuals', { params: { projectId } }).then((r) => r.data),
+    queryKey: ['actuals', projectId, buildingId, unitId],
+    queryFn: () => api.get('/actuals', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
     enabled: !!projectId,
   });
 }

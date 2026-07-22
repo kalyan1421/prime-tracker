@@ -25,7 +25,7 @@ export class UsersController {
   @Post()
   @RequirePermissions('user:manage')
   @ApiOperation({ summary: 'Create a new user' })
-  create(@Body() body: { email: string; name: string; role?: UserRole }) {
+  create(@Body() body: { email: string; name: string; role?: UserRole; roles?: UserRole[]; password?: string }) {
     return this.usersService.create(body);
   }
 

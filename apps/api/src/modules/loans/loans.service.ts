@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { EventBus } from '../../common/events/event-bus.service';
@@ -18,6 +18,7 @@ export class LoansService {
     // project view via OR(projectId match, building.projectId match).
     const loans = await this.prisma.loan.findMany({
       where: {
+        deletedAt: null,
         OR: [
           { projectId },
           { building: { projectId } },
@@ -34,7 +35,7 @@ export class LoansService {
 
   async findByBuilding(buildingId: string) {
     const loans = await this.prisma.loan.findMany({
-      where: { buildingId },
+      where: { buildingId, deletedAt: null },
       include: {
         drawRequests: { orderBy: { drawNumber: 'asc' } },
         building: { select: { id: true, name: true } },
@@ -48,8 +49,28 @@ export class LoansService {
       where: { id },
       include: { drawRequests: { orderBy: { drawNumber: 'asc' } } },
     });
-    if (!loan) throw new NotFoundException('Loan not found');
+    if (!loan || loan.deletedAt) throw new NotFoundException('Loan not found');
     return this.decryptLoan(loan);
+  }
+
+  // Soft-delete only (schema.prisma: "required for compliance/audit") — never a hard
+  // delete. Blocked while the loan has any non-terminal draw request, since deleting
+  // the loan would orphan in-flight/funded draws and the Actuals they've already posted.
+  async delete(id: string) {
+    const loan = await this.findById(id);
+    const activeDraws = await this.prisma.drawRequest.count({
+      where: {
+        loanId: id,
+        status: { notIn: [DrawStatus.DRAFT, DrawStatus.CANCELLED, DrawStatus.REJECTED] },
+      },
+    });
+    if (activeDraws > 0) {
+      throw new ConflictException(
+        `This loan has ${activeDraws} active draw request${activeDraws === 1 ? '' : 's'}. ` +
+        'Resolve or cancel them before deleting the loan.',
+      );
+    }
+    return this.prisma.loan.update({ where: { id: loan.id }, data: { deletedAt: new Date() } });
   }
 
   async create(data: Prisma.LoanUncheckedCreateInput) {
@@ -114,7 +135,7 @@ export class LoansService {
 
   async getMonthlyPayments(projectId: string) {
     const loans = await this.prisma.loan.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       include: {
         unit: { select: { unitNumber: true, building: { select: { name: true } } } },
       },
@@ -138,17 +159,24 @@ export class LoansService {
 
   // ---- Draw Management ----
 
-  async findDrawsByProject(projectId: string) {
-    return this.prisma.drawRequest.findMany({
+  async findDrawsByProject(projectId: string, canViewFinancial: boolean) {
+    const draws = await this.prisma.drawRequest.findMany({
       where: { projectId },
       include: {
         loan: { select: { id: true, loanType: true, encryptedFields: true, lender: true } },
       },
       orderBy: { requestDate: 'desc' },
-    }).then(draws => draws.map(d => ({
-      ...d,
-      loan: d.loan ? this.decryptLoan(d.loan) : null,
-    })));
+    });
+    return draws.map((d) => {
+      if (!d.loan) return { ...d, loan: null };
+      if (canViewFinancial) {
+        return { ...d, loan: this.decryptLoan(d.loan) };
+      }
+      // Financial-blind roles (e.g. CONSTRUCTION holds draw:view but not financial:view/
+      // loan:view): expose only non-financial loan identifiers. Never decrypt the blob
+      // (principal/rate/balance) and never ship the raw encryptedFields ciphertext.
+      return { ...d, loan: { id: d.loan.id, loanType: d.loan.loanType, lender: d.loan.lender } };
+    });
   }
 
   async createDraw(loanId: string, data: any, userId: string) {

@@ -61,6 +61,11 @@ export class LeasesService {
   }
 
   async create(data: Prisma.LeaseUncheckedCreateInput) {
+    // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
+    // DateTime columns need a full ISO-8601 datetime — pass Date objects so Prisma
+    // serializes them correctly instead of erroring "premature end of input".
+    if (typeof data.leaseStart === 'string') data.leaseStart = new Date(data.leaseStart);
+    if (typeof data.leaseEnd === 'string') data.leaseEnd = new Date(data.leaseEnd);
     // Sprint 1: leases are polymorphic — exactly one of (unitId, buildingId) required.
     const unitId = data.unitId as string | null | undefined;
     const buildingId = data.buildingId as string | null | undefined;
@@ -93,6 +98,8 @@ export class LeasesService {
 
   async update(id: string, data: Prisma.LeaseUncheckedUpdateInput) {
     await this.findById(id);
+    if (typeof data.leaseStart === 'string') data.leaseStart = new Date(data.leaseStart);
+    if (typeof data.leaseEnd === 'string') data.leaseEnd = new Date(data.leaseEnd);
     return this.prisma.lease.update({ where: { id }, data });
   }
 

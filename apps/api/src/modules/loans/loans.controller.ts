@@ -38,13 +38,22 @@ export class LoansController {
   @ApiOperation({ summary: 'Update loan, re-encrypts sensitive fields' })
   update(@Param('id') id: string, @Body() body: UpdateLoanDto) { return this.service.update(id, body); }
 
+  @Delete(':id')
+  @RequirePermissions('loan:edit')
+  @ApiOperation({ summary: 'Soft-delete a loan (blocked if it has active draw requests)' })
+  delete(@Param('id') id: string) { return this.service.delete(id); }
+
   // ---- Draw Management ----
 
   @Get('draws')
   @RequirePermissions('draw:view')
   @ApiOperation({ summary: 'Get all draw requests for a project' })
-  findDrawsByProject(@Query('projectId') projectId: string) {
-    return this.service.findDrawsByProject(projectId);
+  findDrawsByProject(@Query('projectId') projectId: string, @Request() req: any) {
+    // Only financial roles get the decrypted loan financials merged into each draw;
+    // draw:view-only roles (CONSTRUCTION) get non-financial loan identifiers only.
+    const perms: string[] = req.user?.permissions ?? [];
+    const canViewFinancial = perms.includes('financial:view') || perms.includes('loan:view');
+    return this.service.findDrawsByProject(projectId, canViewFinancial);
   }
 
   @Get(':id')

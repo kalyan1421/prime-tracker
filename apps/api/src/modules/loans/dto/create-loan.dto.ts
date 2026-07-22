@@ -1,5 +1,5 @@
 import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsEnum, IsDateString, MaxLength, IsInt, Min, Max } from 'class-validator';
-import { LoanType, DrawStatus } from '@prisma/client';
+import { DrawStatus } from '@prisma/client';
 
 export class CreateLoanDto {
   // Sprint 1: a loan attaches at project- or building-level. At least one is
@@ -14,8 +14,8 @@ export class CreateLoanDto {
   @IsOptional() @IsString()
   unitId?: string;
 
-  @IsEnum(LoanType)
-  loanType!: LoanType;
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  loanType!: string;
 
   @IsString() @IsNotEmpty() @MaxLength(200)
   lender!: string;
@@ -55,8 +55,8 @@ export class UpdateLoanDto {
   @IsOptional() @IsString()
   unitId?: string | null;
 
-  @IsOptional() @IsEnum(LoanType)
-  loanType?: LoanType;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100)
+  loanType?: string;
 
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200)
   lender?: string;

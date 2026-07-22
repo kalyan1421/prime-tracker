@@ -8,7 +8,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateBudgetLineDto } from './dto/create-budget-line.dto';
 import { UpdateBudgetLineDto } from './dto/update-budget-line.dto';
 
@@ -56,8 +56,8 @@ export class BudgetsController {
   @Post()
   @RequirePermissions('budget:edit')
   @ApiOperation({ summary: 'Create budget line' })
-  create(@Body() body: CreateBudgetLineDto) {
-    return this.service.create(body);
+  create(@Body() body: CreateBudgetLineDto, @CurrentUser('sub') userId: string) {
+    return this.service.create(body, userId);
   }
 
   @Put(':id')
