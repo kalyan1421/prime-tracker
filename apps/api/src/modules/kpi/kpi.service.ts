@@ -22,12 +22,16 @@ export class KpiService {
   }
 
   async createSnapshot(projectId: string) {
+    // Exclude soft-deleted rows (BudgetLine/Lease/Unit carry deletedAt) — otherwise a
+    // deleted budget line, lease, or unit still inflates the persisted snapshot's budget
+    // total, leased sqft, occupancy, and sold-unit count. (Actual/Commitment are hard-
+    // deleted, so no deletedAt filter applies there.)
     const [budgets, actuals, commitments, leases, units] = await Promise.all([
-      this.prisma.budgetLine.findMany({ where: { projectId } }),
+      this.prisma.budgetLine.findMany({ where: { projectId, deletedAt: null } }),
       this.prisma.actual.findMany({ where: { projectId, interiorProjectId: null } }),
       this.prisma.commitment.findMany({ where: { projectId } }),
-      this.prisma.lease.findMany({ where: { unit: { building: { projectId } }, status: 'ACTIVE' } }),
-      this.prisma.unit.findMany({ where: { building: { projectId } } }),
+      this.prisma.lease.findMany({ where: { unit: { building: { projectId } }, status: 'ACTIVE', deletedAt: null } }),
+      this.prisma.unit.findMany({ where: { building: { projectId }, deletedAt: null } }),
     ]);
 
     const budgetTotal = budgets.reduce((s, b) => s + Number(b.revisedAmt ?? b.baselineAmt), 0);

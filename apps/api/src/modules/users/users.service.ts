@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException, 
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { UserRole, Prisma } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UsersService {
@@ -10,17 +11,34 @@ export class UsersService {
     private audit: AuditService,
   ) {}
 
-  async create(data: { email: string; name: string; role?: UserRole }) {
+  async create(data: { email: string; name: string; role?: UserRole; roles?: UserRole[]; password?: string }) {
     const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
     if (existing) throw new ConflictException('User with this email already exists');
-    const primaryRole = data.role || 'VIEWER';
+
+    // roles[] takes precedence when both are sent (Add User modal sends roles[] via
+    // MultiRolePicker); primary role is the first entry, matching updateRoles() below.
+    const roles = data.roles?.length ? data.roles : [data.role || ('VIEWER' as UserRole)];
+    const primaryRole = roles[0];
+
+    // Password is optional — leaving it unset keeps the user Google-OAuth-only (today's
+    // default). Setting one additionally enables POST /auth/login for accounts without a
+    // Workspace Google account (vendors, and eventually buyer-portal CLIENT users).
+    if (data.password !== undefined && data.password.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters');
+    }
+    const passwordHash = data.password ? await bcrypt.hash(data.password, 12) : undefined;
+
     return this.prisma.user.create({
       data: {
         email: data.email,
         name: data.name,
         role: primaryRole,
-        roles: [primaryRole],
+        roles,
+        passwordHash,
       },
+      // Never return passwordHash/mfaSecret/googleId to the client (this row is sent
+      // straight back to the Add-User modal). See userSelect below.
+      select: this.userSelect,
     });
   }
 
@@ -68,6 +86,7 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id },
       data: { role, roles: [role] },
+      select: this.userSelect,
     });
 
     await this.audit.log({
@@ -101,6 +120,7 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id },
       data: { role: primaryRole, roles },
+      select: this.userSelect,
     });
 
     await this.audit.log({
@@ -131,6 +151,7 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id },
       data: { isActive },
+      select: this.userSelect,
     });
 
     await this.audit.log({
@@ -190,7 +211,7 @@ export class UsersService {
       const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
       if (existing && existing.id !== id) throw new ConflictException('Email already in use');
     }
-    const user = await this.prisma.user.update({ where: { id }, data });
+    const user = await this.prisma.user.update({ where: { id }, data, select: this.userSelect });
     await this.audit.log({
       userId: actorId,
       action: 'UPDATE',

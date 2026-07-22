@@ -36,7 +36,7 @@ export class CommentsController {
   }
 
   @Post()
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:edit')
   @ApiOperation({ summary: 'Create comment on a unit or project' })
   create(
     @Body() body: CreateCommentDto,
@@ -52,7 +52,7 @@ export class CommentsController {
   }
 
   @Put('unit/:id')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:edit')
   @ApiOperation({ summary: 'Update own unit comment' })
   updateUnit(
     @Param('id') id: string,
@@ -63,7 +63,7 @@ export class CommentsController {
   }
 
   @Put('project/:id')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:edit')
   @ApiOperation({ summary: 'Update own project comment' })
   updateProject(
     @Param('id') id: string,
@@ -74,7 +74,7 @@ export class CommentsController {
   }
 
   @Delete('unit/:id')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:edit')
   @ApiOperation({ summary: 'Delete own unit comment (or admin)' })
   deleteUnit(
     @Param('id') id: string,
@@ -85,7 +85,7 @@ export class CommentsController {
   }
 
   @Delete('project/:id')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:edit')
   @ApiOperation({ summary: 'Delete own project comment (or admin)' })
   deleteProject(
     @Param('id') id: string,

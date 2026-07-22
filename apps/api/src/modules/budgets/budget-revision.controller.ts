@@ -5,7 +5,7 @@ import { BudgetRevisionService } from './budget-revision.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { CurrentUser } from '../../common/decorators';
+import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 
 @ApiTags('Budget Revisions')
@@ -18,25 +18,32 @@ export class BudgetRevisionController {
 
   /** GET /api/budgets/revisions?projectId=  — project-wide budget change log */
   @Get('revisions')
+  @RequirePermissions('budget:view')
   listForProject(@Query('projectId') projectId: string) {
     return this.revisions.listForProject(projectId);
   }
 
-  /** GET /api/budgets/:lineId/revisions  — full audit trail for a budget line */
-  @Get(':lineId/revisions')
-  list(@Param('lineId') lineId: string) {
-    return this.revisions.listForLine(lineId);
+  /**
+   * GET /api/budgets/:budgetLineId/revisions  — full audit trail for a budget line.
+   * Param is named `budgetLineId` (not `lineId`) so ProjectAccessGuard resolves the
+   * owning project via KEY_ENTITY and scopes field roles to their own projects.
+   */
+  @Get(':budgetLineId/revisions')
+  @RequirePermissions('budget:view')
+  list(@Param('budgetLineId') budgetLineId: string) {
+    return this.revisions.listForLine(budgetLineId);
   }
 
-  /** POST /api/budgets/:lineId/revisions — create a new revision */
-  @Post(':lineId/revisions')
+  /** POST /api/budgets/:budgetLineId/revisions — create a new revision */
+  @Post(':budgetLineId/revisions')
+  @RequirePermissions('budget:edit')
   create(
-    @Param('lineId') lineId: string,
+    @Param('budgetLineId') budgetLineId: string,
     @CurrentUser('sub') userId: string,
     @Body() body: { amount: number; reason: string; changeReason: BudgetChangeReason },
   ) {
     return this.revisions.createRevision({
-      budgetLineId: lineId,
+      budgetLineId,
       amount: body.amount,
       reason: body.reason,
       changeReason: body.changeReason,
@@ -46,6 +53,7 @@ export class BudgetRevisionController {
 
   /** POST /api/budgets/revisions/:revisionId/approve — stamp approval */
   @Post('revisions/:revisionId/approve')
+  @RequirePermissions('budget:edit')
   approve(@Param('revisionId') revisionId: string, @CurrentUser('sub') userId: string) {
     return this.revisions.approve(revisionId, userId);
   }

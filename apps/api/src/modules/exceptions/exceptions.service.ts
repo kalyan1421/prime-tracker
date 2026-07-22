@@ -9,6 +9,7 @@ import { CacheService } from '../../common/cache/cache.service';
  *   - Overdue milestones
  *   - Stale available units (>90 days)
  *   - Draws past expected funding date
+ *   - Draws awaiting internal approval (also the "Pending Approvals" surface)
  *   - Budget categories over threshold
  *   - Leases expiring within 30 days
  *   - Sales with no activity 14+ days
@@ -40,12 +41,33 @@ export class ExceptionsService {
 
   invalidate() { this.cache.invalidateTag(TAG); }
 
-  async forPortfolio(): Promise<ExceptionItem[]> {
-    return this.cache.wrap('exceptions:portfolio', TTL, () => this.compute(undefined), { tags: [TAG] });
+  async forPortfolio(perms: string[] = []): Promise<ExceptionItem[]> {
+    const all = await this.cache.wrap('exceptions:portfolio', TTL, () => this.compute(undefined), { tags: [TAG] });
+    return this.filterByPermissions(all, perms);
   }
 
-  async forProject(projectId: string): Promise<ExceptionItem[]> {
-    return this.cache.wrap(`exceptions:project:${projectId}`, TTL, () => this.compute(projectId), { tags: [TAG] });
+  async forProject(projectId: string, perms: string[] = []): Promise<ExceptionItem[]> {
+    const all = await this.cache.wrap(`exceptions:project:${projectId}`, TTL, () => this.compute(projectId), { tags: [TAG] });
+    return this.filterByPermissions(all, perms);
+  }
+
+  /**
+   * Drop exception categories the viewer isn't allowed to see — the feed carries
+   * lender/buyer/tenant names, so a Viewer/PM must not receive draw/sale/lease items
+   * their role can't otherwise access. Applied per-request AFTER the cache so the
+   * expensive compute() stays shared and permission-agnostic (no cache-key blowup).
+   */
+  private filterByPermissions(items: ExceptionItem[], perms: string[]): ExceptionItem[] {
+    const can = (p: string) => perms.includes(p);
+    return items.filter((it) => {
+      switch (it.category) {
+        case 'draw':  return can('draw:view') || can('financial:view');
+        case 'sale':  return can('sales:view');
+        case 'lease': return can('lease:view');
+        // milestone / unit — visible to anyone with the baseline project:view the route requires.
+        default:      return true;
+      }
+    });
   }
 
   /** Compute exceptions, scoped to one project or the whole portfolio. */
@@ -77,7 +99,7 @@ export class ExceptionsService {
     // ─── Stale available units ───
     const cutoff = new Date(Date.now() - 90 * 86_400_000);
     const stale = await this.prisma.unit.findMany({
-      where: { status: 'AVAILABLE', availableSince: { lt: cutoff }, ...projectFilterUnit },
+      where: { status: 'AVAILABLE', availableSince: { lt: cutoff }, deletedAt: null, ...projectFilterUnit },
       select: {
         id: true, unitNumber: true, availableSince: true,
         building: { select: { name: true, project: { select: { id: true, name: true } } } },
@@ -126,10 +148,34 @@ export class ExceptionsService {
       });
     }
 
+    // ─── Draws awaiting internal approval ───
+    const pendingApproval = await this.prisma.drawRequest.findMany({
+      where: { status: 'SUBMITTED', ...projectFilter },
+      select: {
+        id: true, drawNumber: true, requestDate: true, projectId: true,
+        loan: { select: { lender: true } },
+        project: { select: { name: true } },
+      },
+      take: 20,
+    });
+    for (const d of pendingApproval) {
+      const days = Math.floor((Date.now() - d.requestDate.getTime()) / 86_400_000);
+      out.push({
+        id: `draw-pending-${d.id}`,
+        severity: days > 3 ? 'warning' : 'info',
+        category: 'draw',
+        title: `Draw #${d.drawNumber} awaiting approval`,
+        detail: `Submitted ${days} day${days === 1 ? '' : 's'} ago from ${d.loan.lender} — needs internal sign-off`,
+        meta: d.project?.name,
+        href: d.projectId ? `/projects/${d.projectId}/draws` : undefined,
+        createdAt: d.requestDate,
+      });
+    }
+
     // ─── Leases expiring soon (next 30 days) ───
     const soon = new Date(Date.now() + 30 * 86_400_000);
     const expiringLeases = await this.prisma.lease.findMany({
-      where: { status: 'ACTIVE', leaseEnd: { lt: soon, gt: new Date() }, unit: projectFilterUnit },
+      where: { status: 'ACTIVE', leaseEnd: { lt: soon, gt: new Date() }, deletedAt: null, unit: projectFilterUnit },
       select: {
         id: true, leaseEnd: true, tenantName: true,
         unit: { select: { id: true, unitNumber: true, building: { select: { project: { select: { id: true, name: true } } } } } },
@@ -159,6 +205,7 @@ export class ExceptionsService {
     const drySales = await this.prisma.sale.findMany({
       where: {
         status: { in: ['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT'] },
+        deletedAt: null,
         OR: [
           { lastActivityAt: { lt: droughtCutoff } },
           { lastActivityAt: null, updatedAt: { lt: droughtCutoff } },

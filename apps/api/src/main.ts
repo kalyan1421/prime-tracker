@@ -26,6 +26,11 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? config.get('API_PORT', 3001));
   const frontendUrl = config.get('FRONTEND_URL', 'http://localhost:5173');
 
+  // Behind nginx (single reverse proxy), trust the first hop so req.ip resolves to the
+  // real client from X-Forwarded-For instead of 127.0.0.1 — without this, ThrottlerGuard
+  // buckets every request under the proxy IP and per-IP rate limiting is a no-op.
+  app.set('trust proxy', 1);
+
   // Security headers
   app.use(helmet());
 

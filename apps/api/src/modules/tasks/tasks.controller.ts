@@ -9,7 +9,8 @@ import { existsSync, mkdirSync } from 'fs';
 import { TasksService } from './tasks.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
-import { CurrentUser } from '../../common/decorators/index';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 
 const UPLOADS_DIR = join(process.cwd(), 'uploads', 'tasks');
@@ -18,13 +19,17 @@ function ensureUploadDir() {
     if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
+// Reads require the baseline project:view (every role has it); writes require task:edit,
+// which read-only roles (VIEWER, LEGAL) lack — previously this controller had NO
+// PermissionsGuard, so any authenticated user could CRUD tasks on any project.
 @Controller('tasks')
-@UseGuards(JwtAuthGuard, ProjectAccessGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 export class TasksController {
     constructor(private readonly tasksService: TasksService) { }
 
     @Get()
+    @RequirePermissions('project:view')
     findAll(
         @Query('projectId') projectId?: string,
         @Query('buildingId') buildingId?: string,
@@ -46,16 +51,19 @@ export class TasksController {
     }
 
     @Get(':id')
+    @RequirePermissions('project:view')
     findOne(@Param('id') id: string) {
         return this.tasksService.findById(id);
     }
 
     @Post()
+    @RequirePermissions('task:edit')
     create(@Body() body: any, @CurrentUser('sub') userId: string) {
         return this.tasksService.create(body, userId);
     }
 
     @Put(':id')
+    @RequirePermissions('task:edit')
     update(
         @Param('id') id: string,
         @Body() body: any,
@@ -66,6 +74,7 @@ export class TasksController {
     }
 
     @Delete(':id')
+    @RequirePermissions('task:edit')
     remove(
         @Param('id') id: string,
         @CurrentUser('sub') userId: string,
@@ -77,11 +86,13 @@ export class TasksController {
     // ---- Comments ----
 
     @Get(':id/comments')
+    @RequirePermissions('project:view')
     getComments(@Param('id') id: string) {
         return this.tasksService.getComments(id);
     }
 
     @Post(':id/comments')
+    @RequirePermissions('task:edit')
     addComment(
         @Param('id') id: string,
         @Body('content') content: string,
@@ -92,6 +103,7 @@ export class TasksController {
     }
 
     @Delete(':id/comments/:commentId')
+    @RequirePermissions('task:edit')
     deleteComment(
         @Param('commentId') commentId: string,
         @CurrentUser('sub') userId: string,
@@ -103,6 +115,7 @@ export class TasksController {
     // ---- Attachments ----
 
     @Post(':id/attachments')
+    @RequirePermissions('task:edit')
     @UseInterceptors(
         FileInterceptor('file', {
             storage: diskStorage({
@@ -134,6 +147,7 @@ export class TasksController {
     }
 
     @Delete(':id/attachments/:attachmentId')
+    @RequirePermissions('task:edit')
     deleteAttachment(
         @Param('attachmentId') attachmentId: string,
         @CurrentUser('sub') userId: string,

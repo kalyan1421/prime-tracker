@@ -60,6 +60,12 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
     (await p.actual.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   budgetLine: async (p, id) =>
     (await p.budgetLine.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  budgetRevision: async (p, id) =>
+    (await p.budgetRevision.findUnique({ where: { id }, select: { budgetLine: { select: { projectId: true } } } }))
+      ?.budgetLine?.projectId,
+  drawDocument: async (p, id) =>
+    (await p.drawDocument.findUnique({ where: { id }, select: { drawRequest: { select: { projectId: true } } } }))
+      ?.drawRequest?.projectId,
   cashflow: async (p, id) =>
     (await p.cashFlowEntry.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   contract: async (p, id) =>
@@ -113,6 +119,8 @@ const KEY_ENTITY: Record<string, string> = {
   budgetLineId: 'budgetLine',
   contractId: 'contract',
   drawId: 'draw',
+  revisionId: 'budgetRevision',
+  documentId: 'drawDocument',
 };
 
 // Controller class name → entity type that its bare ":id" route param refers to.

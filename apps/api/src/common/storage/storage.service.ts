@@ -20,9 +20,17 @@ export class StorageService {
     originalName: string,
     opts: { projectId?: string; projectName?: string; category?: string },
   ): string {
-    const folder1 = opts.projectId ?? 'misc';
-    const folder2 = (opts.category ?? 'general').toLowerCase();
-    const ext = extname(originalName);
+    // projectId/category come straight from the request body — strip anything that
+    // isn't a safe key segment so a value like "../../deploy" can't escape the object
+    // prefix and write elsewhere in the (shared) bucket. Path traversal hardening.
+    const safeSegment = (raw: string | undefined, fallback: string) => {
+      const cleaned = (raw ?? '').replace(/[^a-zA-Z0-9_-]/g, '');
+      return cleaned.length ? cleaned : fallback;
+    };
+    const folder1 = safeSegment(opts.projectId, 'misc');
+    const folder2 = safeSegment(opts.category?.toLowerCase(), 'general');
+    // extname of an attacker filename is bounded (last ".xyz"), but strip separators defensively.
+    const ext = extname(originalName).replace(/[^a-zA-Z0-9.]/g, '');
     const slug = opts.projectName
       ? opts.projectName.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
       : 'file';
