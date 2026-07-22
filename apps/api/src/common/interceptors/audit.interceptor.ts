@@ -7,6 +7,28 @@ import {
 import { Observable, tap } from 'rxjs';
 import { AuditService } from '../utils/audit.service';
 
+// Field names that must never be persisted in the immutable audit log (which
+// audit:view holders can read). Covers credentials and the loan fields the app
+// treats as sensitive/encrypted — otherwise every POST/PUT /loans body wrote a
+// permanent plaintext copy of lender/principal/rate/balance into AuditEvent.
+const SENSITIVE_KEYS = new Set([
+  'password', 'passwordhash', 'mfasecret', 'mfatoken', 'totp',
+  'token', 'accesstoken', 'refreshtoken', 'secret', 'clientsecret',
+  'lender', 'principalamt', 'interestrate', 'currentbalance',
+]);
+
+function redactSensitive(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSensitive);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = SENSITIVE_KEYS.has(k.toLowerCase()) ? '[REDACTED]' : redactSensitive(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
   constructor(private auditService: AuditService) {}
@@ -41,7 +63,9 @@ export class AuditInterceptor implements NestInterceptor {
           action: actionMap[method] || method,
           entity,
           entityId: entityId as string,
-          newValues: method !== 'DELETE' ? request.body : undefined,
+          newValues: method !== 'DELETE'
+            ? (redactSensitive(request.body) as Record<string, unknown> | undefined)
+            : undefined,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'],
         });

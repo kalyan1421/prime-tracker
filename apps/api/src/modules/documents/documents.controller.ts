@@ -13,6 +13,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
 import { UploadDocumentDto } from './dto/upload-document.dto';
+import { PresignedUploadDto } from './dto/presigned-upload.dto';
 import { Response } from 'express';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -34,7 +35,7 @@ export class DocumentsController {
   @Post('presigned-upload')
   @RequirePermissions('document:upload')
   @ApiOperation({ summary: 'Issue a presigned S3 upload URL for client-direct upload' })
-  presignedUpload(@Body() body: { filename: string; projectId?: string; projectName?: string; category?: string }) {
+  presignedUpload(@Body() body: PresignedUploadDto) {
     return this.storage.createPresignedUpload(body.filename, {
       projectId: body.projectId,
       projectName: body.projectName,
