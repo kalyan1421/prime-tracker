@@ -1814,6 +1814,18 @@ export function useRemoveDrawDocument() {
   });
 }
 
+export function useRenameDrawDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ documentId, filename }: { documentId: string; filename: string }) =>
+      api.patch(`/draws/documents/${documentId}`, { filename }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['draw'] });
+      qc.invalidateQueries({ queryKey: ['draw-checklist'] });
+    },
+  });
+}
+
 // Actuals (POSTed expenses) — for variance computation
 export function useActuals(projectId: string | undefined, buildingId?: string, unitId?: string) {
   return useQuery({

@@ -8,7 +8,7 @@ import { DrawApprovalStepper, type DrawApprovalStep } from './DrawApprovalSteppe
 import { DocumentChecklist, type DrawDocType, type ChecklistItem, type AttachedDocument } from './DocumentChecklist';
 import {
   useDraw, useDrawChecklist, useDrawWorkflow, useAttachDrawDocument, useRemoveDrawDocument,
-  usePresignedUpload,
+  useRenameDrawDocument, usePresignedUpload,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -51,7 +51,9 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
   const workflow = useDrawWorkflow();
   const attachDoc = useAttachDrawDocument();
   const removeDoc = useRemoveDrawDocument();
+  const renameDoc = useRenameDrawDocument();
   const presigned = usePresignedUpload();
+  const [uploadingType, setUploadingType] = useState<DrawDocType | null>(null);
   const { hasPermission } = useAuthStore();
   // draw:edit gates submit/return/cancel/document uploads; draw:approve gates
   // approve-internal/mark-funded/reject — mirrors the backend RBAC split in
@@ -99,6 +101,7 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
   };
 
   const handleUpload = async (type: DrawDocType, file: File) => {
+    setUploadingType(type);
     try {
       const { storagePath, filename } = await presigned.mutateAsync({
         file, projectId, projectName, category: 'draws',
@@ -107,6 +110,8 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
       addToast({ title: `Uploaded ${filename}`, color: 'success' });
     } catch (err: any) {
       addToast({ title: err?.message || 'Upload failed', color: 'danger' });
+    } finally {
+      setUploadingType(null);
     }
   };
 
@@ -255,13 +260,19 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
                 <DocumentChecklist
                   checklist={checklistItems}
                   attachments={documents}
-                  uploading={presigned.isPending || attachDoc.isPending}
+                  uploadingType={uploadingType}
                   readOnly={!canEdit}
                   onUpload={handleUpload}
                   onRemove={(id) => {
                     removeDoc.mutate(id, {
                       onSuccess: () => addToast({ title: 'Document removed', color: 'success' }),
                       onError: () => addToast({ title: 'Failed to remove document', color: 'danger' }),
+                    });
+                  }}
+                  onRename={(id, filename) => {
+                    renameDoc.mutate({ documentId: id, filename }, {
+                      onSuccess: () => addToast({ title: 'Document renamed', color: 'success' }),
+                      onError: (err: any) => addToast({ title: err?.response?.data?.message || 'Failed to rename document', color: 'danger' }),
                     });
                   }}
                 />

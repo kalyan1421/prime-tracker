@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Post, UseGuards, UseInterceptors,
+  Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { DrawDocType } from '@prisma/client';
@@ -103,6 +103,12 @@ export class DrawsController {
       uploadedById: userId,
       ...body,
     });
+  }
+
+  @Patch('documents/:documentId')
+  @RequirePermissions('draw:edit')
+  renameDocument(@Param('documentId') documentId: string, @Body() body: { filename: string }) {
+    return this.draws.renameDocument(documentId, body.filename);
   }
 
   @Delete('documents/:documentId')

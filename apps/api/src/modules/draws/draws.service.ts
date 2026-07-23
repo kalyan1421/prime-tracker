@@ -145,6 +145,14 @@ export class DrawsService {
     return this.prisma.drawDocument.delete({ where: { id: documentId } });
   }
 
+  async renameDocument(documentId: string, filename: string) {
+    const trimmed = filename.trim();
+    if (!trimmed) throw new BadRequestException('filename is required');
+    const doc = await this.prisma.drawDocument.findUnique({ where: { id: documentId } });
+    if (!doc) throw new NotFoundException('Document not found');
+    return this.prisma.drawDocument.update({ where: { id: documentId }, data: { filename: trimmed } });
+  }
+
   /**
    * Document checklist for a draw.
    * Returns each required type and whether at least one file of that type
