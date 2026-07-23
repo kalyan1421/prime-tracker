@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Card, CardBody, CardHeader, Chip, Button, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Select, SelectItem, Textarea, useDisclosure, addToast } from '@heroui/react';
 import {
-  LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid,
+  BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import { FiBarChart2, FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import {
-  useCampaigns, useCampaignPerformance, useCampaignSpendTrend, useCampaignSpendByCampaign,
+  useCampaigns, useCampaignPerformance, useCampaignSpendByCampaign,
   useCreateCampaign, useUpdateCampaign, useDeleteCampaign, useRecordCampaignSpend, useProjects,
 } from '../hooks/useApi';
 import { LoadingState, ErrorState, StatCard, EmptyState } from '../components/ui';
@@ -15,7 +15,7 @@ import { fmt, errMsg } from '../utils/fmt';
 const CHANNELS = ['META', 'GOOGLE_ADS', 'NEWSPAPER', 'BROKER', 'EMAIL', 'SIGNAGE', 'EVENT', 'OTHER'];
 const STATUSES = ['PLANNED', 'ACTIVE', 'PAUSED', 'COMPLETED'];
 
-// Stable color per channel so the trend chart legend doesn't reshuffle between renders.
+// Stable color per channel so chart/chip colors don't reshuffle between renders.
 const CHANNEL_FILL: Record<string, string> = {
   META:       '#3b82f6',
   GOOGLE_ADS: '#10b981',
@@ -44,7 +44,6 @@ export default function CampaignsPage() {
   const [projectId, setProjectId] = useState<string>('');
   const { data: projects } = useProjects();
   const { data: performance, isLoading: perfLoading } = useCampaignPerformance(projectId ? { projectId } : undefined);
-  const { data: trend } = useCampaignSpendTrend(projectId ? { projectId, monthsBack: 6 } : { monthsBack: 6 });
   const { data: campaigns } = useCampaigns(projectId ? { projectId } : undefined);
   const { data: spendByCampaign } = useCampaignSpendByCampaign(projectId ? { projectId } : undefined);
 
@@ -59,8 +58,6 @@ export default function CampaignsPage() {
   if (perfLoading) return <LoadingState />;
 
   const perf = (performance as any[]) || [];
-  const trendData = (trend as any)?.series || [];
-  const channels: string[] = (trend as any)?.channels || [];
   const byCampaign = (spendByCampaign as any[]) || [];
 
   // KPI rollup across the full performance table.
@@ -126,59 +123,6 @@ export default function CampaignsPage() {
         <StatCard label="Leads / conversions" value={`${totalLeads} / ${totalConverted}`} />
         <StatCard label="Overall ROI" value={overallRoi != null ? `${overallRoi.toFixed(2)}x` : '—'} />
       </div>
-
-      {/* Monthly spend chart */}
-      <Card shadow="sm">
-        <CardHeader className="pb-2">
-          <p className="font-semibold text-sm text-gray-700">Monthly spend by channel (last 6 months)</p>
-        </CardHeader>
-        <CardBody className="pt-0">
-          {trendData.length === 0 || channels.length === 0 ? (
-            <div className="text-sm text-gray-400 text-center py-12">No spend logged yet.</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={trendData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} tickFormatter={(n) => `$${n.toLocaleString()}`} />
-                <Tooltip formatter={(v: number) => fmt(v)} />
-                <Legend />
-                {channels.map((ch) => (
-                  <Line key={ch} type="monotone" dataKey={ch} stroke={CHANNEL_FILL[ch] || '#94a3b8'} strokeWidth={2} dot={{ r: 3 }} />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </CardBody>
-      </Card>
-
-      {/* Spend by campaign — unlike the trend chart above (channel/month buckets,
-          last 6 months only), this always includes every campaign, even ones with
-          $0 spend so far, so nothing is silently missing from the visualization. */}
-      <Card shadow="sm">
-        <CardHeader className="pb-2">
-          <p className="font-semibold text-sm text-gray-700">Spend by campaign</p>
-        </CardHeader>
-        <CardBody className="pt-0">
-          {byCampaign.length === 0 ? (
-            <div className="text-sm text-gray-400 text-center py-12">No campaigns yet.</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={Math.max(200, byCampaign.length * 36)}>
-              <BarChart data={byCampaign} layout="vertical" margin={{ top: 8, right: 24, bottom: 0, left: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(n) => `$${n.toLocaleString()}`} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={140} />
-                <Tooltip formatter={(v: number) => fmt(v)} />
-                <Bar dataKey="totalSpend" radius={[0, 4, 4, 0]}>
-                  {byCampaign.map((c: any) => (
-                    <Cell key={c.campaignId} fill={CHANNEL_FILL[c.channel] || '#94a3b8'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </CardBody>
-      </Card>
 
       {/* Performance table */}
       <Card shadow="sm">
@@ -258,6 +202,33 @@ export default function CampaignsPage() {
                 ))}
               </tbody>
             </table>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Spend by campaign — always includes every campaign, even ones with $0
+          spend so far, so nothing is silently missing from the visualization. */}
+      <Card shadow="sm">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-700">Spend by campaign</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          {byCampaign.length === 0 ? (
+            <div className="text-sm text-gray-400 text-center py-12">No campaigns yet.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(200, byCampaign.length * 36)}>
+              <BarChart data={byCampaign} layout="vertical" margin={{ top: 8, right: 24, bottom: 0, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(n) => `$${n.toLocaleString()}`} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={140} />
+                <Tooltip formatter={(v: number) => fmt(v)} />
+                <Bar dataKey="totalSpend" radius={[0, 4, 4, 0]}>
+                  {byCampaign.map((c: any) => (
+                    <Cell key={c.campaignId} fill={CHANNEL_FILL[c.channel] || '#94a3b8'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           )}
         </CardBody>
       </Card>
