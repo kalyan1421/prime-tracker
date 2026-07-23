@@ -1166,6 +1166,7 @@ export function useUpdateDraw() {
       amount?: number;
       requestedAmount?: number;
       requestDate?: string;
+      expectedFundingDate?: string;
       notes?: string;
     }) =>
       api.patch(`/loans/draws/${id}`, data).then((r) => r.data),

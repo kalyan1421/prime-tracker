@@ -93,6 +93,11 @@ export class CreateDrawDto {
   @IsOptional() @IsDateString()
   requestDate?: string;
 
+  // Manual input for the same field the milestone-auto-draft path sets automatically
+  // (+14 days) — lets DrawFundingOverdueCron cover manually-created draws too.
+  @IsOptional() @IsDateString()
+  expectedFundingDate?: string;
+
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
 }
@@ -106,6 +111,9 @@ export class UpdateDrawDto {
 
   @IsOptional() @IsDateString()
   requestDate?: string;
+
+  @IsOptional() @IsDateString()
+  expectedFundingDate?: string;
 
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;

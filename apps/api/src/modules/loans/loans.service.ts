@@ -204,6 +204,7 @@ export class LoansService {
           amount: requestedAmt,
           requestedAmount: requestedAmt,
           requestDate: data.requestDate ? new Date(data.requestDate) : new Date(),
+          expectedFundingDate: data.expectedFundingDate ? new Date(data.expectedFundingDate) : null,
           status: DrawStatus.DRAFT,
           notes: data.notes,
           createdById: userId,
@@ -263,7 +264,7 @@ export class LoansService {
     return updated;
   }
 
-  async updateDraw(id: string, data: { amount?: number; requestedAmount?: number; requestDate?: string; notes?: string }) {
+  async updateDraw(id: string, data: { amount?: number; requestedAmount?: number; requestDate?: string; expectedFundingDate?: string; notes?: string }) {
     const draw = await this.prisma.drawRequest.findUnique({ where: { id } });
     if (!draw) throw new NotFoundException('Draw request not found');
     if (draw.status !== DrawStatus.DRAFT) {
@@ -275,6 +276,9 @@ export class LoansService {
     if (data.amount !== undefined) updateData.amount = data.amount;
     else if (data.requestedAmount !== undefined) updateData.amount = data.requestedAmount;
     if (data.requestDate !== undefined) updateData.requestDate = new Date(data.requestDate);
+    if (data.expectedFundingDate !== undefined) {
+      updateData.expectedFundingDate = data.expectedFundingDate ? new Date(data.expectedFundingDate) : null;
+    }
     if (data.notes !== undefined) updateData.notes = data.notes;
 
     return this.prisma.drawRequest.update({ where: { id }, data: updateData });

@@ -5244,7 +5244,7 @@ const DRAW_STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'se
   REJECTED: 'danger',
 };
 
-const EMPTY_DRAW = { loanId: '', requestedAmount: '', requestDate: '', notes: '' };
+const EMPTY_DRAW = { loanId: '', requestedAmount: '', requestDate: '', expectedFundingDate: '', notes: '' };
 const EMPTY_SCHEDULE_LINE = { drawNumber: '', plannedAmount: '', plannedDate: '', description: '' };
 
 const EMPTY_LOAN = {
@@ -5312,6 +5312,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
       loanId: draw.loanId || '',
       requestedAmount: String(draw.requestedAmount ?? draw.amount ?? ''),
       requestDate: draw.requestDate ? String(draw.requestDate).slice(0, 10) : '',
+      expectedFundingDate: draw.expectedFundingDate ? String(draw.expectedFundingDate).slice(0, 10) : '',
       notes: draw.notes || '',
     });
     onOpen();
@@ -5325,6 +5326,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
           projectId,
           requestedAmount: form.requestedAmount ? parseFloat(form.requestedAmount) : undefined,
           requestDate: form.requestDate || undefined,
+          expectedFundingDate: form.expectedFundingDate || undefined,
           notes: form.notes,
         });
         addToast({ title: 'Draw request updated', color: 'success' });
@@ -5332,7 +5334,10 @@ function DrawsTab({ projectId }: { projectId: string }) {
         setEditingDrawId(null);
         onClose();
       } else {
-        const created = await createDraw.mutateAsync({ loanId: form.loanId, projectId, requestedAmount: form.requestedAmount, notes: form.notes });
+        const created = await createDraw.mutateAsync({
+          loanId: form.loanId, projectId, requestedAmount: form.requestedAmount,
+          expectedFundingDate: form.expectedFundingDate || undefined, notes: form.notes,
+        });
         addToast({ title: 'Draw request created', color: 'success' });
         setForm(EMPTY_DRAW);
         onClose();
@@ -5619,6 +5624,10 @@ function DrawsTab({ projectId }: { projectId: string }) {
             </Select>
             <Input label="Requested Amount ($)" type="number" value={form.requestedAmount} onChange={set('requestedAmount')} />
             <Input label="Request Date" type="date" value={form.requestDate} onChange={set('requestDate')} />
+            <Input
+              label="Expected Funding Date" type="date" value={form.expectedFundingDate} onChange={set('expectedFundingDate')}
+              description="If not funded by this date, Founder/Finance/AR-AP get an overdue alert"
+            />
             <Textarea label="Notes" value={form.notes} onChange={set('notes')} minRows={2} />
           </ModalBody>
           <ModalFooter>
