@@ -971,6 +971,13 @@ export function useCampaignSpendTrend(params?: { projectId?: string; monthsBack?
   });
 }
 
+export function useCampaignSpendByCampaign(params?: { projectId?: string }) {
+  return useQuery({
+    queryKey: ['campaigns', 'spend-by-campaign', params],
+    queryFn: () => api.get('/campaigns/spend-by-campaign', { params }).then((r) => r.data),
+  });
+}
+
 export function useCreateCampaign() {
   const qc = useQueryClient();
   return useMutation({

@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardBody, CardHeader, Chip, Button, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Select, SelectItem, Textarea, useDisclosure, addToast } from '@heroui/react';
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid,
+  LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid,
 } from 'recharts';
-import { FiBarChart2, FiPlus, FiDollarSign, FiTarget, FiTrendingUp, FiActivity } from 'react-icons/fi';
+import { FiBarChart2, FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import {
-  useCampaigns, useCampaignPerformance, useCampaignSpendTrend, useCreateCampaign, useRecordCampaignSpend, useProjects,
+  useCampaigns, useCampaignPerformance, useCampaignSpendTrend, useCampaignSpendByCampaign,
+  useCreateCampaign, useUpdateCampaign, useDeleteCampaign, useRecordCampaignSpend, useProjects,
 } from '../hooks/useApi';
 import { LoadingState, ErrorState, StatCard, EmptyState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
+import { fmt, errMsg } from '../utils/fmt';
 
 const CHANNELS = ['META', 'GOOGLE_ADS', 'NEWSPAPER', 'BROKER', 'EMAIL', 'SIGNAGE', 'EVENT', 'OTHER'];
 const STATUSES = ['PLANNED', 'ACTIVE', 'PAUSED', 'COMPLETED'];
@@ -32,28 +34,34 @@ const STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'warning'
   COMPLETED: 'primary',
 };
 
-const fmtMoney = (n: number) => n >= 1_00_000 ? `₹${(n / 1_00_000).toFixed(1)}L` : `₹${n.toLocaleString()}`;
-
 export default function CampaignsPage() {
   const { hasPermission } = useAuthStore();
   const canCreate = hasPermission('campaign:create');
   const canSpend = hasPermission('campaign:spend');
+  const canEdit = hasPermission('campaign:edit');
+  const canDelete = hasPermission('campaign:delete');
 
   const [projectId, setProjectId] = useState<string>('');
   const { data: projects } = useProjects();
   const { data: performance, isLoading: perfLoading } = useCampaignPerformance(projectId ? { projectId } : undefined);
   const { data: trend } = useCampaignSpendTrend(projectId ? { projectId, monthsBack: 6 } : { monthsBack: 6 });
   const { data: campaigns } = useCampaigns(projectId ? { projectId } : undefined);
+  const { data: spendByCampaign } = useCampaignSpendByCampaign(projectId ? { projectId } : undefined);
 
-  const newModal = useDisclosure();
+  const formModal = useDisclosure();
   const spendModal = useDisclosure();
+  const deleteModal = useDisclosure();
   const [spendTarget, setSpendTarget] = useState<any>(null);
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const deleteCampaign = useDeleteCampaign();
 
   if (perfLoading) return <LoadingState />;
 
   const perf = (performance as any[]) || [];
   const trendData = (trend as any)?.series || [];
   const channels: string[] = (trend as any)?.channels || [];
+  const byCampaign = (spendByCampaign as any[]) || [];
 
   // KPI rollup across the full performance table.
   const totalSpend = perf.reduce((s, c) => s + c.totalSpend, 0);
@@ -62,6 +70,26 @@ export default function CampaignsPage() {
   const totalRevenue = perf.reduce((s, c) => s + c.convertedRevenue, 0);
   const overallRoi = totalSpend > 0 ? totalRevenue / totalSpend : null;
   const activeCount = ((campaigns as any[]) || []).filter((c: any) => c.status === 'ACTIVE').length;
+
+  // Full campaign records (with projectId, dates, notes, etc.) keyed by id — the
+  // performance rows only carry aggregate/report fields, not the raw editable ones.
+  const campaignsById = new Map(((campaigns as any[]) || []).map((c: any) => [c.id, c]));
+
+  const openCreate = () => { setEditTarget(null); formModal.onOpen(); };
+  const openEdit = (c: any) => { setEditTarget(campaignsById.get(c.campaignId) ?? null); formModal.onOpen(); };
+  const openDelete = (c: any) => { setDeleteTarget(c); deleteModal.onOpen(); };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteCampaign.mutateAsync(deleteTarget.campaignId);
+      addToast({ title: 'Campaign deleted', color: 'success' });
+      deleteModal.onClose();
+      setDeleteTarget(null);
+    } catch (err) {
+      addToast({ title: errMsg(err, 'Failed to delete campaign'), color: 'danger' });
+    }
+  };
 
   return (
     <div className="p-6 space-y-4 max-w-7xl mx-auto">
@@ -84,7 +112,7 @@ export default function CampaignsPage() {
             ))}
           </select>
           {canCreate && (
-            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={newModal.onOpen}>
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
               New Campaign
             </Button>
           )}
@@ -94,7 +122,7 @@ export default function CampaignsPage() {
       {/* KPI tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Active campaigns" value={activeCount.toString()} />
-        <StatCard label="Total spend" value={fmtMoney(totalSpend)} />
+        <StatCard label="Total spend" value={fmt(totalSpend)} />
         <StatCard label="Leads / conversions" value={`${totalLeads} / ${totalConverted}`} />
         <StatCard label="Overall ROI" value={overallRoi != null ? `${overallRoi.toFixed(2)}x` : '—'} />
       </div>
@@ -112,13 +140,41 @@ export default function CampaignsPage() {
               <LineChart data={trendData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} tickFormatter={(n) => n >= 1_00_000 ? `${(n / 1_00_000).toFixed(1)}L` : n.toLocaleString()} />
-                <Tooltip formatter={(v: number) => fmtMoney(v)} />
+                <YAxis tick={{ fontSize: 12 }} tickFormatter={(n) => `$${n.toLocaleString()}`} />
+                <Tooltip formatter={(v: number) => fmt(v)} />
                 <Legend />
                 {channels.map((ch) => (
                   <Line key={ch} type="monotone" dataKey={ch} stroke={CHANNEL_FILL[ch] || '#94a3b8'} strokeWidth={2} dot={{ r: 3 }} />
                 ))}
               </LineChart>
+            </ResponsiveContainer>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Spend by campaign — unlike the trend chart above (channel/month buckets,
+          last 6 months only), this always includes every campaign, even ones with
+          $0 spend so far, so nothing is silently missing from the visualization. */}
+      <Card shadow="sm">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-700">Spend by campaign</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          {byCampaign.length === 0 ? (
+            <div className="text-sm text-gray-400 text-center py-12">No campaigns yet.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(200, byCampaign.length * 36)}>
+              <BarChart data={byCampaign} layout="vertical" margin={{ top: 8, right: 24, bottom: 0, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(n) => `$${n.toLocaleString()}`} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={140} />
+                <Tooltip formatter={(v: number) => fmt(v)} />
+                <Bar dataKey="totalSpend" radius={[0, 4, 4, 0]}>
+                  {byCampaign.map((c: any) => (
+                    <Cell key={c.campaignId} fill={CHANNEL_FILL[c.channel] || '#94a3b8'} />
+                  ))}
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
           )}
         </CardBody>
@@ -134,7 +190,7 @@ export default function CampaignsPage() {
             <EmptyState
               title="No campaigns yet"
               message="Create a campaign to start tracking ad spend and lead attribution."
-              action={canCreate ? <Button size="sm" color="primary" startContent={<FiPlus />} onPress={newModal.onOpen}>New Campaign</Button> : null}
+              action={canCreate ? <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>New Campaign</Button> : null}
             />
           ) : (
             <table className="w-full text-sm">
@@ -167,11 +223,11 @@ export default function CampaignsPage() {
                         {c.status}
                       </Chip>
                     </td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{fmtMoney(c.totalSpend)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{fmt(c.totalSpend)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">{c.leadCount}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">{c.convertedCount}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-gray-600">{c.cpl != null ? fmtMoney(c.cpl) : '—'}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-gray-600">{c.cpa != null ? fmtMoney(c.cpa) : '—'}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-gray-600">{c.cpl != null ? fmt(c.cpl) : '—'}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-gray-600">{c.cpa != null ? fmt(c.cpa) : '—'}</td>
                     <td className="py-2 pr-3 text-right tabular-nums font-medium">
                       {c.roi != null ? (
                         <span className={c.roi >= 1 ? 'text-emerald-600' : 'text-rose-600'}>
@@ -180,11 +236,23 @@ export default function CampaignsPage() {
                       ) : '—'}
                     </td>
                     <td className="py-2 text-right">
-                      {canSpend && (
-                        <Button size="sm" variant="light" onPress={() => { setSpendTarget(c); spendModal.onOpen(); }}>
-                          + Spend
-                        </Button>
-                      )}
+                      <div className="flex items-center justify-end gap-1">
+                        {canSpend && (
+                          <Button size="sm" variant="light" onPress={() => { setSpendTarget(c); spendModal.onOpen(); }}>
+                            + Spend
+                          </Button>
+                        )}
+                        {canEdit && (
+                          <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(c)} aria-label="Edit campaign">
+                            <FiEdit2 className="text-xs text-gray-400" />
+                          </Button>
+                        )}
+                        {canDelete && (
+                          <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openDelete(c)} aria-label="Delete campaign">
+                            <FiTrash2 className="text-xs" />
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -194,59 +262,108 @@ export default function CampaignsPage() {
         </CardBody>
       </Card>
 
-      <NewCampaignModal isOpen={newModal.isOpen} onClose={newModal.onClose} projects={(projects as any[]) || []} />
+      <CampaignFormModal isOpen={formModal.isOpen} onClose={() => { formModal.onClose(); setEditTarget(null); }} projects={(projects as any[]) || []} campaign={editTarget} />
       {spendTarget && (
         <RecordSpendModal isOpen={spendModal.isOpen} onClose={() => { spendModal.onClose(); setSpendTarget(null); }} campaign={spendTarget} />
       )}
+      <Modal isOpen={deleteModal.isOpen} onClose={deleteModal.onClose} size="sm">
+        <ModalContent>
+          <ModalHeader>Delete campaign?</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-gray-600">
+              Delete <span className="font-medium text-gray-800">{deleteTarget?.name}</span>? It will be removed from
+              lists and dashboards; historical spend and lead attribution are preserved.
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={deleteModal.onClose}>Cancel</Button>
+            <Button size="sm" color="danger" onPress={handleDelete} isLoading={deleteCampaign.isPending}>Delete</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }
 
-// ---- New Campaign modal ----
+// ---- New / Edit Campaign modal ----
 
-function NewCampaignModal({ isOpen, onClose, projects }: { isOpen: boolean; onClose: () => void; projects: any[] }) {
+const EMPTY_CAMPAIGN_FORM = { name: '', channel: 'META', projectId: '', plannedBudget: '', status: 'ACTIVE', startDate: '', endDate: '', externalId: '', notes: '' };
+
+function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: boolean; onClose: () => void; projects: any[]; campaign?: any }) {
   const create = useCreateCampaign();
-  const [form, setForm] = useState({ name: '', channel: 'META', projectId: '', plannedBudget: '', status: 'ACTIVE', startDate: '', endDate: '', externalId: '', notes: '' });
+  const update = useUpdateCampaign();
+  const isEdit = !!campaign;
+  const [form, setForm] = useState(EMPTY_CAMPAIGN_FORM);
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Re-seed the form whenever the modal opens, from the campaign being edited
+  // (or blank for create). Project is intentionally excluded from edit payloads —
+  // UpdateCampaignDto has no projectId field, so it can't be changed after creation.
+  useEffect(() => {
+    if (!isOpen) return;
+    setForm(campaign ? {
+      name: campaign.name ?? '',
+      channel: campaign.channel ?? 'META',
+      projectId: campaign.projectId ?? '',
+      plannedBudget: campaign.plannedBudget != null ? String(campaign.plannedBudget) : '',
+      status: campaign.status ?? 'ACTIVE',
+      startDate: campaign.startDate ? String(campaign.startDate).slice(0, 10) : '',
+      endDate: campaign.endDate ? String(campaign.endDate).slice(0, 10) : '',
+      externalId: campaign.externalId ?? '',
+      notes: campaign.notes ?? '',
+    } : EMPTY_CAMPAIGN_FORM);
+  }, [isOpen, campaign]);
 
   const submit = async () => {
     if (!form.name.trim() || !form.channel) {
       addToast({ title: 'Name and channel are required', color: 'warning' });
       return;
     }
+    const shared = {
+      name: form.name.trim(),
+      channel: form.channel,
+      plannedBudget: form.plannedBudget ? parseFloat(form.plannedBudget) : undefined,
+      status: form.status,
+      startDate: form.startDate || undefined,
+      endDate: form.endDate || undefined,
+      externalId: form.externalId || undefined,
+      notes: form.notes || undefined,
+    };
     try {
-      await create.mutateAsync({
-        name: form.name.trim(),
-        channel: form.channel,
-        projectId: form.projectId || undefined,
-        plannedBudget: form.plannedBudget ? parseFloat(form.plannedBudget) : undefined,
-        status: form.status,
-        startDate: form.startDate || undefined,
-        endDate: form.endDate || undefined,
-        externalId: form.externalId || undefined,
-        notes: form.notes || undefined,
-      });
-      addToast({ title: 'Campaign created', color: 'success' });
+      if (isEdit) {
+        await update.mutateAsync({ id: campaign.id, data: shared });
+        addToast({ title: 'Campaign updated', color: 'success' });
+      } else {
+        await create.mutateAsync({ ...shared, projectId: form.projectId || undefined });
+        addToast({ title: 'Campaign created', color: 'success' });
+      }
       onClose();
-      setForm({ name: '', channel: 'META', projectId: '', plannedBudget: '', status: 'ACTIVE', startDate: '', endDate: '', externalId: '', notes: '' });
-    } catch {
-      addToast({ title: 'Failed to create campaign', color: 'danger' });
+    } catch (err) {
+      addToast({ title: errMsg(err, isEdit ? 'Failed to update campaign' : 'Failed to create campaign'), color: 'danger' });
     }
   };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="lg" scrollBehavior="inside">
       <ModalContent>
-        <ModalHeader>New Campaign</ModalHeader>
+        <ModalHeader>{isEdit ? 'Edit Campaign' : 'New Campaign'}</ModalHeader>
         <ModalBody>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input size="sm" label="Name *" value={form.name} onChange={(e) => set('name', e.target.value)} className="sm:col-span-2" />
             <Select size="sm" label="Channel *" selectedKeys={new Set([form.channel])} onSelectionChange={(k) => set('channel', Array.from(k)[0] as string)}>
               {CHANNELS.map((c) => <SelectItem key={c}>{c.replace('_', ' ')}</SelectItem>)}
             </Select>
-            <Select size="sm" label="Project" placeholder="Portfolio-wide" selectedKeys={form.projectId ? new Set([form.projectId]) : new Set()} onSelectionChange={(k) => set('projectId', (Array.from(k)[0] as string) || '')}>
-              {projects.map((p) => <SelectItem key={p.id}>{p.name}</SelectItem>)}
-            </Select>
+            {isEdit ? (
+              <Input size="sm" label="Project" isReadOnly isDisabled value={campaign.project?.name ?? 'All Projects (portfolio-wide)'}
+                description="Project can't be changed after a campaign is created" />
+            ) : (
+              <Select size="sm" label="Project" placeholder="Portfolio-wide" selectedKeys={form.projectId ? new Set([form.projectId]) : new Set()} onSelectionChange={(k) => set('projectId', (Array.from(k)[0] as string) || '')}>
+                <>
+                  <SelectItem key="">All Projects (portfolio-wide)</SelectItem>
+                  {projects.map((p) => <SelectItem key={p.id}>{p.name}</SelectItem>)}
+                </>
+              </Select>
+            )}
             <Input size="sm" label="Planned budget" type="number" value={form.plannedBudget} onChange={(e) => set('plannedBudget', e.target.value)} />
             <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => set('status', Array.from(k)[0] as string)}>
               {STATUSES.map((s) => <SelectItem key={s}>{s}</SelectItem>)}
@@ -259,7 +376,7 @@ function NewCampaignModal({ isOpen, onClose, projects }: { isOpen: boolean; onCl
         </ModalBody>
         <ModalFooter>
           <Button size="sm" variant="light" onPress={onClose}>Cancel</Button>
-          <Button size="sm" color="primary" onPress={submit} isLoading={create.isPending}>Create</Button>
+          <Button size="sm" color="primary" onPress={submit} isLoading={create.isPending || update.isPending}>{isEdit ? 'Save Changes' : 'Create'}</Button>
         </ModalFooter>
       </ModalContent>
     </Modal>
@@ -292,8 +409,7 @@ function RecordSpendModal({ isOpen, onClose, campaign }: { isOpen: boolean; onCl
       onClose();
       setForm({ amount: '', spentOn: new Date().toISOString().slice(0, 10), source: 'MANUAL', externalRef: '' });
     } catch (err: any) {
-      const msg = err?.response?.data?.message ?? 'Failed to record spend';
-      addToast({ title: msg, color: 'danger' });
+      addToast({ title: errMsg(err, 'Failed to record spend'), color: 'danger' });
     }
   };
 

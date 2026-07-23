@@ -189,18 +189,22 @@ export class CampaignsService {
    * Months with no spend on a channel are emitted as zero so the line chart has
    * continuous data points instead of gaps.
    */
-  async spendTrend(params: { projectId?: string; monthsBack?: number } = {}) {
+  async spendTrend(params: { projectId?: string; monthsBack?: number; viewer?: { userId: string; role: string } } = {}) {
     const monthsBack = Math.max(1, Math.min(24, params.monthsBack ?? 6));
     const now = new Date();
     const startMonth = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1), 1);
 
+    const campaignWhere: Prisma.CampaignWhereInput = { deletedAt: null };
+    if (params.projectId) campaignWhere.projectId = params.projectId;
+    else {
+      const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
+      if (scopeIds) campaignWhere.projectId = { in: scopeIds };
+    }
+
     const spend = await this.prisma.campaignSpend.findMany({
       where: {
         spentOn: { gte: startMonth },
-        campaign: {
-          deletedAt: null,
-          ...(params.projectId ? { projectId: params.projectId } : {}),
-        },
+        campaign: campaignWhere,
       },
       select: {
         amount: true,
@@ -235,6 +239,36 @@ export class CampaignsService {
     });
 
     return { months: monthsBack, channels, series };
+  }
+
+  /**
+   * Total spend per campaign (all non-deleted campaigns, including $0-spend ones).
+   * Powers the "Spend by campaign" bar chart — unlike spendTrend() (channel/month
+   * buckets, last N months only), this always includes every campaign so it's
+   * visible even before any spend has been logged.
+   */
+  async spendByCampaign(params: { projectId?: string; viewer?: { userId: string; role: string } } = {}) {
+    const where: Prisma.CampaignWhereInput = { deletedAt: null };
+    if (params.projectId) where.projectId = params.projectId;
+    else {
+      const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
+      if (scopeIds) where.projectId = { in: scopeIds };
+    }
+
+    const campaigns = await this.prisma.campaign.findMany({
+      where,
+      select: { id: true, name: true, channel: true, status: true, spend: { select: { amount: true } } },
+    });
+
+    return campaigns
+      .map((c) => ({
+        campaignId: c.id,
+        name: c.name,
+        channel: c.channel,
+        status: c.status,
+        totalSpend: c.spend.reduce((sum, s) => sum + Number(s.amount), 0),
+      }))
+      .sort((a, b) => b.totalSpend - a.totalSpend);
   }
 
   // ---- Performance / attribution report ----

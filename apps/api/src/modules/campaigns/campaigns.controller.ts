@@ -53,8 +53,25 @@ export class CampaignsController {
   spendTrend(
     @Query('projectId') projectId?: string,
     @Query('monthsBack') monthsBack?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
   ) {
-    return this.service.spendTrend({ projectId, monthsBack: monthsBack ? parseInt(monthsBack, 10) : undefined });
+    return this.service.spendTrend({
+      projectId,
+      monthsBack: monthsBack ? parseInt(monthsBack, 10) : undefined,
+      viewer: userId && role ? { userId, role } : undefined,
+    });
+  }
+
+  @Get('spend-by-campaign')
+  @RequirePermissions('campaign:view')
+  @ApiOperation({ summary: 'Total spend per campaign (all campaigns, including $0 spend)' })
+  spendByCampaign(
+    @Query('projectId') projectId?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+  ) {
+    return this.service.spendByCampaign({ projectId, viewer: userId && role ? { userId, role } : undefined });
   }
 
   @Get(':id')
