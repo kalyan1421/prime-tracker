@@ -170,7 +170,7 @@ export class ProjectHealthService {
   private async salesScore(projectId: string) {
     const buildings = await this.prisma.building.findMany({
       where: { projectId },
-      select: { units: { select: { status: true, availableSince: true } } },
+      select: { units: { where: { deletedAt: null }, select: { status: true, availableSince: true } } },
     });
     const allUnits = buildings.flatMap((b) => b.units);
 
