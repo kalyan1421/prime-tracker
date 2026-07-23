@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Put, Delete, Param, Body, Query,
+  Controller, Get, Post, Put, Patch, Delete, Param, Body, Query,
   UseGuards, UseInterceptors, ParseBoolPipe, DefaultValuePipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
@@ -11,6 +11,7 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
+import { ReorderBuildingsDto } from './dto/reorder-buildings.dto';
 
 @ApiTags('Buildings')
 @ApiBearerAuth()
@@ -25,6 +26,13 @@ export class BuildingsController {
   @ApiOperation({ summary: 'List buildings by project' })
   findByProject(@Query('projectId') projectId: string) {
     return this.service.findByProject(projectId);
+  }
+
+  @Patch('reorder')
+  @RequirePermissions('building:edit')
+  @ApiOperation({ summary: 'Persist a new building display order within a project' })
+  reorder(@Body() body: ReorderBuildingsDto) {
+    return this.service.reorder(body.projectId, body.buildingIds);
   }
 
   @Get(':id')

@@ -241,6 +241,7 @@ model Building {
   // Project.phase is computed = max(buildings.phase) — see ProjectPhaseService.
   phase          String  @default("PRE_DEVELOPMENT")
   coverPhotoPath String? // optional cover photo (Supabase storage path)
+  sortOrder      Int           @default(0) // manual display order within a project (drag-to-reorder)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   deletedAt      DateTime? // soft-delete
@@ -263,6 +264,7 @@ model Building {
   dailyLogs        DailyLog[]
 
   @@index([projectId])
+  @@index([projectId, sortOrder])
   @@index([phase])
   @@index([deletedAt])
   @@map("buildings")

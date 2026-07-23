@@ -1,5 +1,6 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Reorder, useDragControls } from 'framer-motion';
 import {
   Card, CardBody, CardHeader, Button, Tabs, Tab, Progress, Chip, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -9,7 +10,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare, FiMove } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
@@ -30,7 +31,7 @@ import {
   useCreateCommitment, useUpdateCommitment, useDeleteCommitment,
   useCreateBudget, useUpdateBudget, useDeleteBudget, useProjectBudgetRevisions, useSetApprovedBudget,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
-  useCreateBuilding, useUpdateBuilding, useDeleteBuilding,
+  useCreateBuilding, useUpdateBuilding, useDeleteBuilding, useReorderBuildings,
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
   useProjectDraws, useCreateDraw, useUpdateDraw, useDeleteDraw,
@@ -3805,6 +3806,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
   const createBuilding = useCreateBuilding();
   const updateBuilding = useUpdateBuilding();
   const deleteBuilding = useDeleteBuilding();
+  const reorderBuildings = useReorderBuildings();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
@@ -3816,6 +3818,29 @@ function BuildingsTab({ projectId }: { projectId: string }) {
   const [forceDelete, setForceDelete] = useState(false);
   const [buildingSearch, setBuildingSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [isReorderMode, setIsReorderMode] = useState(false);
+  const [orderedBuildings, setOrderedBuildings] = useState<any[]>([]);
+
+  const allBuildingsRaw = (data as any[]) || [];
+  // Reorder mode always works on the full, unfiltered, server-order list — dragging
+  // within a filtered/search subset would silently corrupt the persisted order for
+  // buildings that are hidden by the current filter.
+  useEffect(() => {
+    if (!isReorderMode) setOrderedBuildings(allBuildingsRaw);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, isReorderMode]);
+
+  const handleReorderDragEnd = () => {
+    reorderBuildings.mutate(
+      { projectId, buildingIds: orderedBuildings.map((b) => b.id) },
+      {
+        onError: (e) => {
+          addToast({ title: errMsg(e, 'Failed to save building order — reverted'), color: 'danger' });
+          setOrderedBuildings(allBuildingsRaw);
+        },
+      },
+    );
+  };
 
   const openCreate = () => {
     setEditId(null);
@@ -3914,7 +3939,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     if (formErrors[field]) setFormErrors((errs) => ({ ...errs, [field]: '' }));
   };
 
-  const allBuildings = (data as any[]) || [];
+  const allBuildings = allBuildingsRaw;
   const searchLower = buildingSearch.trim().toLowerCase();
   const buildings = allBuildings.filter((b: any) => {
     if (typeFilter && b.buildingType !== typeFilter) return false;
@@ -3927,7 +3952,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     <div className="mt-4">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
-          {!isLoading && (
+          {!isLoading && !isReorderMode && (
             <p className="font-semibold text-sm text-gray-600">
               {buildings.length} building{buildings.length !== 1 ? '' : ''}
               {buildings.length !== allBuildings.length && (
@@ -3935,7 +3960,12 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               )}
             </p>
           )}
-          {allBuildings.length > 0 && (
+          {isReorderMode && (
+            <p className="text-sm text-gray-500 flex items-center gap-1.5">
+              <FiMove className="text-gray-400" /> Drag a building by its handle to reorder.
+            </p>
+          )}
+          {!isReorderMode && allBuildings.length > 0 && (
             <Input
               size="sm"
               placeholder="Search building name…"
@@ -3948,7 +3978,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               aria-label="Search buildings by name"
             />
           )}
-          {buildingTypes.length > 1 && (
+          {!isReorderMode && buildingTypes.length > 1 && (
             <Select
               size="sm"
               aria-label="Filter by building type"
@@ -3962,7 +3992,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               ))}
             </Select>
           )}
-          {(buildingSearch || typeFilter) && (
+          {!isReorderMode && (buildingSearch || typeFilter) && (
             <Button
               size="sm"
               variant="light"
@@ -3972,15 +4002,40 @@ function BuildingsTab({ projectId }: { projectId: string }) {
             </Button>
           )}
         </div>
-        {canEdit && (
-          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
-            Add Building
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {canEdit && allBuildings.length > 1 && (
+            <Button
+              size="sm"
+              variant={isReorderMode ? 'solid' : 'flat'}
+              color={isReorderMode ? 'primary' : 'default'}
+              startContent={<FiMove />}
+              onPress={() => setIsReorderMode((v) => !v)}
+            >
+              {isReorderMode ? 'Done Reordering' : 'Reorder Buildings'}
+            </Button>
+          )}
+          {canEdit && !isReorderMode && (
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
+              Add Building
+            </Button>
+          )}
+        </div>
       </div>
 
+      {/* Reorder mode: single-column drag list. framer-motion's Reorder.Group assumes
+          a single axis, so it can't drive the multi-column card grid below directly —
+          this mode swaps to a single-column list for the duration of the drag session
+          instead of fighting that mismatch. */}
+      {isReorderMode && (
+        <Reorder.Group as="div" axis="y" values={orderedBuildings} onReorder={setOrderedBuildings} className="flex flex-col gap-2">
+          {orderedBuildings.map((b: any) => (
+            <ReorderableBuildingRow key={b.id} building={b} onDragEnd={handleReorderDragEnd} />
+          ))}
+        </Reorder.Group>
+      )}
+
       {/* Loading skeletons */}
-      {isLoading && (
+      {!isReorderMode && isLoading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 3 }).map((_, i) => (
             <Card key={i} shadow="sm">
@@ -3998,9 +4053,9 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {!isLoading && error && <ErrorState message="Could not load buildings." />}
+      {!isReorderMode && !isLoading && error && <ErrorState message="Could not load buildings." />}
 
-      {!isLoading && !error && buildings.length === 0 && allBuildings.length === 0 && (
+      {!isReorderMode && !isLoading && !error && buildings.length === 0 && allBuildings.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-sm font-medium text-gray-600">No buildings yet</p>
           <p className="text-xs text-gray-400 mt-1">Add the first building to start tracking units.</p>
@@ -4012,7 +4067,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {!isLoading && !error && buildings.length === 0 && allBuildings.length > 0 && (
+      {!isReorderMode && !isLoading && !error && buildings.length === 0 && allBuildings.length > 0 && (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <p className="text-sm font-medium text-gray-600">No buildings match your filters</p>
           <Button
@@ -4026,7 +4081,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {!isLoading && !error && buildings.length > 0 && (
+      {!isReorderMode && !isLoading && !error && buildings.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {buildings.map((b: any) => (
             <Card key={b.id} shadow="sm">
@@ -4209,6 +4264,37 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         </ModalContent>
       </Modal>
     </div>
+  );
+}
+
+// A row in the Buildings reorder-mode list. Dragging only starts from the handle
+// icon (dragListener={false} + manual dragControls.start on the handle's pointerdown)
+// so the row's own click targets (e.g. a future link) aren't hijacked by drag.
+function ReorderableBuildingRow({ building, onDragEnd }: { building: any; onDragEnd: () => void }) {
+  const controls = useDragControls();
+  return (
+    <Reorder.Item value={building} dragListener={false} dragControls={controls} onDragEnd={onDragEnd}>
+      <Card shadow="sm">
+        <CardBody className="flex flex-row items-center gap-3 py-2.5">
+          <div
+            onPointerDown={(e) => controls.start(e)}
+            className="cursor-grab active:cursor-grabbing shrink-0 text-gray-400 touch-none p-1"
+            aria-label="Drag to reorder"
+          >
+            <FiMove />
+          </div>
+          <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-sm text-gray-900 truncate">{building.name}</span>
+            {building.buildingType && (
+              <span className="text-xs text-gray-400">{building.buildingType}</span>
+            )}
+            <span className="text-xs text-gray-400 ml-auto">
+              {building._count?.units ?? building.units?.length ?? 0} unit{(building._count?.units ?? building.units?.length ?? 0) === 1 ? '' : 's'}
+            </span>
+          </div>
+        </CardBody>
+      </Card>
+    </Reorder.Item>
   );
 }
 

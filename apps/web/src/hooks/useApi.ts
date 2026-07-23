@@ -718,6 +718,15 @@ export function useDeleteBuilding() {
   });
 }
 
+export function useReorderBuildings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { projectId: string; buildingIds: string[] }) =>
+      api.patch('/buildings/reorder', data).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['buildings', vars.projectId] }),
+  });
+}
+
 // ---- User Mutations ----
 export function useCreateUser() {
   const qc = useQueryClient();

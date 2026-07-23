@@ -34,7 +34,7 @@ export class BuildingsService {
     const buildings = await this.prisma.building.findMany({
       where: { projectId },
       include: { _count: { select: { units: true } } },
-      orderBy: { name: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return Promise.all(buildings.map((b) => this.withCoverUrl(b)));
   }
@@ -114,5 +114,33 @@ export class BuildingsService {
     const result = await this.prisma.building.delete({ where: { id } });
     await this.projectPhase.recompute(building.projectId);
     return result;
+  }
+
+  /**
+   * Persist a new drag-and-drop display order. buildingIds must be exactly the
+   * current set of buildings in the project (no missing/extra/duplicate IDs) so a
+   * stale or cross-project payload can't silently corrupt sortOrder for other rows.
+   */
+  async reorder(projectId: string, buildingIds: string[]) {
+    const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
+
+    const existing = await this.prisma.building.findMany({ where: { projectId }, select: { id: true } });
+    const existingIds = new Set(existing.map((b) => b.id));
+    const incomingIds = new Set(buildingIds);
+    if (
+      buildingIds.length !== existing.length ||
+      incomingIds.size !== existingIds.size ||
+      !buildingIds.every((id) => existingIds.has(id))
+    ) {
+      throw new BadRequestException(
+        'buildingIds must exactly match the current set of buildings in this project (no missing, extra, or duplicate IDs)',
+      );
+    }
+
+    await this.prisma.$transaction(
+      buildingIds.map((id, index) => this.prisma.building.update({ where: { id }, data: { sortOrder: index } })),
+    );
+    return this.findByProject(projectId);
   }
 }
