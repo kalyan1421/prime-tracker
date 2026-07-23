@@ -34,7 +34,13 @@ export class S3StorageDriver implements StorageDriver {
     this.publicBase =
       config.get<string>('S3_PUBLIC_BASE_URL', '') ||
       `https://${this.bucket}.s3.${region}.amazonaws.com`;
-    this.client = new S3Client({ region });
+    // Newer SDK versions default to computing a flexible checksum (CRC32) over the
+    // command's Body even when only presigning — createPresignedUpload() builds a
+    // PutObjectCommand with no Body, so the checksum of an *empty* payload gets
+    // signed into the URL's query string. S3 then rejects the browser's real PUT
+    // (real bytes vs. the empty-body checksum). WHEN_REQUIRED restores the old
+    // behavior: only compute/require a checksum when the operation demands one.
+    this.client = new S3Client({ region, requestChecksumCalculation: 'WHEN_REQUIRED' });
   }
 
   async upload(buffer: Buffer, mimeType: string, storagePath: string): Promise<{ publicUrl: string }> {
