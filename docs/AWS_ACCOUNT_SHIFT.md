@@ -3,10 +3,21 @@
 Move the full Prime Tracker AWS stack from the current **test account `221082191502`**
 (Asan, throwaway) into the **client's real AWS Organization account** in `us-east-1`.
 
-Because everything is IaC (`infra/terraform/`) + SSM deploy scripts, and the Supabase
-DB held **demo data only** (no real-data migration), this is mechanical: new creds →
-fresh remote state → new `terraform.tfvars` → `apply` → load secrets → migrate+seed →
-redeploy → repoint external access → destroy the old account.
+Because everything is IaC (`infra/terraform/`) + SSM deploy scripts, this is mostly
+mechanical: new creds → fresh remote state → new `terraform.tfvars` → `apply` (empty
+DB) → **pg_dump/restore the real data across** → copy S3 documents → redeploy →
+repoint external access → destroy the old account.
+
+> **UPDATE 2026-07-23:** the account has been in active use for testing since
+> go-live (loan creation, document uploads, etc.) — it is **no longer demo-only
+> data**. Confirmed via AWS: RDS is `db.t3.micro`/Postgres 15.17, tiny (dump/restore
+> is fast); `prime-tracker-documents-221082191502` has 20 objects / ~11 MB. This
+> replaces the old "reseed, nothing to preserve" plan below with a real
+> **pg_dump → pg_restore** step (Section 6A) so nothing created during testing is
+> lost, and reuses **the current `ENCRYPTION_KEY` unchanged** (see Section 5) —
+> `infra/terraform/README.md` and `put-ssm-params.sh` already enforce this for a
+> reason: AES-256-GCM loan fields encrypted under the old key become permanently
+> unreadable if the key is regenerated instead of carried over.
 
 **The application code does not change.** Only config *values* change, and most
 auto-derive from the account (S3 bucket names use `aws_caller_identity` — see
@@ -27,6 +38,8 @@ auto-derive from the account (S3 bucket names use `aws_caller_identity` — see
 | Terraform state | **Remote** (S3 + DynamoDB) in the client account — not laptop-local |
 | RDS deletion protection | **ON** (real account) |
 | IAM user | Client creates manually; **do NOT connect to the AWS MCP** |
+| Data | **Real** (testing since go-live) → **pg_dump/pg_restore**, no reseed |
+| Secrets on migration | `ENCRYPTION_KEY` **carried over unchanged**; JWT_*/REDIS_PASSWORD/DB password may be fresh |
 
 ## What auto-derives vs. what is manual
 
@@ -104,18 +117,52 @@ terraform apply tf.plan
 ```bash
 export AWS_REGION=us-east-1
 export DATABASE_URL="$(terraform output -raw database_url_for_ssm)"
-export ENCRYPTION_KEY="<fresh 64-hex — demo DB, nothing to preserve>"
-./scripts/put-ssm-params.sh        # JWT_* + REDIS_PASSWORD auto-generate
+export ENCRYPTION_KEY="<the CURRENT prod key — pull from old SSM, do NOT regenerate>"
+#   aws ssm get-parameter --name /prime-tracker/ENCRYPTION_KEY --with-decryption \
+#     --profile <old> --query Parameter.Value --output text
+./scripts/put-ssm-params.sh        # JWT_* + REDIS_PASSWORD may auto-generate fresh (sessions only, no data impact)
 ```
 Set S3 storage so Supabase never instantiates:
 `STORAGE_DRIVER=s3`, `S3_BUCKET=prime-tracker-documents-<CLIENT_ACCT_ID>`, `AWS_REGION=us-east-1`.
 
-### 6. DB migrate + seed (fresh RDS)
+### 6A. Migrate the real data (pg_dump → pg_restore) — do this instead of migrate+seed
+RDS is `publicly_accessible=false` (only reachable from its own EC2 box), so the dump
+has to run from inside each account's network via SSM. The DB is small (t3.micro,
+handful of MB of real rows) so this takes seconds.
+
 ```bash
+# --- on the OLD box (SSM session, old profile) ---
+aws ssm start-session --target <old-instance-id>
+pg_dump "$DATABASE_URL" -Fc --no-owner --no-acl -f /tmp/prime-tracker.dump
+aws s3 cp /tmp/prime-tracker.dump s3://prime-tracker-app-221082191502/migration/prime-tracker.dump
+exit
+# generate a presigned URL (works cross-account, no bucket-policy edits needed)
+aws s3 presign s3://prime-tracker-app-221082191502/migration/prime-tracker.dump --expires-in 3600
+
+# --- on the NEW box (SSM session, new profile) ---
 aws ssm start-session --target <new-instance-id>
-cd apps/api
-npx prisma migrate deploy          # all 30 migrations
-npx prisma migrate status          # "up to date"
+curl -o /tmp/prime-tracker.dump "<presigned URL from above>"
+pg_restore --no-owner --no-acl --clean --if-exists -d "$DATABASE_URL" /tmp/prime-tracker.dump
+```
+This brings over schema + `_prisma_migrations` history + every real row in one shot —
+**skip `prisma migrate deploy` and `db:seed` entirely** for this path (they're for a
+fresh/empty DB). Just confirm afterward:
+```bash
+cd apps/api && npx prisma migrate status   # should read "up to date"
+```
+
+### 6B. Copy the S3 documents (~20 objects / ~11 MB — trivial)
+```bash
+aws s3 sync s3://prime-tracker-documents-221082191502 /tmp/docs-migration --profile <old>
+aws s3 sync /tmp/docs-migration s3://prime-tracker-documents-<CLIENT_ACCT_ID>   --profile <new>
+```
+Object **keys** must stay identical — `Document.storagePath` rows just point at
+`S3_BUCKET`/key, so as long as keys match, the migrated rows resolve correctly
+against the new bucket with no DB changes needed.
+
+### 6-fallback. If real-data preservation is ever waived (fresh reseed instead)
+```bash
+npx prisma migrate deploy          # all migrations, empty DB
 pnpm run db:seed                   # 12 @prime.dev demo users / Prime@123
 ```
 
@@ -154,8 +201,11 @@ terraform destroy                  # first set rds_deletion_protection=false and
 - [ ] `aws sts get-caller-identity` = client account
 - [ ] `terraform plan` shows create-only, 0 destroy
 - [ ] `GET /api/health` = 200, `/api/health/ready` DB `ok:true`
-- [ ] `prisma migrate status` = up to date; seed = 16 users
-- [ ] Password login works (`founder@prime.dev` / `Prime@123`)
+- [ ] `prisma migrate status` = up to date (via pg_restore, not fresh migrate+seed)
+- [ ] Row counts match old vs new DB (spot-check `sales`, `loans`, `documents` counts)
+- [ ] A pre-existing loan record decrypts correctly (proves `ENCRYPTION_KEY` carried over right)
+- [ ] Password login works with existing users (not just the original 12 demo seeds)
+- [ ] A pre-existing uploaded document opens/downloads correctly from the new bucket
 - [ ] S3 driver active (no Supabase WebSocket in logs)
 - [ ] Billing SNS + SES verify emails confirmed (kalyan91333@gmail.com)
-- [ ] Old account `terraform destroy` clean
+- [ ] Old account `terraform destroy` clean (only after the above all pass)
