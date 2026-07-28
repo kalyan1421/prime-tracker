@@ -130,9 +130,18 @@ pnpm --filter @prime-tracker/api exec prisma generate 2>&1 | tail -8
 
 sudo -u ubuntu pm2 restart prime-api --update-env 2>&1 || pm2 restart prime-api --update-env 2>&1
 
-sleep 6
-curl -sf http://localhost:3001/api/health && echo && echo "=== API_OK ===" || \
-  (echo "=== API_FAILED ===" && pm2 logs prime-api --lines 20 --nostream && exit 1)
+# Nest boots in well over 6s on a t3.micro once the module graph and Prisma client
+# are loaded, so a single fixed sleep reports a false failure on a perfectly healthy
+# deploy — and, worse, aborts the run before the web step. Poll instead: up to 12 x 5s.
+for i in \$(seq 1 12); do
+  if curl -sf http://localhost:3001/api/health; then
+    echo && echo "=== API_OK (healthy after \$(( i * 5 ))s) ===" && exit 0
+  fi
+  sleep 5
+done
+echo "=== API_FAILED ==="
+pm2 logs prime-api --lines 20 --nostream
+exit 1
 ENDSCRIPT
 
   ssm_script "prime-deploy-api" "$(cat "$_tmpscript")"
