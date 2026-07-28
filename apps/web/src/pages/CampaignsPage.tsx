@@ -41,11 +41,11 @@ export default function CampaignsPage() {
   const canEdit = hasPermission('campaign:edit');
   const canDelete = hasPermission('campaign:delete');
 
-  const [projectId, setProjectId] = useState<string>('');
   const { data: projects } = useProjects();
-  const { data: performance, isLoading: perfLoading } = useCampaignPerformance(projectId ? { projectId } : undefined);
-  const { data: campaigns } = useCampaigns(projectId ? { projectId } : undefined);
-  const { data: spendByCampaign } = useCampaignSpendByCampaign(projectId ? { projectId } : undefined);
+  // No project filter — always combined across every project (portfolio + project-specific).
+  const { data: performance, isLoading: perfLoading } = useCampaignPerformance();
+  const { data: campaigns } = useCampaigns();
+  const { data: spendByCampaign } = useCampaignSpendByCampaign();
 
   const formModal = useDisclosure();
   const spendModal = useDisclosure();
@@ -68,8 +68,8 @@ export default function CampaignsPage() {
   const overallRoi = totalSpend > 0 ? totalRevenue / totalSpend : null;
   const activeCount = ((campaigns as any[]) || []).filter((c: any) => c.status === 'ACTIVE').length;
 
-  // Full campaign records (with projectId, dates, notes, etc.) keyed by id — the
-  // performance rows only carry aggregate/report fields, not the raw editable ones.
+  // Full campaign records (with linked projects, dates, notes, etc.) keyed by id —
+  // the performance rows only carry aggregate/report fields, not the raw editable ones.
   const campaignsById = new Map(((campaigns as any[]) || []).map((c: any) => [c.id, c]));
 
   const openCreate = () => { setEditTarget(null); formModal.onOpen(); };
@@ -95,19 +95,9 @@ export default function CampaignsPage() {
           <h1 className="text-2xl font-semibold text-gray-800 flex items-center gap-2">
             <FiBarChart2 className="text-blue-600" /> Ads & Campaigns
           </h1>
-          <p className="text-sm text-gray-500 mt-1">Marketing spend, lead attribution, and ROI by campaign.</p>
+          <p className="text-sm text-gray-500 mt-1">Marketing spend, lead attribution, and ROI by campaign — combined across every project.</p>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white"
-          >
-            <option value="">All projects (portfolio)</option>
-            {((projects as any[]) || []).map((p: any) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
           {canCreate && (
             <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
               New Campaign
@@ -141,6 +131,7 @@ export default function CampaignsPage() {
               <thead>
                 <tr className="text-xs text-gray-500 border-b border-gray-100">
                   <th className="text-left py-2 pr-3">Campaign</th>
+                  <th className="text-left py-2 pr-3">Projects</th>
                   <th className="text-left py-2 pr-3">Channel</th>
                   <th className="text-left py-2 pr-3">Status</th>
                   <th className="text-right py-2 pr-3">Spend</th>
@@ -156,6 +147,17 @@ export default function CampaignsPage() {
                 {perf.map((c) => (
                   <tr key={c.campaignId} className="border-b border-gray-50 hover:bg-gray-50">
                     <td className="py-2 pr-3 font-medium text-gray-800">{c.name}</td>
+                    <td className="py-2 pr-3">
+                      {(c.projects as any[])?.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {c.projects.map((p: any) => (
+                            <Chip key={p.id} size="sm" variant="flat" color="secondary" className="text-[10px]">{p.name}</Chip>
+                          ))}
+                        </div>
+                      ) : (
+                        <Chip size="sm" variant="flat" className="text-[10px]">All Projects</Chip>
+                      )}
+                    </td>
                     <td className="py-2 pr-3">
                       <Chip size="sm" variant="flat" className="text-[10px]"
                         style={{ backgroundColor: (CHANNEL_FILL[c.channel] || '#94a3b8') + '20', color: CHANNEL_FILL[c.channel] || '#475569' }}>
@@ -258,7 +260,7 @@ export default function CampaignsPage() {
 
 // ---- New / Edit Campaign modal ----
 
-const EMPTY_CAMPAIGN_FORM = { name: '', channel: 'META', projectId: '', plannedBudget: '', status: 'ACTIVE', startDate: '', endDate: '', externalId: '', notes: '' };
+const EMPTY_CAMPAIGN_FORM = { name: '', channel: 'META', projectIds: [] as string[], plannedBudget: '', status: 'ACTIVE', startDate: '', endDate: '', externalId: '', notes: '' };
 
 function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: boolean; onClose: () => void; projects: any[]; campaign?: any }) {
   const create = useCreateCampaign();
@@ -266,16 +268,17 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
   const isEdit = !!campaign;
   const [form, setForm] = useState(EMPTY_CAMPAIGN_FORM);
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setProjectIds = (ids: string[]) => setForm((f) => ({ ...f, projectIds: ids }));
 
   // Re-seed the form whenever the modal opens, from the campaign being edited
-  // (or blank for create). Project is intentionally excluded from edit payloads —
-  // UpdateCampaignDto has no projectId field, so it can't be changed after creation.
+  // (or blank for create). Projects are intentionally excluded from edit payloads —
+  // UpdateCampaignDto has no project fields, so they can't be changed after creation.
   useEffect(() => {
     if (!isOpen) return;
     setForm(campaign ? {
       name: campaign.name ?? '',
       channel: campaign.channel ?? 'META',
-      projectId: campaign.projectId ?? '',
+      projectIds: ((campaign.projects as any[]) || []).map((cp) => cp.project?.id ?? cp.projectId).filter(Boolean),
       plannedBudget: campaign.plannedBudget != null ? String(campaign.plannedBudget) : '',
       status: campaign.status ?? 'ACTIVE',
       startDate: campaign.startDate ? String(campaign.startDate).slice(0, 10) : '',
@@ -305,7 +308,7 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
         await update.mutateAsync({ id: campaign.id, data: shared });
         addToast({ title: 'Campaign updated', color: 'success' });
       } else {
-        await create.mutateAsync({ ...shared, projectId: form.projectId || undefined });
+        await create.mutateAsync({ ...shared, projectIds: form.projectIds });
         addToast({ title: 'Campaign created', color: 'success' });
       }
       onClose();
@@ -325,14 +328,29 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
               {CHANNELS.map((c) => <SelectItem key={c}>{c.replace('_', ' ')}</SelectItem>)}
             </Select>
             {isEdit ? (
-              <Input size="sm" label="Project" isReadOnly isDisabled value={campaign.project?.name ?? 'All Projects (portfolio-wide)'}
-                description="Project can't be changed after a campaign is created" />
+              <div className="flex flex-col gap-1.5">
+                <p className="text-xs text-gray-500">Projects</p>
+                <div className="flex flex-wrap gap-1">
+                  {((campaign.projects as any[])?.length ?? 0) > 0 ? (
+                    campaign.projects.map((cp: any) => (
+                      <Chip key={cp.project?.id ?? cp.projectId} size="sm" variant="flat">{cp.project?.name}</Chip>
+                    ))
+                  ) : (
+                    <Chip size="sm" variant="flat">All Projects (portfolio-wide)</Chip>
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-400">Projects can't be changed after a campaign is created</p>
+              </div>
             ) : (
-              <Select size="sm" label="Project" placeholder="Portfolio-wide" selectedKeys={form.projectId ? new Set([form.projectId]) : new Set()} onSelectionChange={(k) => set('projectId', (Array.from(k)[0] as string) || '')}>
-                <>
-                  <SelectItem key="">All Projects (portfolio-wide)</SelectItem>
-                  {projects.map((p) => <SelectItem key={p.id}>{p.name}</SelectItem>)}
-                </>
+              <Select
+                size="sm"
+                label="Projects"
+                placeholder="Portfolio-wide (leave empty for all)"
+                selectionMode="multiple"
+                selectedKeys={new Set(form.projectIds)}
+                onSelectionChange={(keys) => setProjectIds(Array.from(keys as Set<string>))}
+              >
+                {projects.map((p) => <SelectItem key={p.id}>{p.name}</SelectItem>)}
               </Select>
             )}
             <Input size="sm" label="Planned budget" type="number" value={form.plannedBudget} onChange={(e) => set('plannedBudget', e.target.value)} />

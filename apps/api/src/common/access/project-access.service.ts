@@ -10,7 +10,9 @@ import { isProjectScopedRole } from '@prime-tracker/shared';
  * restricted here.
  */
 
-type Resolver = (prisma: PrismaService, id: string) => Promise<string | null | undefined>;
+// Most entities own exactly one project; a multi-project Campaign can resolve to
+// several (or none, when portfolio-wide), so a resolver may return an array too.
+type Resolver = (prisma: PrismaService, id: string) => Promise<string | string[] | null | undefined>;
 
 // entity type → resolve one of its row ids to the owning projectId.
 // Most models carry projectId directly; the rest join one or two hops.
@@ -70,8 +72,10 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
     (await p.cashFlowEntry.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   contract: async (p, id) =>
     (await p.contract.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
-  campaign: async (p, id) =>
-    (await p.campaign.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  campaign: async (p, id) => {
+    const c = await p.campaign.findUnique({ where: { id }, select: { projects: { select: { projectId: true } } } });
+    return c?.projects.map((cp) => cp.projectId);
+  },
   task: async (p, id) =>
     (await p.task.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   dailyLog: async (p, id) =>
@@ -112,6 +116,7 @@ const KEY_ENTITY: Record<string, string> = {
   leadId: 'lead',
   milestoneId: 'milestone',
   campaignId: 'campaign',
+  projectIds: 'project',
   taskId: 'task',
   interiorProjectId: 'interior',
   commitmentId: 'commitment',
@@ -200,12 +205,22 @@ export class ProjectAccessService {
     const ids = new Set<string>();
     const jobs: Promise<void>[] = [];
 
+    // rawId is normally a single string FK, but array-valued fields (e.g. the
+    // multi-project Campaign's projectIds) resolve every element the same way.
+    // A resolver itself may also return several projectIds (e.g. a campaign
+    // spanning multiple projects) — every one of them must pass membership.
     const add = async (entity: string | undefined, rawId: unknown) => {
-      if (!entity || typeof rawId !== 'string' || !rawId) return;
+      if (!entity) return;
       const resolver = ENTITY_RESOLVERS[entity];
       if (!resolver) return;
-      const pid = await resolver(this.prisma, rawId);
-      if (pid) ids.add(pid);
+      const rawIds = Array.isArray(rawId) ? rawId : [rawId];
+      for (const raw of rawIds) {
+        if (typeof raw !== 'string' || !raw) continue;
+        const pid = await resolver(this.prisma, raw);
+        for (const p of Array.isArray(pid) ? pid : [pid]) {
+          if (p) ids.add(p);
+        }
+      }
     };
 
     for (const src of [req.params, req.query, req.body]) {

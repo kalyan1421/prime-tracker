@@ -7,12 +7,12 @@ export class LeasesService {
   constructor(private prisma: PrismaService) {}
 
   async findByUnit(unitId: string) {
-    return this.prisma.lease.findMany({ where: { unitId }, orderBy: { leaseStart: 'desc' } });
+    return this.prisma.lease.findMany({ where: { unitId, deletedAt: null }, orderBy: { leaseStart: 'desc' } });
   }
 
   /** Sprint 1: building-level leases (e.g. Leander Bldg 1 leased as one whole asset). */
   async findByBuilding(buildingId: string) {
-    return this.prisma.lease.findMany({ where: { buildingId }, orderBy: { leaseStart: 'desc' } });
+    return this.prisma.lease.findMany({ where: { buildingId, deletedAt: null }, orderBy: { leaseStart: 'desc' } });
   }
 
   async findByProject(projectId: string) {
@@ -20,6 +20,7 @@ export class LeasesService {
     // building-leases (via building→project) under one project.
     return this.prisma.lease.findMany({
       where: {
+        deletedAt: null,
         OR: [
           { unit: { building: { projectId } } },
           { building: { projectId } },
@@ -37,6 +38,7 @@ export class LeasesService {
     const leases = await this.prisma.lease.findMany({
       where: {
         status: 'ACTIVE',
+        deletedAt: null,
         OR: [
           { unit: { building: { projectId } } },
           { building: { projectId } },
@@ -56,7 +58,7 @@ export class LeasesService {
       where: { id },
       include: { unit: true, building: { select: { id: true, name: true, projectId: true } } },
     });
-    if (!lease) throw new NotFoundException('Lease not found');
+    if (!lease || lease.deletedAt) throw new NotFoundException('Lease not found');
     return lease;
   }
 
@@ -80,7 +82,7 @@ export class LeasesService {
       // "lease_unit_active_unique". This gives a friendlier 400 vs a raw Prisma
       // unique constraint error.
       const existing = await this.prisma.lease.findFirst({
-        where: { unitId, status: { notIn: ['EXPIRED', 'TERMINATED'] } },
+        where: { unitId, deletedAt: null, status: { notIn: ['EXPIRED', 'TERMINATED'] } },
       });
       if (existing) {
         throw new BadRequestException('This unit already has an active lease. Expire or terminate the existing lease before adding a new one.');
@@ -103,8 +105,9 @@ export class LeasesService {
     return this.prisma.lease.update({ where: { id }, data });
   }
 
+  // Soft-delete — preserves the row (and the unit's history) instead of destroying it.
   async delete(id: string) {
     await this.findById(id);
-    return this.prisma.lease.delete({ where: { id } });
+    return this.prisma.lease.update({ where: { id }, data: { deletedAt: new Date() } });
   }
 }

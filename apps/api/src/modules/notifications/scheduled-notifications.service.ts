@@ -196,6 +196,7 @@ export class ScheduledNotificationsService {
       where: {
         leaseEnd: { gte: now, lte: in30 },
         status: 'ACTIVE',
+        deletedAt: null,
       },
       include: {
         unit: {

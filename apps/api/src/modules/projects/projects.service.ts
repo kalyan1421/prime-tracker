@@ -79,9 +79,9 @@ export class ProjectsService {
       this.prisma.project.findMany({
         where,
         include: {
-          _count: { select: { buildings: true, milestones: true, budgetLines: true } },
-          buildings: { include: { _count: { select: { units: true } } } },
-          budgetLines: { select: { baselineAmt: true, revisedAmt: true } },
+          _count: { select: { buildings: { where: { deletedAt: null } }, milestones: true, budgetLines: { where: { deletedAt: null } } } },
+          buildings: { where: { deletedAt: null }, include: { _count: { select: { units: { where: { deletedAt: null } } } } } },
+          budgetLines: { where: { deletedAt: null }, select: { baselineAmt: true, revisedAmt: true } },
           actuals: { select: { amount: true } },
         },
         orderBy,
@@ -122,15 +122,18 @@ export class ProjectsService {
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
+        // Soft-deleted buildings/units/loans/sales (archived, merged-away, etc.)
+        // must not leak into the project overview's counts and totals.
         buildings: {
-          include: { units: true },
+          where: { deletedAt: null },
+          include: { units: { where: { deletedAt: null } } },
         },
         milestones: { orderBy: { sortOrder: 'asc' } },
-        budgetLines: { orderBy: { category: 'asc' } },
+        budgetLines: { where: { deletedAt: null }, orderBy: { category: 'asc' } },
         commitments: true,
         actuals: { orderBy: { txnDate: 'desc' } },
-        loans: true,
-        sales: { include: { unit: true } },
+        loans: { where: { deletedAt: null } },
+        sales: { where: { deletedAt: null }, include: { unit: true } },
         kpiSnapshots: { orderBy: { snapshotDate: 'desc' }, take: 1 },
       },
     });
@@ -410,7 +413,7 @@ export class ProjectsService {
 
     // Active lease income — use DB aggregate instead of loading all lease rows.
     const leaseAgg = await this.prisma.lease.aggregate({
-      where: { status: 'ACTIVE' },
+      where: { status: 'ACTIVE', deletedAt: null },
       _sum: { monthlyRent: true },
     });
     totalMonthlyLeaseIncome = Number(leaseAgg._sum.monthlyRent ?? 0);
@@ -550,6 +553,7 @@ export class ProjectsService {
       // Sales
       this.prisma.sale.findMany({
         where: {
+          deletedAt: null,
           OR: [
             { unit: { building: { projectId } } },
             { building: { projectId } },
@@ -563,6 +567,7 @@ export class ProjectsService {
       // Leases
       this.prisma.lease.findMany({
         where: {
+          deletedAt: null,
           OR: [
             { unit: { building: { projectId } } },
             { building: { projectId } },

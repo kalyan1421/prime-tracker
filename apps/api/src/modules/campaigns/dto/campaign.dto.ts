@@ -1,13 +1,14 @@
 import {
   IsString, IsNotEmpty, IsOptional, IsEnum, IsNumber, IsPositive,
-  IsDateString, MaxLength, Min,
+  IsDateString, IsArray, ArrayUnique, MaxLength, Min,
 } from 'class-validator';
 import { CampaignChannel, CampaignStatus, CampaignSpendSource } from '@prisma/client';
 
 export class CreateCampaignDto {
-  // Cross-project campaigns leave projectId unset; project-specific ones populate it.
-  @IsOptional() @IsString()
-  projectId?: string;
+  // Cross-project campaigns leave this unset/empty; project-specific ones list the
+  // projects it spans (one project = single-project campaign, several = multi-project).
+  @IsOptional() @IsArray() @ArrayUnique() @IsString({ each: true })
+  projectIds?: string[];
 
   @IsString() @IsNotEmpty() @MaxLength(200)
   name!: string;

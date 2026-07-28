@@ -16,8 +16,9 @@ import { CacheService } from '../../common/cache/cache.service';
  * rows are left alone — once OVERDUE is set, the user is responsible for
  * progressing it (no auto-recovery to avoid status thrashing).
  *
- * Cache invalidation: clears project health + dashboard so the new severity
- * shows up on the next read instead of waiting for the 60s TTL.
+ * Cache invalidation: clears the exceptions feed + dashboard so the new severity
+ * shows up on the next read instead of waiting for the 60s TTL. (Project health is
+ * unit-based only and does not depend on milestone status — nothing to invalidate there.)
  */
 @Injectable()
 export class OverdueDetectionCron {
@@ -37,10 +38,9 @@ export class OverdueDetectionCron {
 
     if (result.count > 0) {
       this.logger.log(`Flagged ${result.count} milestones as OVERDUE`);
-      // The exception feed and project health both depend on milestone status —
-      // wipe both caches so dashboards reflect the change immediately.
+      // The exception feed depends on milestone status — wipe it and dashboard
+      // so both reflect the change immediately.
       this.cache.invalidateTag('exceptions');
-      this.cache.invalidateTag('projectHealth');
       this.cache.invalidateTag('dashboard');
     }
   }

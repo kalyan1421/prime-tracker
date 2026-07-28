@@ -426,7 +426,7 @@ function LeadFormModal({
       if (!seen.has(c.id)) { out.push(c); seen.add(c.id); }
     }
     for (const c of ((portfolioCampaigns as any[]) || [])) {
-      if (!c.projectId && !seen.has(c.id)) { out.push(c); seen.add(c.id); }
+      if ((!c.projects || c.projects.length === 0) && !seen.has(c.id)) { out.push(c); seen.add(c.id); }
     }
     return out;
   })();

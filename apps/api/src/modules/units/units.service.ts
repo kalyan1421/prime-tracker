@@ -33,7 +33,7 @@ export class UnitsService {
     if (!buildingId) throw new BadRequestException('buildingId required');
     return this.prisma.unit.findMany({
       where: { buildingId, deletedAt: null },
-      include: { leases: { where: { status: 'ACTIVE' } }, sales: true },
+      include: { leases: { where: { status: 'ACTIVE', deletedAt: null } }, sales: { where: { deletedAt: null } } },
       orderBy: { unitNumber: 'asc' },
     });
   }
@@ -44,10 +44,10 @@ export class UnitsService {
       where: { building: { projectId }, deletedAt: null },
       include: {
         building: { select: { id: true, name: true } },
-        leases: { where: { status: 'ACTIVE' } },
-        sales: true,
+        leases: { where: { status: 'ACTIVE', deletedAt: null } },
+        sales: { where: { deletedAt: null } },
         loans: { select: { id: true, loanType: true, monthlyPayment: true } },
-        _count: { select: { comments: true, sales: true, leases: true } },
+        _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } } } },
       },
       orderBy: [
         { building: { name: 'asc' } },
@@ -61,12 +61,16 @@ export class UnitsService {
       where: { id },
       include: {
         building: { select: { id: true, name: true, project: { select: { id: true, name: true, status: true } } } },
-        leases: true,
-        sales: true,
+        // Full history — every lease/sale the unit has ever had, oldest to newest,
+        // so the Unit Detail "History" timeline can render the complete story
+        // (past tenants, past sale attempts) even after the unit moves on
+        // (e.g. gets sold). Soft-deleted rows are excluded, not the record itself.
+        leases: { where: { deletedAt: null }, orderBy: { leaseStart: 'desc' } },
+        sales: { where: { deletedAt: null }, orderBy: { createdAt: 'desc' } },
         loans: { select: { id: true, loanType: true, lender: true, monthlyPayment: true, principalAmt: true } },
         // Provenance for combined units — which source units were merged in.
         mergedFrom: { select: { id: true, unitNumber: true } },
-        _count: { select: { comments: true, sales: true, leases: true } },
+        _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } } } },
       },
     });
     if (!unit) throw new NotFoundException('Unit not found');
@@ -103,8 +107,8 @@ export class UnitsService {
       include: {
         _count: {
           select: {
-            sales: true,
-            leases: { where: { status: 'ACTIVE' } },
+            sales: { where: { deletedAt: null } },
+            leases: { where: { status: 'ACTIVE', deletedAt: null } },
             // A fit-out anchored to a source unit would orphan (FK is SetNull) on merge.
             interiorProjects: { where: { deletedAt: null } },
           },
@@ -373,8 +377,8 @@ export class UnitsService {
             project: { select: { id: true, name: true, status: true, phase: true } },
           },
         },
-        leases: { where: { status: 'ACTIVE' }, select: { id: true, tenantName: true, leaseEnd: true } },
-        sales: { select: { id: true, status: true, buyer: true, salePrice: true } },
+        leases: { where: { status: 'ACTIVE', deletedAt: null }, select: { id: true, tenantName: true, leaseEnd: true } },
+        sales: { where: { deletedAt: null }, select: { id: true, status: true, buyer: true, salePrice: true } },
       },
       orderBy: [
         { building: { project: { name: 'asc' } } },
@@ -392,6 +396,7 @@ export class UnitsService {
     const leases = await this.prisma.lease.findMany({
       where: {
         status: 'ACTIVE',
+        deletedAt: null,
         unit: { building: { projectId } },
       },
       include: {

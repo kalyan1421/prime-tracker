@@ -26,6 +26,18 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'OCCUPIED',          label: 'Occupied',            color: 'primary' },
     { value: 'UNDER_CONSTRUCTION',label: 'Under Construction',  color: 'warning' },
   ],
+  // Was a hardcoded UnitType Prisma enum on Unit — converted so orgs can add their own
+  // unit types (e.g. "COWORKING") without a schema change.
+  unit_type: [
+    { value: 'RETAIL',          label: 'Retail',          color: 'primary'   },
+    { value: 'MEDICAL',         label: 'Medical',         color: 'success'   },
+    { value: 'FLEX',            label: 'Flex',            color: 'secondary' },
+    { value: 'RESIDENTIAL_LOT', label: 'Residential Lot', color: 'primary'   },
+    { value: 'COMMERCIAL_LOT',  label: 'Commercial Lot',  color: 'secondary' },
+    { value: 'OFFICE',          label: 'Office',          color: 'default'   },
+    { value: 'RESTAURANT',      label: 'Restaurant',      color: 'warning'   },
+    { value: 'EVENT_CENTER',    label: 'Event Center',    color: 'secondary' },
+  ],
   sale_status: [
     { value: 'PROSPECT',       label: 'Prospect',        color: 'default'   },
     { value: 'LOI_SIGNED',     label: 'LOI Signed',      color: 'secondary' },

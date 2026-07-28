@@ -1,8 +1,7 @@
 import {
   IsString, IsNotEmpty, MinLength, MaxLength,
-  IsOptional, IsEnum, IsNumber, IsPositive, IsBoolean, IsInt, Min,
+  IsOptional, IsNumber, IsPositive, IsBoolean, IsInt, Min,
 } from 'class-validator';
-import { UnitType } from '@prisma/client';
 
 export class CreateUnitDto {
   @IsString() @IsNotEmpty()
@@ -11,8 +10,8 @@ export class CreateUnitDto {
   @IsString() @IsNotEmpty() @MinLength(1) @MaxLength(40)
   unitNumber!: string;
 
-  @IsEnum(UnitType)
-  unitType!: UnitType;
+  @IsString() @IsNotEmpty()
+  unitType!: string;
 
   @IsOptional() @IsString()
   status?: string;

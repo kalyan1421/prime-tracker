@@ -192,7 +192,7 @@ model Project {
   tasks           Task[]
   members         ProjectMember[]
   clients         Client[]
-  campaigns       Campaign[]
+  campaignProjects CampaignProject[]
   dailyLogs       DailyLog[]
 
   @@index([orgId])
@@ -275,7 +275,10 @@ model Unit {
   buildingId     String
   building       Building   @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitNumber     String
-  unitType       UnitType
+  // Free-text type key backed by CustomOption (category="unit_type") — was a hardcoded
+  // UnitType enum; converted so orgs can add their own unit types without a schema change.
+  // The 8 former enum values are seeded as system defaults in custom-options.service.ts.
+  unitType       String
   sqft           Int?
   // Optional split of total sqft into floor + mezzanine. Some lease structures price
   // these separately (e.g. Lewisville P1 mezzanine units). When both are set,
@@ -341,16 +344,6 @@ enum BuildingType {
   LOT
 }
 
-enum UnitType {
-  RETAIL
-  MEDICAL
-  FLEX
-  RESIDENTIAL_LOT
-  COMMERCIAL_LOT
-  OFFICE
-  RESTAURANT
-  EVENT_CENTER
-}
 
 
 // ---- Comments ----
@@ -1099,10 +1092,6 @@ enum CampaignSpendSource {
 
 model Campaign {
   id            String          @id @default(cuid())
-  // Cross-project campaigns (Prime Developers brand campaign) leave this null;
-  // project-specific campaigns (Spur Plaza Diwali launch) populate it.
-  projectId     String?
-  project       Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   name          String
   channel       CampaignChannel
   // External platform ID (Meta Ad Set ID, Google Campaign ID) — used by future
@@ -1122,13 +1111,30 @@ model Campaign {
 
   spend CampaignSpend[]
   leads Lead[]
+  // Cross-project campaigns (Prime Developers brand campaign) leave this empty;
+  // project-specific campaigns populate one row per linked project — a campaign
+  // can span 0 (portfolio-wide), 1, or several projects.
+  projects CampaignProject[]
 
-  @@index([projectId])
   @@index([channel])
   @@index([status])
   @@index([externalId])
   @@index([deletedAt])
   @@map("campaigns")
+}
+
+model CampaignProject {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([campaignId, projectId])
+  @@index([campaignId])
+  @@index([projectId])
+  @@map("campaign_projects")
 }
 
 model CampaignSpend {

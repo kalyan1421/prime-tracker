@@ -29,6 +29,7 @@ export class SalesStaleCron {
     const dryDeals = await this.prisma.sale.findMany({
       where: {
         status: { in: ['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT'] },
+        deletedAt: null,
         OR: [
           { lastActivityAt: { lt: droughtCutoff } },
           { lastActivityAt: null, updatedAt: { lt: droughtCutoff } },
@@ -46,6 +47,7 @@ export class SalesStaleCron {
     const staleStage = await this.prisma.sale.findMany({
       where: {
         status: { in: ['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT'] },
+        deletedAt: null,
         updatedAt: { lt: stageAgeCutoff },
       },
       select: { id: true, status: true, updatedAt: true },

@@ -12,7 +12,6 @@ import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { useAuthStore } from '../store/authStore';
 
 const PAGE_SIZE = 20;
-const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 
 const STATUS_COLORS: Record<string, string> = {
   AVAILABLE: 'bg-green-100 text-green-800',
@@ -29,6 +28,7 @@ export default function InventoryPage() {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('unit:edit');
   const { data: unitStatusOpts = [] } = useCustomOptions('unit_status');
+  const { data: unitTypeOpts = [] } = useCustomOptions('unit_type');
   const UNIT_STATUSES = unitStatusOpts.map((o) => o.value);
   const UNIT_STATUS_LABELS: Record<string, string> = Object.fromEntries(unitStatusOpts.map((o) => [o.value, o.label]));
 
@@ -170,8 +170,8 @@ export default function InventoryPage() {
               selectedKeys={typeFilter ? [typeFilter] : []}
               onSelectionChange={(keys) => setTypeFilter(Array.from(keys)[0] as string || '')}
             >
-              {UNIT_TYPES.map((t) => (
-                <SelectItem key={t}>{t.replace(/_/g, ' ')}</SelectItem>
+              {unitTypeOpts.map((o) => (
+                <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
               ))}
             </Select>
             <Select

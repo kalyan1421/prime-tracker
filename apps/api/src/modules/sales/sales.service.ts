@@ -9,7 +9,7 @@ export class SalesService {
 
   async findByProject(projectId: string) {
     return this.prisma.sale.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       include: { unit: { include: { building: { select: { name: true } } } } },
       orderBy: { updatedAt: 'desc' },
     });
@@ -45,7 +45,7 @@ export class SalesService {
 
   async findById(id: string) {
     const s = await this.prisma.sale.findUnique({ where: { id }, include: { unit: true } });
-    if (!s) throw new NotFoundException('Sale not found');
+    if (!s || s.deletedAt) throw new NotFoundException('Sale not found');
     return s;
   }
 
@@ -268,11 +268,12 @@ export class SalesService {
     return 5; // default until the org configures a threshold
   }
 
+  // Soft-delete — preserves the row (and the unit's history) instead of destroying it.
   async delete(id: string, userRole: UserRole) {
     const sale = await this.findById(id);
     if (sale.status === 'CLOSED' && !['FOUNDER', 'SUPER_ADMIN'].includes(userRole)) {
       throw new ForbiddenException('Closed sales can only be deleted by Founder or Super Admin');
     }
-    return this.prisma.sale.delete({ where: { id } });
+    return this.prisma.sale.update({ where: { id }, data: { deletedAt: new Date() } });
   }
 }

@@ -9,7 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useUploadDocument, useDeleteDocument,
-  useRenameDocument, useReplaceDocument, useUnitFinancialSummary,
+  useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -26,7 +26,6 @@ import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
 
 
-const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 
 // Single metric cell used inside the unified key-metrics strip.
@@ -91,12 +90,162 @@ function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
   );
 }
 
+// ---- Unit History timeline ----
+// Merges every lease (past + current) and every sale (any status) this unit has ever
+// had into one reverse-chronological list, with vacancy gaps computed between leases.
+// Reads the full, unfiltered-by-status arrays GET /units/:id already returns — no
+// separate endpoint or new table needed. A unit that gets sold doesn't lose its past
+// tenants: their lease rows are never deleted, just no longer the "current" one.
+type HistoryEntry =
+  | { id: string; kind: 'lease'; date: string; endDate: string | null; ongoing: boolean; data: any }
+  | { id: string; kind: 'sale'; date: string; data: any }
+  | { id: string; kind: 'vacant'; date: string; endDate: string };
+
+function durationLabel(startISO: string, endISO: string): string {
+  const start = new Date(startISO);
+  const end = new Date(endISO);
+  let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+  if (end.getDate() < start.getDate()) months -= 1;
+  months = Math.max(0, months);
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  const parts: string[] = [];
+  if (years > 0) parts.push(`${years} year${years === 1 ? '' : 's'}`);
+  if (rem > 0 || years === 0) parts.push(`${rem} month${rem === 1 ? '' : 's'}`);
+  return parts.join(', ');
+}
+
+function buildUnitHistory(leases: any[], sales: any[]): HistoryEntry[] {
+  const entries: HistoryEntry[] = [];
+
+  const sortedLeases = [...(leases || [])]
+    .filter((l) => l.leaseStart)
+    .sort((a, b) => new Date(a.leaseStart).getTime() - new Date(b.leaseStart).getTime());
+
+  sortedLeases.forEach((lease, i) => {
+    const ongoing = !['EXPIRED', 'TERMINATED'].includes(lease.status);
+    entries.push({
+      id: `lease-${lease.id}`,
+      kind: 'lease',
+      date: lease.leaseStart,
+      endDate: ongoing ? null : lease.leaseEnd,
+      ongoing,
+      data: lease,
+    });
+
+    // A vacancy gap only makes sense between two leases that actually ended —
+    // an ongoing lease has no known end yet, so nothing to measure a gap from.
+    const next = sortedLeases[i + 1];
+    if (!ongoing && next) {
+      const gapMs = new Date(next.leaseStart).getTime() - new Date(lease.leaseEnd).getTime();
+      if (gapMs > 24 * 60 * 60 * 1000) {
+        entries.push({
+          id: `vacant-${lease.id}-${next.id}`,
+          kind: 'vacant',
+          date: lease.leaseEnd,
+          endDate: next.leaseStart,
+        });
+      }
+    }
+  });
+
+  for (const sale of sales || []) {
+    entries.push({
+      id: `sale-${sale.id}`,
+      kind: 'sale',
+      date: sale.closingDate || sale.updatedAt || sale.createdAt,
+      data: sale,
+    });
+  }
+
+  return entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+}
+
+function saleHistoryLabel(status: string): string {
+  if (status === 'CLOSED') return 'Sold';
+  if (status === 'CANCELLED') return 'Sale fell through';
+  return `Sale in progress (${status.replace(/_/g, ' ')})`;
+}
+
+function UnitHistoryTimeline({ leases, sales }: { leases: any[]; sales: any[] }) {
+  const entries = buildUnitHistory(leases, sales);
+
+  if (entries.length === 0) {
+    return <EmptyRow icon={<FiClock className="w-5 h-5" />} text="No history yet" />;
+  }
+
+  return (
+    <div>
+      {entries.map((e, i) => (
+        <div key={e.id} className="flex gap-3">
+          <div className="flex flex-col items-center">
+            <div
+              className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
+                e.kind === 'sale'
+                  ? e.data.status === 'CLOSED' ? 'bg-emerald-500' : e.data.status === 'CANCELLED' ? 'bg-gray-300' : 'bg-amber-400'
+                  : e.kind === 'vacant'
+                  ? 'bg-gray-300'
+                  : e.ongoing ? 'bg-blue-500' : 'bg-gray-400'
+              }`}
+            />
+            {i < entries.length - 1 && <div className="w-px flex-1 bg-gray-200 mt-1 mb-1" />}
+          </div>
+          <div className={`min-w-0 flex-1 ${i < entries.length - 1 ? 'pb-4' : ''}`}>
+            {e.kind === 'lease' && (
+              <>
+                <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
+                  Leased to {e.data.tenantBrand || e.data.tenantName}
+                  {e.ongoing && (
+                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                      Current
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.date)} – {e.ongoing ? 'present' : fmtDate(e.endDate)}
+                  {' · '}{fmt(e.data.monthlyRent)}/mo
+                </p>
+                {!e.ongoing && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Lease {String(e.data.status).toLowerCase()} · {durationLabel(e.date, e.endDate!)}
+                  </p>
+                )}
+              </>
+            )}
+            {e.kind === 'sale' && (
+              <>
+                <p className="text-sm font-medium text-gray-900">
+                  {saleHistoryLabel(e.data.status)}
+                  {e.data.buyer && ` — ${e.data.buyer}`}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.date)}
+                  {e.data.salePrice != null && ` · ${fmt(e.data.salePrice)}`}
+                </p>
+                {e.data.status === 'CANCELLED' && e.data.lostReason && (
+                  <p className="text-xs text-gray-400 mt-0.5">Reason: {String(e.data.lostReason).replace(/_/g, ' ')}</p>
+                )}
+              </>
+            )}
+            {e.kind === 'vacant' && (
+              <p className="text-sm text-gray-400 italic">
+                Vacant · {fmtDate(e.date)} – {fmtDate(e.endDate)}
+              </p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function UnitDetailPage() {
   const { id: projectId, unitId } = useParams<{ id: string; unitId: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: unit, isLoading, error } = useUnit(unitId!);
   const updateUnit = useUpdateUnit();
+  const { data: unitTypeOpts = [] } = useCustomOptions('unit_type');
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>({});
   const [primeOwned, setPrimeOwned] = useState(false);
@@ -284,7 +433,9 @@ export default function UnitDetailPage() {
                   if (v) setForm((f) => ({ ...f, unitType: v }));
                 }}
               >
-                {UNIT_TYPES.map((t) => <SelectItem key={t}>{t.replace(/_/g, ' ')}</SelectItem>)}
+                {(unitTypeOpts as any[]).map((opt: any) => (
+                  <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
+                ))}
               </Select>
               <Select
                 label="Status"
@@ -534,6 +685,14 @@ export default function UnitDetailPage() {
             </dl>
           </Section>
         )}
+      </div>
+
+      {/* History — full lease + sale timeline, survives the unit changing status
+          (e.g. a past tenant stays visible after the unit is later sold) */}
+      <div className="mb-5 sm:mb-6">
+        <Section icon={<FiClock className="w-4 h-4 text-slate-600" />} title="History">
+          <UnitHistoryTimeline leases={u.leases || []} sales={u.sales || []} />
+        </Section>
       </div>
 
       {/* Notes — always visible so users can add notes even when empty */}

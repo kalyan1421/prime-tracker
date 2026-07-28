@@ -43,7 +43,7 @@ export class SalesForecastService {
     const probabilities = { ...DEFAULT_PROBABILITIES, ...(overrides ?? {}) };
 
     const sales = await this.prisma.sale.findMany({
-      where: { projectId },
+      where: { projectId, deletedAt: null },
       select: { status: true, salePrice: true, closingDate: true },
     });
 

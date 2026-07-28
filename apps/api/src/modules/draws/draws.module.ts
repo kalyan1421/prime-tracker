@@ -4,7 +4,6 @@ import { DrawsController } from './draws.controller';
 import { DrawFundingOverdueCron } from './draw-funding-overdue.cron';
 import { DrawEventHandlers } from './draw-event-handlers.service';
 import { DashboardModule } from '../dashboard/dashboard.module';
-import { ProjectHealthModule } from '../project-health/project-health.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditService } from '../../common/utils/audit.service';
 
@@ -19,7 +18,7 @@ import { AuditService } from '../../common/utils/audit.service';
  *   - The cross-feature event handlers that wire all 7 features together
  */
 @Module({
-  imports: [DashboardModule, ProjectHealthModule, NotificationsModule],
+  imports: [DashboardModule, NotificationsModule],
   controllers: [DrawsController],
   providers: [DrawsService, DrawFundingOverdueCron, DrawEventHandlers, AuditService],
   exports: [DrawsService],

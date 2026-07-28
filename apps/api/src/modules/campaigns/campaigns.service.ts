@@ -23,10 +23,10 @@ export class CampaignsService {
 
   async findAll(params: { projectId?: string; status?: CampaignStatus; channel?: CampaignChannel; viewer?: { userId: string; role: string } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) where.projectId = params.projectId;
+    if (params.projectId) where.projects = { some: { projectId: params.projectId } };
     else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) where.projectId = { in: scopeIds };
+      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds } } };
     }
     if (params.status) where.status = params.status;
     if (params.channel) where.channel = params.channel;
@@ -34,7 +34,7 @@ export class CampaignsService {
     return this.prisma.campaign.findMany({
       where,
       include: {
-        project: { select: { id: true, name: true } },
+        projects: { include: { project: { select: { id: true, name: true } } } },
         createdByUser: { select: { id: true, name: true } },
         _count: { select: { leads: true, spend: true } },
       },
@@ -46,7 +46,7 @@ export class CampaignsService {
     const campaign = await this.prisma.campaign.findFirst({
       where: { id, deletedAt: null },
       include: {
-        project: { select: { id: true, name: true } },
+        projects: { include: { project: { select: { id: true, name: true } } } },
         createdByUser: { select: { id: true, name: true } },
         spend: {
           orderBy: { spentOn: 'desc' },
@@ -60,7 +60,7 @@ export class CampaignsService {
   }
 
   async create(data: {
-    projectId?: string;
+    projectIds?: string[];
     name: string;
     channel: CampaignChannel;
     externalId?: string;
@@ -71,16 +71,16 @@ export class CampaignsService {
     notes?: string;
     createdBy: string;
   }) {
-    if (data.projectId) {
-      const project = await this.prisma.project.findFirst({
-        where: { id: data.projectId, deletedAt: null },
+    const projectIds = Array.from(new Set(data.projectIds ?? []));
+    if (projectIds.length > 0) {
+      const found = await this.prisma.project.findMany({
+        where: { id: { in: projectIds }, deletedAt: null },
         select: { id: true },
       });
-      if (!project) throw new BadRequestException('Project not found');
+      if (found.length !== projectIds.length) throw new BadRequestException('One or more projects not found');
     }
     return this.prisma.campaign.create({
       data: {
-        projectId: data.projectId ?? null,
         name: data.name,
         channel: data.channel,
         externalId: data.externalId,
@@ -90,9 +90,10 @@ export class CampaignsService {
         endDate: data.endDate ? new Date(data.endDate) : null,
         notes: data.notes,
         createdBy: data.createdBy,
+        projects: { create: projectIds.map((projectId) => ({ projectId })) },
       },
       include: {
-        project: { select: { id: true, name: true } },
+        projects: { include: { project: { select: { id: true, name: true } } } },
         createdByUser: { select: { id: true, name: true } },
       },
     });
@@ -121,7 +122,7 @@ export class CampaignsService {
           : undefined,
       },
       include: {
-        project: { select: { id: true, name: true } },
+        projects: { include: { project: { select: { id: true, name: true } } } },
         createdByUser: { select: { id: true, name: true } },
       },
     });
@@ -195,10 +196,10 @@ export class CampaignsService {
     const startMonth = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1), 1);
 
     const campaignWhere: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) campaignWhere.projectId = params.projectId;
+    if (params.projectId) campaignWhere.projects = { some: { projectId: params.projectId } };
     else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) campaignWhere.projectId = { in: scopeIds };
+      if (scopeIds) campaignWhere.projects = { some: { projectId: { in: scopeIds } } };
     }
 
     const spend = await this.prisma.campaignSpend.findMany({
@@ -249,10 +250,10 @@ export class CampaignsService {
    */
   async spendByCampaign(params: { projectId?: string; viewer?: { userId: string; role: string } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) where.projectId = params.projectId;
+    if (params.projectId) where.projects = { some: { projectId: params.projectId } };
     else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) where.projectId = { in: scopeIds };
+      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds } } };
     }
 
     const campaigns = await this.prisma.campaign.findMany({
@@ -280,10 +281,10 @@ export class CampaignsService {
    */
   async performance(params: { projectId?: string; from?: string; to?: string; viewer?: { userId: string; role: string } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) where.projectId = params.projectId;
+    if (params.projectId) where.projects = { some: { projectId: params.projectId } };
     else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) where.projectId = { in: scopeIds };
+      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds } } };
     }
 
     const campaigns = await this.prisma.campaign.findMany({
@@ -304,6 +305,7 @@ export class CampaignsService {
             convertedToSale: { select: { salePrice: true, status: true } },
           },
         },
+        projects: { include: { project: { select: { id: true, name: true } } } },
       },
     });
 
@@ -327,6 +329,7 @@ export class CampaignsService {
         name: c.name,
         channel: c.channel,
         status: c.status,
+        projects: c.projects.map((cp) => cp.project),
         plannedBudget: c.plannedBudget ? Number(c.plannedBudget) : null,
         totalSpend,
         leadCount,

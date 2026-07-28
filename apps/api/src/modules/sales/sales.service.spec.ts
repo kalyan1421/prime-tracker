@@ -226,3 +226,36 @@ describe('SalesService — broker commission on close', () => {
     expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
   });
 });
+
+describe('SalesService.delete — soft delete (preserves unit history)', () => {
+  let service: SalesService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+  });
+
+  it('soft-deletes via update(deletedAt) instead of a hard Prisma delete', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'PROSPECT', unitId: 'u1', unit: {} });
+    mockPrisma.sale.update.mockResolvedValue({ id: 's1', deletedAt: new Date() });
+    expect(mockPrisma.sale.delete).toBeUndefined(); // never wired up — nothing in this service should call it
+
+    await service.delete('s1', 'FOUNDER' as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith({
+      where: { id: 's1' },
+      data: { deletedAt: expect.any(Date) },
+    });
+  });
+
+  it('a soft-deleted sale reads back as not-found', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'PROSPECT', deletedAt: new Date() });
+    await expect(service.findById('s1')).rejects.toThrow('Sale not found');
+  });
+
+  it('still blocks a non-Founder/SuperAdmin from deleting a CLOSED sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'CLOSED', unitId: 'u1', unit: {} });
+    await expect(service.delete('s1', 'SALES' as any)).rejects.toThrow(ForbiddenException);
+    expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+  });
+});

@@ -2,7 +2,6 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { DashboardService } from '../dashboard/dashboard.service';
-import { ProjectHealthService } from '../project-health/project-health.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 /**
@@ -11,9 +10,12 @@ import { NotificationsService } from '../notifications/notifications.service';
  *   milestone.completed       → if linkedDrawSchedule, auto-create DrawRequest{ DRAFT }
  *   drawRequest.submitted     → notify approvers (Super Admin/Founder/Executive/Finance)
  *   drawRequest.approved      → notify Finance/leadership the draw is ready for the lender
- *   drawRequest.funded        → auto-create Actual rows, invalidate dashboards + health, notify
+ *   drawRequest.funded        → auto-create Actual rows, invalidate dashboards, notify
  *   drawRequest.fundingOverdue→ create Notification for Finance+Founder
- *   budget.varianceExceeded   → create Notification, invalidate project health cache
+ *   budget.varianceExceeded   → invalidate dashboard cache
+ *
+ * Note: project health is unit-based only (see ProjectHealthService) and does not
+ * depend on draws, milestones, or budget variance — none of these handlers touch it.
  *
  * This service is the "glue layer". If you remove it, all features still work
  * individually — but the system stops feeling like one product. Keep handlers
@@ -27,7 +29,6 @@ export class DrawEventHandlers implements OnModuleInit {
     private prisma: PrismaService,
     private bus: EventBus,
     private dashboard: DashboardService,
-    private health: ProjectHealthService,
     private notifications: NotificationsService,
   ) {}
 
@@ -114,9 +115,6 @@ export class DrawEventHandlers implements OnModuleInit {
       },
     });
     this.logger.log(`Auto-drafted draw #${schedule.drawNumber} for milestone ${e.milestoneId}`);
-
-    // Recompute project health since milestone status + new draft draw both affect it
-    this.health.invalidate(e.projectId);
   }
 
   /**
@@ -152,7 +150,6 @@ export class DrawEventHandlers implements OnModuleInit {
     this.logger.log(`Posted actual for draw ${e.drawId} ($${e.amount})`);
 
     this.dashboard.invalidate();
-    this.health.invalidate(e.projectId);
 
     const draw = await this.findDrawForNotification(e.drawId);
     if (draw?.projectId && draw.project) {
@@ -185,8 +182,7 @@ export class DrawEventHandlers implements OnModuleInit {
   }
 
   private async onVarianceExceeded(e: { projectId: string; pct: number }) {
-    // Invalidate health so the dashboard reflects the new severity immediately
-    this.health.invalidate(e.projectId);
+    // Invalidate dashboard so the new variance severity shows up immediately
     this.dashboard.invalidate();
   }
 }

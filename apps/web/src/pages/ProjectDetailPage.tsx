@@ -214,7 +214,7 @@ import { fmt, fmtPct, fmtDate, errMsg } from '../utils/fmt';
 import { FormError } from '../components/FormError';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
-  PermissionGate,
+  PermissionGate, STATUS_COLORS,
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
@@ -381,6 +381,10 @@ export default function ProjectDetailPage() {
 
 // ---- Overview Tab ----
 const PROJECT_TYPES = ['RESIDENTIAL', 'COMMERCIAL', 'MIXED_USE', 'INDUSTRIAL'];
+// Canonical left-to-right order for the Overview tab's unit-status breakdown — object key
+// order otherwise follows whichever unit was scanned first, so the chip order would shuffle
+// project to project.
+const UNIT_STATUS_ORDER = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASE_PENDING', 'LEASED', 'OCCUPIED', 'SOLD', 'UNDER_CONSTRUCTION'];
 const EMPTY_PROJECT = {
   name: '', description: '', location: '', address: '', acreage: '',
   status: 'ACTIVE', phase: 'PRE_DEVELOPMENT', projectType: '', startDate: '', targetEnd: '',
@@ -527,67 +531,24 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
   );
 }
 
-const PHASE_STEPS = [
-  { key: 'PRE_DEVELOPMENT', label: 'Pre-Dev' },
-  { key: 'PERMITTING', label: 'Permitting' },
-  { key: 'CONSTRUCTION', label: 'Construction' },
-  { key: 'LEASE_UP', label: 'Lease-Up' },
-  { key: 'STABILIZED', label: 'Stabilized' },
-  { key: 'SOLD_REFI', label: 'Sold / Refi' },
-];
-
-function PhaseTimeline({ current }: { current: string }) {
-  const currentIdx = PHASE_STEPS.findIndex((s) => s.key === current);
+// Small "jump to the tab this card summarizes" affordance, used consistently
+// across every Overview section that mirrors another tab's data.
+function CardNavLink({ label, onPress }: { label: string; onPress: () => void }) {
   return (
-    <div className="flex items-start gap-0 w-full">
-      {PHASE_STEPS.map((step, i) => {
-        const done = i < currentIdx;
-        const active = i === currentIdx;
-        const upcoming = i > currentIdx;
-        return (
-          <div key={step.key} className="flex-1 flex flex-col items-center relative">
-            {/* Connector line left */}
-            {i > 0 && (
-              <div
-                className={`absolute left-0 top-[13px] w-1/2 h-0.5 ${done || active ? 'bg-blue-500' : 'bg-gray-200'}`}
-              />
-            )}
-            {/* Connector line right */}
-            {i < PHASE_STEPS.length - 1 && (
-              <div
-                className={`absolute right-0 top-[13px] w-1/2 h-0.5 ${done ? 'bg-blue-500' : 'bg-gray-200'}`}
-              />
-            )}
-            {/* Circle */}
-            <div
-              className={`relative z-10 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold border-2 transition-all ${done
-                  ? 'bg-blue-500 border-blue-500 text-white'
-                  : active
-                    ? 'bg-white border-blue-500 text-blue-600 shadow-[0_0_0_3px_rgba(0,115,230,0.15)]'
-                    : 'bg-white border-gray-300 text-gray-400'
-                }`}
-            >
-              {done ? (
-                <FiCheck className="text-[10px]" />
-              ) : (
-                <span>{i + 1}</span>
-              )}
-            </div>
-            {/* Label */}
-            <p
-              className={`mt-1.5 text-[10px] text-center leading-tight ${active ? 'text-blue-600 font-semibold' : done ? 'text-gray-500' : 'text-gray-400'
-                }`}
-            >
-              {step.label}
-            </p>
-          </div>
-        );
-      })}
-    </div>
+    <button
+      type="button"
+      onClick={onPress}
+      className="text-xs text-blue-600 hover:text-blue-700 hover:underline font-medium flex items-center gap-0.5 shrink-0"
+    >
+      {label}
+      <FiChevronRight className="text-[10px]" />
+    </button>
   );
 }
 
 function OverviewTab({ project: p }: { project: any }) {
+  const navigate = useNavigate();
+  const goTab = (tab: string) => navigate(`/projects/${p.id}/${tab}`);
   const updateProject = useUpdateProject();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>(EMPTY_PROJECT);
@@ -635,20 +596,73 @@ function OverviewTab({ project: p }: { project: any }) {
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
 
-  // Financial calculations \u2014 always compute, show $0 when no data
-  const totalBudget = (p.budgetLines || []).reduce(
-    (s: number, b: any) => s + Number(b.revisedAmt ?? b.baselineAmt ?? 0), 0,
-  );
-  const totalActuals = (p.actuals || []).reduce((s: number, a: any) => s + Number(a.amount ?? 0), 0);
+  // Financial calculations \u2014 sourced from /budgets/summary, the same endpoint the page
+  // header uses. Previously this recomputed its own totals from p.budgetLines/p.actuals,
+  // which don't exclude soft-deleted budget lines or interior/TI-tagged actuals the way
+  // the summary endpoint does \u2014 the header and this card could show two different
+  // "budget"/"spent" numbers for the same project. Pulling from the shared endpoint keeps
+  // them always in agreement and adds Committed (contracted-but-unpaid), which wasn't
+  // shown anywhere on Overview before.
+  const { data: finSummary } = useFinancialSummary(p.id);
+  const fin = (finSummary as any) || { budgetTotal: 0, actualTotal: 0, committedTotal: 0 };
+  const totalBudget = Number(fin.budgetTotal || 0);
+  const totalActuals = Number(fin.actualTotal || 0);
+  const totalCommitted = Number(fin.committedTotal || 0);
   const budgetRemaining = totalBudget - totalActuals;
   const pctSpent = totalBudget > 0 ? (totalActuals / totalBudget) * 100 : 0;
 
-  const unitCount = (p.buildings || []).reduce(
-    (s: number, b: any) => s + (b.units?.length ?? b._count?.units ?? 0), 0,
-  );
+  // Every building/unit needed for the counts below already comes from
+  // GET /projects/:id (p.buildings[].units[]) \u2014 no extra fetch needed, and both
+  // are already deletedAt-filtered server-side so archived/merged-away records
+  // can't inflate these numbers.
+  const buildings = p.buildings || [];
+  const allUnits = buildings.flatMap((b: any) => (b.units || []).map((u: any) => ({ ...u, buildingName: b.name })));
+  const unitCount = allUnits.length;
+  const unitStatusCounts = allUnits.reduce((acc: Record<string, number>, u: any) => {
+    acc[u.status] = (acc[u.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  // p.milestones already comes from GET /projects/:id (no extra fetch) but was never
+  // surfaced on Overview — this project's schedule health was invisible without opening
+  // the Milestones tab. Status is kept current by a daily cron that flips past-due
+  // NOT_STARTED/IN_PROGRESS milestones to OVERDUE, so counting by status is reliable.
+  const milestonesArr = p.milestones || [];
+  const milestonesCompleted = milestonesArr.filter((m: any) => m.status === 'COMPLETED').length;
+  const milestonesOverdue = milestonesArr.filter((m: any) => m.status === 'OVERDUE').length;
+
+  // Revenue, debt service, leads, and draws aren't part of the project payload \u2014
+  // one lightweight query each, reusing the same hooks/shapes the Revenue/Leads/Draws
+  // tabs already use (server-pre-aggregated where possible).
+  const { data: pipeline } = useSalesPipeline(p.id);
+  const { data: leaseIncome } = useMonthlyLeaseIncome(p.id);
+  const { data: monthlyPayments } = useMonthlyPayments(p.id);
+  const { data: leadsData } = useLeads({ projectId: p.id });
+  const { data: drawsData } = useProjectDraws(p.id);
+
+  const pip = (pipeline as any) || { totalPipelineValue: 0, closedRevenue: 0 };
+  const li = (leaseIncome as any) || { total: 0, annualProjection: 0 };
+  const mp = (monthlyPayments as any) || { total: 0, annualTotal: 0 };
+  const leadsArr = (leadsData as any[]) || [];
+  const leadsConverted = leadsArr.filter((l) => l.status === 'CONVERTED').length;
+  const leadsLost = leadsArr.filter((l) => ['LOST', 'DEAD'].includes(l.status)).length;
+  const leadsActive = leadsArr.length - leadsConverted - leadsLost;
+  const drawsArr = (drawsData as any[]) || [];
+  const drawsFunded = drawsArr.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + Number(d.requestedAmount || d.amount || 0), 0);
+  const drawsPending = drawsArr.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + Number(d.requestedAmount || d.amount || 0), 0);
 
   return (
     <div className="space-y-5 mt-4">
+      {/* Row 0: KPI strip \u2014 quick-glance numbers for the whole project */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <StatCard label="Buildings" value={String(buildings.length)} colorScheme="brand" onClick={() => goTab('construction')} />
+        <StatCard label="Total Units" value={String(unitCount)} colorScheme="brand" onClick={() => goTab('units')} />
+        <StatCard label="Available" value={String(unitStatusCounts.AVAILABLE || 0)} colorScheme="green" onClick={() => goTab('units')} />
+        <StatCard label="Sold" value={String(unitStatusCounts.SOLD || 0)} colorScheme="gray" onClick={() => goTab('units')} />
+        <StatCard label="Active Leads" value={String(leadsActive)} colorScheme="purple" onClick={() => goTab('leads')} />
+        <StatCard label="Monthly Debt Service" value={fmt(mp.total)} colorScheme="red" onClick={() => goTab('draws')} />
+      </div>
+
       {/* Row 1: Details + Financial Snapshot */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Project Details */}
@@ -667,31 +681,41 @@ function OverviewTab({ project: p }: { project: any }) {
               {([
                 ['Type', p.projectType ? p.projectType.replace(/_/g, ' ') : '\u2014'],
                 ['Acreage', p.acreage ? `${p.acreage} ac` : '\u2014'],
+                ['Address', p.address || '\u2014'],
                 ['Start Date', fmtDate(p.startDate)],
                 ['Target Completion', fmtDate(p.targetEnd)],
                 ['Last Updated', fmtDate(p.updatedAt)],
-                ['Buildings', p.buildings?.length ?? 0],
-                ['Total Units', unitCount],
-              ] as [string, string | number][]).map(([label, value]) => (
-                <div key={label}>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">{label}</p>
-                  <p className="text-sm font-medium text-gray-800 mt-0.5">{value}</p>
-                </div>
-              ))}
+              ] as [string, string | number][]).map(([label, value]) => {
+                // "Last Updated" is system metadata, not a business fact like the other
+                // fields here — de-emphasized so it doesn't compete for attention with
+                // dates/counts the user actually came to this card to read.
+                const isMeta = label === 'Last Updated';
+                return (
+                  <div key={label}>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">{label}</p>
+                    <p className={`text-sm mt-0.5 ${isMeta ? 'font-normal text-gray-400' : 'font-medium text-gray-800'}`}>{value}</p>
+                  </div>
+                );
+              })}
             </div>
           </CardBody>
         </Card>
 
         {/* Financial Snapshot \u2014 always visible */}
         <Card shadow="sm">
-          <CardHeader className="pb-0">
+          <CardHeader className="pb-0 flex justify-between items-center">
             <p className="font-semibold text-sm text-gray-700">Financial Snapshot</p>
+            <CardNavLink label="View Budget" onPress={() => goTab('budget')} />
           </CardHeader>
           <CardBody>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
                 <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Budget</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(totalBudget)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Committed</p>
+                <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(totalCommitted)}</p>
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Spent</p>
@@ -720,32 +744,212 @@ function OverviewTab({ project: p }: { project: any }) {
                 />
               </div>
             )}
-            {(p.loans || []).length > 0 && (
-              <div className="mt-4 pt-3 border-t border-gray-100">
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium mb-2">Loans</p>
-                {p.loans.map((l: any) => (
-                  <div key={l.id} className="flex justify-between items-center mb-1.5">
-                    <span className="text-xs text-gray-600">{l.loanType?.replace(/_/g, ' ')}</span>
-                    <span className="text-xs font-semibold tabular-nums">{fmt(l.principalAmt)}</span>
-                  </div>
+          </CardBody>
+        </Card>
+      </div>
+
+      {/* Row 2: Buildings breakdown + Unit status mix */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card shadow="sm">
+          <CardHeader className="pb-0 flex justify-between items-center">
+            <p className="font-semibold text-sm text-gray-700">Buildings</p>
+            <CardNavLink label="View Construction" onPress={() => goTab('construction')} />
+          </CardHeader>
+          <CardBody>
+            {buildings.length > 0 ? (
+              <div className="space-y-3">
+                {buildings.map((b: any) => {
+                  const bUnits = b.units || [];
+                  const sold = bUnits.filter((u: any) => u.status === 'SOLD').length;
+                  const available = bUnits.filter((u: any) => u.status === 'AVAILABLE').length;
+                  return (
+                    <div key={b.id} className="flex items-center justify-between border-b border-gray-50 last:border-0 pb-3 last:pb-0">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{b.name}</p>
+                        <p className="text-[11px] text-gray-400">{b.buildingType?.replace(/_/g, ' ') || '\u2014'}{' \u00b7 '}{bUnits.length} unit{bUnits.length === 1 ? '' : 's'}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {available > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.AVAILABLE} className="text-[10px]">{available} available</Chip>}
+                        {sold > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.SOLD} className="text-[10px]">{sold} sold</Chip>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyState title="No buildings yet" message="Add a building to start tracking units." />
+            )}
+          </CardBody>
+        </Card>
+
+        <Card shadow="sm">
+          <CardHeader className="pb-0 flex justify-between items-center">
+            <p className="font-semibold text-sm text-gray-700">Unit Status Mix</p>
+            <CardNavLink label="View Units" onPress={() => goTab('units')} />
+          </CardHeader>
+          <CardBody>
+            {unitCount > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {UNIT_STATUS_ORDER.filter((status) => unitStatusCounts[status] > 0).map((status) => (
+                  <Chip key={status} size="sm" variant="flat" color={STATUS_COLORS[status] || 'default'} className="text-[10px]">
+                    <span className="font-bold">{unitStatusCounts[status]}</span> {status.replace(/_/g, ' ')}
+                  </Chip>
                 ))}
               </div>
+            ) : (
+              <EmptyState title="No units yet" message="Units appear here once buildings have units." />
             )}
           </CardBody>
         </Card>
       </div>
 
-      {/* Row 2: Phase Timeline */}
+      {/* Row 2.5: Milestones — schedule health at a glance, previously absent from Overview */}
       <Card shadow="sm">
-        <CardHeader className="pb-0">
-          <p className="font-semibold text-sm text-gray-700">Project Phase</p>
+        <CardHeader className="pb-0 flex justify-between items-center">
+          <p className="font-semibold text-sm text-gray-700">Milestones</p>
+          <CardNavLink label="View Milestones" onPress={() => goTab('milestones')} />
         </CardHeader>
-        <CardBody className="pt-4 pb-5">
-          <PhaseTimeline current={p.phase || 'PRE_DEVELOPMENT'} />
+        <CardBody>
+          {milestonesArr.length > 0 ? (
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total</p>
+                <p className="text-lg font-semibold text-gray-900 mt-0.5">{milestonesArr.length}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Completed</p>
+                <p className="text-lg font-semibold text-green-700 mt-0.5">{milestonesCompleted}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Overdue</p>
+                <p className={`text-lg font-semibold mt-0.5 ${milestonesOverdue > 0 ? 'text-red-600' : 'text-gray-900'}`}>{milestonesOverdue}</p>
+              </div>
+            </div>
+          ) : (
+            <EmptyState title="No milestones yet" message="Milestones for this project will show up here." />
+          )}
         </CardBody>
       </Card>
 
-      {/* Row 3: Team Members */}
+      {/* Row 3: Revenue + Leads */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card shadow="sm">
+          <CardHeader className="pb-0 flex justify-between items-center">
+            <p className="font-semibold text-sm text-gray-700">Revenue</p>
+            <CardNavLink label="View Revenue" onPress={() => goTab('revenue')} />
+          </CardHeader>
+          <CardBody>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Closed Sales</p>
+                <p className="text-lg font-semibold text-green-700 mt-0.5">{fmt(pip.closedRevenue)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Pipeline Value</p>
+                <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(pip.totalPipelineValue)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Monthly Lease Income</p>
+                <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(li.total)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Annual Projection</p>
+                <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(li.annualProjection)}</p>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
+        <Card shadow="sm">
+          <CardHeader className="pb-0 flex justify-between items-center">
+            <p className="font-semibold text-sm text-gray-700">Leads</p>
+            <CardNavLink label="View Leads" onPress={() => goTab('leads')} />
+          </CardHeader>
+          <CardBody>
+            {leadsArr.length > 0 ? (
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Active</p>
+                  <p className="text-lg font-semibold text-blue-700 mt-0.5">{leadsActive}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Converted</p>
+                  <p className="text-lg font-semibold text-green-700 mt-0.5">{leadsConverted}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Lost</p>
+                  <p className="text-lg font-semibold text-gray-500 mt-0.5">{leadsLost}</p>
+                </div>
+              </div>
+            ) : (
+              <EmptyState title="No leads yet" message="Leads for this project will show up here." />
+            )}
+          </CardBody>
+        </Card>
+      </div>
+
+      {/* Row 4: Draws + Loans */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card shadow="sm">
+          <CardHeader className="pb-0 flex justify-between items-center">
+            <p className="font-semibold text-sm text-gray-700">Draws</p>
+            <CardNavLink label="View Draws" onPress={() => goTab('draws')} />
+          </CardHeader>
+          <CardBody>
+            {drawsArr.length > 0 ? (
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Draws</p>
+                  <p className="text-lg font-semibold text-gray-900 mt-0.5">{drawsArr.length}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Funded</p>
+                  <p className="text-lg font-semibold text-green-700 mt-0.5">{fmt(drawsFunded)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Pending</p>
+                  <p className="text-lg font-semibold text-amber-600 mt-0.5">{fmt(drawsPending)}</p>
+                </div>
+              </div>
+            ) : (
+              <EmptyState title="No draws yet" message="Draw requests against this project's loans will show up here." />
+            )}
+          </CardBody>
+        </Card>
+
+        <Card shadow="sm">
+          <CardHeader className="pb-0 flex justify-between items-center">
+            <p className="font-semibold text-sm text-gray-700">Loans</p>
+            <CardNavLink label="View Draws" onPress={() => goTab('draws')} />
+          </CardHeader>
+          <CardBody>
+            {(p.loans || []).length > 0 ? (
+              <>
+                <div className="grid grid-cols-2 gap-4 mb-3 pb-3 border-b border-gray-100">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Monthly Debt Service</p>
+                    <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(mp.total)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Annual Debt Service</p>
+                    <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(mp.annualTotal)}</p>
+                  </div>
+                </div>
+                {p.loans.map((l: any) => (
+                  <div key={l.id} className="flex justify-between items-center mb-1.5">
+                    <span className="text-xs text-gray-600">{l.lender || '\u2014'}{' \u00b7 '}{l.loanType?.replace(/_/g, ' ')}</span>
+                    <span className="text-xs font-semibold tabular-nums">{fmt(l.principalAmt)}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <EmptyState title="No loans yet" message="Loans attached to this project will show up here." />
+            )}
+          </CardBody>
+        </Card>
+      </div>
+
+      {/* Row 5: Team Members */}
       <TeamMembersCard projectId={p.id} />
 
       {/* Slice 9: project-scoped exception feed at bottom of Overview */}
@@ -1814,7 +2018,6 @@ function FinancialsTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Units Tab ----
-const UNIT_TYPES = ['RETAIL', 'MEDICAL', 'FLEX', 'RESIDENTIAL_LOT', 'OFFICE', 'RESTAURANT', 'EVENT_CENTER'];
 
 const EMPTY_UNIT = {
   unitNumber: '', buildingId: '', unitType: 'RETAIL', sqft: '', status: 'AVAILABLE',
@@ -1929,6 +2132,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const { data: unitStatusOpts = [] } = useCustomOptions('unit_status');
   const UNIT_STATUSES = unitStatusOpts.map((o) => o.value);
   const UNIT_STATUS_LABELS: Record<string, string> = Object.fromEntries(unitStatusOpts.map((o) => [o.value, o.label]));
+  const { data: unitTypeOpts = [] } = useCustomOptions('unit_type');
   const canStatusEdit = hasPermission('unit:edit'); // Sales falls into this branch
   const canDelete = hasPermission('unit:edit') && !isSales;
   const canCreate = canFullEdit;
@@ -2472,8 +2676,8 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                   if (val) setForm((f) => ({ ...f, unitType: val }));
                 }}
               >
-                {UNIT_TYPES.map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
+                {(unitTypeOpts as any[]).map((opt: any) => (
+                  <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
                 ))}
               </Select>
               <Input

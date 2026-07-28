@@ -63,7 +63,7 @@ export function StatCard({
 }
 
 // ---- Status Badge ----
-const STATUS_COLORS: Record<string, 'success' | 'primary' | 'warning' | 'danger' | 'secondary' | 'default'> = {
+export const STATUS_COLORS: Record<string, 'success' | 'primary' | 'warning' | 'danger' | 'secondary' | 'default'> = {
   ACTIVE: 'success', COMPLETED: 'primary', ON_HOLD: 'warning', CANCELLED: 'danger',
   AVAILABLE: 'default', UNDER_CONTRACT: 'warning', LEASED: 'success', SOLD: 'primary',
   OCCUPIED: 'success', UNDER_CONSTRUCTION: 'warning',

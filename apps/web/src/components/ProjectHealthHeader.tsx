@@ -5,6 +5,7 @@ import {
   useFinancialSummary, useUnits, useLeases, useLoans, useUpdateProject,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
+import { fmt as fmtMoney } from '../utils/fmt';
 
 const PHASES = [
   { key: 'PRE_DEVELOPMENT', label: 'Pre-Dev' },
@@ -14,13 +15,6 @@ const PHASES = [
   { key: 'STABILIZED',      label: 'Stabilized' },
   { key: 'SOLD_REFI',       label: 'Sold/Refi' },
 ] as const;
-
-const fmtMoney = (n: number) => {
-  if (n === 0) return '$0';
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${Math.round(n).toLocaleString()}`;
-};
 
 const fmtPct = (n: number) => `${(n * 100).toFixed(0)}%`;
 
