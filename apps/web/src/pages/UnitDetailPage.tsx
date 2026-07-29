@@ -25,6 +25,7 @@ import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
 import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
+import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
 
 
@@ -254,10 +255,24 @@ function UnitHistoryTimeline({ leases, sales }: { leases: any[]; sales: any[] })
 // here because each schedule is a full multi-row table plus a four-stat strip —
 // a unit on its fourth tenant would otherwise be several screens of tables.
 //
+// Each expanded lease shows BOTH halves of that tenancy's rent story, because
+// they answer different questions and are different models: the SCHEDULE is what
+// was contracted (periods, escalations, free-rent months — what is owed), the
+// LEDGER is what actually happened (one row per month, payments recorded against
+// it — what was collected). Reading either alone is how a tenant ends up chased
+// for an abated month, or a missed payment goes unnoticed behind a healthy
+// schedule, so they are stacked under one tenant header rather than split apart.
+//
 // Leases arrive on the unit payload from GET /units/:id (already used above for
 // the History timeline), so this costs no extra request; only the expanded
-// LeaseRentSchedule fetches its own periods.
-function UnitRentHistory({ leases, canEdit }: { leases: any[]; canEdit: boolean }) {
+// lease's schedule and ledger fetch their own rows.
+function UnitRentHistory({ leases, canEdit, canCollect, unitId }: {
+  leases: any[];
+  canEdit: boolean;
+  /** `rent:collect` — recording money received, deliberately not `lease:edit`. */
+  canCollect: boolean;
+  unitId: string | undefined;
+}) {
   const ordered = [...(leases || [])].sort(
     (a, b) => new Date(b.leaseStart || 0).getTime() - new Date(a.leaseStart || 0).getTime(),
   );
@@ -310,8 +325,19 @@ function UnitRentHistory({ leases, canEdit }: { leases: any[]; canEdit: boolean 
               </span>
             </button>
             {open && (
-              <div className="mt-3">
-                <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} />
+              <div className="mt-3 space-y-5">
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Rent schedule — what is owed
+                  </p>
+                  <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Rent ledger — what was collected
+                  </p>
+                  <RentCollectionPanel leaseId={l.id} canCollect={canCollect} unitId={unitId} />
+                </div>
               </div>
             )}
           </div>
@@ -334,6 +360,10 @@ export default function UnitDetailPage() {
   const { hasPermission } = useAuthStore();
   const canEditUnit = hasPermission('unit:edit');
   const canEditLease = hasPermission('lease:edit');
+  const canViewLeases = hasPermission('lease:view');
+  // Recording rent is `rent:collect`, not `lease:edit` — an AR/AP clerk banks a
+  // cheque without being able to rewrite the lease terms behind it.
+  const canCollectRent = hasPermission('rent:collect');
   const canViewBudget = hasPermission('budget:view');
   const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
   const [editingNotes, setEditingNotes] = useState(false);
@@ -781,22 +811,35 @@ export default function UnitDetailPage() {
           "who was here and when"; this answers "how much, and when did it change"
           for those same leases, so the drill-down sits against the summary it
           expands rather than at the foot of the page. Not rendered inside a
-          Section: LeaseRentSchedule and ObligationSummaryCard bring their own
-          card chrome and would otherwise be a card inside a card. */}
-      <div className="mb-5 sm:mb-6 space-y-4">
-        <ObligationSummaryCard scope="unit" id={unitId} />
+          Section: LeaseRentSchedule, RentCollectionPanel and ObligationSummaryCard
+          bring their own card chrome and would otherwise be a card inside a card.
 
-        <div className="flex items-center gap-2.5 pt-1">
-          <FiTrendingUp className="w-4 h-4 text-emerald-600" />
-          <h2 className="font-semibold text-sm text-gray-800">
-            Rent History
-            {(u.leases?.length ?? 0) > 1 && (
-              <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
-            )}
-          </h2>
+          Gated on lease:view like BuildingDetailPage does: every endpoint behind
+          this block (obligation summary, rent periods, rent invoices) requires
+          lease:view, and this route is not permission-guarded in App.tsx — so
+          without the gate an ACCOUNTING / AR_AP / CONSTRUCTION / VIEWER user is
+          shown a card whose only possible outcome is a 403. */}
+      {canViewLeases && (
+        <div className="mb-5 sm:mb-6 space-y-4">
+          <ObligationSummaryCard scope="unit" id={unitId} />
+
+          <div className="flex items-center gap-2.5 pt-1">
+            <FiTrendingUp className="w-4 h-4 text-emerald-600" />
+            <h2 className="font-semibold text-sm text-gray-800">
+              Rent History
+              {(u.leases?.length ?? 0) > 1 && (
+                <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
+              )}
+            </h2>
+          </div>
+          <UnitRentHistory
+            leases={u.leases || []}
+            canEdit={canEditLease}
+            canCollect={canCollectRent}
+            unitId={unitId}
+          />
         </div>
-        <UnitRentHistory leases={u.leases || []} canEdit={canEditLease} />
-      </div>
+      )}
 
       {/* Notes — always visible so users can add notes even when empty */}
       {(u.notes || canEditUnit) && (

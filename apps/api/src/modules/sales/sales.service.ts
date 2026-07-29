@@ -86,9 +86,47 @@ export class SalesService {
     for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
       if (typeof data[field] === 'string') (data as any)[field] = new Date(data[field] as unknown as string);
     }
-    return this.prisma.sale.create({
+    // A sale can be CREATED already CLOSED — the units flow does exactly that when a
+    // user flips a unit to SOLD and fills in the deal. update() gates that transition
+    // on founder discount sign-off and stamps broker commission; create() must apply
+    // the same rules, or "create as CLOSED" becomes a way around both.
+    const createdClosed = data.status === 'CLOSED';
+    if (createdClosed) {
+      await this.assertDiscountApproved({
+        projectId: data.projectId as string,
+        unitId: (data.unitId as string | undefined) ?? null,
+        salePrice: (data.salePrice as Prisma.Decimal | undefined) ?? null,
+        discountApprovedAt: (data.discountApprovedAt as Date | undefined) ?? null,
+      });
+      const commission = await this.computeBrokerCommission(
+        {
+          brokerId: (data.brokerId as string | undefined) ?? null,
+          salePrice: data.salePrice,
+          brokerCommissionPct: data.brokerCommissionPct,
+        },
+        data as Prisma.SaleUncheckedUpdateInput,
+      );
+      if (commission != null) (data as any).brokerCommissionAmt = commission;
+    }
+
+    const created = await this.prisma.sale.create({
       data: { ...data, lastActivityAt: new Date() },
     });
+
+    // Emit for the same reason: a sale born CLOSED is still a sale that closed, and
+    // Finance/Accounting learn about it through these events.
+    if (createdClosed) {
+      this.bus.emit({ type: 'sale.statusChanged', saleId: created.id, from: 'NEW', to: 'CLOSED' });
+      if (created.unitId && created.projectId) {
+        this.bus.emit({
+          type: 'unit.sold',
+          unitId: created.unitId,
+          saleId: created.id,
+          projectId: created.projectId,
+        });
+      }
+    }
+    return created;
   }
 
   async update(id: string, data: Prisma.SaleUncheckedUpdateInput) {
@@ -130,27 +168,35 @@ export class SalesService {
     }
 
     let result;
+    // Did THIS request actually perform the status transition? Only the optimistic-locked
+    // CLOSE path can lose (a concurrent CLOSE beat us to the write); every other path
+    // writes unconditionally and therefore always applies. Events must be gated on this,
+    // not on the pre-transaction snapshot — otherwise two concurrent CLOSEs both read
+    // status=UNDER_CONTRACT and both emit, double-notifying every recipient.
+    let applied = true;
     if (data.status === 'CLOSED' && sale.unitId) {
       const unitId = sale.unitId;
       // Atomic + optimistic-locked: only the NOT_CLOSED→CLOSED transition stamps the broker
       // commission and flips the unit. Guarding the write on `status != CLOSED` means a
       // concurrent CLOSE finds 0 rows and skips re-stamping brokerCommissionAmt.
-      result = await this.prisma.$transaction(async (tx) => {
+      const outcome = await this.prisma.$transaction(async (tx) => {
         const guard = await tx.sale.updateMany({
           where: { id, status: { not: 'CLOSED' } },
           data: dataWithActivity,
         });
         if (guard.count === 0) {
           // Lost the race — already CLOSED elsewhere. Return current row, no side effects.
-          return tx.sale.findUniqueOrThrow({ where: { id } });
+          return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false };
         }
         await tx.unit.update({
           where: { id: unitId },
           // Sale closed → unit becomes SOLD; clear time-on-market
           data: { status: 'SOLD', availableSince: null },
         });
-        return tx.sale.findUniqueOrThrow({ where: { id } });
+        return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
       });
+      result = outcome.sale;
+      applied = outcome.applied;
     } else if (cancelling && sale.unitId) {
       // Cancelling a sale must RELEASE the unit it was holding, or the unit stays stuck
       // in UNDER_CONTRACT forever (backend-issue #1). Only flip a unit that was *reserved*
@@ -177,7 +223,10 @@ export class SalesService {
       result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
     }
 
-    if (data.status && data.status !== sale.status) {
+    // `applied` (not the stale pre-read snapshot) is what makes these events fire exactly
+    // once: the request that lost the optimistic lock changed nothing, so announcing a
+    // transition it didn't make would double-notify — and its `from` is stale besides.
+    if (applied && data.status && data.status !== sale.status) {
       this.bus.emit({
         type: 'sale.statusChanged',
         saleId: id,

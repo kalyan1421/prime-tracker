@@ -5,7 +5,7 @@ import { LeaseObligationService } from './lease-obligation.service';
 const D = (v: string | number) => new Prisma.Decimal(v);
 
 const mockPrisma: any = {
-  lease: { findFirst: jest.fn() },
+  lease: { findFirst: jest.fn(), findUnique: jest.fn() },
   leaseObligation: {
     findMany: jest.fn(),
     findFirst: jest.fn(),
@@ -24,8 +24,17 @@ const mockPrisma: any = {
   $transaction: jest.fn((arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma))),
 };
 
+const mockBus: any = { emit: jest.fn() };
+
 function makeService() {
-  return new LeaseObligationService(mockPrisma as any);
+  return new LeaseObligationService(mockPrisma as any, mockBus as any);
+}
+
+/** Every `lease.tiDisbursed` the service put on the bus. */
+function tiEvents() {
+  return mockBus.emit.mock.calls
+    .map((c: any[]) => c[0])
+    .filter((e: any) => e.type === 'lease.tiDisbursed');
 }
 
 /** Last `data` object handed to leaseObligation.update — i.e. the mirror that was written. */
@@ -223,6 +232,147 @@ describe('LeaseObligationService', () => {
       seed('5000', []);
       await service.recordPayment('ob1', { amount: 100 });
       expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─────── TI disbursement announces itself; a deposit does not ───────
+
+  describe('recordPayment — lease.tiDisbursed', () => {
+    /** Obligation of `kind` on lease `l-x`, already carrying `existing` payments. */
+    function seedObligation(kind: string, total: string, existing: string[]) {
+      const paid = existing.reduce((s, a) => s.plus(D(a)), D(0));
+      mockPrisma.leaseObligation.findUnique.mockResolvedValue({
+        id: 'ob1',
+        leaseId: 'l-x',
+        kind,
+        totalAmount: D(total),
+        paidAmount: paid,
+        status: paid.greaterThan(0) ? 'PARTIAL' : 'PENDING',
+      });
+      mockPrisma.leaseObligationPayment.findMany.mockImplementation(() =>
+        Promise.resolve(
+          [
+            ...existing,
+            ...mockPrisma.leaseObligationPayment.create.mock.calls.map((c: any) => c[0].data.amount),
+          ].map((a: any) => ({ amount: D(a) })),
+        ),
+      );
+    }
+
+    /** A lease hanging off a unit inside a building inside a project. */
+    function leaseOnUnit(projectId: string | null) {
+      mockPrisma.lease.findUnique.mockResolvedValue({
+        building: null,
+        unit: { building: projectId ? { projectId } : null },
+      });
+    }
+
+    it('emits for a TI_ALLOWANCE payment with projectId, amount and remaining pending', async () => {
+      seedObligation('TI_ALLOWANCE', '30000', ['5000']);
+      leaseOnUnit('p1');
+
+      await service.recordPayment('ob1', { amount: 10000 });
+
+      expect(tiEvents()).toEqual([
+        {
+          type: 'lease.tiDisbursed',
+          leaseId: 'l-x',
+          projectId: 'p1',
+          amount: 10000,
+          // 30000 agreed − 15000 now disbursed
+          pending: 15000,
+        },
+      ]);
+    });
+
+    it('resolves the project through the BUILDING when the lease is building-level', async () => {
+      seedObligation('TI_ALLOWANCE', '1000', []);
+      mockPrisma.lease.findUnique.mockResolvedValue({
+        building: { projectId: 'p-bldg' },
+        unit: null,
+      });
+
+      await service.recordPayment('ob1', { amount: 250 });
+
+      expect(tiEvents()[0]).toEqual(
+        expect.objectContaining({ projectId: 'p-bldg', amount: 250, pending: 750 }),
+      );
+    });
+
+    it('does NOT emit for a SECURITY_DEPOSIT payment (money coming in, not going out)', async () => {
+      seedObligation('SECURITY_DEPOSIT', '5000', []);
+      leaseOnUnit('p1');
+
+      await service.recordPayment('ob1', { amount: 5000 });
+
+      expect(tiEvents()).toHaveLength(0);
+      // and it never even looks the lease up
+      expect(mockPrisma.lease.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('skips the emit when the project cannot be resolved rather than emitting a broken event', async () => {
+      seedObligation('TI_ALLOWANCE', '30000', []);
+      leaseOnUnit(null);
+
+      // The payment itself still succeeds — the money is recorded either way.
+      const res: any = await service.recordPayment('ob1', { amount: 1000 });
+      expect(Number(res.obligation.paidAmount)).toBe(1000);
+      expect(tiEvents()).toHaveLength(0);
+    });
+
+    it('emits AFTER the transaction commits, never inside it', async () => {
+      seedObligation('TI_ALLOWANCE', '30000', []);
+      leaseOnUnit('p1');
+
+      let emitsAtCommit = -1;
+      mockPrisma.$transaction.mockImplementationOnce(async (fn: any) => {
+        const out = await fn(mockPrisma);
+        emitsAtCommit = mockBus.emit.mock.calls.length;
+        return out;
+      });
+
+      await service.recordPayment('ob1', { amount: 1000 });
+
+      expect(emitsAtCommit).toBe(0); // nothing announced while the write could still roll back
+      expect(tiEvents()).toHaveLength(1);
+    });
+
+    it('does not emit when the payment transaction rolls back', async () => {
+      seedObligation('TI_ALLOWANCE', '30000', []);
+      leaseOnUnit('p1');
+      mockPrisma.$transaction.mockImplementationOnce(() => Promise.reject(new Error('deadlock')));
+
+      await expect(service.recordPayment('ob1', { amount: 1000 })).rejects.toThrow('deadlock');
+      expect(tiEvents()).toHaveLength(0);
+    });
+
+    it('reports NEGATIVE pending when the TI is over-disbursed (refund signal)', async () => {
+      seedObligation('TI_ALLOWANCE', '30000', ['29000']);
+      leaseOnUnit('p1');
+
+      await service.recordPayment('ob1', { amount: 1500 });
+
+      expect(tiEvents()[0]).toEqual(expect.objectContaining({ amount: 1500, pending: -500 }));
+    });
+
+    it('computes pending with Decimal math, not string-concatenating `+`/`-`', async () => {
+      seedObligation('TI_ALLOWANCE', '1000.50', ['0.25']);
+      leaseOnUnit('p1');
+
+      await service.recordPayment('ob1', { amount: 0.25 });
+
+      // 1000.50 − (0.25 + 0.25). A raw `-` on Prisma Decimals here would produce NaN.
+      expect(tiEvents()[0]).toEqual(expect.objectContaining({ amount: 0.25, pending: 1000 }));
+    });
+
+    it('a failure resolving the project never fails the recorded payment', async () => {
+      seedObligation('TI_ALLOWANCE', '30000', []);
+      mockPrisma.lease.findUnique.mockRejectedValue(new Error('db down'));
+
+      await expect(service.recordPayment('ob1', { amount: 1000 })).resolves.toEqual(
+        expect.objectContaining({ obligation: expect.anything() }),
+      );
+      expect(tiEvents()).toHaveLength(0);
     });
   });
 

@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { NotificationType } from '@prisma/client';
+import { isProjectScopedRole } from '@prime-tracker/shared';
 import { Mailer, createMailer } from './mailer';
 import { NotificationsGateway } from './notifications.gateway';
 
@@ -26,12 +27,6 @@ export type NotificationTier = 'ACTION' | 'FYI';
 /**
  * The tier of every NotificationType. Exported so callers/tests can assert the
  * classification rather than re-deriving it.
- *
- * Keys are plain string literals rather than `NotificationType.X` members
- * because nine values (UNIT_SOLD … RENT_OVERDUE) exist in the database enum
- * (migration 20260729120000_add_notification_types_l3) but are not yet mirrored
- * in `prisma/schema.prisma`, so the generated client has no member for them.
- * See L3_NOTIFICATION_TYPES below.
  */
 export const NOTIFICATION_TIERS = {
   // ---- ACTION: someone must do something ----
@@ -78,33 +73,6 @@ type _Unclassified = Exclude<NotificationType, keyof typeof NOTIFICATION_TIERS>;
 const _tiersAreExhaustive: [_Unclassified] extends [never] ? true : never = true;
 
 /**
- * Notification types added by migration 20260729120000_add_notification_types_l3.
- * The database enum has them; `prisma/schema.prisma`'s `enum NotificationType`
- * block does NOT, so the generated client has no member to reference. The cast
- * is safe (Prisma passes the string straight through to Postgres, which accepts
- * it) and becomes a no-op the moment the schema block is updated.
- *
- * TODO(schema): add these nine values to prisma/schema.prisma so they show up in
- * `Object.values(NotificationType)` — until then they cannot appear in the
- * per-type preference list returned by getPreferences().
- */
-export const L3_NOTIFICATION_TYPES = [
-  'UNIT_SOLD',
-  'LEASE_ADDED',
-  'LEASE_ACTIVATED',
-  'LEASE_TERMINATED',
-  'LEASE_RENT_CHANGED',
-  'FREE_RENT_ENDING_30',
-  'DEPOSIT_OUTSTANDING',
-  'TI_DISBURSED',
-  'RENT_OVERDUE',
-] as const;
-export type L3NotificationType = (typeof L3_NOTIFICATION_TYPES)[number];
-
-/** See L3_NOTIFICATION_TYPES. */
-const l3 = (type: L3NotificationType): NotificationType => type as unknown as NotificationType;
-
-/**
  * Portfolio owners. They are recipients of every routed event regardless of
  * project staffing — they own the whole book, not individual projects.
  */
@@ -148,18 +116,29 @@ export class NotificationsService {
    * Resolve who should hear about an event.
    *
    *   recipients = every active leadership user (SUPER_ADMIN/FOUNDER/EXECUTIVE)
-   *              ∪ active ProjectMember(projectId) holding one of `roles`
+   *              ∪ every active user holding a GLOBAL role in `roles`
+   *              ∪ active ProjectMember(projectId) holding a PROJECT-SCOPED role in `roles`
    *
-   * Leadership is always role-global — they own the portfolio. Everyone else is
-   * scoped to the project so a 30-person org doesn't get a lease alert for a
-   * project they have never touched.
+   * Which roles are project-scoped is NOT decided here — it comes from
+   * `isProjectScopedRole()` in `@prime-tracker/shared`, the same helper that
+   * drives project *visibility* (ProjectsService, ProjectAccessService). Routing
+   * that disagreed with visibility would be a second, silently divergent rule.
+   *
+   * Today that means only the field/operational roles — PROJECT_MANAGER,
+   * CONSTRUCTION, SALES, MARKETING — are filtered by ProjectMember. FINANCE,
+   * ACCOUNTING, AR_AP, LEGAL and VIEWER are deliberately global: they carry the
+   * whole book, are rarely added as ProjectMembers, and are precisely the people
+   * a rent-overdue or budget-variance alert exists for. Scoping them by
+   * membership dropped them from their own alerts.
+   *
+   * Leadership is always role-global — they own the portfolio.
    *
    * Fallback (deliberate, not optional): if the project has ZERO ProjectMember
-   * rows we fall back to role-global for the non-leadership roles. A project
-   * nobody has staffed yet would otherwise emit nothing at all to anyone but
-   * leadership, which reads as broken software rather than as a routing rule.
+   * rows we fall back to role-global for the project-scoped roles too. A project
+   * nobody has staffed yet would otherwise emit nothing to the field roles at
+   * all, which reads as broken software rather than as a routing rule.
    *
-   * When `projectId` is absent the behaviour is role-global, exactly as before.
+   * When `projectId` is absent the behaviour is role-global for everyone.
    */
   async resolveRecipients(params: { roles: string[]; projectId?: string | null }): Promise<string[]> {
     const ids = new Set<string>();
@@ -170,22 +149,28 @@ export class NotificationsService {
     });
     for (const u of leadership) ids.add(u.id);
 
-    // Leadership is already covered globally; anything else is project-scoped.
-    const scopedRoles = [...new Set(params.roles ?? [])].filter((r) => !LEADERSHIP_SET.has(r));
-    if (scopedRoles.length === 0) return [...ids];
-
-    const projectId = params.projectId ?? undefined;
-
-    const addRoleGlobal = async () => {
+    const addRoleGlobal = async (roles: string[]) => {
+      if (roles.length === 0) return;
       const users = await this.prisma.user.findMany({
-        where: { role: { in: scopedRoles } as any, isActive: true },
+        where: { role: { in: roles } as any, isActive: true },
         select: { id: true },
       });
       for (const u of users) ids.add(u.id);
     };
 
+    // Leadership is already covered globally; split the rest by the shared rule.
+    const requested = [...new Set(params.roles ?? [])].filter((r) => !LEADERSHIP_SET.has(r));
+    const scopedRoles = requested.filter((r) => isProjectScopedRole(r));
+    const globalRoles = requested.filter((r) => !isProjectScopedRole(r));
+
+    // Global roles are never filtered by project membership.
+    await addRoleGlobal(globalRoles);
+
+    if (scopedRoles.length === 0) return [...ids];
+
+    const projectId = params.projectId ?? undefined;
     if (!projectId) {
-      await addRoleGlobal();
+      await addRoleGlobal(scopedRoles);
       return [...ids];
     }
 
@@ -196,7 +181,7 @@ export class NotificationsService {
 
     if (members.length === 0) {
       // Unstaffed project — see the fallback note above.
-      await addRoleGlobal();
+      await addRoleGlobal(scopedRoles);
       return [...ids];
     }
 
@@ -491,6 +476,30 @@ export class NotificationsService {
     });
   }
 
+  /**
+   * A submitted draw has blown past its expected funding date. ACTION tier, so
+   * it emails by default — and, unlike the raw insert this replaced, it honours
+   * per-user mute/email preferences and project routing.
+   *
+   * Roles are FINANCE + AR_AP (the people who chase the lender); leadership is
+   * added automatically by resolveRecipients.
+   */
+  async notifyDrawFundingOverdue(p: {
+    drawNumber: number;
+    projectId: string;
+    projectName?: string | null;
+    daysOverdue: number;
+  }) {
+    await this.sendToRoles({
+      roles: ['FINANCE', 'AR_AP'],
+      projectId: p.projectId,
+      type: NotificationType.DRAW_FUNDING_OVERDUE,
+      title: `Draw funding overdue (${p.daysOverdue}d)`,
+      body: `Draw #${p.drawNumber} on ${p.projectName ?? 'a project'} is ${p.daysOverdue} day(s) past its expected funding date.`,
+      link: `/projects/${p.projectId}/draws`,
+    });
+  }
+
   async notifyBudgetVariance(projectId: string, projectName: string, variancePct: number) {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING'],
@@ -555,7 +564,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'SALES', 'ACCOUNTING'],
       projectId: p.projectId,
-      type: l3('UNIT_SOLD'),
+      type: NotificationType.UNIT_SOLD,
       title: `Unit sold: ${p.unitLabel}`,
       body: `${p.unitLabel} in ${p.projectName ?? 'a project'} was sold${p.buyer ? ` to ${p.buyer}` : ''}${
         p.salePrice != null ? ` for ${this.money(p.salePrice)}` : ''
@@ -576,7 +585,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['SALES', 'FINANCE'],
       projectId: p.projectId,
-      type: l3('LEASE_ADDED'),
+      type: NotificationType.LEASE_ADDED,
       title: `New lease: ${p.tenantName}`,
       body: `A lease for ${p.tenantName}${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} was created${
         p.monthlyRent != null ? ` at ${this.money(p.monthlyRent)}/mo` : ''
@@ -597,7 +606,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
-      type: l3('LEASE_ACTIVATED'),
+      type: NotificationType.LEASE_ACTIVATED,
       title: `Lease activated: ${p.tenantName}`,
       body: `${p.tenantName}'s lease${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} is now ACTIVE${
         p.leaseStart ? ` (from ${this.date(p.leaseStart)})` : ''
@@ -618,7 +627,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'SALES'],
       projectId: p.projectId,
-      type: l3('LEASE_TERMINATED'),
+      type: NotificationType.LEASE_TERMINATED,
       title: `Lease terminated: ${p.tenantName}`,
       body: `${p.tenantName}'s lease${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} was terminated${
         p.terminatedOn ? ` on ${this.date(p.terminatedOn)}` : ''
@@ -641,7 +650,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
-      type: l3('LEASE_RENT_CHANGED'),
+      type: NotificationType.LEASE_RENT_CHANGED,
       title: `Rent changed: ${p.tenantName}`,
       body: `Rent for ${p.tenantName}${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} changes ${from}${this.money(
         p.newRent,
@@ -663,7 +672,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
-      type: l3('FREE_RENT_ENDING_30'),
+      type: NotificationType.FREE_RENT_ENDING_30,
       title: `Free rent ends in ${p.daysLeft}d: ${p.tenantName}`,
       body: `${p.tenantName}'s free-rent period${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} ends ${this.date(
         p.freeRentEnd,
@@ -685,7 +694,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
-      type: l3('DEPOSIT_OUTSTANDING'),
+      type: NotificationType.DEPOSIT_OUTSTANDING,
       title: `Deposit outstanding (${p.daysOverdue}d): ${p.tenantName}`,
       body: `${this.money(p.outstanding)} of ${p.tenantName}'s security deposit${this.at(p.unitLabel)} in ${
         p.projectName ?? 'a project'
@@ -712,7 +721,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId: p.projectId,
-      type: l3('TI_DISBURSED'),
+      type: NotificationType.TI_DISBURSED,
       title: `TI disbursed: ${this.money(p.amount)} to ${p.tenantName}`,
       body: `A tenant-improvement allowance payment of ${this.money(p.amount)} was recorded for ${p.tenantName}${this.at(
         p.unitLabel,
@@ -735,7 +744,7 @@ export class NotificationsService {
     await this.sendToRoles({
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
-      type: l3('RENT_OVERDUE'),
+      type: NotificationType.RENT_OVERDUE,
       title: `Rent overdue (${p.daysOverdue}d): ${p.tenantName}`,
       body: `${this.money(p.amountOutstanding)} of ${p.tenantName}'s rent${this.at(p.unitLabel)} in ${
         p.projectName ?? 'a project'

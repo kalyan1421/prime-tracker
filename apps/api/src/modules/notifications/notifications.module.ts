@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { LeasesModule } from '../leases/leases.module';
 import { JwtModule } from '@nestjs/jwt';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
@@ -9,6 +10,11 @@ import { LeaseEventHandlers } from './lease-event-handlers.service';
 
 @Module({
   imports: [
+    // For LeaseRentInvoiceService, which the daily cron calls to populate the rent
+    // ledger before checking for overdue rent. Safe direction: LeasesModule does NOT
+    // import NotificationsModule — LeaseEventHandlers lives here precisely so leases
+    // never has to depend on notifications.
+    LeasesModule,
     JwtModule.register({
       secret: process.env.JWT_ACCESS_SECRET,
       signOptions: { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' },

@@ -333,6 +333,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BROKER_VIEW,
   ],
   [UserRole.ACCOUNTING]: [
+    // rent:collect is worthless without lease:view — the invoice list and
+    // summary endpoints it works against both require the read permission.
+    PERMISSIONS.LEASE_VIEW,
     PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
@@ -362,6 +365,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DAILYLOG_VIEW,
   ],
   [UserRole.AR_AP]: [
+    // rent:collect is worthless without lease:view — the invoice list and
+    // summary endpoints it works against both require the read permission.
+    PERMISSIONS.LEASE_VIEW,
     PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,

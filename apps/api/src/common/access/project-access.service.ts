@@ -14,6 +14,19 @@ import { isProjectScopedRole } from '@prime-tracker/shared';
 // several (or none, when portfolio-wide), so a resolver may return an array too.
 type Resolver = (prisma: PrismaService, id: string) => Promise<string | string[] | null | undefined>;
 
+// A Lease hangs off a Unit *or* a Building, so every lease-child resolver funnels
+// through here instead of repeating the two-way traversal.
+const leaseProjectId = async (p: PrismaService, leaseId: string) => {
+  const l = await p.lease.findUnique({
+    where: { id: leaseId },
+    select: {
+      building: { select: { projectId: true } },
+      unit: { select: { building: { select: { projectId: true } } } },
+    },
+  });
+  return l?.building?.projectId ?? l?.unit?.building?.projectId;
+};
+
 // entity type → resolve one of its row ids to the owning projectId.
 // Most models carry projectId directly; the rest join one or two hops.
 const ENTITY_RESOLVERS: Record<string, Resolver> = {
@@ -29,15 +42,21 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
     (await p.sale.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   lead: async (p, id) =>
     (await p.lead.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
-  lease: async (p, id) => {
-    const l = await p.lease.findUnique({
+  lease: async (p, id) => leaseProjectId(p, id),
+  leaseObligation: async (p, id) => {
+    const o = await p.leaseObligation.findUnique({ where: { id }, select: { leaseId: true } });
+    return o ? leaseProjectId(p, o.leaseId) : undefined;
+  },
+  leaseObligationPayment: async (p, id) => {
+    const pay = await p.leaseObligationPayment.findUnique({
       where: { id },
-      select: {
-        building: { select: { projectId: true } },
-        unit: { select: { building: { select: { projectId: true } } } },
-      },
+      select: { obligation: { select: { leaseId: true } } },
     });
-    return l?.building?.projectId ?? l?.unit?.building?.projectId;
+    return pay ? leaseProjectId(p, pay.obligation.leaseId) : undefined;
+  },
+  leaseRentInvoice: async (p, id) => {
+    const inv = await p.leaseRentInvoice.findUnique({ where: { id }, select: { leaseId: true } });
+    return inv ? leaseProjectId(p, inv.leaseId) : undefined;
   },
   loan: async (p, id) => {
     const l = await p.loan.findUnique({
@@ -126,6 +145,19 @@ const KEY_ENTITY: Record<string, string> = {
   drawId: 'draw',
   revisionId: 'budgetRevision',
   documentId: 'drawDocument',
+  obligationId: 'leaseObligation',
+};
+
+// Controller class name → { param key → entity type }, for keys too generic to resolve
+// globally. ":paymentId" and ":invoiceId" are lease ledger rows only on LeasesController;
+// ContractPayment / SalePayment / InteriorInvoice would reuse those names on their own
+// controllers, and a global entry would silently resolve them to nothing (= no membership
+// check at all). Checked before KEY_ENTITY.
+const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
+  LeasesController: {
+    paymentId: 'leaseObligationPayment',
+    invoiceId: 'leaseRentInvoice',
+  },
 };
 
 // Controller class name → entity type that its bare ":id" route param refers to.
@@ -195,7 +227,8 @@ export class ProjectAccessService {
 
   /**
    * Every projectId the request references, derived from explicit foreign keys in
-   * params/query/body plus the controller's bare ":id" param. Unresolvable ids are
+   * params/query/body (global or controller-scoped) plus the controller's bare ":id"
+   * param. Unresolvable ids are
    * dropped (treated as "no project context"), so the guard never masks a real 404.
    */
   async resolveProjectIds(
@@ -223,10 +256,12 @@ export class ProjectAccessService {
       }
     };
 
+    const controllerKeys = CONTROLLER_KEY_ENTITY[controllerName];
     for (const src of [req.params, req.query, req.body]) {
       if (!src) continue;
       for (const [key, val] of Object.entries(src)) {
-        if (KEY_ENTITY[key]) jobs.push(add(KEY_ENTITY[key], val));
+        const entity = controllerKeys?.[key] ?? KEY_ENTITY[key];
+        if (entity) jobs.push(add(entity, val));
       }
     }
 

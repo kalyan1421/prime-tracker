@@ -58,6 +58,12 @@ export class CreateLeaseDto {
 
   // Rent abatement: free months sit INSIDE the term, so leaseEnd and the escalation clock
   // are unaffected. Defaults to leaseStart when freeRentStartDate is omitted.
+  // Day of month rent falls due (1-31); omit for the 1st. Per-lease because Prime's
+  // leases genuinely differ. The invoice generator clamps to month end, so 31 bills
+  // 28 Feb (29 in a leap year) rather than rolling into March.
+  @IsOptional() @IsInt() @Min(1) @Max(31)
+  rentDueDay?: number;
+
   @IsOptional() @IsInt() @Min(0) @Max(60)
   freeRentMonths?: number;
 
@@ -117,6 +123,12 @@ export class UpdateLeaseDto {
   securityDeposit?: number;
 
   // Rent abatement — see CreateLeaseDto: free months sit inside the term.
+  // Day of month rent falls due (1-31); omit for the 1st. Per-lease because Prime's
+  // leases genuinely differ. The invoice generator clamps to month end, so 31 bills
+  // 28 Feb (29 in a leap year) rather than rolling into March.
+  @IsOptional() @IsInt() @Min(1) @Max(31)
+  rentDueDay?: number;
+
   @IsOptional() @IsInt() @Min(0) @Max(60)
   freeRentMonths?: number;
 

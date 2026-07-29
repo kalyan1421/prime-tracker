@@ -346,6 +346,9 @@ export function useCreateLease() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leases'] });
       qc.invalidateQueries({ queryKey: ['rent-roll'] });
+      // Units carry the tenant/lease columns, so a new lease makes that table stale.
+      // useCreateSale already does this; useCreateLease did not.
+      qc.invalidateQueries({ queryKey: ['units'] });
     },
   });
 }

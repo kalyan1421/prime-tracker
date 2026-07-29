@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
+import { LeaseRentInvoiceService } from '../leases/lease-rent-invoice.service';
 
 /**
  * A lease is polymorphic (unitId XOR buildingId), so every leasing check has to fetch
@@ -40,12 +41,29 @@ export class ScheduledNotificationsService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private rentInvoices: LeaseRentInvoiceService,
   ) {}
 
   // Run daily at 8:00 AM Central Time
   @Cron('0 8 * * *', { timeZone: 'America/Chicago' })
   async runDailyChecks() {
     this.logger.log('Running daily notification checks...');
+
+    // Rent invoices must be generated BEFORE checkOverdueRent reads them — awaited,
+    // not part of the parallel batch below. Without this the ledger is never populated
+    // outside a manual API call, so checkOverdueRent always queries an empty table and
+    // RENT_OVERDUE can never fire. Generation is idempotent (unique on
+    // leaseId+periodMonth) and append-only, so a daily re-run is safe.
+    try {
+      const result = await this.rentInvoices.generateDueThrough(new Date());
+      this.logger.log(
+        `Rent invoices: ${result.invoicesCreated} created across ${result.leasesProcessed} lease(s)`,
+      );
+    } catch (err) {
+      // Never let generation failure block the notification checks below.
+      this.logger.error(`Rent invoice generation failed: ${err}`);
+    }
+
     await Promise.allSettled([
       this.checkOverdueMilestones(),
       this.checkExpiringLeases(),

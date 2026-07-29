@@ -846,9 +846,12 @@ model Lease {
   tenantContact   String?
   tenantEmail     String?
   tenantPhone     String?
-  // Headline / current values. Once rentPeriods exist these are MIRRORS of the period
-  // covering today, maintained by LeasesService — same pattern as BudgetLine.revisedAmt
-  // mirroring the latest BudgetRevision. Existing readers of monthlyRent keep working.
+  // The CONTRACTED headline rent — deliberately NOT mirrored from the active rent
+  // period. Mirroring was the original plan but is wrong: a lease inside a free-rent
+  // period has an effective rent of 0, so mirroring would zero this field and the next
+  // schedule regeneration would derive a zero schedule from it. What a tenant actually
+  // owes in a given month comes from LeaseRentPeriod (see LeasesService.getRentRoll,
+  // which returns both the effective and the contracted totals).
   monthlyRent     Decimal     @db.Decimal(12, 2)
   rentPerSqft     Decimal?    @db.Decimal(8, 2)
   leaseStart      DateTime

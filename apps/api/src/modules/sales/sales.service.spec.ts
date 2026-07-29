@@ -146,6 +146,40 @@ describe('SalesService — discount-approval gate', () => {
     expect(mockPrisma.sale.findUniqueOrThrow).toHaveBeenCalled();
   });
 
+  it('the LOSER of a concurrent CLOSE emits nothing (no duplicate unit.sold notifications)', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: 'u1', salePrice: 97, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 0 }); // lost the optimistic lock
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    // The pre-transaction snapshot still says UNDER_CONTRACT, but this request wrote
+    // nothing — announcing the close would double-notify ~10 recipients.
+    expect(mockBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'unit.sold' }));
+    expect(mockBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'sale.statusChanged' }));
+    expect(mockBus.emit).not.toHaveBeenCalled();
+  });
+
+  it('the WINNER of a concurrent CLOSE emits unit.sold + sale.statusChanged exactly once', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: 'u1', salePrice: 97, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 1 }); // won the optimistic lock
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockBus.emit).toHaveBeenCalledWith({
+      type: 'unit.sold', unitId: 'u1', saleId: 's1', projectId: 'pr1',
+    });
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sale.statusChanged', from: 'UNDER_CONTRACT', to: 'CLOSED' }),
+    );
+    expect(mockBus.emit.mock.calls.filter((c: any[]) => c[0].type === 'unit.sold')).toHaveLength(1);
+  });
+
   it('does not gate a building-level sale (no unit asking price)', async () => {
     mockPrisma.sale.findUnique.mockResolvedValue({
       id: 's1', status: 'PROSPECT', projectId: 'pr1', unitId: null, salePrice: 90, discountApprovedAt: null, unit: null,

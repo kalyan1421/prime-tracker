@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EventBus } from '../../common/events/event-bus.service';
 
 /**
  * Lease obligation ledger — an agreed total paid down by discrete payments.
@@ -87,7 +88,14 @@ interface Totals {
 
 @Injectable()
 export class LeaseObligationService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(LeaseObligationService.name);
+
+  // EventBusModule is @Global(), so EventBus injects here without leases.module
+  // importing anything — same as LeasesService.
+  constructor(
+    private prisma: PrismaService,
+    private bus: EventBus,
+  ) {}
 
   // ─────── Reads ───────
 
@@ -215,18 +223,24 @@ export class LeaseObligationService {
   /**
    * Record a payment against an obligation, then recompute the mirror + status
    * inside the same transaction. Overpayment is allowed (see class doc).
+   *
+   * A payment against a TI_ALLOWANCE is a disbursement of Prime's money to the
+   * tenant, so it raises `lease.tiDisbursed` for Finance/Accounting. A deposit
+   * payment is money coming IN and raises nothing here.
    */
   async recordPayment(obligationId: string, input: RecordPaymentInput) {
     const amount = this.toPositiveDecimal(input.amount, 'Payment amount');
 
-    return this.prisma.$transaction(async (tx) => {
-      const obligation = await tx.leaseObligation.findUnique({ where: { id: obligationId } });
-      if (!obligation) throw new NotFoundException('Lease obligation not found');
-      if (obligation.status === 'WAIVED') {
+    // The TI context is carried OUT of the transaction rather than emitted inside
+    // it: a notification must never go out for a payment that then rolls back.
+    const { payment, obligation, ti } = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.leaseObligation.findUnique({ where: { id: obligationId } });
+      if (!current) throw new NotFoundException('Lease obligation not found');
+      if (current.status === 'WAIVED') {
         throw new BadRequestException('This obligation is waived; un-waive it before recording a payment');
       }
 
-      const payment = await tx.leaseObligationPayment.create({
+      const created = await tx.leaseObligationPayment.create({
         data: {
           obligationId,
           amount,
@@ -240,8 +254,22 @@ export class LeaseObligationService {
       });
 
       const updated = await this.syncMirror(tx, obligationId);
-      return { payment, obligation: updated };
+      return {
+        payment: created,
+        obligation: updated,
+        // recordPayment never touches totalAmount, so the pre-write value is current.
+        ti:
+          current.kind === 'TI_ALLOWANCE'
+            ? { leaseId: current.leaseId, totalAmount: new Prisma.Decimal(current.totalAmount) }
+            : null,
+      };
     });
+
+    if (ti) {
+      await this.emitTiDisbursed(ti.leaseId, amount, ti.totalAmount, new Prisma.Decimal(obligation.paidAmount));
+    }
+
+    return { payment, obligation };
   }
 
   /**
@@ -336,6 +364,51 @@ export class LeaseObligationService {
   }
 
   // ─────── Internals ───────
+
+  /**
+   * Announce a TI disbursement. Runs AFTER the payment transaction has committed.
+   *
+   * Notification routing is project-scoped, and a lease is polymorphic (unit XOR
+   * building), so the project is resolved through whichever side is set. If it
+   * cannot be resolved we skip the emit entirely — a `lease.tiDisbursed` with a
+   * bogus projectId would route the notification to the wrong people, which is
+   * worse than not sending it. Likewise, anything that goes wrong here is logged
+   * and swallowed: the money is already recorded and must not be un-recorded by
+   * a failure in the telling.
+   */
+  private async emitTiDisbursed(
+    leaseId: string,
+    amount: Prisma.Decimal,
+    totalAmount: Prisma.Decimal,
+    paidAmount: Prisma.Decimal,
+  ) {
+    try {
+      const lease = await this.prisma.lease.findUnique({
+        where: { id: leaseId },
+        select: {
+          building: { select: { projectId: true } },
+          unit: { select: { building: { select: { projectId: true } } } },
+        },
+      });
+      const projectId = lease?.building?.projectId ?? lease?.unit?.building?.projectId ?? null;
+      if (!projectId) {
+        this.logger.warn(`Skipping lease.tiDisbursed for lease ${leaseId}: project could not be resolved`);
+        return;
+      }
+
+      this.bus.emit({
+        type: 'lease.tiDisbursed',
+        leaseId,
+        projectId,
+        amount: this.num(amount),
+        // Decimal.minus — raw `-`/`+` on Prisma Decimals is the repo's known bug class.
+        // Mirrors the ledger's pending rule, so an over-disbursed TI reports negative.
+        pending: this.num(totalAmount.minus(paidAmount)),
+      });
+    } catch (err) {
+      this.logger.error(`Failed to emit lease.tiDisbursed for lease ${leaseId}`, err as Error);
+    }
+  }
 
   /**
    * Recompute paidAmount from the payment rows (never increment) and re-derive

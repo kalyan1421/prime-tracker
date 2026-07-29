@@ -3,7 +3,6 @@ import { ScheduledNotificationsService } from './scheduled-notifications.service
 import {
   NotificationsService,
   NOTIFICATION_TIERS,
-  L3_NOTIFICATION_TYPES,
   LEADERSHIP_ROLES,
 } from './notifications.service';
 
@@ -19,6 +18,11 @@ const mockNotifications = {
   notifyFreeRentEnding: jest.fn(),
   notifyDepositOutstanding: jest.fn(),
   notifyRentOverdue: jest.fn(),
+};
+// runDailyChecks generates the rent ledger before reading it; the per-check tests
+// below call the checks directly, so a no-op stub is enough.
+const mockRentInvoices = {
+  generateDueThrough: jest.fn().mockResolvedValue({ invoicesCreated: 0, leasesProcessed: 0 }),
 };
 
 function daysFromNow(n: number) {
@@ -41,7 +45,7 @@ describe('ScheduledNotificationsService.checkSalePayments', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
   });
 
   it('flips past-due installments to OVERDUE and notifies; warns on those due within 7 days', async () => {
@@ -92,7 +96,7 @@ describe('ScheduledNotificationsService.checkFreeRentEnding', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
   });
 
   /** The window query has no `OR`; the "still abated?" query is the one with `OR`. */
@@ -186,7 +190,7 @@ describe('ScheduledNotificationsService.checkOutstandingDeposits', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
   });
 
   it('notifies on a past-due deposit that is not settled, with the pending amount', async () => {
@@ -240,7 +244,7 @@ describe('ScheduledNotificationsService.checkOverdueRent', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
   });
 
   it('notifies on a past-due DUE/PARTIAL invoice with the outstanding balance', async () => {
@@ -302,6 +306,9 @@ const USERS = [
   { id: 'fin2', role: 'FINANCE', isActive: true, email: 'fin2@p.com', name: 'Fern' },
   { id: 'acct', role: 'ACCOUNTING', isActive: true, email: 'a@p.com', name: 'Ada' },
   { id: 'sales', role: 'SALES', isActive: true, email: 's@p.com', name: 'Sal' },
+  { id: 'sales2', role: 'SALES', isActive: true, email: 's2@p.com', name: 'Sid' },
+  { id: 'pm', role: 'PROJECT_MANAGER', isActive: true, email: 'pm@p.com', name: 'Pia' },
+  { id: 'arap', role: 'AR_AP', isActive: true, email: 'ar@p.com', name: 'Ari' },
   { id: 'finOff', role: 'FINANCE', isActive: false, email: 'off@p.com', name: 'Gone' },
 ];
 
@@ -337,26 +344,59 @@ describe('NotificationsService — recipient routing', () => {
     expect(LEADERSHIP_ROLES).toEqual(['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE']);
   });
 
-  it('scopes non-leadership roles to project members', async () => {
-    prisma.projectMember.findMany.mockResolvedValue([{ userId: 'fin1' }, { userId: 'sales' }]);
+  it('scopes PROJECT-SCOPED roles to project members', async () => {
+    prisma.projectMember.findMany.mockResolvedValue([{ userId: 'sales' }, { userId: 'pm' }]);
 
-    const ids = await service.resolveRecipients({ roles: ['FINANCE'], projectId: 'pr1' });
+    const ids = await service.resolveRecipients({ roles: ['SALES'], projectId: 'pr1' });
 
-    expect(ids).toContain('fin1');
-    // fin2 holds the role but is not on the project; sales is on the project but not
+    expect(ids).toContain('sales');
+    // sales2 holds the role but is not on the project; pm is on the project but not
     // a relevant role for this event.
-    expect(ids).not.toContain('fin2');
-    expect(ids).not.toContain('sales');
+    expect(ids).not.toContain('sales2');
+    expect(ids).not.toContain('pm');
   });
 
-  it('falls back to role-global when the project has ZERO members', async () => {
+  // ---- The rule that matters: scoped vs global comes from @prime-tracker/shared ----
+
+  it('does NOT scope global roles by membership — Finance/Accounting/AR_AP still get the alert', async () => {
+    // A staffed project where NONE of the finance people are members. Treating
+    // every non-leadership role as project-scoped silently dropped exactly the
+    // people rent-overdue / deposit / budget-variance alerts exist for.
+    prisma.projectMember.findMany.mockResolvedValue([{ userId: 'sales' }, { userId: 'pm' }]);
+
+    const ids = await service.resolveRecipients({
+      roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
+      projectId: 'pr1',
+    });
+
+    expect(ids).toEqual(expect.arrayContaining(['fin1', 'fin2', 'acct', 'arap']));
+    // No project-scoped role was requested, so membership is never consulted.
+    expect(prisma.projectMember.findMany).not.toHaveBeenCalled();
+  });
+
+  it('mixes the two rules in one call: global roles global, scoped roles filtered', async () => {
+    prisma.projectMember.findMany.mockResolvedValue([{ userId: 'sales' }, { userId: 'pm' }]);
+
+    const ids = await service.resolveRecipients({
+      roles: ['FINANCE', 'SALES'],
+      projectId: 'pr1',
+    });
+
+    // FINANCE is global: fin2 is not a member and is still notified.
+    expect(ids).toEqual(expect.arrayContaining(['fin1', 'fin2']));
+    // SALES is project-scoped: only the member is notified.
+    expect(ids).toContain('sales');
+    expect(ids).not.toContain('sales2');
+  });
+
+  it('falls back to role-global for scoped roles when the project has ZERO members', async () => {
     prisma.projectMember.findMany.mockResolvedValue([]);
 
-    const ids = await service.resolveRecipients({ roles: ['FINANCE'], projectId: 'unstaffed' });
+    const ids = await service.resolveRecipients({ roles: ['SALES'], projectId: 'unstaffed' });
 
-    // An unstaffed project must not go silent — every FINANCE user hears about it.
-    expect(ids).toEqual(expect.arrayContaining(['sa', 'founder', 'exec', 'fin1', 'fin2']));
-    expect(ids).not.toContain('sales');
+    // An unstaffed project must not go silent — every SALES user hears about it.
+    expect(ids).toEqual(expect.arrayContaining(['sa', 'founder', 'exec', 'sales', 'sales2']));
+    expect(ids).not.toContain('pm');
   });
 
   it('never routes to inactive users', async () => {
@@ -384,6 +424,71 @@ describe('NotificationsService — recipient routing', () => {
     // FOUNDER is filtered out of the scoped roles, but pass it anyway to prove dedupe.
     const ids = await service.resolveRecipients({ roles: ['FOUNDER', 'FINANCE'], projectId: 'pr1' });
     expect(ids.filter((id) => id === 'founder')).toHaveLength(1);
+  });
+});
+
+describe('NotificationsService.notifyDrawFundingOverdue', () => {
+  let service: NotificationsService;
+  let prisma: any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma = {
+      user: {
+        findMany: jest.fn(({ where }: any) => {
+          let rows = USERS.filter((u) => u.isActive);
+          if (where?.role?.in) rows = rows.filter((u) => where.role.in.includes(u.role));
+          if (where?.id?.in) rows = rows.filter((u) => where.id.in.includes(u.id));
+          return Promise.resolve(rows);
+        }),
+      },
+      projectMember: { findMany: jest.fn().mockResolvedValue([]) },
+      notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
+      notification: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const config = { get: jest.fn((_k: string, d?: string) => d) };
+    service = new NotificationsService(prisma, config as any, undefined as any);
+  });
+
+  it('routes through sendToRoles with the project, an ACTION type and a real tab link', async () => {
+    const spy = jest.spyOn(service, 'sendToRoles').mockResolvedValue(undefined);
+
+    await service.notifyDrawFundingOverdue({
+      drawNumber: 4,
+      projectId: 'pr1',
+      projectName: 'Rio Ranch',
+      daysOverdue: 12,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roles: ['FINANCE', 'AR_AP'],
+        projectId: 'pr1',
+        type: NotificationType.DRAW_FUNDING_OVERDUE,
+        link: '/projects/pr1/draws',
+      }),
+    );
+    expect(service.tierOf(NotificationType.DRAW_FUNDING_OVERDUE)).toBe('ACTION');
+  });
+
+  it('reaches finance and leadership without a ProjectMember row', async () => {
+    prisma.projectMember.findMany.mockResolvedValue([{ userId: 'pm' }]);
+
+    await service.notifyDrawFundingOverdue({ drawNumber: 4, projectId: 'pr1', daysOverdue: 12 });
+
+    const rows = prisma.notification.createMany.mock.calls[0][0].data;
+    const notified = rows.map((r: any) => r.userId);
+    expect(notified).toEqual(expect.arrayContaining(['fin1', 'fin2', 'arap', 'founder']));
+  });
+
+  it('is mutable per user — the raw insert it replaced ignored preferences entirely', async () => {
+    prisma.notificationPreference.findMany.mockImplementation(({ where }: any) =>
+      Promise.resolve(where.userId.in.map((userId: string) => ({ userId, enabled: false, emailEnabled: null }))),
+    );
+
+    await service.notifyDrawFundingOverdue({ drawNumber: 4, projectId: 'pr1', daysOverdue: 12 });
+
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
   });
 });
 
@@ -427,10 +532,25 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     }
   });
 
-  it('classifies the nine L3 types that are not yet mirrored in the Prisma enum', () => {
-    for (const type of L3_NOTIFICATION_TYPES) {
+  it('carries the nine leasing-depth (L3) types in the Prisma enum itself', () => {
+    // These once lived only in the database enum and were referenced by string
+    // cast. schema.prisma now declares them, so the generated client must too —
+    // otherwise getPreferences() silently stops listing them.
+    for (const type of [
+      'UNIT_SOLD',
+      'LEASE_ADDED',
+      'LEASE_ACTIVATED',
+      'LEASE_TERMINATED',
+      'LEASE_RENT_CHANGED',
+      'FREE_RENT_ENDING_30',
+      'DEPOSIT_OUTSTANDING',
+      'TI_DISBURSED',
+      'RENT_OVERDUE',
+    ] as const) {
+      expect(Object.values(NotificationType)).toContain(type);
       expect(NOTIFICATION_TIERS).toHaveProperty(type);
     }
+    expect(Object.values(NotificationType)).toHaveLength(28);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {

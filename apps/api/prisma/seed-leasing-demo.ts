@@ -37,8 +37,13 @@ function monthsAhead(n: number) {
 }
 
 async function main() {
+  // LeaseObligationService emits lease.tiDisbursed on the EventBus. A seed script has
+  // no Nest container and must not fire notifications at anyone, so pass a no-op bus
+  // rather than leaving it undefined (which the service tolerates, but logs loudly).
+  const silentBus = { emit: () => undefined, on: () => undefined } as any;
+
   const rentPeriods = new LeaseRentPeriodService(prisma as any);
-  const obligations = new LeaseObligationService(prisma as any);
+  const obligations = new LeaseObligationService(prisma as any, silentBus);
   const invoices = new LeaseRentInvoiceService(prisma as any);
 
   // Pick the target deterministically so the demo lands on the same unit every run:
@@ -85,6 +90,12 @@ async function main() {
   await prisma.leaseObligation.deleteMany({
     where: { leaseId: current.id, notes: { contains: DEMO_TAG } },
   });
+  // Invoices must go too. They carry no DEMO_TAG, and generateForLease only
+  // createMany({skipDuplicates})s MISSING months — so without this, a second run
+  // leaves last run's rows behind with stale amounts and a periodId nulled by the
+  // rent-period wipe below (the FK is onDelete: SetNull). That would quietly break
+  // the idempotency this script claims.
+  await prisma.leaseRentInvoice.deleteMany({ where: { leaseId: current.id } });
 
   // ---- 1. The re-let: a PRIOR, expired lease on the SAME unit ----------------
   // This is the whole point — a unit whose rent story spans two tenants.
