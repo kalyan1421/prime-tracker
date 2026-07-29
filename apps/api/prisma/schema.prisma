@@ -73,6 +73,7 @@ model User {
   // Leasing depth — rent timeline + deposit/TI ledger
   leaseRentPeriods        LeaseRentPeriod[]        @relation("LeaseRentPeriodCreator")
   leaseObligationPayments LeaseObligationPayment[] @relation("LeaseObligationPaymentRecorder")
+  leaseRentInvoices       LeaseRentInvoice[]       @relation("LeaseRentInvoiceRecorder")
 
   @@map("users")
 }
@@ -861,6 +862,10 @@ model Lease {
   // signed contract. The generator emits these months as isFreeRent periods at rent 0.
   freeRentMonths    Int?
   freeRentStartDate DateTime?
+  // Day of month rent falls due (1-31). Null = the 1st. Per-lease because Prime's
+  // leases genuinely differ (5th, 10th); the invoice generator clamps to the last
+  // day of short months so a "31st" lease still bills correctly in February.
+  rentDueDay        Int?
   status          String @default("DRAFT")
   notes           String?
   createdAt       DateTime    @default(now())
@@ -870,6 +875,7 @@ model Lease {
   interiorProjects InteriorProject[]
   rentPeriods      LeaseRentPeriod[]
   obligations      LeaseObligation[]
+  rentInvoices     LeaseRentInvoice[]
 
   @@index([unitId])
   @@index([buildingId])
@@ -914,6 +920,8 @@ model LeaseRentPeriod {
   createdById   String?
   createdBy     User?     @relation("LeaseRentPeriodCreator", fields: [createdById], references: [id])
   createdAt     DateTime  @default(now())
+
+  invoices LeaseRentInvoice[]
 
   @@unique([leaseId, sequence])
   @@index([leaseId, startDate])
@@ -972,6 +980,50 @@ model LeaseObligationPayment {
 
   @@index([obligationId])
   @@map("lease_obligation_payments")
+}
+
+// ============================================================================
+// Monthly rent collection ledger.
+//
+// LeaseRentPeriod says what a tenant OWES; this says what they PAID. One row per
+// month per lease, GENERATED from the covering period — never hand-created, so a
+// unit's payment history can have no unexplained gaps. Free-rent months generate
+// rows too (amountDue 0, status FREE) for exactly that reason.
+//
+// The @@unique([leaseId, periodMonth]) makes generation idempotent: the monthly
+// cron can re-run safely.
+// ============================================================================
+
+model LeaseRentInvoice {
+  id           String           @id @default(cuid())
+  leaseId      String
+  lease        Lease            @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  periodId     String?
+  period       LeaseRentPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  /// First day of the billed month (UTC), the natural key alongside leaseId.
+  periodMonth  DateTime
+  dueDate      DateTime
+  amountDue    Decimal          @db.Decimal(12, 2)
+  amountPaid   Decimal          @default(0) @db.Decimal(12, 2)
+  /// True when the month was billed pro-rata (partial first/last month).
+  isProrated   Boolean          @default(false)
+  /// Days billed vs days in month — kept so a prorated figure can be explained.
+  billedDays   Int?
+  monthDays    Int?
+  paidAt       DateTime?
+  status       String           @default("DUE") // DUE | PARTIAL | PAID | FREE | WAIVED
+  method       String?
+  reference    String?
+  notes        String?
+  recordedById String?
+  recordedBy   User?            @relation("LeaseRentInvoiceRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([leaseId, periodMonth])
+  @@index([leaseId, periodMonth])
+  @@index([status, dueDate])
+  @@map("lease_rent_invoices")
 }
 
 // ---- Rent Roll Snapshot ----
@@ -1304,6 +1356,19 @@ enum NotificationType {
   // Draw past its expectedFundingDate. Previously these alerts were filed under
   // BUDGET_VARIANCE, which meant muting budget alerts also muted funding alerts.
   DRAW_FUNDING_OVERDUE
+  // Leasing depth triggers. These must stay in sync with
+  // migrations/20260729120000_add_notification_types_l3 — a value present in the DB
+  // but missing here is invisible to Object.values(NotificationType), which means it
+  // never appears in getPreferences() and users cannot mute it.
+  UNIT_SOLD
+  LEASE_ADDED
+  LEASE_ACTIVATED
+  LEASE_TERMINATED
+  LEASE_RENT_CHANGED
+  FREE_RENT_ENDING_30
+  DEPOSIT_OUTSTANDING
+  TI_DISBURSED
+  RENT_OVERDUE
 }
 
 model Notification {
@@ -1324,6 +1389,10 @@ model Notification {
 
 model NotificationPreference {
   id      String           @id @default(cuid())
+  // emailEnabled is NULLABLE on purpose: null means "use this notification type's
+  // tier default" (action-needed types email, FYI types are in-app only). An
+  // explicit true/false is a deliberate per-user override in either direction.
+  emailEnabled Boolean?
   userId  String
   user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   type    NotificationType

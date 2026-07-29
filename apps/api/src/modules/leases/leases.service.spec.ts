@@ -12,14 +12,24 @@ const mockPrisma: any = {
   leaseRentPeriod: {
     findMany: jest.fn().mockResolvedValue([]),
   },
+  // resolveProjectId walks unit -> building -> project (or building -> project) so
+  // lease events can be routed to the right project's members.
+  unit: {
+    findUnique: jest.fn().mockResolvedValue({ building: { projectId: 'p1' } }),
+  },
+  building: {
+    findUnique: jest.fn().mockResolvedValue({ projectId: 'p1' }),
+  },
 };
 
 const mockRentPeriods: any = {
   generateForLease: jest.fn().mockResolvedValue([]),
 };
 
+const mockBus: any = { emit: jest.fn() };
+
 function makeService() {
-  return new LeasesService(mockPrisma as any, mockRentPeriods as any);
+  return new LeasesService(mockPrisma as any, mockRentPeriods as any, mockBus as any);
 }
 
 describe('LeasesService.delete — soft delete (preserves unit history)', () => {
@@ -214,5 +224,89 @@ describe('LeasesService.getRentRoll — effective rent, not flat monthlyRent', (
     const rr = await service.getRentRoll('p1', new Date('2027-06-01'));
 
     expect(rr.totalMonthlyRent).toBe(900);
+  });
+});
+
+describe('LeasesService — domain events for notification routing', () => {
+  let service: LeasesService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.leaseRentPeriod.findMany.mockResolvedValue([]);
+    mockRentPeriods.generateForLease.mockResolvedValue([]);
+    mockPrisma.unit.findUnique.mockResolvedValue({ building: { projectId: 'p1' } });
+    mockPrisma.building.findUnique.mockResolvedValue({ projectId: 'p1' });
+    service = makeService();
+  });
+
+  const base = {
+    unitId: 'u1', buildingId: null, tenantName: 'Acme', monthlyRent: 1000,
+    leaseStart: '2026-01-01', leaseEnd: '2027-01-01', termMonths: 12,
+  } as any;
+
+  it('emits lease.created with a resolved projectId', async () => {
+    mockPrisma.lease.findFirst.mockResolvedValue(null);
+    mockPrisma.lease.create.mockResolvedValue({ id: 'l1', ...base, status: 'DRAFT' });
+
+    await service.create(base);
+
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'lease.created', leaseId: 'l1', projectId: 'p1' }),
+    );
+  });
+
+  it('a lease created straight as ACTIVE also emits lease.activated (it never passes through update)', async () => {
+    mockPrisma.lease.findFirst.mockResolvedValue(null);
+    mockPrisma.lease.create.mockResolvedValue({ id: 'l1', ...base, status: 'ACTIVE' });
+
+    await service.create({ ...base, status: 'ACTIVE' });
+
+    const types = mockBus.emit.mock.calls.map((c: any[]) => c[0].type);
+    expect(types).toContain('lease.created');
+    expect(types).toContain('lease.activated');
+  });
+
+  it('resolves projectId through the building for a building-level lease', async () => {
+    mockPrisma.lease.findFirst.mockResolvedValue(null);
+    mockPrisma.lease.create.mockResolvedValue({ id: 'l2', ...base, unitId: null, buildingId: 'b1', status: 'DRAFT' });
+
+    await service.create({ ...base, unitId: undefined, buildingId: 'b1' });
+
+    expect(mockPrisma.building.findUnique).toHaveBeenCalled();
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'lease.created', projectId: 'p1' }),
+    );
+  });
+
+  it('emits lease.terminated on a status change to TERMINATED', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ id: 'l1', ...base, status: 'ACTIVE', deletedAt: null });
+    mockPrisma.lease.update.mockResolvedValue({ id: 'l1', ...base, status: 'TERMINATED' });
+
+    await service.update('l1', { status: 'TERMINATED' });
+
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'lease.terminated', leaseId: 'l1', projectId: 'p1' }),
+    );
+  });
+
+  it('emits lease.rentChanged with both the old and new rent', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ id: 'l1', ...base, monthlyRent: 1000, status: 'ACTIVE', deletedAt: null });
+    mockPrisma.lease.update.mockResolvedValue({ id: 'l1', ...base, monthlyRent: 1200, status: 'ACTIVE' });
+
+    await service.update('l1', { monthlyRent: 1200 });
+
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'lease.rentChanged', from: 1000, to: 1200, source: 'MANUAL' }),
+    );
+  });
+
+  it('does not emit a rent change when the rent did not actually move', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ id: 'l1', ...base, monthlyRent: 1000, status: 'ACTIVE', deletedAt: null });
+    mockPrisma.lease.update.mockResolvedValue({ id: 'l1', ...base, monthlyRent: 1000, status: 'ACTIVE' });
+
+    await service.update('l1', { monthlyRent: 1000 });
+
+    const types = mockBus.emit.mock.calls.map((c: any[]) => c[0].type);
+    expect(types).not.toContain('lease.rentChanged');
   });
 });

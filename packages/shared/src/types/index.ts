@@ -149,6 +149,9 @@ export const PERMISSIONS = {
   SALES_EDIT: 'sales:edit',
   LEASE_VIEW: 'lease:view',
   LEASE_EDIT: 'lease:edit',
+  // Recording rent received is deliberately NOT lease:edit — an AR/AP clerk must be
+  // able to mark rent paid without also being able to rewrite the lease terms.
+  RENT_COLLECT: 'rent:collect',
 
   // Leads
   LEAD_VIEW: 'lead:view',
@@ -288,6 +291,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.SETTINGS_MANAGE,
   ],
   [UserRole.FINANCE]: [
+    PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -329,6 +333,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BROKER_VIEW,
   ],
   [UserRole.ACCOUNTING]: [
+    PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -357,6 +362,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DAILYLOG_VIEW,
   ],
   [UserRole.AR_AP]: [
+    PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -574,7 +580,7 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'buildings', label: 'Buildings & Units', permissions: ['building:view', 'building:edit', 'unit:view', 'unit:edit'] },
   { key: 'financial', label: 'Financial', permissions: ['financial:view', 'financial:edit', 'financial:export', 'budget:view', 'budget:edit', 'actual:view', 'actual:edit'] },
   { key: 'loans', label: 'Loans & Draws', permissions: ['loan:view', 'loan:edit', 'draw:view', 'draw:edit', 'draw:approve'] },
-  { key: 'sales_leasing', label: 'Sales & Leasing', permissions: ['sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'lead:view', 'lead:create', 'lead:edit', 'lead:delete', 'lead:convert'] },
+  { key: 'sales_leasing', label: 'Sales & Leasing', permissions: ['sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'rent:collect', 'lead:view', 'lead:create', 'lead:edit', 'lead:delete', 'lead:convert'] },
   { key: 'marketing', label: 'Marketing & Campaigns', permissions: ['campaign:view', 'campaign:create', 'campaign:edit', 'campaign:spend', 'campaign:delete'] },
   { key: 'milestones', label: 'Milestones', permissions: ['milestone:view', 'milestone:edit'] },
   { key: 'vendors', label: 'Vendors & Contracts', permissions: ['vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve'] },

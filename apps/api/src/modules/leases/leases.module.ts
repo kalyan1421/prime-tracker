@@ -3,6 +3,7 @@ import { LeasesService } from './leases.service';
 import { LeasesController } from './leases.controller';
 import { LeaseObligationService } from './lease-obligation.service';
 import { LeaseRentPeriodService } from './lease-rent-period.service';
+import { LeaseRentInvoiceService } from './lease-rent-invoice.service';
 import { AuditService } from '../../common/utils/audit.service';
 
 @Module({
@@ -11,7 +12,7 @@ import { AuditService } from '../../common/utils/audit.service';
   // LeaseRentPeriodService (escalation schedule / rent history / free rent) are exported
   // so the units, buildings and reports modules can read their rollups and as-of-date
   // rent without routing through LeasesService.
-  providers: [LeasesService, AuditService, LeaseObligationService, LeaseRentPeriodService],
-  exports: [LeasesService, LeaseObligationService, LeaseRentPeriodService],
+  providers: [LeasesService, AuditService, LeaseObligationService, LeaseRentPeriodService, LeaseRentInvoiceService],
+  exports: [LeasesService, LeaseObligationService, LeaseRentPeriodService, LeaseRentInvoiceService],
 })
 export class LeasesModule {}

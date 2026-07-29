@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException } from '@nes
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { LeaseRentPeriodService, startOfUtcDay, addMonthsUtc } from './lease-rent-period.service';
+import { EventBus } from '../../common/events/event-bus.service';
 
 /**
  * Which rent period covers `at`, given periods sorted newest-start-first.
@@ -40,7 +41,29 @@ export class LeasesService {
   constructor(
     private prisma: PrismaService,
     private rentPeriods: LeaseRentPeriodService,
+    private bus: EventBus,
   ) {}
+
+  /**
+   * Notification routing is project-scoped, so every lease event needs a projectId.
+   * A lease hangs off EITHER a unit or a building, so resolve from whichever is set.
+   */
+  private async resolveProjectId(lease: { unitId: string | null; buildingId: string | null }) {
+    if (lease.buildingId) {
+      const b = await this.prisma.building.findUnique({
+        where: { id: lease.buildingId }, select: { projectId: true },
+      });
+      return b?.projectId ?? null;
+    }
+    if (lease.unitId) {
+      const u = await this.prisma.unit.findUnique({
+        where: { id: lease.unitId },
+        select: { building: { select: { projectId: true } } },
+      });
+      return u?.building?.projectId ?? null;
+    }
+    return null;
+  }
 
   async findByUnit(unitId: string) {
     return this.prisma.lease.findMany({ where: { unitId, deletedAt: null }, orderBy: { leaseStart: 'desc' } });
@@ -227,6 +250,16 @@ export class LeasesService {
     // periods without falling back to lease.monthlyRent (see getRentRoll), and
     // generateForLease is idempotent, so this is safe to retry later.
     await this.generateSchedule(lease.id, createdById);
+
+    const projectId = await this.resolveProjectId(lease);
+    if (projectId) {
+      this.bus.emit({ type: 'lease.created', leaseId: lease.id, projectId, tenantName: lease.tenantName });
+      // A lease entered straight as ACTIVE never passes through an update, so it would
+      // otherwise never announce itself to Finance/Accounting.
+      if (lease.status === 'ACTIVE') {
+        this.bus.emit({ type: 'lease.activated', leaseId: lease.id, projectId, tenantName: lease.tenantName });
+      }
+    }
     return lease;
   }
 
@@ -259,6 +292,32 @@ export class LeasesService {
     );
     if (scheduleChanged) {
       await this.generateSchedule(id, updatedById, true);
+    }
+
+    const projectId = await this.resolveProjectId(updated);
+    if (projectId) {
+      if (data.status && data.status !== before.status) {
+        if (updated.status === 'ACTIVE') {
+          this.bus.emit({ type: 'lease.activated', leaseId: id, projectId, tenantName: updated.tenantName });
+        } else if (updated.status === 'TERMINATED') {
+          this.bus.emit({ type: 'lease.terminated', leaseId: id, projectId, tenantName: updated.tenantName });
+        }
+      }
+      // Headline rent moved — Finance/Accounting/AR need to know regardless of whether
+      // it came from a scheduled escalation or someone editing the lease.
+      const fromRent = Number(before.monthlyRent);
+      const toRent = Number(updated.monthlyRent);
+      if (data.monthlyRent !== undefined && fromRent !== toRent) {
+        this.bus.emit({
+          type: 'lease.rentChanged',
+          leaseId: id,
+          projectId,
+          from: fromRent,
+          to: toRent,
+          effectiveAt: updated.leaseStart,
+          source: 'MANUAL',
+        });
+      }
     }
     return updated;
   }

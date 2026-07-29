@@ -184,6 +184,17 @@ export class SalesService {
         from: sale.status,
         to: data.status as string,
       });
+      // A unit flipping to SOLD is the event Finance/Sales/Accounting actually care
+      // about — distinct from a sale merely changing stage. Only emitted for
+      // unit-level sales; a building-level sale has no unit to flip.
+      if (data.status === 'CLOSED' && sale.status !== 'CLOSED' && sale.unitId && sale.projectId) {
+        this.bus.emit({
+          type: 'unit.sold',
+          unitId: sale.unitId,
+          saleId: id,
+          projectId: sale.projectId,
+        });
+      }
     }
     return result;
   }

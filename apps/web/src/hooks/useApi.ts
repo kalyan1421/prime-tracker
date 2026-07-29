@@ -857,13 +857,34 @@ export function useNotificationPreferences() {
   });
 }
 
+/**
+ * Delivery is split per channel: `enabled` drives in-app, `emailEnabled` drives
+ * email. `emailEnabled` is deliberately nullable — null means "fall back to this
+ * type's tier default" (ACTION types email, FYI types are in-app only), so it is
+ * NOT interchangeable with false. Both fields are optional so a caller can move
+ * one channel without restating the other.
+ */
 export function useUpdateNotificationPreference() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ type, enabled }: { type: string; enabled: boolean }) =>
-      api.put('/notifications/preferences', { type, enabled }).then((r) => r.data),
+    mutationFn: ({ type, enabled, emailEnabled }: { type: string; enabled?: boolean; emailEnabled?: boolean | null }) =>
+      api
+        .put('/notifications/preferences', {
+          type,
+          ...(enabled === undefined ? {} : { enabled }),
+          ...(emailEnabled === undefined ? {} : { emailEnabled }),
+        })
+        .then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['notification-prefs'] }),
   });
+}
+
+export interface NotificationPreference {
+  type: string;
+  enabled: boolean;
+  /** null = use the tier default; true/false = explicit user override. */
+  emailEnabled?: boolean | null;
+  tier?: 'ACTION' | 'FYI';
 }
 
 // ---- Leads ----
@@ -2587,5 +2608,95 @@ export function useDeleteObligationPayment() {
     mutationFn: ({ paymentId }: ObligationScope & { paymentId: string }) =>
       api.delete(`/leases/obligation-payments/${paymentId}`).then((r) => r.data),
     onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}
+
+// ============================================================================
+// Rent invoices (monthly rent billing + collection)
+// ============================================================================
+// Money is passed through untouched — the API serialises Prisma Decimal to
+// strings, so amounts stay strings all the way to the formatter.
+
+export function useLeaseRentInvoices(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-rent-invoices', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/rent-invoices`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+/** Every invoice across all leases on a unit — the unit's collection history. */
+export function useUnitRentInvoices(unitId?: string) {
+  return useQuery({
+    queryKey: ['rent-invoices', 'unit', unitId],
+    queryFn: () => api.get(`/leases/rent-invoices/unit/${unitId}`).then((r) => r.data),
+    enabled: !!unitId,
+  });
+}
+
+/** { billed, collected, outstanding, overdueCount } — money fields are strings. */
+export function useLeaseRentInvoiceSummary(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-rent-invoice-summary', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/rent-invoice-summary`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+/**
+ * Payment writes are addressed by invoice id, so the mutation can't derive which
+ * views moved. Callers pass the ids they already hold (same approach as
+ * ObligationScope above): leaseId for the lease's list + summary, unitId for the
+ * cross-lease unit view. Touching one invoice moves all three, so they are always
+ * invalidated together; a missing leg falls back to sweeping that prefix rather
+ * than leaving it stale.
+ */
+type RentInvoiceScope = { leaseId?: string; unitId?: string };
+
+function invalidateRentInvoices(qc: ReturnType<typeof useQueryClient>, v: RentInvoiceScope) {
+  qc.invalidateQueries({ queryKey: v.leaseId ? ['lease-rent-invoices', v.leaseId] : ['lease-rent-invoices'] });
+  qc.invalidateQueries({
+    queryKey: v.leaseId ? ['lease-rent-invoice-summary', v.leaseId] : ['lease-rent-invoice-summary'],
+  });
+  qc.invalidateQueries({ queryKey: v.unitId ? ['rent-invoices', 'unit', v.unitId] : ['rent-invoices'] });
+}
+
+/** Backfill/generate invoices for a lease from its rent timeline. */
+export function useGenerateRentInvoices() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leaseId, data }: RentInvoiceScope & { leaseId: string; data?: Record<string, any> }) =>
+      api.post(`/leases/${leaseId}/rent-invoices/generate`, data ?? {}).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentInvoices(qc, v),
+  });
+}
+
+/** Record (or correct) a payment against one invoice: { amountPaid, paidAt?, method?, reference?, notes? }. */
+export function useRecordRentPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ invoiceId, data }: RentInvoiceScope & { invoiceId: string; data: Record<string, any> }) =>
+      api.patch(`/leases/rent-invoices/${invoiceId}/payment`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentInvoices(qc, v),
+  });
+}
+
+/** Clear a mis-keyed payment, returning the invoice to unpaid. */
+export function useClearRentPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ invoiceId }: RentInvoiceScope & { invoiceId: string }) =>
+      api.delete(`/leases/rent-invoices/${invoiceId}/payment`).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentInvoices(qc, v),
+  });
+}
+
+/** Forgive an invoice (abatement, goodwill credit…) — requires a reason. */
+export function useWaiveRentInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ invoiceId, data }: RentInvoiceScope & { invoiceId: string; data: { reason: string } }) =>
+      api.post(`/leases/rent-invoices/${invoiceId}/waive`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentInvoices(qc, v),
   });
 }

@@ -5,6 +5,7 @@ import { NotificationsController } from './notifications.controller';
 import { ScheduledNotificationsService } from './scheduled-notifications.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { NotificationsGateway } from './notifications.gateway';
+import { LeaseEventHandlers } from './lease-event-handlers.service';
 
 @Module({
   imports: [
@@ -14,7 +15,10 @@ import { NotificationsGateway } from './notifications.gateway';
     }),
   ],
   controllers: [NotificationsController],
-  providers: [NotificationsService, ScheduledNotificationsService, AuditService, NotificationsGateway],
+    // LeaseEventHandlers subscribes to the EventBus on init — it lives here rather than in
+  // LeasesModule so leases never has to import notifications (the circular dep that
+  // DrawEventHandlers exists to avoid).
+  providers: [NotificationsService, ScheduledNotificationsService, AuditService, NotificationsGateway, LeaseEventHandlers],
   exports: [NotificationsService, NotificationsGateway],
 })
 export class NotificationsModule {}
