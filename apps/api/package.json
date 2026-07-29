@@ -16,7 +16,8 @@
     "db:seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts"
   },
   "prisma": {
-    "seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts"
+    "seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts && ts-node prisma/seed-leasing-demo.ts",
+    "seed:leasing-demo": "ts-node prisma/seed-leasing-demo.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1067.0",
