@@ -407,20 +407,31 @@ Four **additional** pre-existing bugs found and fixed during the work, none part
 - `buildings.service.ts` inline param types omitted `llcName` and `acreage`.
 - `freeRentStartDate` needed the same `YYYY-MM-DD` → `Date` coercion `leaseStart`/`leaseEnd` already have.
 
-**L1 / L2 — service layer complete, not yet integrated.** `LeaseRentPeriodService` (58 tests) and
-`LeaseObligationService` (35 tests) are built, registered in `leases.module.ts` and exported.
+**L1 / L2 — API complete. UI outstanding.** `LeaseRentPeriodService` (58 tests) and
+`LeaseObligationService` (35 tests) built, registered, and now fully wired: 14 HTTP routes + DTOs,
+15 web query hooks, schedule generation on lease create/update, and an as-of-date rent roll.
+
+Verified against **real Postgres**, not just mocks — every unit test mocks Prisma, so nothing had
+proven the generator writes correct rows. A throwaway 36-month lease at 5%/12mo with 3 free months
+produced: one free period spanning exactly the abated months, 33 paying months of 36 with `leaseEnd`
+unmoved, escalations at +12/+24mo from `leaseStart`, base rents 1000 → 1050 → 1102.50, and
+`forwardYearRent` 12,862.50 vs a naive ×12 of 12,600.
+
+⚠️ **Plan correction — do not mirror `Lease.monthlyRent` from the active period.** §3.2 originally
+called for this (the `BudgetLine.revisedAmt` pattern). It is wrong here: a lease inside a free-rent
+period has an effective rent of 0, so mirroring would zero the headline rent, and the next
+regeneration would derive a zero schedule from it. `monthlyRent` stays the contractual base;
+effective rent is always derived, never stored back.
+
+Still outstanding for L1/L2 — **UI only**:
+- rent history / schedule table on the lease and on `UnitDetailPage` (flattened across all leases
+  for that unit, so a re-let reads as one continuous timeline)
+- deposit + TI panels; deposit column on the units table; building-level totals
+- "Deposits outstanding" stat on the Revenue tab
 
 Verification: API `tsc --noEmit` exit 0; web `tsc --noEmit` exit 0; 248 tests pass. 11 failures in
 `interior.service`, `encryption.service`, `daily-logs.service` are **pre-existing** — confirmed by
 stashing all of this work and re-running to the identical 11.
-
-Still to do for L1/L2 (deliberately not done — behaviour changes that need the UI to land with them):
-- `LeasesService.create()` → call `generateForLease`; `update()` → `regenerateFuture` when
-  `monthlyRent`/`escalationPct`/`escalationFreq`/`freeRent*` change
-- mirror `Lease.monthlyRent` from `getEffectivePeriod(leaseId, now)`
-- controller routes + DTOs for both services
-- `getRentRoll` as-of-date (§3.8) and the two "Annual Rent × 12" cards (A3)
-- rent history + deposit/TI UI on the lease, unit and building screens
 
 **Two engine decisions worth knowing:**
 - Rounding compounds the *rounded* value (half-up, 2dp, at each period boundary) — the tenant is
