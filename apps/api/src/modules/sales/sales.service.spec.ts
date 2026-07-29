@@ -259,6 +259,52 @@ describe('SalesService — broker commission on close', () => {
     expect(data.brokerCommissionAmt).toBeUndefined();
     expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
   });
+
+  // Correcting a closed sale's record afterward (e.g. from the unit detail page) must
+  // keep the stamped commission honest — it must not go stale just because the sale
+  // isn't transitioning INTO closed this time.
+  it('recomputes commission when an ALREADY-CLOSED sale has its broker % edited', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED', brokerCommissionPct: 2 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { brokerCommissionPct: 5 } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 50000 }) }),
+    );
+  });
+
+  it('recomputes commission when an ALREADY-CLOSED sale has its sale price edited', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED' }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { salePrice: 2000000 } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 40000 }) }),
+    );
+  });
+
+  it('zeroes the commission when the broker is explicitly cleared on an already-closed sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED' }));
+
+    await service.update('s1', { brokerId: null } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    expect(data.brokerCommissionAmt).toBeNull();
+    // Must not fall through to the OLD broker via computeBrokerCommission's `?? sale.brokerId`.
+    expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('does NOT touch commission on an unrelated field edit to an already-closed sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED' }));
+
+    await service.update('s1', { notes: 'corrected buyer spelling' } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    expect(data.brokerCommissionAmt).toBeUndefined();
+    expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
+  });
 });
 
 describe('SalesService.delete — soft delete (preserves unit history)', () => {

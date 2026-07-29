@@ -162,9 +162,24 @@ export class SalesService {
     }
 
     // Broker commission is earned when the sale CLOSES — compute + stamp the amount.
-    if (data.status === 'CLOSED' && sale.status !== 'CLOSED') {
-      const commission = await this.computeBrokerCommission(sale, data);
-      if (commission != null) dataWithActivity.brokerCommissionAmt = commission;
+    // Also recompute when an ALREADY-CLOSED sale's broker/commission%/price is edited
+    // afterward (e.g. correcting the record from the unit page) — otherwise the
+    // stamped commission goes stale the moment any of its inputs changes post-close.
+    const closingNow = data.status === 'CLOSED' && sale.status !== 'CLOSED';
+    const editingClosedCommissionInputs =
+      sale.status === 'CLOSED' &&
+      (data.brokerId !== undefined || data.brokerCommissionPct !== undefined || data.salePrice !== undefined);
+    if (closingNow || editingClosedCommissionInputs) {
+      if (data.brokerId === null) {
+        // Broker explicitly cleared. computeBrokerCommission's `data.brokerId ?? sale.brokerId`
+        // can't tell "cleared" apart from "omitted" — both fall through to the old value —
+        // so handle the clear here rather than asking it to compute against a broker
+        // that was just removed.
+        dataWithActivity.brokerCommissionAmt = null;
+      } else {
+        const commission = await this.computeBrokerCommission(sale, data);
+        if (commission != null) dataWithActivity.brokerCommissionAmt = commission;
+      }
     }
 
     let result;

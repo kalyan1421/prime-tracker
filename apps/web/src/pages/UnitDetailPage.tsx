@@ -4,11 +4,11 @@ import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
-  useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useUploadDocument, useDeleteDocument,
+  useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
@@ -359,6 +359,7 @@ export default function UnitDetailPage() {
   const [primeOwned, setPrimeOwned] = useState(false);
   const { hasPermission } = useAuthStore();
   const canEditUnit = hasPermission('unit:edit');
+  const canEditSale = hasPermission('sales:edit');
   const canEditLease = hasPermission('lease:edit');
   const canViewLeases = hasPermission('lease:view');
   // Recording rent is `rent:collect`, not `lease:edit` — an AR/AP clerk banks a
@@ -425,6 +426,48 @@ export default function UnitDetailPage() {
       addToast({ title: errMsg(e, 'Failed to save lease'), color: 'danger' });
     }
   };
+
+  // Quick-add for a SOLD unit with no sale record yet. Editing an EXISTING closed
+  // sale (buyer, price, dates, broker) happens inside SoldUnitPanel — this only
+  // covers the case where the unit's status was flipped to SOLD but nobody has
+  // recorded the deal yet, mirroring the "+ Add Lease" fallback above.
+  const [saleModalOpen, setSaleModalOpen] = useState(false);
+  const [saleForm, setSaleForm] = useState<Record<string, string>>({
+    buyer: '', salePrice: '', depositAmt: '', closingDate: '', notes: '',
+  });
+  const createSale = useCreateSale();
+
+  const openAddSale = () => {
+    setSaleForm({ buyer: '', salePrice: '', depositAmt: '', closingDate: '', notes: '' });
+    setSaleModalOpen(true);
+  };
+
+  const handleSaveSale = async () => {
+    if (!saleForm.salePrice) {
+      return addToast({ title: 'Sale price is required', color: 'warning' });
+    }
+    const toDate = (d: string) => (d ? new Date(`${d}T12:00:00.000Z`).toISOString() : undefined);
+    try {
+      await createSale.mutateAsync({
+        projectId: projectId!,
+        unitId: unitId!,
+        status: 'CLOSED',
+        buyer: saleForm.buyer.trim() || undefined,
+        salePrice: parseFloat(saleForm.salePrice),
+        depositAmt: saleForm.depositAmt ? parseFloat(saleForm.depositAmt) : undefined,
+        closingDate: toDate(saleForm.closingDate),
+        notes: saleForm.notes.trim() || undefined,
+      });
+      addToast({ title: 'Sale recorded', color: 'success' });
+      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      setSaleModalOpen(false);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to save sale'), color: 'danger' });
+    }
+  };
+
+  const setSale = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setSaleForm((f) => ({ ...f, [field]: e.target.value }));
 
   const setLease = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setLeaseForm((f) => ({ ...f, [field]: e.target.value }));
@@ -635,6 +678,28 @@ export default function UnitDetailPage() {
         </ModalContent>
       </Modal>
 
+      {/* Add Sale Modal — quick-add for a SOLD unit with no sale record yet.
+          Broker attribution and further edits happen inside SoldUnitPanel once
+          this exists. */}
+      <Modal isOpen={saleModalOpen} onClose={() => setSaleModalOpen(false)} size="md">
+        <ModalContent>
+          <ModalHeader>Add Sale</ModalHeader>
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Buyer" size="sm" value={saleForm.buyer} onChange={setSale('buyer')} className="sm:col-span-2" />
+              <Input label="Sale Price ($)" size="sm" type="number" value={saleForm.salePrice} onChange={setSale('salePrice')} />
+              <Input label="Deposit Amount ($)" size="sm" type="number" value={saleForm.depositAmt} onChange={setSale('depositAmt')} />
+              <Input label="Closing Date" size="sm" type="date" value={saleForm.closingDate} onChange={setSale('closingDate')} className="sm:col-span-2" />
+              <Input label="Notes" size="sm" value={saleForm.notes} onChange={setSale('notes')} className="sm:col-span-2" />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={() => setSaleModalOpen(false)}>Cancel</Button>
+            <Button color="primary" onPress={handleSaveSale} isLoading={createSale.isPending}>Add Sale</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
         <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
@@ -658,10 +723,25 @@ export default function UnitDetailPage() {
         )}
       </div>
 
-      {/* Sold unit details */}
+      {/* Sold unit details — the unit's status is SOLD but nobody has recorded the
+          deal yet. Previously this rendered nothing at all, which read as "there is
+          no way to enter a sale" rather than "nothing has been entered yet". */}
       {u.status === 'SOLD' && (() => {
         const closedSale = u.sales?.find((s: any) => s.status === 'CLOSED');
-        return closedSale ? <SoldUnitPanel sale={closedSale} /> : null;
+        if (closedSale) return <SoldUnitPanel sale={closedSale} />;
+        return (
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-dashed border-gray-200 bg-white p-5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-gray-500">
+              <FiDollarSign className="w-4 h-4" />
+              <p className="text-sm">This unit is marked SOLD, but no sale has been recorded yet.</p>
+            </div>
+            {canEditSale ? (
+              <Button size="sm" color="primary" variant="flat" onPress={openAddSale}>+ Add Sale</Button>
+            ) : (
+              <span className="text-xs text-gray-400">Ask someone with sales access to record it.</span>
+            )}
+          </div>
+        );
       })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
