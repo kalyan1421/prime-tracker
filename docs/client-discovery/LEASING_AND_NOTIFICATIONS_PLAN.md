@@ -548,16 +548,46 @@ particular is a revenue number reading zero on a screen the client looks at.
 
 ---
 
+## 5b. Final status (2026-07-29) — all phases complete
+
+Branch `feat/leasing-depth`, 6 commits. **L0, L1, L2, L2b and L3 all built and verified.**
+
+Client answers that landed in this pass: rent due day is **per-lease** (`Lease.rentDueDay`, null =
+the 1st, clamped to month end); partial months bill **pro-rata by day count**; FYI notifications are
+**in-app only with email opt-in**, ACTION types still email.
+
+Two further plan corrections found during the build:
+- Do **not** mirror `Lease.monthlyRent` from the active period (§3.2 originally called for it) — a
+  free-rent period would zero the headline rent and the next regeneration would derive a zero
+  schedule from it.
+- `getEffectiveRent` must **not** throw when a lease has no periods. Every pre-generator lease is in
+  that state, and a GET returning 400 on valid data forces callers to swallow errors.
+
+Verified end to end against the running app and real Postgres — not only unit tests, which all mock
+Prisma. Full detail in the commit messages.
+
+**Left deliberately undone**, all pre-existing and out of scope:
+- `BuildingDetailPage` lease KPIs aren't gated on `lease:view` — a user without it sees `$0` rather
+  than "not permitted". The new obligation card *is* gated, so that page is now inconsistent.
+- `GET /api/units` with no `projectId` returns an empty array while `?projectId=` works.
+- Seed data has no unit with a re-let and (bar one demo lease) no generated rent schedules, so the
+  multi-lease rent timeline can't be demoed without seeding.
+- `LeaseObligationService` allows overpayment; `SalePaymentsService` blocks it. Still worth
+  reconciling.
+- An escalation landing mid-month takes effect on the *next* invoice — the invoice schema holds one
+  rate per month, with nowhere to record a blended two-rate month.
+
+---
+
 ## 6. Remaining open questions
 
 Only two, and neither blocks L0 or L1:
 
-**R1 — Rent due date.** `LeaseRentInvoice.dueDate`: 1st of the month, or a per-lease `rentDueDay`
-(5th, 10th)? *Assumption: 1st, with an optional `Lease.rentDueDay Int?` if the client wants it.*
-Blocks L2b only.
+~~**R1 — Rent due date.**~~ **Answered: per-lease `Lease.rentDueDay`**, null = the 1st. Built.
 
-**R2 — Partial-month rent.** A lease starting the 15th — does month 1 bill pro-rata or a full month?
-*Assumption: pro-rata by day count.* Blocks L2b only.
+~~**R2 — Partial-month rent.**~~ **Answered: pro-rata by day count.** Built.
+
+None outstanding.
 
 ---
 
