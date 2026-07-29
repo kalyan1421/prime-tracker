@@ -64,11 +64,14 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
 
   const projects: any[] = Array.isArray(data) ? data : [];
 
-  // An active (non-cancelled, non-completed) project already exists → block create
-  const activeProject = projects.find(
+  // Multiple concurrent interior projects per unit are allowed (client decision,
+  // 2026-07-29) — e.g. separate contractors on separate scopes, or tracking
+  // competing proposals before picking one. Previously capped at one active
+  // project; that cap is gone, so "Start fit-out" is always available.
+  const activeCount = projects.filter(
     (p) => p.status !== 'COMPLETED' && p.status !== 'CANCELLED',
-  );
-  const canCreate = canEditInterior && !activeProject;
+  ).length;
+  const canCreate = canEditInterior;
 
   const defaultForm = (): Record<string, string> => ({
     name: unitNumber ? `Unit ${unitNumber} fit-out` : '',
@@ -125,8 +128,10 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
             Start fit-out
           </Button>
         )}
-        {canEditInterior && activeProject && (
-          <Chip size="sm" variant="flat" color="warning">1 active</Chip>
+        {/* Only worth a chip once it's not just restating the header count — i.e. some
+            projects on this unit have wrapped up (COMPLETED/CANCELLED) and some haven't. */}
+        {canEditInterior && activeCount > 0 && activeCount < projects.length && (
+          <Chip size="sm" variant="flat" color="warning">{activeCount} active</Chip>
         )}
       </CardHeader>
       <CardBody className="pt-0 space-y-3">
