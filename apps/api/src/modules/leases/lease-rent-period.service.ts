@@ -568,11 +568,23 @@ export class LeaseRentPeriodService {
     const lease = await this.loadLease(leaseId);
     const periods = await this.findByLease(leaseId);
     if (periods.length === 0) {
-      throw new BadRequestException(
-        'Lease has no rent periods — run generateForLease before asking for effective rent',
-      );
+      // "No schedule yet" is a legitimate state, not a client error — every lease
+      // created before the generator existed is in it. Throwing here made a plain
+      // GET return 400 for valid data and forced callers to swallow errors, which
+      // hides real failures. Return a zeroed summary flagged hasSchedule:false so
+      // the UI can offer to backfill instead.
+      return {
+        hasSchedule: false,
+        termMonths: lease.termMonths ?? 0,
+        payingMonths: 0,
+        freeRentMonths: 0,
+        totalContractedRent: new Prisma.Decimal(0),
+        totalContractedBaseRent: new Prisma.Decimal(0),
+        effectiveMonthlyRent: new Prisma.Decimal(0),
+        effectiveMonthlyBaseRent: new Prisma.Decimal(0),
+      };
     }
-    return summariseEffectiveRent(periods, lease.leaseEnd, lease.termMonths);
+    return { hasSchedule: true, ...summariseEffectiveRent(periods, lease.leaseEnd, lease.termMonths) };
   }
 
   /**

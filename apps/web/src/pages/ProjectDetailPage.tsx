@@ -16,6 +16,9 @@ import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
 import { CashflowForecastView } from '../components/CashflowForecastView';
 import { ObligationsPanel } from '../components/ObligationsPanel';
+// Lease-scoped deposits / TI — distinct from ObligationsPanel above, which is budget cash obligations.
+import { LeaseObligationsPanel } from '../components/LeaseObligationsPanel';
+import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
 import { CancelSaleModal } from '../components/CancelSaleModal';
 import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
@@ -3275,6 +3278,11 @@ const EMPTY_LEASE = {
 };
 
 function LeasesTab({ projectId }: { projectId: string }) {
+  const { hasPermission } = useAuthStore();
+  const canEditLease = hasPermission('lease:edit');
+  // Rent schedule + deposits are per-lease detail: one row expanded at a time, mirroring
+  // the SalesTab card-expansion pattern rather than opening yet another modal.
+  const [expandedLease, setExpandedLease] = useState<string | null>(null);
   const { data: leases, isLoading: ll } = useLeases(projectId);
   const { data: rentRoll, isLoading: rl } = useRentRoll(projectId);
   const { data: unitsData } = useUnits(projectId);
@@ -3454,7 +3462,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
               </thead>
               <tbody>
                 {leaseList.map((l: any) => (
-                  <tr key={l.id} className="border-b border-gray-50">
+                  <React.Fragment key={l.id}>
+                  <tr className="border-b border-gray-50">
                     <td className="py-2 px-2 font-medium">
                       <div>
                         <span>{l.tenantBrand || l.tenantName}</span>
@@ -3483,11 +3492,44 @@ function LeasesTab({ projectId }: { projectId: string }) {
                     <td className="py-2 px-2"><StatusBadge status={l.status} /></td>
                     <td className="py-2 px-2">
                       <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="light"
+                          isIconOnly
+                          onPress={() => setExpandedLease((cur) => (cur === l.id ? null : l.id))}
+                          title={expandedLease === l.id ? 'Hide rent schedule & deposits' : 'Rent schedule & deposits'}
+                          aria-label="Toggle rent schedule and deposits"
+                          aria-expanded={expandedLease === l.id}
+                        >
+                          {expandedLease === l.id ? <FiChevronUp className="text-xs" /> : <FiChevronDown className="text-xs" />}
+                        </Button>
                         <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(l)}><FiEdit2 className="text-xs" /></Button>
                         <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openDelete(l.id)}><FiTrash2 className="text-xs" /></Button>
                       </div>
                     </td>
                   </tr>
+                  {expandedLease === l.id && (
+                    <tr key={`${l.id}-detail`} className="border-b border-gray-100 bg-gray-50/60">
+                      <td colSpan={8} className="p-4">
+                        <div className="space-y-6">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Rent schedule &amp; history</p>
+                            <LeaseRentSchedule leaseId={l.id} canEdit={canEditLease} />
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Security deposit &amp; TI allowance</p>
+                            <LeaseObligationsPanel
+                              leaseId={l.id}
+                              canEdit={canEditLease}
+                              unitId={l.unitId ?? l.unit?.id}
+                              buildingId={l.buildingId ?? l.building?.id}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table></div>

@@ -843,8 +843,21 @@ describe('LeaseRentPeriodService.getEffectiveRent', () => {
     expect(summary.payingMonths).toBe(36);
   });
 
-  it('throws when the lease has no rent periods yet', async () => {
+  it('returns a zeroed summary flagged hasSchedule:false when no periods exist yet', async () => {
+    // Not an error: every lease predating the generator is in this state, and a GET
+    // that 400s on valid data forces callers to swallow errors.
     mockPrisma.leaseRentPeriod.findMany.mockResolvedValue([]);
-    await expect(service.getEffectiveRent('lease-1')).rejects.toThrow(BadRequestException);
+
+    const summary = await service.getEffectiveRent('lease-1');
+
+    expect(summary.hasSchedule).toBe(false);
+    expect(summary.effectiveMonthlyRent.toFixed(2)).toBe('0.00');
+    expect(summary.payingMonths).toBe(0);
+  });
+
+  it('flags hasSchedule:true when periods exist', async () => {
+    mockPrisma.leaseRentPeriod.findMany.mockResolvedValue([row(1, '2026-01-01', '2026-12-31', '1000')]);
+    const summary = await service.getEffectiveRent('lease-1');
+    expect(summary.hasSchedule).toBe(true);
   });
 });

@@ -4,7 +4,7 @@ import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
@@ -24,6 +24,8 @@ import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
+import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
+import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
 
 
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
@@ -235,6 +237,86 @@ function UnitHistoryTimeline({ leases, sales }: { leases: any[]; sales: any[] })
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Rent history, per unit ----
+// The client asked for rent changes to live in the *unit's* history, but rent
+// periods hang off a LEASE. A re-let means the unit has several leases, so
+// rendering only the current one would silently drop the previous tenant's rent
+// story — exactly the history that was asked for.
+//
+// So: every lease this unit has ever had, newest first, each labelled with its
+// tenant and dates. The newest is expanded; older ones collapse to a one-line
+// header that still carries tenant, dates and rent, so the unit reads as one
+// continuous timeline whether or not you open the tables. Collapsing matters
+// here because each schedule is a full multi-row table plus a four-stat strip —
+// a unit on its fourth tenant would otherwise be several screens of tables.
+//
+// Leases arrive on the unit payload from GET /units/:id (already used above for
+// the History timeline), so this costs no extra request; only the expanded
+// LeaseRentSchedule fetches its own periods.
+function UnitRentHistory({ leases, canEdit }: { leases: any[]; canEdit: boolean }) {
+  const ordered = [...(leases || [])].sort(
+    (a, b) => new Date(b.leaseStart || 0).getTime() - new Date(a.leaseStart || 0).getTime(),
+  );
+  const [openIds, setOpenIds] = useState<string[]>(ordered.length > 0 ? [ordered[0].id] : []);
+
+  const toggle = (id: string) =>
+    setOpenIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+
+  if (ordered.length === 0) {
+    return <EmptyRow icon={<FiTrendingUp className="w-5 h-5" />} text="No leases yet — rent history starts with the first lease" />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {ordered.map((l: any) => {
+        const ongoing = !['EXPIRED', 'TERMINATED'].includes(l.status);
+        const open = openIds.includes(l.id);
+        return (
+          <div key={l.id}>
+            <button
+              type="button"
+              onClick={() => toggle(l.id)}
+              aria-expanded={open}
+              className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="text-gray-400 shrink-0">
+                  {open ? <FiChevronDown className="w-4 h-4" /> : <FiChevronRight className="w-4 h-4" />}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
+                    {l.tenantBrand || l.tenantName || 'Unnamed tenant'}
+                    {ongoing ? (
+                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                        Current
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                        {String(l.status).toLowerCase()}
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {fmtDate(l.leaseStart)} – {fmtDate(l.leaseEnd)}
+                  </p>
+                </div>
+              </div>
+              <span className="text-sm font-semibold text-gray-700 tabular-nums shrink-0">
+                {l.monthlyRent != null ? `${fmt(l.monthlyRent)}/mo` : '—'}
+              </span>
+            </button>
+            {open && (
+              <div className="mt-3">
+                <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} />
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -693,6 +775,27 @@ export default function UnitDetailPage() {
         <Section icon={<FiClock className="w-4 h-4 text-slate-600" />} title="History">
           <UnitHistoryTimeline leases={u.leases || []} sales={u.sales || []} />
         </Section>
+      </div>
+
+      {/* Rent & deposits — deliberately directly under History. History answers
+          "who was here and when"; this answers "how much, and when did it change"
+          for those same leases, so the drill-down sits against the summary it
+          expands rather than at the foot of the page. Not rendered inside a
+          Section: LeaseRentSchedule and ObligationSummaryCard bring their own
+          card chrome and would otherwise be a card inside a card. */}
+      <div className="mb-5 sm:mb-6 space-y-4">
+        <ObligationSummaryCard scope="unit" id={unitId} />
+
+        <div className="flex items-center gap-2.5 pt-1">
+          <FiTrendingUp className="w-4 h-4 text-emerald-600" />
+          <h2 className="font-semibold text-sm text-gray-800">
+            Rent History
+            {(u.leases?.length ?? 0) > 1 && (
+              <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
+            )}
+          </h2>
+        </div>
+        <UnitRentHistory leases={u.leases || []} canEdit={canEditLease} />
       </div>
 
       {/* Notes — always visible so users can add notes even when empty */}

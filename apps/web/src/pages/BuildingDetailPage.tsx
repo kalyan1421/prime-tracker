@@ -10,6 +10,7 @@ import {
 import { useAuthStore } from '../store/authStore';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, StatCard } from '../components/ui';
+import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
 
 // Unit status palette — re-uses the dashboard's status semantics so users only learn one.
 const STATUS_FILL: Record<string, string> = {
@@ -43,6 +44,9 @@ export default function BuildingDetailPage() {
 
   const { hasPermission } = useAuthStore();
   const canViewBudget = hasPermission('budget:view');
+  // Same permission the obligation-summary endpoints require, so we never render
+  // a card whose only possible outcome is a 403 error state.
+  const canViewLeases = hasPermission('lease:view');
 
   const { data: building, isLoading: bLoading, error: bError } = useBuilding(buildingId!);
   const { data: allUnits } = useUnits(projectId || '');
@@ -231,6 +235,13 @@ export default function BuildingDetailPage() {
           </CardBody>
         </Card>
       </div>
+
+      {/* Deposits & TI allowances — the money the leases above carry.
+          Placed with the leasing block rather than the loan block: these are
+          tenant obligations, not Prime's debt. Full width like the Budget card
+          because it is a breakdown (per kind, building-level vs unit-level),
+          not a single figure that belongs in the KPI strip. */}
+      {canViewLeases && <ObligationSummaryCard scope="building" id={buildingId} />}
 
       {/* Linked loans + Documents */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
