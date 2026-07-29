@@ -156,7 +156,8 @@ export class NotificationsService {
 
   async notifyLeaseExpiring(lease: { unitId: string; tenantName: string; leaseEnd: Date; unit: { building: { project: { id: string; name: string } } } }, daysLeft: number) {
     const projectId = lease.unit.building.project.id;
-    const link = `/projects/${projectId}/leases`;
+    // Leases live inside the Revenue tab — there is no standalone `leases` tab.
+    const link = `/projects/${projectId}/revenue`;
     await this.sendToRoles({
       roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'],
       type: daysLeft <= 7 ? NotificationType.LEASE_EXPIRING_7 : NotificationType.LEASE_EXPIRING_30,
@@ -167,7 +168,8 @@ export class NotificationsService {
   }
 
   async notifyLoanMaturity(loan: { id: string; lender: string; maturityDate: Date; projectId: string; project: { name: string } }) {
-    const link = `/projects/${loan.projectId}/financials`;
+    // Loans and their draws live in the Draws tab; `financials` is not a real tab.
+    const link = `/projects/${loan.projectId}/draws`;
     await this.sendToRoles({
       roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'],
       type: NotificationType.LOAN_MATURITY_60,
@@ -226,7 +228,7 @@ export class NotificationsService {
       type: NotificationType.BUDGET_VARIANCE,
       title: `Budget Variance Alert: ${projectName}`,
       body: `Project ${projectName} has exceeded budget by ${variancePct.toFixed(1)}% (threshold: 10%).`,
-      link: `/projects/${projectId}/financials`,
+      link: `/projects/${projectId}/budget`,
     });
   }
 

@@ -198,6 +198,8 @@ export class ScheduledNotificationsService {
         status: 'ACTIVE',
         deletedAt: null,
       },
+      // Leases are polymorphic (unit XOR building) — fetch the project down BOTH paths so
+      // whole-building leases can be notified on too.
       include: {
         unit: {
           include: {
@@ -208,22 +210,29 @@ export class ScheduledNotificationsService {
             },
           },
         },
+        building: {
+          select: { project: { select: { id: true, name: true } } },
+        },
       },
     });
 
     for (const lease of leases30) {
-      // Sprint 1: Lease.unitId / Lease.unit are now nullable to support building-level
-      // leases (e.g. Leander Bldg 1). Building-level lease expiry notifications need
-      // their own code path — skip those for now and keep unit-level behaviour intact.
-      if (!lease.unitId || !lease.unit) continue;
+      // Resolve the project from whichever side of the polymorphic link is set. Only an
+      // orphaned lease (neither unit nor building) is skipped.
+      const project = lease.unit?.building?.project ?? lease.building?.project;
+      if (!project) continue;
       const daysLeft = Math.ceil((lease.leaseEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
       try {
         await this.notifications.notifyLeaseExpiring(
           {
-            unitId: lease.unitId,
+            // notifyLeaseExpiring predates polymorphic leases: it takes a non-null unitId
+            // and reads the project off `unit.building.project`. Both are only used to
+            // resolve the project/link, so a building-level lease passes its buildingId
+            // and a synthesised `unit` wrapper around the resolved project.
+            unitId: lease.unitId ?? lease.buildingId!,
             tenantName: lease.tenantName,
             leaseEnd: lease.leaseEnd,
-            unit: lease.unit,
+            unit: { building: { project } },
           },
           daysLeft,
         );

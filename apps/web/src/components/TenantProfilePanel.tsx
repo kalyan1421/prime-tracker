@@ -83,7 +83,11 @@ interface TenantProfilePanelProps {
     tenantName?: string;
     tenantLegalName?: string;
     tenantBrand?: string;
+    // tenantContact is the contact PERSON's name; email/phone are separate structured
+    // fields so they can be validated and rendered as mailto:/tel: links.
     tenantContact?: string;
+    tenantEmail?: string;
+    tenantPhone?: string;
     notes?: string;
   };
   unitNumber?: string;
@@ -100,6 +104,8 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
       tenantBrand:     lease.tenantBrand     ?? '',
       tenantLegalName: lease.tenantLegalName ?? '',
       tenantContact:   lease.tenantContact   ?? '',
+      tenantEmail:     lease.tenantEmail     ?? '',
+      tenantPhone:     lease.tenantPhone     ?? '',
       businessType:    p.businessType,
       tradingHours:    p.tradingHours,
       designNotes:     p.designNotes,
@@ -125,6 +131,8 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
       tenantBrand:     lease.tenantBrand     ?? '',
       tenantLegalName: lease.tenantLegalName ?? '',
       tenantContact:   lease.tenantContact   ?? '',
+      tenantEmail:     lease.tenantEmail     ?? '',
+      tenantPhone:     lease.tenantPhone     ?? '',
       businessType:    p.businessType,
       tradingHours:    p.tradingHours,
       designNotes:     p.designNotes,
@@ -143,6 +151,8 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
           tenantBrand:     form.tenantBrand     || undefined,
           tenantLegalName: form.tenantLegalName || undefined,
           tenantContact:   form.tenantContact   || undefined,
+          tenantEmail:     form.tenantEmail     || undefined,
+          tenantPhone:     form.tenantPhone     || undefined,
           notes:           buildNotes() || undefined,
         },
       });
@@ -263,7 +273,12 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
           <Input size="sm" label="Legal entity (LLC name)" value={form.tenantLegalName} onChange={set('tenantLegalName')} />
         </div>
 
-        <Input size="sm" label="Contact (phone / email)" value={form.tenantContact} onChange={set('tenantContact')} />
+        <Input size="sm" label="Contact person" value={form.tenantContact} onChange={set('tenantContact')} />
+
+        <div className="flex gap-2">
+          <Input size="sm" type="email" label="Email" value={form.tenantEmail} onChange={set('tenantEmail')} />
+          <Input size="sm" type="tel" label="Phone" value={form.tenantPhone} onChange={set('tenantPhone')} />
+        </div>
 
         {/* ── Business type tiles ─────────────────────────────────────── */}
         <div>

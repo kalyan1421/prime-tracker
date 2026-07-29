@@ -546,6 +546,15 @@ function CardNavLink({ label, onPress }: { label: string; onPress: () => void })
   );
 }
 
+// The dollar figure a draw actually represents. DrawRequest carries amount, requestedAmount
+// AND approvedAmount — approvedAmount is what the lender signed off on, so it wins whenever
+// it is set (a lender funding less than requested would otherwise be overstated). Decimals
+// arrive from the API as strings, so always coerce with Number().
+// Single source of truth: Overview and Draws must never disagree for the same project.
+function fundedAmount(d: any): number {
+  return Number(d?.approvedAmount ?? d?.amount ?? 0);
+}
+
 function OverviewTab({ project: p }: { project: any }) {
   const navigate = useNavigate();
   const goTab = (tab: string) => navigate(`/projects/${p.id}/${tab}`);
@@ -648,8 +657,8 @@ function OverviewTab({ project: p }: { project: any }) {
   const leadsLost = leadsArr.filter((l) => ['LOST', 'DEAD'].includes(l.status)).length;
   const leadsActive = leadsArr.length - leadsConverted - leadsLost;
   const drawsArr = (drawsData as any[]) || [];
-  const drawsFunded = drawsArr.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + Number(d.requestedAmount || d.amount || 0), 0);
-  const drawsPending = drawsArr.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + Number(d.requestedAmount || d.amount || 0), 0);
+  const drawsFunded = drawsArr.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + fundedAmount(d), 0);
+  const drawsPending = drawsArr.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + fundedAmount(d), 0);
 
   return (
     <div className="space-y-5 mt-4">
@@ -3260,7 +3269,7 @@ function MilestonesTab({ projectId }: { projectId: string }) {
 
 // ---- Leases Tab ----
 const EMPTY_LEASE = {
-  unitId: '', tenantName: '', tenantContact: '', monthlyRent: '',
+  unitId: '', tenantName: '', tenantContact: '', tenantEmail: '', tenantPhone: '', monthlyRent: '',
   leaseStart: '', leaseEnd: '', termMonths: '', escalationPct: '',
   securityDeposit: '', status: 'DRAFT', notes: '',
 };
@@ -3297,6 +3306,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
       unitId: l.unitId || l.unit?.id || '',
       tenantName: l.tenantName || '',
       tenantContact: l.tenantContact || '',
+      tenantEmail: l.tenantEmail || '',
+      tenantPhone: l.tenantPhone || '',
       monthlyRent: l.monthlyRent?.toString() || '',
       leaseStart: (l.leaseStart || l.startDate) ? (l.leaseStart || l.startDate).slice(0, 10) : '',
       leaseEnd: (l.leaseEnd || l.endDate) ? (l.leaseEnd || l.endDate).slice(0, 10) : '',
@@ -3325,6 +3336,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
       const payload: Record<string, unknown> = {
         tenantName: form.tenantName,
         tenantContact: form.tenantContact || undefined,
+        tenantEmail: form.tenantEmail || undefined,
+        tenantPhone: form.tenantPhone || undefined,
         monthlyRent: parseFloat(form.monthlyRent),
         leaseStart: toDate(form.leaseStart),
         leaseEnd: toDate(form.leaseEnd),
@@ -3427,6 +3440,18 @@ function LeasesTab({ projectId }: { projectId: string }) {
                           <span className="text-xs text-gray-400 ml-1">({l.tenantName})</span>
                         )}
                       </div>
+                      {/* Contact links live inside the Tenant cell rather than as two extra
+                          columns — the table is already 8 columns wide at min-w-[560px]. */}
+                      {(l.tenantEmail || l.tenantPhone) && (
+                        <div className="flex items-center gap-2 mt-0.5 text-xs font-normal">
+                          {l.tenantEmail && (
+                            <a href={`mailto:${l.tenantEmail}`} className="text-blue-600 hover:underline truncate">{l.tenantEmail}</a>
+                          )}
+                          {l.tenantPhone && (
+                            <a href={`tel:${l.tenantPhone}`} className="text-blue-600 hover:underline whitespace-nowrap">{l.tenantPhone}</a>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 px-2">{l.unit?.unitNumber || l.unit?.name || '\u2014'}</td>
                     <td className="py-2 px-2 text-right">{fmt(l.monthlyRent)}</td>
@@ -3470,7 +3495,9 @@ function LeasesTab({ projectId }: { projectId: string }) {
                 ))}
               </Select>
               <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} isInvalid={!!leaseErrors.tenantName} errorMessage={leaseErrors.tenantName} />
-              <Input size="sm" label="Tenant Contact" value={form.tenantContact} onChange={set('tenantContact')} />
+              <Input size="sm" label="Contact Person" value={form.tenantContact} onChange={set('tenantContact')} />
+              <Input size="sm" label="Tenant Email" type="email" value={form.tenantEmail} onChange={set('tenantEmail')} />
+              <Input size="sm" label="Tenant Phone" type="tel" value={form.tenantPhone} onChange={set('tenantPhone')} />
               <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} isInvalid={!!leaseErrors.monthlyRent} errorMessage={leaseErrors.monthlyRent} />
               <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} isInvalid={!!leaseErrors.leaseStart} errorMessage={leaseErrors.leaseStart} />
               <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} isInvalid={!!leaseErrors.leaseEnd} errorMessage={leaseErrors.leaseEnd} />
@@ -3999,7 +4026,7 @@ function SalesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Buildings Tab ----
-const EMPTY_BUILDING = { name: '', totalSqft: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
+const EMPTY_BUILDING = { name: '', llcName: '', totalSqft: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
 
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
@@ -4057,6 +4084,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     setEditId(b.id);
     setForm({
       name: b.name || '',
+      llcName: b.llcName || '',
       totalSqft: b.totalSqft?.toString() || '',
       stories: b.stories?.toString() || '',
       buildingType: b.buildingType || '',
@@ -4102,6 +4130,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       const payload: Record<string, unknown> = {
         projectId,
         name: form.name.trim(),
+        llcName: form.llcName.trim() || undefined,
         totalSqft: form.totalSqft ? parseFloat(form.totalSqft) : undefined,
         stories: form.stories ? parseInt(form.stories) : undefined,
         buildingType: form.buildingType.trim() || undefined,
@@ -4309,6 +4338,9 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                   >
                     {b.name}
                   </Link>
+                  {b.llcName && (
+                    <p className="text-xs text-gray-400 truncate mt-0.5" title={b.llcName}>{b.llcName}</p>
+                  )}
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                     {b.buildingType && (
                       <span className="text-xs text-gray-400 truncate">{b.buildingType}</span>
@@ -4364,6 +4396,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                   size="sm" label="Building Name" isRequired
                   value={form.name} onChange={set('name')}
                   isInvalid={!!formErrors.name} errorMessage={formErrors.name}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <Input
+                  size="sm" label="LLC Name"
+                  placeholder="e.g. Prime Leander I LLC"
+                  description="Legal entity that owns this building"
+                  value={form.llcName} onChange={set('llcName')}
                 />
               </div>
               <Select
@@ -4709,8 +4749,12 @@ function RevenueTab({ projectId }: { projectId: string }) {
   const pip = pipeline as any;
   const li = leaseIncome as any;
 
-  const closedSalesValue = (pip?.CLOSED || []).reduce((s: number, sale: any) => s + (sale.salePrice || 0), 0);
-  const underContractCount = (pip?.UNDER_CONTRACT || []).length;
+  // GET /sales/pipeline returns { byStatus, avgDaysToClose, totalPipelineValue, closedRevenue }.
+  // The per-status sale arrays are nested under `byStatus` — NOT at the root — and salePrice
+  // arrives as a Decimal-serialized string, so never sum it with a bare `+`. Use the totals the
+  // API already computes (see SalesTab / OverviewTab, which read it the same way).
+  const closedSalesValue = pip?.closedRevenue || 0;
+  const underContractCount = pip?.byStatus?.UNDER_CONTRACT?.length || 0;
   const monthlyLease = li?.total || 0;
 
   return (
@@ -5496,8 +5540,8 @@ function DrawsTab({ projectId }: { projectId: string }) {
 
   const drawList = draws as any[];
   const totalDraws = drawList.length;
-  const funded = drawList.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
-  const pending = drawList.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
+  const funded = drawList.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + fundedAmount(d), 0);
+  const pending = drawList.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + fundedAmount(d), 0);
 
   const openAddDraw = () => {
     setEditingDrawId(null);

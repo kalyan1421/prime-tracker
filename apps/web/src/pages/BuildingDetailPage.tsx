@@ -110,6 +110,11 @@ export default function BuildingDetailPage() {
           <h1 className="text-2xl font-semibold text-gray-900 flex items-center gap-2">
             <FiHome className="text-blue-600" /> {b.name}
           </h1>
+          {b.llcName && (
+            <p className="mt-1 text-sm text-gray-500">
+              Owned by <span className="font-medium text-gray-700">{b.llcName}</span>
+            </p>
+          )}
           <div className="flex items-center gap-3 mt-1 text-sm text-gray-500 flex-wrap">
             {b.buildingType && (
               <Chip size="sm" variant="flat" className="text-xs">{String(b.buildingType).replace('_', ' ')}</Chip>

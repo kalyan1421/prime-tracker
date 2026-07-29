@@ -68,6 +68,9 @@ export class LeasesService {
     // serializes them correctly instead of erroring "premature end of input".
     if (typeof data.leaseStart === 'string') data.leaseStart = new Date(data.leaseStart);
     if (typeof data.leaseEnd === 'string') data.leaseEnd = new Date(data.leaseEnd);
+    // Same coercion for freeRentStartDate — it's also @IsDateString(), so a bare
+    // "YYYY-MM-DD" from an <input type="date"> would otherwise reach Prisma as a string.
+    if (typeof data.freeRentStartDate === 'string') data.freeRentStartDate = new Date(data.freeRentStartDate);
     // Sprint 1: leases are polymorphic — exactly one of (unitId, buildingId) required.
     const unitId = data.unitId as string | null | undefined;
     const buildingId = data.buildingId as string | null | undefined;
@@ -102,6 +105,9 @@ export class LeasesService {
     await this.findById(id);
     if (typeof data.leaseStart === 'string') data.leaseStart = new Date(data.leaseStart);
     if (typeof data.leaseEnd === 'string') data.leaseEnd = new Date(data.leaseEnd);
+    // Same coercion for freeRentStartDate — it's also @IsDateString(), so a bare
+    // "YYYY-MM-DD" from an <input type="date"> would otherwise reach Prisma as a string.
+    if (typeof data.freeRentStartDate === 'string') data.freeRentStartDate = new Date(data.freeRentStartDate);
     return this.prisma.lease.update({ where: { id }, data });
   }
 

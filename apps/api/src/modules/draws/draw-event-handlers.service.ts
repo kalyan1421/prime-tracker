@@ -173,7 +173,7 @@ export class DrawEventHandlers implements OnModuleInit {
     await this.prisma.notification.createMany({
       data: recipients.map((u) => ({
         userId: u.id,
-        type: 'BUDGET_VARIANCE',  // closest existing type; add DRAW_OVERDUE in next migration
+        type: 'DRAW_FUNDING_OVERDUE',
         title: `Draw funding overdue (${e.daysOverdue}d)`,
         body: `Draw #${draw.drawNumber} on ${draw.project?.name ?? 'project'} is ${e.daysOverdue} days past expected funding`,
         link: draw.projectId ? `/projects/${draw.projectId}/draws` : null,
