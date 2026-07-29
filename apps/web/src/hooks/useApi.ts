@@ -2415,3 +2415,177 @@ export interface CustomOption {
   isSystem: boolean;
   isActive: boolean;
 }
+
+// ============================================================================
+// Lease rent timeline (escalation periods)
+// ============================================================================
+// Money comes back from the API as strings (Prisma Decimal serializes to string).
+// These hooks pass the payload through untouched — format in the component.
+
+export function useLeaseRentPeriods(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-rent-periods', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/rent-periods`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+export function useLeaseRentSummary(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-rent-summary', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/rent-summary`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+// Rewriting the rent timeline changes this lease's periods/summary *and* every
+// aggregate that reads lease rent. Those live under ['leases', projectId],
+// ['rent-roll', projectId] and ['lease-income', projectId] — invalidating the
+// prefix covers whichever project this lease belongs to (same broad-prefix
+// approach as useCreateLease/useUpdateLease above).
+function invalidateRentPeriods(qc: ReturnType<typeof useQueryClient>, leaseId?: string) {
+  if (leaseId) {
+    qc.invalidateQueries({ queryKey: ['lease-rent-periods', leaseId] });
+    qc.invalidateQueries({ queryKey: ['lease-rent-summary', leaseId] });
+  } else {
+    qc.invalidateQueries({ queryKey: ['lease-rent-periods'] });
+    qc.invalidateQueries({ queryKey: ['lease-rent-summary'] });
+  }
+  qc.invalidateQueries({ queryKey: ['leases'] });
+  qc.invalidateQueries({ queryKey: ['rent-roll'] });
+  qc.invalidateQueries({ queryKey: ['lease-income'] });
+}
+
+/** Build the full escalation schedule for a lease from its terms. */
+export function useGenerateRentPeriods() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leaseId, data }: { leaseId: string; data?: Record<string, any> }) =>
+      api.post(`/leases/${leaseId}/rent-periods/generate`, data ?? {}).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentPeriods(qc, v.leaseId),
+  });
+}
+
+/** Re-cut only the not-yet-started periods, leaving billed history intact. */
+export function useRegenerateFutureRentPeriods() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leaseId, data }: { leaseId: string; data?: Record<string, any> }) =>
+      api.post(`/leases/${leaseId}/rent-periods/regenerate-future`, data ?? {}).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentPeriods(qc, v.leaseId),
+  });
+}
+
+/** Insert a one-off period (negotiated step, abatement, holdover…). */
+export function useAddManualRentPeriod() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leaseId, data }: { leaseId: string; data: Record<string, any> }) =>
+      api.post(`/leases/${leaseId}/rent-periods/manual`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateRentPeriods(qc, v.leaseId),
+  });
+}
+
+// ============================================================================
+// Lease obligations (security deposits + TI allowances)
+// ============================================================================
+
+export function useLeaseObligations(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-obligations', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/obligations`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+export function useUnitObligationSummary(unitId?: string) {
+  return useQuery({
+    queryKey: ['obligation-summary', 'unit', unitId],
+    queryFn: () => api.get(`/leases/obligation-summary/unit/${unitId}`).then((r) => r.data),
+    enabled: !!unitId,
+  });
+}
+
+export function useBuildingObligationSummary(buildingId?: string) {
+  return useQuery({
+    queryKey: ['obligation-summary', 'building', buildingId],
+    queryFn: () => api.get(`/leases/obligation-summary/building/${buildingId}`).then((r) => r.data),
+    enabled: !!buildingId,
+  });
+}
+
+/**
+ * Obligation writes are addressed by obligation/payment id, so the mutation
+ * can't derive which rollups moved. Callers pass the ids they already have
+ * (same trick as useDeleteComment's `{ id, source }` and useDeleteSalePayment's
+ * `{ id, saleId }`): leaseId for the list, plus unitId/buildingId for the
+ * rollups. A unit-level obligation rolls into its building too, so unless both
+ * legs are known we sweep the whole ['obligation-summary', …] prefix rather
+ * than leave one side stale.
+ */
+type ObligationScope = { leaseId?: string; unitId?: string; buildingId?: string };
+
+function invalidateObligations(qc: ReturnType<typeof useQueryClient>, v: ObligationScope) {
+  qc.invalidateQueries({ queryKey: v.leaseId ? ['lease-obligations', v.leaseId] : ['lease-obligations'] });
+  if (v.unitId && v.buildingId) {
+    qc.invalidateQueries({ queryKey: ['obligation-summary', 'unit', v.unitId] });
+    qc.invalidateQueries({ queryKey: ['obligation-summary', 'building', v.buildingId] });
+  } else {
+    qc.invalidateQueries({ queryKey: ['obligation-summary'] });
+  }
+}
+
+export function useCreateLeaseObligation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leaseId, data }: ObligationScope & { leaseId: string; data: Record<string, any> }) =>
+      api.post(`/leases/${leaseId}/obligations`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}
+
+export function useUpdateLeaseObligation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ obligationId, data }: ObligationScope & { obligationId: string; data: Record<string, any> }) =>
+      api.put(`/leases/obligations/${obligationId}`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}
+
+export function useDeleteLeaseObligation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ obligationId }: ObligationScope & { obligationId: string }) =>
+      api.delete(`/leases/obligations/${obligationId}`).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}
+
+/** Forgive the outstanding balance (e.g. deposit waived at signing). */
+export function useWaiveLeaseObligation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ obligationId, data }: ObligationScope & { obligationId: string; data?: Record<string, any> }) =>
+      api.post(`/leases/obligations/${obligationId}/waive`, data ?? {}).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}
+
+export function useRecordObligationPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ obligationId, data }: ObligationScope & { obligationId: string; data: Record<string, any> }) =>
+      api.post(`/leases/obligations/${obligationId}/payments`, data).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}
+
+export function useDeleteObligationPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ paymentId }: ObligationScope & { paymentId: string }) =>
+      api.delete(`/leases/obligation-payments/${paymentId}`).then((r) => r.data),
+    onSuccess: (_d, v) => invalidateObligations(qc, v),
+  });
+}

@@ -3407,8 +3407,30 @@ function LeasesTab({ projectId }: { projectId: string }) {
       {rr && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <StatCard label="Active Leases" value={String(rr.activeLeases || rr.leaseCount || 0)} colorScheme="green" variant="revenue" />
-          <StatCard label="Monthly Rent" value={fmt(rr.totalMonthlyRent)} colorScheme="brand" variant="revenue" />
-          <StatCard label="Annual Rent" value={fmt((rr.totalMonthlyRent || 0) * 12)} colorScheme="purple" variant="revenue" />
+          {/* totalMonthlyRent is the EFFECTIVE roll — the rent period covering today, so a
+              lease inside a free-rent month contributes 0. contractedMonthlyRent is the sum
+              of headline rents. Surfacing the gap stops the effective number looking like a
+              bug when abatement kicks in. */}
+          <StatCard
+            label="Monthly Rent"
+            value={fmt(rr.totalMonthlyRent)}
+            colorScheme="brand"
+            variant="revenue"
+            helpText={
+              rr.freeRentLeaseCount
+                ? `${fmt(rr.contractedMonthlyRent)} contracted · ${rr.freeRentLeaseCount} in free rent`
+                : undefined
+            }
+          />
+          {/* Walks the actual rent schedule month by month — NOT monthly x 12, which
+              over-states any lease with free months or a mid-year escalation. */}
+          <StatCard
+            label="Next 12 Months"
+            value={fmt(rr.forwardYearRent ?? (rr.totalMonthlyRent || 0) * 12)}
+            colorScheme="purple"
+            variant="revenue"
+            helpText="Scheduled rent, free-rent and escalations applied"
+          />
         </div>
       )}
 
@@ -4764,7 +4786,10 @@ function RevenueTab({ projectId }: { projectId: string }) {
         <StatCard label="Closed Sales" value={fmt(closedSalesValue)} variant="revenue" colorScheme="green" />
         <StatCard label="Under Contract" value={String(underContractCount)} variant="revenue" colorScheme="brand" />
         <StatCard label="Monthly Lease Income" value={fmt(monthlyLease)} variant="revenue" colorScheme="teal" />
-        <StatCard label="Annual Rent" value={fmt(monthlyLease * 12)} variant="revenue" colorScheme="blue" />
+        {/* Run-rate, not a forecast: the lease-income endpoint returns monthly x 12 and is
+            not free-rent or escalation aware. The schedule-accurate figure lives on the
+            Leases rent roll below ("Next 12 Months"). */}
+        <StatCard label="Annual Run-Rate" value={fmt(monthlyLease * 12)} variant="revenue" colorScheme="blue" helpText="Current monthly x 12" />
       </div>
       <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mb-0">Sales Pipeline</p>
       <SalesTab projectId={projectId} />
