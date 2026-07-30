@@ -305,6 +305,32 @@ describe('SalesService — broker commission on close', () => {
     expect(data.brokerCommissionAmt).toBeUndefined();
     expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
   });
+
+  // The edit form sends null (not undefined) for a field the user emptied, so "cleared"
+  // and "omitted" arrive as different values and must behave differently.
+  it('falls back to the broker default rate when the per-sale % is cleared on a closed sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED', brokerCommissionPct: 3 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { brokerCommissionPct: null } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    // 2% of 1,000,000 — the broker default. NOT 30000, which would recompute from the
+    // 3% override that this very request deleted.
+    expect(Number(data.brokerCommissionAmt)).toBe(20000);
+  });
+
+  it('clears a stale commission when the new broker has neither a rate nor a flat fee', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED', brokerCommissionAmt: 20000 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: null, commissionFlat: null });
+
+    await service.update('s1', { brokerId: 'br2' } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    // Nothing computable for br2 → the $20,000 stamped for the previous broker must go,
+    // not survive by omission.
+    expect(data.brokerCommissionAmt).toBeNull();
+  });
 });
 
 describe('SalesService.delete — soft delete (preserves unit history)', () => {

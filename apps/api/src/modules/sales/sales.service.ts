@@ -178,7 +178,17 @@ export class SalesService {
         dataWithActivity.brokerCommissionAmt = null;
       } else {
         const commission = await this.computeBrokerCommission(sale, data);
-        if (commission != null) dataWithActivity.brokerCommissionAmt = commission;
+        if (commission != null) {
+          dataWithActivity.brokerCommissionAmt = commission;
+        } else if (editingClosedCommissionInputs) {
+          // Nothing computable — the broker carries neither a rate nor a flat fee, or
+          // there's no price. An already-closed sale may still hold an amount stamped
+          // from the previous broker/rate, so leaving it untouched would keep a figure
+          // the current inputs no longer support. On the closingNow path there is
+          // nothing stale to clear, and a close with no computable commission must
+          // stay unstamped.
+          dataWithActivity.brokerCommissionAmt = null;
+        }
       }
     }
 
@@ -317,7 +327,15 @@ export class SalesService {
     });
     if (!broker) return undefined;
 
-    const pctRaw = (data.brokerCommissionPct as any) ?? sale.brokerCommissionPct ?? broker.commissionRate;
+    // An explicit null means the per-sale override was CLEARED, which is not the same as
+    // omitting it (undefined), where the sale's existing override still stands. Without
+    // this the `??` chain falls straight through to the value just deleted, recomputing
+    // the amount from an override the row no longer has. Cleared → drop to the next rung
+    // of the documented precedence: per-sale override → broker rate → flat fee.
+    const pctCleared = data.brokerCommissionPct === null;
+    const pctRaw = pctCleared
+      ? broker.commissionRate
+      : (data.brokerCommissionPct as any) ?? sale.brokerCommissionPct ?? broker.commissionRate;
     const priceRaw = (data.salePrice as any) ?? sale.salePrice;
     const salePrice = priceRaw != null ? Number(priceRaw) : null;
 
