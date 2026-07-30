@@ -66,7 +66,13 @@ export class UnitsService {
         // (past tenants, past sale attempts) even after the unit moves on
         // (e.g. gets sold). Soft-deleted rows are excluded, not the record itself.
         leases: { where: { deletedAt: null }, orderBy: { leaseStart: 'desc' } },
-        sales: { where: { deletedAt: null }, orderBy: { createdAt: 'desc' } },
+        // broker relation included so the unit page can display and edit who
+        // brokered a closed sale — sale.broker.name was being read without this.
+        sales: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+          include: { broker: { select: { id: true, name: true } } },
+        },
         loans: { select: { id: true, loanType: true, lender: true, monthlyPayment: true, principalAmt: true } },
         // Provenance for combined units — which source units were merged in.
         mergedFrom: { select: { id: true, unitNumber: true } },

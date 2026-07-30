@@ -39,7 +39,19 @@ export type DomainEvent =
   // Phase 1 — Sale Payment Schedule
   | { type: 'salePayment.due'; salePaymentId: string; saleId: string }
   | { type: 'salePayment.paid'; salePaymentId: string; saleId: string; amount: number }
-  | { type: 'salePayment.overdue'; salePaymentId: string; saleId: string; daysOverdue: number };
+  | { type: 'salePayment.overdue'; salePaymentId: string; saleId: string; daysOverdue: number }
+  // Leasing depth — rent timeline, deposits/TI, rent collection.
+  // Every one carries projectId because notification routing is project-scoped:
+  // leadership sees everything, everyone else only projects they're a member of.
+  | { type: 'unit.sold'; unitId: string; saleId: string; projectId: string }
+  | { type: 'lease.created'; leaseId: string; projectId: string; tenantName: string }
+  | { type: 'lease.activated'; leaseId: string; projectId: string; tenantName: string }
+  | { type: 'lease.terminated'; leaseId: string; projectId: string; tenantName: string; reason?: string }
+  | { type: 'lease.rentChanged'; leaseId: string; projectId: string; from: number; to: number; effectiveAt: Date; source: 'AUTO' | 'MANUAL' }
+  | { type: 'lease.freeRentEnding'; leaseId: string; projectId: string; firstPayingMonth: Date }
+  | { type: 'lease.depositOutstanding'; leaseId: string; projectId: string; outstanding: number; daysLate: number }
+  | { type: 'lease.tiDisbursed'; leaseId: string; projectId: string; amount: number; pending: number }
+  | { type: 'rent.overdue'; invoiceId: string; leaseId: string; projectId: string; unitId?: string; daysOverdue: number };
 
 export type DomainEventType = DomainEvent['type'];
 export type DomainEventOf<T extends DomainEventType> = Extract<DomainEvent, { type: T }>;

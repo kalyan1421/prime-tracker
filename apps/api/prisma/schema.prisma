@@ -70,6 +70,10 @@ model User {
   snagItems               SnagItem[]               @relation("SnagAssignee")
   discountApprovedSales   Sale[]                   @relation("SaleDiscountApprover")
   dailyLogs               DailyLog[]               @relation("DailyLogAuthor")
+  // Leasing depth — rent timeline + deposit/TI ledger
+  leaseRentPeriods        LeaseRentPeriod[]        @relation("LeaseRentPeriodCreator")
+  leaseObligationPayments LeaseObligationPayment[] @relation("LeaseObligationPaymentRecorder")
+  leaseRentInvoices       LeaseRentInvoice[]       @relation("LeaseRentInvoiceRecorder")
 
   @@map("users")
 }
@@ -230,6 +234,11 @@ model Building {
   projectId      String
   project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name           String
+  // Legal entity that owns this building (e.g. "Prime Leander I LLC"). Free-text by
+  // design — Prime tracks the LLC *label* per building, not LLC master data (EIN,
+  // registered address, formation docs). If entity-level reporting is ever needed,
+  // promote to a LegalEntity relation via SELECT DISTINCT "llcName".
+  llcName        String?
   totalSqft      Int?
   // For LOT-type buildings (raw parcels — see BuildingType.LOT), size is expressed
   // in acres rather than square feet. Stored as Decimal(10,3) to support fractional
@@ -831,7 +840,18 @@ model Lease {
   tenantName      String
   tenantLegalName String?
   tenantBrand     String?
+  // tenantContact is the contact PERSON's name; email/phone are separate so they can be
+  // validated and displayed as links. Note: tenants are never notified by the platform —
+  // notifications are strictly internal (they only ever address User rows).
   tenantContact   String?
+  tenantEmail     String?
+  tenantPhone     String?
+  // The CONTRACTED headline rent — deliberately NOT mirrored from the active rent
+  // period. Mirroring was the original plan but is wrong: a lease inside a free-rent
+  // period has an effective rent of 0, so mirroring would zero this field and the next
+  // schedule regeneration would derive a zero schedule from it. What a tenant actually
+  // owes in a given month comes from LeaseRentPeriod (see LeasesService.getRentRoll,
+  // which returns both the effective and the contracted totals).
   monthlyRent     Decimal     @db.Decimal(12, 2)
   rentPerSqft     Decimal?    @db.Decimal(8, 2)
   leaseStart      DateTime
@@ -840,6 +860,15 @@ model Lease {
   escalationPct   Decimal?    @db.Decimal(5, 2)
   escalationFreq  Int? // months between escalations
   securityDeposit Decimal?    @db.Decimal(12, 2)
+  // Rent abatement. Free months sit INSIDE the term — leaseEnd is unchanged and the
+  // escalation clock still runs from leaseStart, so derived dates never contradict the
+  // signed contract. The generator emits these months as isFreeRent periods at rent 0.
+  freeRentMonths    Int?
+  freeRentStartDate DateTime?
+  // Day of month rent falls due (1-31). Null = the 1st. Per-lease because Prime's
+  // leases genuinely differ (5th, 10th); the invoice generator clamps to the last
+  // day of short months so a "31st" lease still bills correctly in February.
+  rentDueDay        Int?
   status          String @default("DRAFT")
   notes           String?
   createdAt       DateTime    @default(now())
@@ -847,6 +876,9 @@ model Lease {
   deletedAt       DateTime? // soft-delete
 
   interiorProjects InteriorProject[]
+  rentPeriods      LeaseRentPeriod[]
+  obligations      LeaseObligation[]
+  rentInvoices     LeaseRentInvoice[]
 
   @@index([unitId])
   @@index([buildingId])
@@ -855,6 +887,147 @@ model Lease {
   @@map("leases")
 }
 
+
+// ============================================================================
+// Lease rent timeline.
+//
+// One table for what would naively be three: the escalation SCHEDULE, the rent
+// HISTORY, and free-rent months. They are the same timeline — an escalation is
+// known the day the lease is signed, so "schedule" is just the part after today
+// and "history" the part before. Splitting them means storing each rent twice
+// and reconciling forever.
+//
+// Rules (client-confirmed 2026-07-29):
+//   - escalation COMPOUNDS: baseRent = previous period's baseRent x (1 + pct)
+//   - escalation applies to baseRent ONLY; nnnAmount carries forward untouched
+//     and is edited by hand each year
+//   - past periods are immutable; edits regenerate FUTURE periods only
+//     (append-only, same rule as BudgetRevision)
+// ============================================================================
+
+model LeaseRentPeriod {
+  id            String    @id @default(cuid())
+  leaseId       String
+  lease         Lease     @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  sequence      Int // 1 = initial term
+  startDate     DateTime
+  endDate       DateTime? // null = runs to lease end
+  baseRent      Decimal   @db.Decimal(12, 2) // the rent portion — this is what escalates
+  nnnAmount     Decimal   @default(0) @db.Decimal(12, 2) // NNN portion — never auto-escalated
+  // Invariant enforced in LeaseRentPeriodService: monthlyRent == baseRent + nnnAmount.
+  monthlyRent   Decimal   @db.Decimal(12, 2)
+  isFreeRent    Boolean   @default(false) // abatement month -> monthlyRent 0
+  escalationPct Decimal?  @db.Decimal(5, 2) // pct applied vs the PREVIOUS period
+  source        String // INITIAL | AUTO_ESCALATION | MANUAL | FREE_RENT
+  reason        String? // required when source = MANUAL
+  createdById   String?
+  createdBy     User?     @relation("LeaseRentPeriodCreator", fields: [createdById], references: [id])
+  createdAt     DateTime  @default(now())
+
+  invoices LeaseRentInvoice[]
+
+  @@unique([leaseId, sequence])
+  @@index([leaseId, startDate])
+  @@map("lease_rent_periods")
+}
+
+// ============================================================================
+// Lease obligations — an agreed total paid down by discrete payments.
+//
+// Security deposit (tenant -> Prime) and TI allowance (Prime -> tenant) are the
+// same shape, so they share one model rather than two near-identical services
+// and two near-identical UI panels. Mirrors SalePayment on the sales side.
+//
+//   - deposit: ONE obligation at whatever level the lease sits at (unit or
+//     building). Never split across units — roll up for display only.
+//   - TI allowance: a fixed agreed amount (NOT a percentage), disbursed in
+//     phases as multiple LeaseObligationPayment rows.
+// ============================================================================
+
+model LeaseObligation {
+  id          String    @id @default(cuid())
+  leaseId     String
+  lease       Lease     @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  kind        String // SECURITY_DEPOSIT | TI_ALLOWANCE | OTHER
+  direction   String // FROM_TENANT | TO_TENANT
+  totalAmount Decimal   @db.Decimal(14, 2)
+  dueDate     DateTime?
+  status      String    @default("PENDING") // PENDING | PARTIAL | SETTLED | WAIVED
+  // Mirror of sum(payments.amount), maintained by the service so list queries
+  // don't need an aggregate. pending = totalAmount - paidAmount.
+  paidAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  payments LeaseObligationPayment[]
+
+  @@index([leaseId, kind])
+  @@index([status, dueDate])
+  @@map("lease_obligations")
+}
+
+model LeaseObligationPayment {
+  id           String          @id @default(cuid())
+  obligationId String
+  obligation   LeaseObligation @relation(fields: [obligationId], references: [id], onDelete: Cascade)
+  amount       Decimal         @db.Decimal(14, 2)
+  paidAt       DateTime
+  method       String? // WIRE | CHECK | ACH | CASH | ADJUSTMENT
+  reference    String? // check no / wire ref
+  documentId   String? // receipt in the doc vault
+  notes        String?
+  recordedById String?
+  recordedBy   User?           @relation("LeaseObligationPaymentRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime        @default(now())
+
+  @@index([obligationId])
+  @@map("lease_obligation_payments")
+}
+
+// ============================================================================
+// Monthly rent collection ledger.
+//
+// LeaseRentPeriod says what a tenant OWES; this says what they PAID. One row per
+// month per lease, GENERATED from the covering period — never hand-created, so a
+// unit's payment history can have no unexplained gaps. Free-rent months generate
+// rows too (amountDue 0, status FREE) for exactly that reason.
+//
+// The @@unique([leaseId, periodMonth]) makes generation idempotent: the monthly
+// cron can re-run safely.
+// ============================================================================
+
+model LeaseRentInvoice {
+  id           String           @id @default(cuid())
+  leaseId      String
+  lease        Lease            @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  periodId     String?
+  period       LeaseRentPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  /// First day of the billed month (UTC), the natural key alongside leaseId.
+  periodMonth  DateTime
+  dueDate      DateTime
+  amountDue    Decimal          @db.Decimal(12, 2)
+  amountPaid   Decimal          @default(0) @db.Decimal(12, 2)
+  /// True when the month was billed pro-rata (partial first/last month).
+  isProrated   Boolean          @default(false)
+  /// Days billed vs days in month — kept so a prorated figure can be explained.
+  billedDays   Int?
+  monthDays    Int?
+  paidAt       DateTime?
+  status       String           @default("DUE") // DUE | PARTIAL | PAID | FREE | WAIVED
+  method       String?
+  reference    String?
+  notes        String?
+  recordedById String?
+  recordedBy   User?            @relation("LeaseRentInvoiceRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([leaseId, periodMonth])
+  @@index([leaseId, periodMonth])
+  @@index([status, dueDate])
+  @@map("lease_rent_invoices")
+}
 
 // ---- Rent Roll Snapshot ----
 
@@ -1183,6 +1356,22 @@ enum NotificationType {
   SNAG_OVERDUE
   PAYMENT_DUE_7
   PAYMENT_OVERDUE
+  // Draw past its expectedFundingDate. Previously these alerts were filed under
+  // BUDGET_VARIANCE, which meant muting budget alerts also muted funding alerts.
+  DRAW_FUNDING_OVERDUE
+  // Leasing depth triggers. These must stay in sync with
+  // migrations/20260729120000_add_notification_types_l3 — a value present in the DB
+  // but missing here is invisible to Object.values(NotificationType), which means it
+  // never appears in getPreferences() and users cannot mute it.
+  UNIT_SOLD
+  LEASE_ADDED
+  LEASE_ACTIVATED
+  LEASE_TERMINATED
+  LEASE_RENT_CHANGED
+  FREE_RENT_ENDING_30
+  DEPOSIT_OUTSTANDING
+  TI_DISBURSED
+  RENT_OVERDUE
 }
 
 model Notification {
@@ -1203,6 +1392,10 @@ model Notification {
 
 model NotificationPreference {
   id      String           @id @default(cuid())
+  // emailEnabled is NULLABLE on purpose: null means "use this notification type's
+  // tier default" (action-needed types email, FYI types are in-app only). An
+  // explicit true/false is a deliberate per-user override in either direction.
+  emailEnabled Boolean?
   userId  String
   user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   type    NotificationType

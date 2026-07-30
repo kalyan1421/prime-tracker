@@ -146,6 +146,40 @@ describe('SalesService — discount-approval gate', () => {
     expect(mockPrisma.sale.findUniqueOrThrow).toHaveBeenCalled();
   });
 
+  it('the LOSER of a concurrent CLOSE emits nothing (no duplicate unit.sold notifications)', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: 'u1', salePrice: 97, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 0 }); // lost the optimistic lock
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    // The pre-transaction snapshot still says UNDER_CONTRACT, but this request wrote
+    // nothing — announcing the close would double-notify ~10 recipients.
+    expect(mockBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'unit.sold' }));
+    expect(mockBus.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'sale.statusChanged' }));
+    expect(mockBus.emit).not.toHaveBeenCalled();
+  });
+
+  it('the WINNER of a concurrent CLOSE emits unit.sold + sale.statusChanged exactly once', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: 'u1', salePrice: 97, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 1 }); // won the optimistic lock
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockBus.emit).toHaveBeenCalledWith({
+      type: 'unit.sold', unitId: 'u1', saleId: 's1', projectId: 'pr1',
+    });
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sale.statusChanged', from: 'UNDER_CONTRACT', to: 'CLOSED' }),
+    );
+    expect(mockBus.emit.mock.calls.filter((c: any[]) => c[0].type === 'unit.sold')).toHaveLength(1);
+  });
+
   it('does not gate a building-level sale (no unit asking price)', async () => {
     mockPrisma.sale.findUnique.mockResolvedValue({
       id: 's1', status: 'PROSPECT', projectId: 'pr1', unitId: null, salePrice: 90, discountApprovedAt: null, unit: null,
@@ -224,6 +258,78 @@ describe('SalesService — broker commission on close', () => {
     const data = mockPrisma.sale.update.mock.calls[0][0].data;
     expect(data.brokerCommissionAmt).toBeUndefined();
     expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
+  });
+
+  // Correcting a closed sale's record afterward (e.g. from the unit detail page) must
+  // keep the stamped commission honest — it must not go stale just because the sale
+  // isn't transitioning INTO closed this time.
+  it('recomputes commission when an ALREADY-CLOSED sale has its broker % edited', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED', brokerCommissionPct: 2 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { brokerCommissionPct: 5 } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 50000 }) }),
+    );
+  });
+
+  it('recomputes commission when an ALREADY-CLOSED sale has its sale price edited', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED' }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { salePrice: 2000000 } as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ brokerCommissionAmt: 40000 }) }),
+    );
+  });
+
+  it('zeroes the commission when the broker is explicitly cleared on an already-closed sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED' }));
+
+    await service.update('s1', { brokerId: null } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    expect(data.brokerCommissionAmt).toBeNull();
+    // Must not fall through to the OLD broker via computeBrokerCommission's `?? sale.brokerId`.
+    expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('does NOT touch commission on an unrelated field edit to an already-closed sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED' }));
+
+    await service.update('s1', { notes: 'corrected buyer spelling' } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    expect(data.brokerCommissionAmt).toBeUndefined();
+    expect(mockPrisma.broker.findUnique).not.toHaveBeenCalled();
+  });
+
+  // The edit form sends null (not undefined) for a field the user emptied, so "cleared"
+  // and "omitted" arrive as different values and must behave differently.
+  it('falls back to the broker default rate when the per-sale % is cleared on a closed sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED', brokerCommissionPct: 3 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+    await service.update('s1', { brokerCommissionPct: null } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    // 2% of 1,000,000 — the broker default. NOT 30000, which would recompute from the
+    // 3% override that this very request deleted.
+    expect(Number(data.brokerCommissionAmt)).toBe(20000);
+  });
+
+  it('clears a stale commission when the new broker has neither a rate nor a flat fee', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(brokerSale({ status: 'CLOSED', brokerCommissionAmt: 20000 }));
+    mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: null, commissionFlat: null });
+
+    await service.update('s1', { brokerId: 'br2' } as any);
+
+    const data = mockPrisma.sale.update.mock.calls[0][0].data;
+    // Nothing computable for br2 → the $20,000 stamped for the previous broker must go,
+    // not survive by omission.
+    expect(data.brokerCommissionAmt).toBeNull();
   });
 });
 

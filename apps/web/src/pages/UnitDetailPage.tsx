@@ -4,11 +4,11 @@ import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink } from 'react-icons/fi';
+import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
-  useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useUploadDocument, useDeleteDocument,
+  useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
@@ -24,6 +24,9 @@ import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
+import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
+import { RentCollectionPanel } from '../components/RentCollectionPanel';
+import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
 
 
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
@@ -239,6 +242,111 @@ function UnitHistoryTimeline({ leases, sales }: { leases: any[]; sales: any[] })
   );
 }
 
+// ---- Rent history, per unit ----
+// The client asked for rent changes to live in the *unit's* history, but rent
+// periods hang off a LEASE. A re-let means the unit has several leases, so
+// rendering only the current one would silently drop the previous tenant's rent
+// story — exactly the history that was asked for.
+//
+// So: every lease this unit has ever had, newest first, each labelled with its
+// tenant and dates. The newest is expanded; older ones collapse to a one-line
+// header that still carries tenant, dates and rent, so the unit reads as one
+// continuous timeline whether or not you open the tables. Collapsing matters
+// here because each schedule is a full multi-row table plus a four-stat strip —
+// a unit on its fourth tenant would otherwise be several screens of tables.
+//
+// Each expanded lease shows BOTH halves of that tenancy's rent story, because
+// they answer different questions and are different models: the SCHEDULE is what
+// was contracted (periods, escalations, free-rent months — what is owed), the
+// LEDGER is what actually happened (one row per month, payments recorded against
+// it — what was collected). Reading either alone is how a tenant ends up chased
+// for an abated month, or a missed payment goes unnoticed behind a healthy
+// schedule, so they are stacked under one tenant header rather than split apart.
+//
+// Leases arrive on the unit payload from GET /units/:id (already used above for
+// the History timeline), so this costs no extra request; only the expanded
+// lease's schedule and ledger fetch their own rows.
+function UnitRentHistory({ leases, canEdit, canCollect, unitId }: {
+  leases: any[];
+  canEdit: boolean;
+  /** `rent:collect` — recording money received, deliberately not `lease:edit`. */
+  canCollect: boolean;
+  unitId: string | undefined;
+}) {
+  const ordered = [...(leases || [])].sort(
+    (a, b) => new Date(b.leaseStart || 0).getTime() - new Date(a.leaseStart || 0).getTime(),
+  );
+  const [openIds, setOpenIds] = useState<string[]>(ordered.length > 0 ? [ordered[0].id] : []);
+
+  const toggle = (id: string) =>
+    setOpenIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+
+  if (ordered.length === 0) {
+    return <EmptyRow icon={<FiTrendingUp className="w-5 h-5" />} text="No leases yet — rent history starts with the first lease" />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {ordered.map((l: any) => {
+        const ongoing = !['EXPIRED', 'TERMINATED'].includes(l.status);
+        const open = openIds.includes(l.id);
+        return (
+          <div key={l.id}>
+            <button
+              type="button"
+              onClick={() => toggle(l.id)}
+              aria-expanded={open}
+              className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="text-gray-400 shrink-0">
+                  {open ? <FiChevronDown className="w-4 h-4" /> : <FiChevronRight className="w-4 h-4" />}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
+                    {l.tenantBrand || l.tenantName || 'Unnamed tenant'}
+                    {ongoing ? (
+                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                        Current
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                        {String(l.status).toLowerCase()}
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {fmtDate(l.leaseStart)} – {fmtDate(l.leaseEnd)}
+                  </p>
+                </div>
+              </div>
+              <span className="text-sm font-semibold text-gray-700 tabular-nums shrink-0">
+                {l.monthlyRent != null ? `${fmt(l.monthlyRent)}/mo` : '—'}
+              </span>
+            </button>
+            {open && (
+              <div className="mt-3 space-y-5">
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Rent schedule — what is owed
+                  </p>
+                  <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Rent ledger — what was collected
+                  </p>
+                  <RentCollectionPanel leaseId={l.id} canCollect={canCollect} unitId={unitId} />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function UnitDetailPage() {
   const { id: projectId, unitId } = useParams<{ id: string; unitId: string }>();
   const navigate = useNavigate();
@@ -251,7 +359,12 @@ export default function UnitDetailPage() {
   const [primeOwned, setPrimeOwned] = useState(false);
   const { hasPermission } = useAuthStore();
   const canEditUnit = hasPermission('unit:edit');
+  const canEditSale = hasPermission('sales:edit');
   const canEditLease = hasPermission('lease:edit');
+  const canViewLeases = hasPermission('lease:view');
+  // Recording rent is `rent:collect`, not `lease:edit` — an AR/AP clerk banks a
+  // cheque without being able to rewrite the lease terms behind it.
+  const canCollectRent = hasPermission('rent:collect');
   const canViewBudget = hasPermission('budget:view');
   const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
   const [editingNotes, setEditingNotes] = useState(false);
@@ -313,6 +426,48 @@ export default function UnitDetailPage() {
       addToast({ title: errMsg(e, 'Failed to save lease'), color: 'danger' });
     }
   };
+
+  // Quick-add for a SOLD unit with no sale record yet. Editing an EXISTING closed
+  // sale (buyer, price, dates, broker) happens inside SoldUnitPanel — this only
+  // covers the case where the unit's status was flipped to SOLD but nobody has
+  // recorded the deal yet, mirroring the "+ Add Lease" fallback above.
+  const [saleModalOpen, setSaleModalOpen] = useState(false);
+  const [saleForm, setSaleForm] = useState<Record<string, string>>({
+    buyer: '', salePrice: '', depositAmt: '', closingDate: '', notes: '',
+  });
+  const createSale = useCreateSale();
+
+  const openAddSale = () => {
+    setSaleForm({ buyer: '', salePrice: '', depositAmt: '', closingDate: '', notes: '' });
+    setSaleModalOpen(true);
+  };
+
+  const handleSaveSale = async () => {
+    if (!saleForm.salePrice) {
+      return addToast({ title: 'Sale price is required', color: 'warning' });
+    }
+    const toDate = (d: string) => (d ? new Date(`${d}T12:00:00.000Z`).toISOString() : undefined);
+    try {
+      await createSale.mutateAsync({
+        projectId: projectId!,
+        unitId: unitId!,
+        status: 'CLOSED',
+        buyer: saleForm.buyer.trim() || undefined,
+        salePrice: parseFloat(saleForm.salePrice),
+        depositAmt: saleForm.depositAmt ? parseFloat(saleForm.depositAmt) : undefined,
+        closingDate: toDate(saleForm.closingDate),
+        notes: saleForm.notes.trim() || undefined,
+      });
+      addToast({ title: 'Sale recorded', color: 'success' });
+      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      setSaleModalOpen(false);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to save sale'), color: 'danger' });
+    }
+  };
+
+  const setSale = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setSaleForm((f) => ({ ...f, [field]: e.target.value }));
 
   const setLease = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setLeaseForm((f) => ({ ...f, [field]: e.target.value }));
@@ -523,6 +678,28 @@ export default function UnitDetailPage() {
         </ModalContent>
       </Modal>
 
+      {/* Add Sale Modal — quick-add for a SOLD unit with no sale record yet.
+          Broker attribution and further edits happen inside SoldUnitPanel once
+          this exists. */}
+      <Modal isOpen={saleModalOpen} onClose={() => setSaleModalOpen(false)} size="md">
+        <ModalContent>
+          <ModalHeader>Add Sale</ModalHeader>
+          <ModalBody>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Buyer" size="sm" value={saleForm.buyer} onChange={setSale('buyer')} className="sm:col-span-2" />
+              <Input label="Sale Price ($)" size="sm" type="number" value={saleForm.salePrice} onChange={setSale('salePrice')} />
+              <Input label="Deposit Amount ($)" size="sm" type="number" value={saleForm.depositAmt} onChange={setSale('depositAmt')} />
+              <Input label="Closing Date" size="sm" type="date" value={saleForm.closingDate} onChange={setSale('closingDate')} className="sm:col-span-2" />
+              <Input label="Notes" size="sm" value={saleForm.notes} onChange={setSale('notes')} className="sm:col-span-2" />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={() => setSaleModalOpen(false)}>Cancel</Button>
+            <Button color="primary" onPress={handleSaveSale} isLoading={createSale.isPending}>Add Sale</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
         <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
@@ -546,10 +723,25 @@ export default function UnitDetailPage() {
         )}
       </div>
 
-      {/* Sold unit details */}
+      {/* Sold unit details — the unit's status is SOLD but nobody has recorded the
+          deal yet. Previously this rendered nothing at all, which read as "there is
+          no way to enter a sale" rather than "nothing has been entered yet". */}
       {u.status === 'SOLD' && (() => {
         const closedSale = u.sales?.find((s: any) => s.status === 'CLOSED');
-        return closedSale ? <SoldUnitPanel sale={closedSale} /> : null;
+        if (closedSale) return <SoldUnitPanel sale={closedSale} />;
+        return (
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-dashed border-gray-200 bg-white p-5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-gray-500">
+              <FiDollarSign className="w-4 h-4" />
+              <p className="text-sm">This unit is marked SOLD, but no sale has been recorded yet.</p>
+            </div>
+            {canEditSale ? (
+              <Button size="sm" color="primary" variant="flat" onPress={openAddSale}>+ Add Sale</Button>
+            ) : (
+              <span className="text-xs text-gray-400">Ask someone with sales access to record it.</span>
+            )}
+          </div>
+        );
       })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
@@ -694,6 +886,40 @@ export default function UnitDetailPage() {
           <UnitHistoryTimeline leases={u.leases || []} sales={u.sales || []} />
         </Section>
       </div>
+
+      {/* Rent & deposits — deliberately directly under History. History answers
+          "who was here and when"; this answers "how much, and when did it change"
+          for those same leases, so the drill-down sits against the summary it
+          expands rather than at the foot of the page. Not rendered inside a
+          Section: LeaseRentSchedule, RentCollectionPanel and ObligationSummaryCard
+          bring their own card chrome and would otherwise be a card inside a card.
+
+          Gated on lease:view like BuildingDetailPage does: every endpoint behind
+          this block (obligation summary, rent periods, rent invoices) requires
+          lease:view, and this route is not permission-guarded in App.tsx — so
+          without the gate an ACCOUNTING / AR_AP / CONSTRUCTION / VIEWER user is
+          shown a card whose only possible outcome is a 403. */}
+      {canViewLeases && (
+        <div className="mb-5 sm:mb-6 space-y-4">
+          <ObligationSummaryCard scope="unit" id={unitId} />
+
+          <div className="flex items-center gap-2.5 pt-1">
+            <FiTrendingUp className="w-4 h-4 text-emerald-600" />
+            <h2 className="font-semibold text-sm text-gray-800">
+              Rent History
+              {(u.leases?.length ?? 0) > 1 && (
+                <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
+              )}
+            </h2>
+          </div>
+          <UnitRentHistory
+            leases={u.leases || []}
+            canEdit={canEditLease}
+            canCollect={canCollectRent}
+            unitId={unitId}
+          />
+        </div>
+      )}
 
       {/* Notes — always visible so users can add notes even when empty */}
       {(u.notes || canEditUnit) && (

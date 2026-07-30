@@ -95,6 +95,24 @@ describe('InteriorService', () => {
     });
   });
 
+  describe('create — multiple concurrent projects per unit are allowed', () => {
+    // Client decision 2026-07-29: reversed the earlier "one active project per unit"
+    // rule. Distinct from the discovery-doc "no parallel execution" gate, which is
+    // about fit-out vs. shell CONSTRUCTION timing and lives in advancePhase() —
+    // covered separately by the 'advancePhase — soft parallel gate' suite below.
+    it('does not reject a second project on a unit that already has an active one', async () => {
+      // findFirst here is InteriorProject.findFirst — if a stray "already exists"
+      // check were reintroduced it would resolve this and reject the create.
+      mockPrisma.interiorProject.findFirst.mockResolvedValue({ id: 'ip-existing', name: 'Phase 1 fit-out' });
+      mockPrisma.interiorProject.create.mockResolvedValue({ id: 'ip2' });
+
+      await expect(
+        service.create({ name: 'Phase 2 fit-out', unitId: 'u1' }),
+      ).resolves.toEqual(expect.objectContaining({ id: 'ip2' }));
+      expect(mockPrisma.interiorProject.create).toHaveBeenCalled();
+    });
+  });
+
   describe('create — per-sqft contract value', () => {
     it('computes contractValue = ratePerSqft × area for a PER_SQFT contract', async () => {
       mockPrisma.interiorProject.create.mockResolvedValue({ id: 'ip1' });

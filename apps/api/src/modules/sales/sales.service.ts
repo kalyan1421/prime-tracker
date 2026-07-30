@@ -86,9 +86,47 @@ export class SalesService {
     for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
       if (typeof data[field] === 'string') (data as any)[field] = new Date(data[field] as unknown as string);
     }
-    return this.prisma.sale.create({
+    // A sale can be CREATED already CLOSED — the units flow does exactly that when a
+    // user flips a unit to SOLD and fills in the deal. update() gates that transition
+    // on founder discount sign-off and stamps broker commission; create() must apply
+    // the same rules, or "create as CLOSED" becomes a way around both.
+    const createdClosed = data.status === 'CLOSED';
+    if (createdClosed) {
+      await this.assertDiscountApproved({
+        projectId: data.projectId as string,
+        unitId: (data.unitId as string | undefined) ?? null,
+        salePrice: (data.salePrice as Prisma.Decimal | undefined) ?? null,
+        discountApprovedAt: (data.discountApprovedAt as Date | undefined) ?? null,
+      });
+      const commission = await this.computeBrokerCommission(
+        {
+          brokerId: (data.brokerId as string | undefined) ?? null,
+          salePrice: data.salePrice,
+          brokerCommissionPct: data.brokerCommissionPct,
+        },
+        data as Prisma.SaleUncheckedUpdateInput,
+      );
+      if (commission != null) (data as any).brokerCommissionAmt = commission;
+    }
+
+    const created = await this.prisma.sale.create({
       data: { ...data, lastActivityAt: new Date() },
     });
+
+    // Emit for the same reason: a sale born CLOSED is still a sale that closed, and
+    // Finance/Accounting learn about it through these events.
+    if (createdClosed) {
+      this.bus.emit({ type: 'sale.statusChanged', saleId: created.id, from: 'NEW', to: 'CLOSED' });
+      if (created.unitId && created.projectId) {
+        this.bus.emit({
+          type: 'unit.sold',
+          unitId: created.unitId,
+          saleId: created.id,
+          projectId: created.projectId,
+        });
+      }
+    }
+    return created;
   }
 
   async update(id: string, data: Prisma.SaleUncheckedUpdateInput) {
@@ -124,33 +162,66 @@ export class SalesService {
     }
 
     // Broker commission is earned when the sale CLOSES — compute + stamp the amount.
-    if (data.status === 'CLOSED' && sale.status !== 'CLOSED') {
-      const commission = await this.computeBrokerCommission(sale, data);
-      if (commission != null) dataWithActivity.brokerCommissionAmt = commission;
+    // Also recompute when an ALREADY-CLOSED sale's broker/commission%/price is edited
+    // afterward (e.g. correcting the record from the unit page) — otherwise the
+    // stamped commission goes stale the moment any of its inputs changes post-close.
+    const closingNow = data.status === 'CLOSED' && sale.status !== 'CLOSED';
+    const editingClosedCommissionInputs =
+      sale.status === 'CLOSED' &&
+      (data.brokerId !== undefined || data.brokerCommissionPct !== undefined || data.salePrice !== undefined);
+    if (closingNow || editingClosedCommissionInputs) {
+      if (data.brokerId === null) {
+        // Broker explicitly cleared. computeBrokerCommission's `data.brokerId ?? sale.brokerId`
+        // can't tell "cleared" apart from "omitted" — both fall through to the old value —
+        // so handle the clear here rather than asking it to compute against a broker
+        // that was just removed.
+        dataWithActivity.brokerCommissionAmt = null;
+      } else {
+        const commission = await this.computeBrokerCommission(sale, data);
+        if (commission != null) {
+          dataWithActivity.brokerCommissionAmt = commission;
+        } else if (editingClosedCommissionInputs) {
+          // Nothing computable — the broker carries neither a rate nor a flat fee, or
+          // there's no price. An already-closed sale may still hold an amount stamped
+          // from the previous broker/rate, so leaving it untouched would keep a figure
+          // the current inputs no longer support. On the closingNow path there is
+          // nothing stale to clear, and a close with no computable commission must
+          // stay unstamped.
+          dataWithActivity.brokerCommissionAmt = null;
+        }
+      }
     }
 
     let result;
+    // Did THIS request actually perform the status transition? Only the optimistic-locked
+    // CLOSE path can lose (a concurrent CLOSE beat us to the write); every other path
+    // writes unconditionally and therefore always applies. Events must be gated on this,
+    // not on the pre-transaction snapshot — otherwise two concurrent CLOSEs both read
+    // status=UNDER_CONTRACT and both emit, double-notifying every recipient.
+    let applied = true;
     if (data.status === 'CLOSED' && sale.unitId) {
       const unitId = sale.unitId;
       // Atomic + optimistic-locked: only the NOT_CLOSED→CLOSED transition stamps the broker
       // commission and flips the unit. Guarding the write on `status != CLOSED` means a
       // concurrent CLOSE finds 0 rows and skips re-stamping brokerCommissionAmt.
-      result = await this.prisma.$transaction(async (tx) => {
+      const outcome = await this.prisma.$transaction(async (tx) => {
         const guard = await tx.sale.updateMany({
           where: { id, status: { not: 'CLOSED' } },
           data: dataWithActivity,
         });
         if (guard.count === 0) {
           // Lost the race — already CLOSED elsewhere. Return current row, no side effects.
-          return tx.sale.findUniqueOrThrow({ where: { id } });
+          return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false };
         }
         await tx.unit.update({
           where: { id: unitId },
           // Sale closed → unit becomes SOLD; clear time-on-market
           data: { status: 'SOLD', availableSince: null },
         });
-        return tx.sale.findUniqueOrThrow({ where: { id } });
+        return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
       });
+      result = outcome.sale;
+      applied = outcome.applied;
     } else if (cancelling && sale.unitId) {
       // Cancelling a sale must RELEASE the unit it was holding, or the unit stays stuck
       // in UNDER_CONTRACT forever (backend-issue #1). Only flip a unit that was *reserved*
@@ -177,13 +248,27 @@ export class SalesService {
       result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
     }
 
-    if (data.status && data.status !== sale.status) {
+    // `applied` (not the stale pre-read snapshot) is what makes these events fire exactly
+    // once: the request that lost the optimistic lock changed nothing, so announcing a
+    // transition it didn't make would double-notify — and its `from` is stale besides.
+    if (applied && data.status && data.status !== sale.status) {
       this.bus.emit({
         type: 'sale.statusChanged',
         saleId: id,
         from: sale.status,
         to: data.status as string,
       });
+      // A unit flipping to SOLD is the event Finance/Sales/Accounting actually care
+      // about — distinct from a sale merely changing stage. Only emitted for
+      // unit-level sales; a building-level sale has no unit to flip.
+      if (data.status === 'CLOSED' && sale.status !== 'CLOSED' && sale.unitId && sale.projectId) {
+        this.bus.emit({
+          type: 'unit.sold',
+          unitId: sale.unitId,
+          saleId: id,
+          projectId: sale.projectId,
+        });
+      }
     }
     return result;
   }
@@ -242,7 +327,15 @@ export class SalesService {
     });
     if (!broker) return undefined;
 
-    const pctRaw = (data.brokerCommissionPct as any) ?? sale.brokerCommissionPct ?? broker.commissionRate;
+    // An explicit null means the per-sale override was CLEARED, which is not the same as
+    // omitting it (undefined), where the sale's existing override still stands. Without
+    // this the `??` chain falls straight through to the value just deleted, recomputing
+    // the amount from an override the row no longer has. Cleared → drop to the next rung
+    // of the documented precedence: per-sale override → broker rate → flat fee.
+    const pctCleared = data.brokerCommissionPct === null;
+    const pctRaw = pctCleared
+      ? broker.commissionRate
+      : (data.brokerCommissionPct as any) ?? sale.brokerCommissionPct ?? broker.commissionRate;
     const priceRaw = (data.salePrice as any) ?? sale.salePrice;
     const salePrice = priceRaw != null ? Number(priceRaw) : null;
 

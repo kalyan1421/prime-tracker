@@ -55,6 +55,9 @@ export class BuildingsService {
   async create(input: {
     projectId: string;
     name: string;
+    llcName?: string;
+    // Decimal(10,3) on the model — LOT parcels are sized in acres, not sqft.
+    acreage?: number;
     totalSqft?: number;
     stories?: number;
     buildingType?: BuildingType;
@@ -81,6 +84,8 @@ export class BuildingsService {
 
   async update(id: string, input: {
     name?: string;
+    llcName?: string;
+    acreage?: number;
     totalSqft?: number;
     stories?: number;
     buildingType?: BuildingType;

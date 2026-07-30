@@ -11,7 +11,7 @@ import { NotificationsService } from '../notifications/notifications.service';
  *   drawRequest.submitted     → notify approvers (Super Admin/Founder/Executive/Finance)
  *   drawRequest.approved      → notify Finance/leadership the draw is ready for the lender
  *   drawRequest.funded        → auto-create Actual rows, invalidate dashboards, notify
- *   drawRequest.fundingOverdue→ create Notification for Finance+Founder
+ *   drawRequest.fundingOverdue→ notify Finance/AR-AP (+ leadership) the lender is late
  *   budget.varianceExceeded   → invalidate dashboard cache
  *
  * Note: project health is unit-based only (see ProjectHealthService) and does not
@@ -157,27 +157,24 @@ export class DrawEventHandlers implements OnModuleInit {
     }
   }
 
+  /**
+   * Delegates to NotificationsService like its sibling handlers do. The raw
+   * prisma.notification.createMany this replaced bypassed project routing,
+   * per-user mute preferences and email entirely — which made the settings
+   * toggle for DRAW_FUNDING_OVERDUE a lie.
+   *
+   * `loan.lender` is deliberately NOT fetched: it is an AES-encrypted field, so
+   * reading it here would put ciphertext in a notification body.
+   */
   private async onFundingOverdue(e: { drawId: string; daysOverdue: number }) {
-    const draw = await this.prisma.drawRequest.findUnique({
-      where: { id: e.drawId },
-      include: { loan: { select: { lender: true } }, project: { select: { name: true, id: true } } },
-    });
-    if (!draw) return;
+    const draw = await this.findDrawForNotification(e.drawId);
+    if (!draw?.projectId) return;
 
-    // Notify Finance + Founder roles. We use the existing Notification model.
-    const recipients = await this.prisma.user.findMany({
-      where: { role: { in: ['FOUNDER', 'FINANCE', 'AR_AP'] }, isActive: true },
-      select: { id: true },
-    });
-
-    await this.prisma.notification.createMany({
-      data: recipients.map((u) => ({
-        userId: u.id,
-        type: 'BUDGET_VARIANCE',  // closest existing type; add DRAW_OVERDUE in next migration
-        title: `Draw funding overdue (${e.daysOverdue}d)`,
-        body: `Draw #${draw.drawNumber} on ${draw.project?.name ?? 'project'} is ${e.daysOverdue} days past expected funding`,
-        link: draw.projectId ? `/projects/${draw.projectId}/draws` : null,
-      })),
+    await this.notifications.notifyDrawFundingOverdue({
+      drawNumber: draw.drawNumber,
+      projectId: draw.projectId,
+      projectName: draw.project?.name ?? null,
+      daysOverdue: e.daysOverdue,
     });
   }
 

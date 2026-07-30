@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsDateString, MaxLength, Min, IsInt } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsDateString, MaxLength, Min, Max, IsInt, IsEmail } from 'class-validator';
 
 export class CreateLeaseDto {
   // Sprint 1: leases are polymorphic — exactly one of (unitId, buildingId) is required.
@@ -20,8 +20,17 @@ export class CreateLeaseDto {
   @IsOptional() @IsString() @MaxLength(200)
   tenantBrand?: string;
 
+  // tenantContact is the contact PERSON's name; email/phone are stored separately so they
+  // can be validated and rendered as links. Contact data only — tenants are never emailed
+  // by the platform (notifications only ever address internal User rows).
   @IsOptional() @IsString() @MaxLength(200)
   tenantContact?: string;
+
+  @IsOptional() @IsEmail() @MaxLength(200)
+  tenantEmail?: string;
+
+  @IsOptional() @IsString() @MaxLength(50)
+  tenantPhone?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
   monthlyRent!: number;
@@ -47,6 +56,20 @@ export class CreateLeaseDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   securityDeposit?: number;
 
+  // Rent abatement: free months sit INSIDE the term, so leaseEnd and the escalation clock
+  // are unaffected. Defaults to leaseStart when freeRentStartDate is omitted.
+  // Day of month rent falls due (1-31); omit for the 1st. Per-lease because Prime's
+  // leases genuinely differ. The invoice generator clamps to month end, so 31 bills
+  // 28 Feb (29 in a leap year) rather than rolling into March.
+  @IsOptional() @IsInt() @Min(1) @Max(31)
+  rentDueDay?: number;
+
+  @IsOptional() @IsInt() @Min(0) @Max(60)
+  freeRentMonths?: number;
+
+  @IsOptional() @IsDateString()
+  freeRentStartDate?: string;
+
   @IsOptional() @IsString()
   status?: string;
 
@@ -64,8 +87,16 @@ export class UpdateLeaseDto {
   @IsOptional() @IsString() @MaxLength(200)
   tenantBrand?: string;
 
+  // Contact PERSON's name + their email/phone. Contact data only — the platform never
+  // emails tenants (notifications only ever address internal User rows).
   @IsOptional() @IsString() @MaxLength(200)
   tenantContact?: string;
+
+  @IsOptional() @IsEmail() @MaxLength(200)
+  tenantEmail?: string;
+
+  @IsOptional() @IsString() @MaxLength(50)
+  tenantPhone?: string;
 
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
   monthlyRent?: number;
@@ -90,6 +121,19 @@ export class UpdateLeaseDto {
 
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   securityDeposit?: number;
+
+  // Rent abatement — see CreateLeaseDto: free months sit inside the term.
+  // Day of month rent falls due (1-31); omit for the 1st. Per-lease because Prime's
+  // leases genuinely differ. The invoice generator clamps to month end, so 31 bills
+  // 28 Feb (29 in a leap year) rather than rolling into March.
+  @IsOptional() @IsInt() @Min(1) @Max(31)
+  rentDueDay?: number;
+
+  @IsOptional() @IsInt() @Min(0) @Max(60)
+  freeRentMonths?: number;
+
+  @IsOptional() @IsDateString()
+  freeRentStartDate?: string;
 
   @IsOptional() @IsString()
   status?: string;

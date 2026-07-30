@@ -1,10 +1,69 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { LeaseRentPeriodService, startOfUtcDay, addMonthsUtc } from './lease-rent-period.service';
+import { EventBus } from '../../common/events/event-bus.service';
+
+/**
+ * Which rent period covers `at`, given periods sorted newest-start-first.
+ *
+ * Mirrors LeaseRentPeriodService.getEffectivePeriod exactly: the newest period
+ * whose start is on or before `at` and which hasn't ended wins. That is what
+ * lets a mid-term MANUAL renegotiation supersede an earlier row without the
+ * earlier row's endDate ever being edited (past periods are immutable).
+ */
+function pickPeriodCovering<T extends { startDate: Date; endDate: Date | null }>(
+  periodsNewestFirst: T[],
+  at: Date,
+): T | null {
+  const day = startOfUtcDay(at);
+  for (const p of periodsNewestFirst) {
+    if (startOfUtcDay(p.startDate) > day) continue;
+    if (p.endDate !== null && startOfUtcDay(p.endDate) < day) continue;
+    return p;
+  }
+  return null;
+}
+
+/**
+ * Fields whose change invalidates the generated rent schedule. Editing any of
+ * these re-derives the FUTURE periods (past ones stay frozen).
+ */
+const SCHEDULE_INPUT_FIELDS = [
+  'monthlyRent', 'escalationPct', 'escalationFreq',
+  'freeRentMonths', 'freeRentStartDate', 'leaseStart', 'leaseEnd',
+] as const;
 
 @Injectable()
 export class LeasesService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(LeasesService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private rentPeriods: LeaseRentPeriodService,
+    private bus: EventBus,
+  ) {}
+
+  /**
+   * Notification routing is project-scoped, so every lease event needs a projectId.
+   * A lease hangs off EITHER a unit or a building, so resolve from whichever is set.
+   */
+  private async resolveProjectId(lease: { unitId: string | null; buildingId: string | null }) {
+    if (lease.buildingId) {
+      const b = await this.prisma.building.findUnique({
+        where: { id: lease.buildingId }, select: { projectId: true },
+      });
+      return b?.projectId ?? null;
+    }
+    if (lease.unitId) {
+      const u = await this.prisma.unit.findUnique({
+        where: { id: lease.unitId },
+        select: { building: { select: { projectId: true } } },
+      });
+      return u?.building?.projectId ?? null;
+    }
+    return null;
+  }
 
   async findByUnit(unitId: string) {
     return this.prisma.lease.findMany({ where: { unitId, deletedAt: null }, orderBy: { leaseStart: 'desc' } });
@@ -34,7 +93,23 @@ export class LeasesService {
     });
   }
 
-  async getRentRoll(projectId: string) {
+  /**
+   * Rent roll as of a date (defaults to today).
+   *
+   * `lease.monthlyRent` is the CONTRACTED headline rent. What a tenant actually
+   * owes in a given month is the rent period covering that date — which differs
+   * once escalations or free-rent months exist. Summing monthlyRent flat
+   * overstates the roll for any lease sitting in an abatement period.
+   *
+   * Leases with no generated periods fall back to `monthlyRent`, so this is
+   * identical to the old behaviour for existing data and degrades gracefully if
+   * schedule generation ever failed for a lease.
+   *
+   * Both totals are returned: `totalMonthlyRent` is the effective (correct) one,
+   * `contractedMonthlyRent` is the old flat sum, so the UI can show the gap and
+   * explain it rather than looking like the number silently dropped.
+   */
+  async getRentRoll(projectId: string, asOf: Date = new Date()) {
     const leases = await this.prisma.lease.findMany({
       where: {
         status: 'ACTIVE',
@@ -49,9 +124,75 @@ export class LeasesService {
         building: { select: { id: true, name: true } },
       },
     });
-    const totalRent = leases.reduce((s, l) => s + Number(l.monthlyRent), 0);
-    return { leases, totalMonthlyRent: totalRent, leaseCount: leases.length };
+
+    const leaseIds = leases.map((l) => l.id);
+    const byLease = await this.periodsByLease(leaseIds);
+
+    let totalRent = 0;
+    let contractedRent = 0;
+    let forwardYear = 0;
+    let freeRentLeases = 0;
+
+    const rows = leases.map((l) => {
+      const periods = byLease.get(l.id) ?? [];
+      const headline = Number(l.monthlyRent);
+      const period = pickPeriodCovering(periods, asOf);
+      const effectiveRent = period ? Number(period.monthlyRent) : headline;
+
+      // Genuine next-12-months total: walk month by month through the schedule
+      // rather than multiplying by 12. With free rent or a mid-year escalation
+      // these differ materially — that gap is the whole point of the schedule.
+      let leaseForwardYear = 0;
+      for (let m = 0; m < 12; m += 1) {
+        const at = addMonthsUtc(startOfUtcDay(asOf), m);
+        const p = pickPeriodCovering(periods, at);
+        leaseForwardYear += p ? Number(p.monthlyRent) : headline;
+      }
+
+      totalRent += effectiveRent;
+      contractedRent += headline;
+      forwardYear += leaseForwardYear;
+      if (period?.isFreeRent) freeRentLeases += 1;
+
+      return {
+        ...l,
+        effectiveMonthlyRent: effectiveRent,
+        forwardYearRent: leaseForwardYear,
+        currentPeriod: period,
+      };
+    });
+
+    return {
+      leases: rows,
+      asOf,
+      // Effective (correct) — what is actually owed this month.
+      totalMonthlyRent: totalRent,
+      // The old flat sum of headline rents, kept so the UI can show the gap.
+      contractedMonthlyRent: contractedRent,
+      // True next-12-months total. NOT totalMonthlyRent * 12.
+      forwardYearRent: forwardYear,
+      leaseCount: leases.length,
+      freeRentLeaseCount: freeRentLeases,
+    };
   }
+
+  /** All rent periods for the given leases, newest start first (one query). */
+  private async periodsByLease(leaseIds: string[]) {
+    const byLease = new Map<string, Prisma.LeaseRentPeriodGetPayload<{}>[]>();
+    if (leaseIds.length === 0) return byLease;
+
+    const periods = await this.prisma.leaseRentPeriod.findMany({
+      where: { leaseId: { in: leaseIds } },
+      orderBy: [{ startDate: 'desc' }, { sequence: 'desc' }],
+    });
+    for (const p of periods) {
+      const list = byLease.get(p.leaseId);
+      if (list) list.push(p);
+      else byLease.set(p.leaseId, [p]);
+    }
+    return byLease;
+  }
+
 
   async findById(id: string) {
     const lease = await this.prisma.lease.findUnique({
@@ -62,12 +203,15 @@ export class LeasesService {
     return lease;
   }
 
-  async create(data: Prisma.LeaseUncheckedCreateInput) {
+  async create(data: Prisma.LeaseUncheckedCreateInput, createdById?: string) {
     // class-validator's @IsDateString() accepts a bare "YYYY-MM-DD" date, but Prisma's
     // DateTime columns need a full ISO-8601 datetime — pass Date objects so Prisma
     // serializes them correctly instead of erroring "premature end of input".
     if (typeof data.leaseStart === 'string') data.leaseStart = new Date(data.leaseStart);
     if (typeof data.leaseEnd === 'string') data.leaseEnd = new Date(data.leaseEnd);
+    // Same coercion for freeRentStartDate — it's also @IsDateString(), so a bare
+    // "YYYY-MM-DD" from an <input type="date"> would otherwise reach Prisma as a string.
+    if (typeof data.freeRentStartDate === 'string') data.freeRentStartDate = new Date(data.freeRentStartDate);
     // Sprint 1: leases are polymorphic — exactly one of (unitId, buildingId) required.
     const unitId = data.unitId as string | null | undefined;
     const buildingId = data.buildingId as string | null | undefined;
@@ -88,21 +232,94 @@ export class LeasesService {
         throw new BadRequestException('This unit already has an active lease. Expire or terminate the existing lease before adding a new one.');
       }
     }
+    let lease: Prisma.LeaseGetPayload<{}>;
     try {
-      return await this.prisma.lease.create({ data });
+      lease = await this.prisma.lease.create({ data });
     } catch (e: any) {
       if (e?.code === 'P2002') {
         throw new BadRequestException('This unit already has an active lease. Expire or terminate the existing lease before adding a new one.');
       }
       throw e;
     }
+
+    // Build the rent schedule (escalations + free-rent months) up front so the
+    // client sees the full timeline the moment the lease is signed.
+    //
+    // Deliberately NOT part of the create transaction: a schedule that fails to
+    // generate must not cost the user a lease they already entered. Nothing reads
+    // periods without falling back to lease.monthlyRent (see getRentRoll), and
+    // generateForLease is idempotent, so this is safe to retry later.
+    await this.generateSchedule(lease.id, createdById);
+
+    const projectId = await this.resolveProjectId(lease);
+    if (projectId) {
+      this.bus.emit({ type: 'lease.created', leaseId: lease.id, projectId, tenantName: lease.tenantName });
+      // A lease entered straight as ACTIVE never passes through an update, so it would
+      // otherwise never announce itself to Finance/Accounting.
+      if (lease.status === 'ACTIVE') {
+        this.bus.emit({ type: 'lease.activated', leaseId: lease.id, projectId, tenantName: lease.tenantName });
+      }
+    }
+    return lease;
   }
 
-  async update(id: string, data: Prisma.LeaseUncheckedUpdateInput) {
-    await this.findById(id);
+  /** Idempotent, non-fatal. Logged loudly rather than swallowed. */
+  private async generateSchedule(leaseId: string, createdById?: string, force = false) {
+    try {
+      await this.rentPeriods.generateForLease(leaseId, { createdById, force });
+    } catch (err) {
+      this.logger.error(
+        `Rent schedule generation failed for lease ${leaseId} — the lease is intact and rent ` +
+        `falls back to its headline monthlyRent. Re-run via POST /leases/${leaseId}/rent-periods/generate. ${err}`,
+      );
+    }
+  }
+
+  async update(id: string, data: Prisma.LeaseUncheckedUpdateInput, updatedById?: string) {
+    const before = await this.findById(id);
     if (typeof data.leaseStart === 'string') data.leaseStart = new Date(data.leaseStart);
     if (typeof data.leaseEnd === 'string') data.leaseEnd = new Date(data.leaseEnd);
-    return this.prisma.lease.update({ where: { id }, data });
+    // Same coercion for freeRentStartDate — it's also @IsDateString(), so a bare
+    // "YYYY-MM-DD" from an <input type="date"> would otherwise reach Prisma as a string.
+    if (typeof data.freeRentStartDate === 'string') data.freeRentStartDate = new Date(data.freeRentStartDate);
+
+    const updated = await this.prisma.lease.update({ where: { id }, data });
+
+    // Terms that feed the schedule changed → re-derive the FUTURE periods. Past
+    // periods stay frozen; the tenant was already invoiced against them.
+    const scheduleChanged = SCHEDULE_INPUT_FIELDS.some(
+      (f) => data[f] !== undefined && String(before[f] ?? '') !== String(updated[f] ?? ''),
+    );
+    if (scheduleChanged) {
+      await this.generateSchedule(id, updatedById, true);
+    }
+
+    const projectId = await this.resolveProjectId(updated);
+    if (projectId) {
+      if (data.status && data.status !== before.status) {
+        if (updated.status === 'ACTIVE') {
+          this.bus.emit({ type: 'lease.activated', leaseId: id, projectId, tenantName: updated.tenantName });
+        } else if (updated.status === 'TERMINATED') {
+          this.bus.emit({ type: 'lease.terminated', leaseId: id, projectId, tenantName: updated.tenantName });
+        }
+      }
+      // Headline rent moved — Finance/Accounting/AR need to know regardless of whether
+      // it came from a scheduled escalation or someone editing the lease.
+      const fromRent = Number(before.monthlyRent);
+      const toRent = Number(updated.monthlyRent);
+      if (data.monthlyRent !== undefined && fromRent !== toRent) {
+        this.bus.emit({
+          type: 'lease.rentChanged',
+          leaseId: id,
+          projectId,
+          from: fromRent,
+          to: toRent,
+          effectiveAt: updated.leaseStart,
+          source: 'MANUAL',
+        });
+      }
+    }
+    return updated;
   }
 
   // Soft-delete — preserves the row (and the unit's history) instead of destroying it.

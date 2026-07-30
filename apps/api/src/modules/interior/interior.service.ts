@@ -132,17 +132,12 @@ export class InteriorService {
     if (!input.name?.trim()) throw new BadRequestException('name is required');
     this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
 
-    // Enforce one active interior project per unit/building at a time.
-    const existingAnchorField = input.unitId ? { unitId: input.unitId } : { buildingId: input.buildingId };
-    const existing = await this.prisma.interiorProject.findFirst({
-      where: { ...existingAnchorField, deletedAt: null, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
-      select: { id: true, name: true },
-    });
-    if (existing) {
-      throw new ConflictException(
-        `An active interior project "${existing.name}" already exists for this ${input.unitId ? 'unit' : 'building'}. Complete or cancel it before starting a new one.`,
-      );
-    }
+    // Multiple concurrent interior projects per unit/building are allowed (client
+    // decision, 2026-07-29) — e.g. separate contractors on separate scopes, or
+    // tracking competing proposals before picking one. This is NOT the discovery-doc
+    // "no parallel execution" rule (INTERIOR_MODULE_DESIGN.md §0.2), which is about
+    // fit-out not running in parallel with the unit/building SHELL construction —
+    // that gate is unchanged and still enforced in advancePhase() below.
 
     // If a package template is chosen, default the rate from it and seed its BOQ lines.
     let templateItems: Array<{

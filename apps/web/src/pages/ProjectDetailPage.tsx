@@ -16,6 +16,10 @@ import { DailyLogFeed } from '../components/DailyLogFeed';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
 import { CashflowForecastView } from '../components/CashflowForecastView';
 import { ObligationsPanel } from '../components/ObligationsPanel';
+// Lease-scoped deposits / TI — distinct from ObligationsPanel above, which is budget cash obligations.
+import { LeaseObligationsPanel } from '../components/LeaseObligationsPanel';
+import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
+import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { CancelSaleModal } from '../components/CancelSaleModal';
 import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
@@ -24,7 +28,7 @@ import {
   useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useDeleteLoan, useCommitments, useBuildings,
   useBudgetLines,
   useUpdateProject,
-  useCreateUnit, useUpdateUnit, useUpdateUnitStatus, useDeleteUnit,
+  useCreateUnit, useUpdateUnit, useDeleteUnit,
   useCreateMilestone, useUpdateMilestone, useDeleteMilestone,
   useCreateLease, useUpdateLease, useDeleteLease,
   useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount, useBrokers,
@@ -546,6 +550,15 @@ function CardNavLink({ label, onPress }: { label: string; onPress: () => void })
   );
 }
 
+// The dollar figure a draw actually represents. DrawRequest carries amount, requestedAmount
+// AND approvedAmount — approvedAmount is what the lender signed off on, so it wins whenever
+// it is set (a lender funding less than requested would otherwise be overstated). Decimals
+// arrive from the API as strings, so always coerce with Number().
+// Single source of truth: Overview and Draws must never disagree for the same project.
+function fundedAmount(d: any): number {
+  return Number(d?.approvedAmount ?? d?.amount ?? 0);
+}
+
 function OverviewTab({ project: p }: { project: any }) {
   const navigate = useNavigate();
   const goTab = (tab: string) => navigate(`/projects/${p.id}/${tab}`);
@@ -648,8 +661,8 @@ function OverviewTab({ project: p }: { project: any }) {
   const leadsLost = leadsArr.filter((l) => ['LOST', 'DEAD'].includes(l.status)).length;
   const leadsActive = leadsArr.length - leadsConverted - leadsLost;
   const drawsArr = (drawsData as any[]) || [];
-  const drawsFunded = drawsArr.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + Number(d.requestedAmount || d.amount || 0), 0);
-  const drawsPending = drawsArr.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + Number(d.requestedAmount || d.amount || 0), 0);
+  const drawsFunded = drawsArr.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + fundedAmount(d), 0);
+  const drawsPending = drawsArr.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + fundedAmount(d), 0);
 
   return (
     <div className="space-y-5 mt-4">
@@ -2136,21 +2149,27 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const canStatusEdit = hasPermission('unit:edit'); // Sales falls into this branch
   const canDelete = hasPermission('unit:edit') && !isSales;
   const canCreate = canFullEdit;
+  // A unit flipping to SOLD / LEASED should capture the deal behind it — but only for
+  // users who are actually allowed to write that record.
+  const canCreateSale = hasPermission('sales:edit');
+  const canCreateLease = hasPermission('lease:edit');
 
   const { data, isLoading, error } = useUnits(projectId);
   const { data: buildingsData } = useBuildings(projectId);
   const { data: leaseIncome } = useMonthlyLeaseIncome(projectId);
   const createUnit = useCreateUnit();
   const updateUnit = useUpdateUnit();
-  const updateUnitStatus = useUpdateUnitStatus();
   const deleteUnit = useDeleteUnit();
   const updateLease = useUpdateLease();
+  const createSale = useCreateSale();
+  const createLease = useCreateLease();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isStatusOpen, onOpen: onStatusOpen, onClose: onStatusClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
   const { isOpen: isCommentsOpen, onOpen: onCommentsOpen, onClose: onCommentsClose } = useDisclosure();
   const { isOpen: isCombineOpen, onOpen: onCombineOpen, onClose: onCombineClose } = useDisclosure();
+  const { isOpen: isDealOpen, onOpen: onDealOpen, onClose: onDealClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_UNIT);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -2163,6 +2182,11 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const [filterBuildingId, setFilterBuildingId] = useState<string>('');
   const [unitSearch, setUnitSearch] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  // Follow-up deal capture after a unit flips to SOLD / LEASED.
+  const [dealPrompt, setDealPrompt] = useState<{ kind: 'SALE' | 'LEASE'; unit: any } | null>(null);
+  const [dealForm, setDealForm] = useState<Record<string, string>>(EMPTY_SALE);
+  const [dealErrors, setDealErrors] = useState<Record<string, string>>({});
+  const [dealError, setDealError] = useState<string | null>(null);
 
   const buildings = (buildingsData as any[]) || [];
   const li = leaseIncome as any;
@@ -2284,8 +2308,110 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
     return Object.keys(errs).length === 0;
   };
 
+  // ---- Post-status-change deal capture ---------------------------------------------
+  // Runs only AFTER the unit status write has succeeded. The prompt is a bonus capture
+  // step, never a gate: skipping it leaves the new status exactly as saved.
+  const maybePromptForDeal = (unitBefore: any, prevStatus: string, newStatus: string) => {
+    if (!unitBefore || newStatus === prevStatus) return;
+    if (newStatus !== 'SOLD' && newStatus !== 'LEASED') return;
+    const label = `Unit ${unitBefore.unitNumber || ''}`.trim();
+
+    if (newStatus === 'SOLD') {
+      if (!canCreateSale) return;
+      // The unit list carries every non-deleted sale. A CANCELLED one is a dead deal and
+      // shouldn't block a fresh record; anything else means the sale is already tracked,
+      // and a second row would double-count the pipeline — so we point at it instead.
+      const existing = (unitBefore.sales || []).find((s: any) => s.status !== 'CANCELLED');
+      if (existing) {
+        addToast({
+          title: `${label} already has a sale record (${String(existing.status || '').replace(/_/g, ' ')}) — update it in the Revenue tab.`,
+          color: 'warning',
+        });
+        return;
+      }
+      setDealForm({
+        ...EMPTY_SALE,
+        unitId: unitBefore.id,
+        status: 'CLOSED',
+        salePrice: unitBefore.askingPrice != null ? String(unitBefore.askingPrice) : '',
+      });
+      setDealErrors({});
+      setDealError(null);
+      setDealPrompt({ kind: 'SALE', unit: unitBefore });
+      onDealOpen();
+      return;
+    }
+
+    if (!canCreateLease) return;
+    // `leases` on the project unit list is ACTIVE-only, so an expired or terminated
+    // tenancy correctly does NOT block recording the new one.
+    const activeLease = (unitBefore.leases || [])[0];
+    if (activeLease) {
+      addToast({
+        title: `${label} already has an active lease (${activeLease.tenantName || 'tenant'}) — update it in the Revenue tab.`,
+        color: 'warning',
+      });
+      return;
+    }
+    setDealForm({
+      ...EMPTY_LEASE,
+      unitId: unitBefore.id,
+      status: 'ACTIVE',
+      monthlyRent: unitBefore.askingRent != null ? String(unitBefore.askingRent) : '',
+    });
+    setDealErrors({});
+    setDealError(null);
+    setDealPrompt({ kind: 'LEASE', unit: unitBefore });
+    onDealOpen();
+  };
+
+  const closeDealPrompt = () => {
+    setDealPrompt(null);
+    setDealError(null);
+    setDealErrors({});
+    onDealClose();
+  };
+
+  const skipDealPrompt = () => {
+    // Guards against the modal's dismiss handler firing again after a successful save.
+    if (!dealPrompt) return;
+    const kind = dealPrompt.kind === 'SALE' ? 'sale' : 'lease';
+    closeDealPrompt();
+    addToast({ title: `Status saved. You can add the ${kind} details later from the Revenue tab.`, color: 'default' });
+  };
+
+  const handleDealSave = async () => {
+    if (!dealPrompt) return;
+    setDealError(null);
+    try {
+      if (dealPrompt.kind === 'SALE') {
+        if (dealForm.status === 'CANCELLED' && !dealForm.lostReason) {
+          setDealError('Please select a reason — why was this deal lost?');
+          return;
+        }
+        await createSale.mutateAsync(buildSalePayload(dealForm, projectId));
+        addToast({ title: 'Sale recorded', color: 'success' });
+      } else {
+        const errs = validateLeaseForm(dealForm);
+        if (Object.keys(errs).length) { setDealErrors(errs); return; }
+        await createLease.mutateAsync({ ...buildLeasePayload(dealForm), unitId: dealForm.unitId });
+        addToast({ title: 'Lease recorded', color: 'success' });
+      }
+      closeDealPrompt();
+    } catch (e) {
+      const msg = errMsg(e, dealPrompt.kind === 'SALE' ? 'Failed to save sale' : 'Failed to save lease');
+      setDealError(msg);
+      addToast({ title: msg, color: 'danger' });
+    }
+  };
+
+  const clearDealError = (field: string) => {
+    if (dealErrors[field]) setDealErrors((errs) => ({ ...errs, [field]: '' }));
+  };
+
   const handleSave = async () => {
     if (!validateForm()) return;
+    const unitBefore = editId ? allUnits.find((u: any) => u.id === editId) : null;
     try {
       const basePayload: Record<string, unknown> = {
         unitNumber: form.unitNumber.trim(),
@@ -2310,6 +2436,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         addToast({ title: 'Unit created', color: 'success' });
       }
       onFormClose();
+      if (unitBefore) maybePromptForDeal(unitBefore, unitBefore.status || '', form.status);
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to save unit'), color: 'danger' });
     }
@@ -2318,7 +2445,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const handleStatusSave = async () => {
     if (!statusTarget) { onStatusClose(); return; }
     const statusChanged = statusTarget.newStatus !== statusTarget.currentStatus;
-    const originalNotes = allUnits.find((u: any) => u.id === statusTarget.id)?.notes || '';
+    // Snapshot the unit BEFORE the write — the query cache is invalidated by the mutation.
+    const unitBefore = allUnits.find((u: any) => u.id === statusTarget.id);
+    const originalNotes = unitBefore?.notes || '';
     const notesChanged = statusTarget.notes !== originalNotes;
     if (!statusChanged && !notesChanged) { onStatusClose(); return; }
     try {
@@ -2328,7 +2457,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
       await updateUnit.mutateAsync({ id: statusTarget.id, data: payload });
       addToast({ title: statusChanged ? `Unit ${statusTarget.unitNumber} → ${statusTarget.newStatus.replace(/_/g, ' ')}` : 'Unit notes updated', color: 'success' });
       onStatusClose();
+      const newStatus = statusTarget.newStatus;
+      const prevStatus = statusTarget.currentStatus;
       setStatusTarget(null);
+      if (statusChanged) maybePromptForDeal(unitBefore, prevStatus, newStatus);
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to update unit'), color: 'danger' });
     }
@@ -2809,6 +2941,57 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         </ModalContent>
       </Modal>
 
+      {/* Deal capture — opens AFTER a unit flips to SOLD / LEASED. Entirely optional:
+          the status change is already persisted, so skipping loses nothing. */}
+      <Modal isOpen={isDealOpen} onClose={skipDealPrompt} size="lg" scrollBehavior="inside">
+        <ModalContent>
+          <ModalHeader className="flex flex-col gap-1">
+            <span>{dealPrompt?.kind === 'SALE' ? 'Record the sale details' : 'Record the lease details'}</span>
+            <span className="text-xs font-normal text-gray-500">
+              Unit {dealPrompt?.unit?.unitNumber || ''} is now{' '}
+              {dealPrompt?.kind === 'SALE' ? 'SOLD' : 'LEASED'}
+            </span>
+          </ModalHeader>
+          <ModalBody>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+              The status change is already saved. Filling this in is optional — press
+              <strong> Skip for now</strong> and add the {dealPrompt?.kind === 'SALE' ? 'sale' : 'lease'} later
+              from the Revenue tab. The unit will stay {dealPrompt?.kind === 'SALE' ? 'SOLD' : 'LEASED'} either way.
+            </div>
+            <FormError message={dealError} />
+            {dealPrompt?.kind === 'SALE' ? (
+              <SaleFormFields
+                form={dealForm}
+                setForm={setDealForm}
+                unitOptions={dealPrompt.unit ? [dealPrompt.unit] : []}
+                formError={dealError}
+                lockUnit
+              />
+            ) : dealPrompt ? (
+              <LeaseFormFields
+                form={dealForm}
+                setForm={setDealForm}
+                errors={dealErrors}
+                clearError={clearDealError}
+                unitOptions={dealPrompt.unit ? [dealPrompt.unit] : []}
+                lockUnit
+              />
+            ) : null}
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={skipDealPrompt}>Skip for now</Button>
+            <Button
+              size="sm"
+              color="primary"
+              onPress={handleDealSave}
+              isLoading={createSale.isPending || createLease.isPending}
+            >
+              {dealPrompt?.kind === 'SALE' ? 'Save Sale' : 'Save Lease'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* Delete Confirmation — shows attached lease/sale counts and requires explicit force */}
       <Modal isOpen={isDeleteOpen} onClose={onDeleteClose} isDismissable={false} size="sm">
         <ModalContent>
@@ -3260,12 +3443,135 @@ function MilestonesTab({ projectId }: { projectId: string }) {
 
 // ---- Leases Tab ----
 const EMPTY_LEASE = {
-  unitId: '', tenantName: '', tenantContact: '', monthlyRent: '',
+  unitId: '', tenantName: '', tenantContact: '', tenantEmail: '', tenantPhone: '', monthlyRent: '',
   leaseStart: '', leaseEnd: '', termMonths: '', escalationPct: '',
-  securityDeposit: '', status: 'DRAFT', notes: '',
+  securityDeposit: '', rentDueDay: '', status: 'DRAFT', notes: '',
 };
 
+// Use T12:00:00 to anchor the date at noon UTC — avoids off-by-one day in any timezone.
+const toApiDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
+
+/** Shared by the LeasesTab modal and the UnitsTab "unit just became LEASED" prompt. */
+function validateLeaseForm(form: Record<string, string>): Record<string, string> {
+  const errs: Record<string, string> = {};
+  if (!form.tenantName.trim()) errs.tenantName = 'Required';
+  if (!form.monthlyRent) errs.monthlyRent = 'Required';
+  if (!form.leaseStart) errs.leaseStart = 'Required';
+  if (!form.leaseEnd) errs.leaseEnd = 'Required';
+  if (form.rentDueDay) {
+    const d = Number(form.rentDueDay);
+    if (!Number.isInteger(d) || d < 1 || d > 31) errs.rentDueDay = 'Must be a whole number between 1 and 31';
+  }
+  return errs;
+}
+
+/** Lease payload WITHOUT unitId — immutable on update, the UpdateLeaseDto rejects it. */
+function buildLeasePayload(form: Record<string, string>): Record<string, unknown> {
+  return {
+    tenantName: form.tenantName,
+    tenantContact: form.tenantContact || undefined,
+    tenantEmail: form.tenantEmail || undefined,
+    tenantPhone: form.tenantPhone || undefined,
+    monthlyRent: parseFloat(form.monthlyRent),
+    leaseStart: toApiDate(form.leaseStart),
+    leaseEnd: toApiDate(form.leaseEnd),
+    termMonths: form.termMonths ? parseInt(form.termMonths) : undefined,
+    escalationPct: form.escalationPct ? parseFloat(form.escalationPct) : undefined,
+    securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : undefined,
+    rentDueDay: form.rentDueDay ? parseInt(form.rentDueDay, 10) : undefined,
+    status: form.status,
+    notes: form.notes || undefined,
+  };
+}
+
+/**
+ * The one and only lease field set. Rendered by the LeasesTab create/edit modal and by the
+ * UnitsTab post-status-change prompt so the two can never drift apart.
+ */
+function LeaseFormFields({
+  form, setForm, errors = {}, clearError, unitOptions, lockUnit = false,
+}: {
+  form: Record<string, string>;
+  setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  errors?: Record<string, string>;
+  clearError?: (field: string) => void;
+  unitOptions: any[];
+  lockUnit?: boolean;
+}) {
+  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm((f) => ({ ...f, [field]: e.target.value }));
+    clearError?.(field);
+  };
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <Select
+        size="sm"
+        label="Unit"
+        isRequired
+        isDisabled={lockUnit}
+        description={lockUnit ? 'Locked to the unit you just updated' : undefined}
+        selectedKeys={form.unitId ? [form.unitId] : []}
+        onSelectionChange={(keys) => {
+          const val = Array.from(keys)[0] as string;
+          if (val) setForm((f) => ({ ...f, unitId: val }));
+        }}
+      >
+        {unitOptions.map((u: any) => (
+          <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
+        ))}
+      </Select>
+      <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} isInvalid={!!errors.tenantName} errorMessage={errors.tenantName} />
+      <Input size="sm" label="Contact Person" value={form.tenantContact} onChange={set('tenantContact')} />
+      <Input size="sm" label="Tenant Email" type="email" value={form.tenantEmail} onChange={set('tenantEmail')} />
+      <Input size="sm" label="Tenant Phone" type="tel" value={form.tenantPhone} onChange={set('tenantPhone')} />
+      <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} isInvalid={!!errors.monthlyRent} errorMessage={errors.monthlyRent} />
+      <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} isInvalid={!!errors.leaseStart} errorMessage={errors.leaseStart} />
+      <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} isInvalid={!!errors.leaseEnd} errorMessage={errors.leaseEnd} />
+      <Input size="sm" label="Term (months)" type="number" value={form.termMonths} onChange={set('termMonths')} />
+      <Input size="sm" label="Escalation %" type="number" value={form.escalationPct} onChange={set('escalationPct')} />
+      <Input size="sm" label="Security Deposit ($)" type="number" value={form.securityDeposit} onChange={set('securityDeposit')} />
+      {/* Drives the due date on every generated rent invoice. Blank = the 1st. */}
+      <Input
+        size="sm"
+        label="Rent Due Day (1-31)"
+        type="number"
+        min={1}
+        max={31}
+        value={form.rentDueDay}
+        onChange={set('rentDueDay')}
+        isInvalid={!!errors.rentDueDay}
+        errorMessage={errors.rentDueDay}
+        description="Day of the month rent is due. Leave blank to bill on the 1st."
+      />
+      <Select
+        size="sm"
+        label="Status"
+        selectedKeys={form.status ? [form.status] : []}
+        onSelectionChange={(keys) => {
+          const val = Array.from(keys)[0] as string;
+          if (val) setForm((f) => ({ ...f, status: val }));
+        }}
+      >
+        {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((v) => (
+          <SelectItem key={v} textValue={v}>{v}</SelectItem>
+        ))}
+      </Select>
+      <div className="sm:col-span-2">
+        <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
+      </div>
+    </div>
+  );
+}
+
 function LeasesTab({ projectId }: { projectId: string }) {
+  const { hasPermission } = useAuthStore();
+  const canEditLease = hasPermission('lease:edit');
+  // Recording rent is deliberately a separate permission: AR/AP marks rent received
+  // without also being able to rewrite the lease terms.
+  const canCollectRent = hasPermission('rent:collect');
+  // Rent schedule + deposits are per-lease detail: one row expanded at a time, mirroring
+  // the SalesTab card-expansion pattern rather than opening yet another modal.
+  const [expandedLease, setExpandedLease] = useState<string | null>(null);
   const { data: leases, isLoading: ll } = useLeases(projectId);
   const { data: rentRoll, isLoading: rl } = useRentRoll(projectId);
   const { data: unitsData } = useUnits(projectId);
@@ -3297,12 +3603,15 @@ function LeasesTab({ projectId }: { projectId: string }) {
       unitId: l.unitId || l.unit?.id || '',
       tenantName: l.tenantName || '',
       tenantContact: l.tenantContact || '',
+      tenantEmail: l.tenantEmail || '',
+      tenantPhone: l.tenantPhone || '',
       monthlyRent: l.monthlyRent?.toString() || '',
       leaseStart: (l.leaseStart || l.startDate) ? (l.leaseStart || l.startDate).slice(0, 10) : '',
       leaseEnd: (l.leaseEnd || l.endDate) ? (l.leaseEnd || l.endDate).slice(0, 10) : '',
       termMonths: l.termMonths?.toString() || '',
       escalationPct: (l.escalationPct ?? l.annualEscalation)?.toString() || '',
       securityDeposit: l.securityDeposit?.toString() || '',
+      rentDueDay: l.rentDueDay != null ? String(l.rentDueDay) : '',
       status: l.status || 'DRAFT',
       notes: l.notes || '',
     });
@@ -3313,27 +3622,10 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
 
   const handleSave = async () => {
-    const errs: Record<string, string> = {};
-    if (!form.tenantName.trim()) errs.tenantName = 'Required';
-    if (!form.monthlyRent) errs.monthlyRent = 'Required';
-    if (!form.leaseStart) errs.leaseStart = 'Required';
-    if (!form.leaseEnd) errs.leaseEnd = 'Required';
+    const errs = validateLeaseForm(form);
     if (Object.keys(errs).length) { setLeaseErrors(errs); return; }
-    // Use T12:00:00 to anchor the date at noon UTC — avoids off-by-one day in any timezone.
-    const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
     try {
-      const payload: Record<string, unknown> = {
-        tenantName: form.tenantName,
-        tenantContact: form.tenantContact || undefined,
-        monthlyRent: parseFloat(form.monthlyRent),
-        leaseStart: toDate(form.leaseStart),
-        leaseEnd: toDate(form.leaseEnd),
-        termMonths: form.termMonths ? parseInt(form.termMonths) : undefined,
-        escalationPct: form.escalationPct ? parseFloat(form.escalationPct) : undefined,
-        securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : undefined,
-        status: form.status,
-        notes: form.notes || undefined,
-      };
+      const payload = buildLeasePayload(form);
       if (editId) {
         // unitId is immutable on a lease — the UpdateLeaseDto rejects it (forbidNonWhitelisted).
         await updateLease.mutateAsync({ id: editId, data: payload });
@@ -3361,8 +3653,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
     }
   };
 
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((f) => ({ ...f, [field]: e.target.value }));
+  const clearLeaseError = (field: string) => {
     if (leaseErrors[field]) setLeaseErrors((errs) => ({ ...errs, [field]: '' }));
   };
 
@@ -3394,8 +3685,30 @@ function LeasesTab({ projectId }: { projectId: string }) {
       {rr && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <StatCard label="Active Leases" value={String(rr.activeLeases || rr.leaseCount || 0)} colorScheme="green" variant="revenue" />
-          <StatCard label="Monthly Rent" value={fmt(rr.totalMonthlyRent)} colorScheme="brand" variant="revenue" />
-          <StatCard label="Annual Rent" value={fmt((rr.totalMonthlyRent || 0) * 12)} colorScheme="purple" variant="revenue" />
+          {/* totalMonthlyRent is the EFFECTIVE roll — the rent period covering today, so a
+              lease inside a free-rent month contributes 0. contractedMonthlyRent is the sum
+              of headline rents. Surfacing the gap stops the effective number looking like a
+              bug when abatement kicks in. */}
+          <StatCard
+            label="Monthly Rent"
+            value={fmt(rr.totalMonthlyRent)}
+            colorScheme="brand"
+            variant="revenue"
+            helpText={
+              rr.freeRentLeaseCount
+                ? `${fmt(rr.contractedMonthlyRent)} contracted · ${rr.freeRentLeaseCount} in free rent`
+                : undefined
+            }
+          />
+          {/* Walks the actual rent schedule month by month — NOT monthly x 12, which
+              over-states any lease with free months or a mid-year escalation. */}
+          <StatCard
+            label="Next 12 Months"
+            value={fmt(rr.forwardYearRent ?? (rr.totalMonthlyRent || 0) * 12)}
+            colorScheme="purple"
+            variant="revenue"
+            helpText="Scheduled rent, free-rent and escalations applied"
+          />
         </div>
       )}
 
@@ -3419,7 +3732,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
               </thead>
               <tbody>
                 {leaseList.map((l: any) => (
-                  <tr key={l.id} className="border-b border-gray-50">
+                  <React.Fragment key={l.id}>
+                  <tr className="border-b border-gray-50">
                     <td className="py-2 px-2 font-medium">
                       <div>
                         <span>{l.tenantBrand || l.tenantName}</span>
@@ -3427,6 +3741,18 @@ function LeasesTab({ projectId }: { projectId: string }) {
                           <span className="text-xs text-gray-400 ml-1">({l.tenantName})</span>
                         )}
                       </div>
+                      {/* Contact links live inside the Tenant cell rather than as two extra
+                          columns — the table is already 8 columns wide at min-w-[560px]. */}
+                      {(l.tenantEmail || l.tenantPhone) && (
+                        <div className="flex items-center gap-2 mt-0.5 text-xs font-normal">
+                          {l.tenantEmail && (
+                            <a href={`mailto:${l.tenantEmail}`} className="text-blue-600 hover:underline truncate">{l.tenantEmail}</a>
+                          )}
+                          {l.tenantPhone && (
+                            <a href={`tel:${l.tenantPhone}`} className="text-blue-600 hover:underline whitespace-nowrap">{l.tenantPhone}</a>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 px-2">{l.unit?.unitNumber || l.unit?.name || '\u2014'}</td>
                     <td className="py-2 px-2 text-right">{fmt(l.monthlyRent)}</td>
@@ -3436,11 +3762,54 @@ function LeasesTab({ projectId }: { projectId: string }) {
                     <td className="py-2 px-2"><StatusBadge status={l.status} /></td>
                     <td className="py-2 px-2">
                       <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="light"
+                          isIconOnly
+                          onPress={() => setExpandedLease((cur) => (cur === l.id ? null : l.id))}
+                          title={expandedLease === l.id ? 'Hide rent schedule & deposits' : 'Rent schedule & deposits'}
+                          aria-label="Toggle rent schedule and deposits"
+                          aria-expanded={expandedLease === l.id}
+                        >
+                          {expandedLease === l.id ? <FiChevronUp className="text-xs" /> : <FiChevronDown className="text-xs" />}
+                        </Button>
                         <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(l)}><FiEdit2 className="text-xs" /></Button>
                         <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => openDelete(l.id)}><FiTrash2 className="text-xs" /></Button>
                       </div>
                     </td>
                   </tr>
+                  {expandedLease === l.id && (
+                    <tr key={`${l.id}-detail`} className="border-b border-gray-100 bg-gray-50/60">
+                      <td colSpan={8} className="p-4">
+                        <div className="space-y-6">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Rent schedule &amp; history</p>
+                            <LeaseRentSchedule leaseId={l.id} canEdit={canEditLease} />
+                          </div>
+                          <div>
+                            {/* The schedule above says what is OWED each month; this says what
+                                was PAID. Two different models, deliberately shown together. */}
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Rent collection</p>
+                            <RentCollectionPanel
+                              leaseId={l.id}
+                              canCollect={canCollectRent}
+                              unitId={l.unitId ?? l.unit?.id}
+                            />
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Security deposit &amp; TI allowance</p>
+                            <LeaseObligationsPanel
+                              leaseId={l.id}
+                              canEdit={canEditLease}
+                              unitId={l.unitId ?? l.unit?.id}
+                              buildingId={l.buildingId ?? l.building?.id}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table></div>
@@ -3454,46 +3823,13 @@ function LeasesTab({ projectId }: { projectId: string }) {
           <ModalHeader>{editId ? 'Edit Lease' : 'Add Lease'}</ModalHeader>
           <ModalBody>
             <FormError message={leaseFormError} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Select
-                size="sm"
-                label="Unit"
-                isRequired
-                selectedKeys={form.unitId ? [form.unitId] : []}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setForm((f) => ({ ...f, unitId: val }));
-                }}
-              >
-                {availableForLease.map((u: any) => (
-                  <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
-                ))}
-              </Select>
-              <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} isInvalid={!!leaseErrors.tenantName} errorMessage={leaseErrors.tenantName} />
-              <Input size="sm" label="Tenant Contact" value={form.tenantContact} onChange={set('tenantContact')} />
-              <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} isInvalid={!!leaseErrors.monthlyRent} errorMessage={leaseErrors.monthlyRent} />
-              <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} isInvalid={!!leaseErrors.leaseStart} errorMessage={leaseErrors.leaseStart} />
-              <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} isInvalid={!!leaseErrors.leaseEnd} errorMessage={leaseErrors.leaseEnd} />
-              <Input size="sm" label="Term (months)" type="number" value={form.termMonths} onChange={set('termMonths')} />
-              <Input size="sm" label="Escalation %" type="number" value={form.escalationPct} onChange={set('escalationPct')} />
-              <Input size="sm" label="Security Deposit ($)" type="number" value={form.securityDeposit} onChange={set('securityDeposit')} />
-              <Select
-                size="sm"
-                label="Status"
-                selectedKeys={form.status ? [form.status] : []}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setForm((f) => ({ ...f, status: val }));
-                }}
-              >
-                {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((v) => (
-                  <SelectItem key={v} textValue={v}>{v}</SelectItem>
-                ))}
-              </Select>
-              <div className="sm:col-span-2">
-                <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
-              </div>
-            </div>
+            <LeaseFormFields
+              form={form}
+              setForm={setForm}
+              errors={leaseErrors}
+              clearError={clearLeaseError}
+              unitOptions={availableForLease}
+            />
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={onFormClose}>Cancel</Button>
@@ -3558,17 +3894,145 @@ const LOST_REASONS = [
   { key: 'OTHER', label: 'Other' },
 ];
 
+function buildSalePayload(form: Record<string, string>, projectId: string): Record<string, unknown> {
+  return {
+    projectId,
+    unitId: form.unitId,
+    buyer: form.buyer || undefined,
+    salePrice: form.salePrice ? parseFloat(form.salePrice) : undefined,
+    depositAmt: form.depositAmt ? parseFloat(form.depositAmt) : undefined,
+    status: form.status,
+    loiDate: form.loiDate ? toApiDate(form.loiDate) : undefined,
+    contractDate: form.contractDate ? toApiDate(form.contractDate) : undefined,
+    closingDate: form.closingDate ? toApiDate(form.closingDate) : undefined,
+    expectedCloseDate: form.expectedCloseDate ? toApiDate(form.expectedCloseDate) : undefined,
+    notes: form.notes || undefined,
+    lostReason: form.status === 'CANCELLED' ? form.lostReason : undefined,
+    lostReasonNote: form.status === 'CANCELLED' ? (form.lostReasonNote || undefined) : undefined,
+    brokerId: form.brokerId || undefined,
+    brokerCommissionPct: form.brokerCommissionPct ? parseFloat(form.brokerCommissionPct) : undefined,
+  };
+}
+
+/**
+ * The one and only sale field set. Rendered by the SalesTab create/edit modal and by the
+ * UnitsTab post-status-change prompt so the two can never drift apart.
+ */
+function SaleFormFields({
+  form, setForm, unitOptions, formError = null, lockUnit = false,
+}: {
+  form: Record<string, string>;
+  setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  unitOptions: any[];
+  formError?: string | null;
+  lockUnit?: boolean;
+}) {
+  // Fetched here rather than passed in, so every caller gets the same option lists without
+  // firing a broker:view request on tabs that never open this form.
+  const { data: saleStatusOpts = [] } = useCustomOptions('sale_status');
+  const { data: brokersData } = useBrokers();
+  const brokers = (brokersData as any[]) || [];
+  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((f) => ({ ...f, [field]: e.target.value }));
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <Select
+        size="sm"
+        label="Unit"
+        isRequired
+        isDisabled={lockUnit}
+        description={lockUnit ? 'Locked to the unit you just updated' : undefined}
+        selectedKeys={form.unitId ? [form.unitId] : []}
+        onSelectionChange={(keys) => {
+          const val = Array.from(keys)[0] as string;
+          if (val) setForm((f) => ({ ...f, unitId: val }));
+        }}
+      >
+        {unitOptions.map((u: any) => (
+          <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
+        ))}
+      </Select>
+      <Input size="sm" label="Buyer" value={form.buyer} onChange={set('buyer')} />
+      <Input size="sm" label="Sale Price ($)" type="number" value={form.salePrice} onChange={set('salePrice')} />
+      <Input size="sm" label="Deposit Amount ($)" type="number" value={form.depositAmt} onChange={set('depositAmt')} />
+      <Select
+        size="sm"
+        label="Status"
+        selectedKeys={form.status ? [form.status] : []}
+        onSelectionChange={(keys) => {
+          const val = Array.from(keys)[0] as string;
+          if (val) setForm((f) => ({ ...f, status: val }));
+        }}
+      >
+        {saleStatusOpts.map((o) => (
+          <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
+        ))}
+      </Select>
+      <Input size="sm" label="LOI Date" type="date" value={form.loiDate} onChange={set('loiDate')} />
+      <Input size="sm" label="Contract Date" type="date" value={form.contractDate} onChange={set('contractDate')} />
+      <Input size="sm" label="Closing Date" type="date" value={form.closingDate} onChange={set('closingDate')} />
+      <Input size="sm" label="Expected Close" type="date" value={form.expectedCloseDate} onChange={set('expectedCloseDate')} />
+
+      {/* Phase 4: broker attribution — commission is stamped on close */}
+      <Select
+        size="sm"
+        label="Broker (optional)"
+        selectedKeys={form.brokerId ? [form.brokerId] : []}
+        onSelectionChange={(keys) => setForm((f) => ({ ...f, brokerId: (Array.from(keys)[0] as string) || '' }))}
+      >
+        {[{ id: '', name: '— none —', company: '' }, ...brokers].map((b: any) => (
+          <SelectItem key={b.id} textValue={b.id ? `${b.name}${b.company ? ` · ${b.company}` : ''}` : '— none —'}>
+            {b.id ? `${b.name}${b.company ? ` · ${b.company}` : ''}` : '— none —'}
+          </SelectItem>
+        ))}
+      </Select>
+      {form.brokerId && (
+        <Input
+          size="sm" type="number" label="Commission % override"
+          value={form.brokerCommissionPct} onChange={set('brokerCommissionPct')}
+          description="Blank = broker default; stamped on close"
+        />
+      )}
+
+      {/* Slice 6: lost-reason picker — only shown when cancelling */}
+      {form.status === 'CANCELLED' && (
+        <>
+          <Select
+            size="sm"
+            label="Why lost?"
+            isRequired
+            description="Captured for the lost-deal heatmap"
+            selectedKeys={form.lostReason ? [form.lostReason] : []}
+            isInvalid={!form.lostReason && formError !== null}
+            errorMessage="Required when cancelling"
+            onSelectionChange={(keys) => {
+              const val = Array.from(keys)[0] as string;
+              if (val) setForm((f) => ({ ...f, lostReason: val }));
+            }}
+          >
+            {LOST_REASONS.map((r) => (
+              <SelectItem key={r.key} textValue={r.label}>{r.label}</SelectItem>
+            ))}
+          </Select>
+          <Input size="sm" label="Reason note (optional)" value={form.lostReasonNote} onChange={set('lostReasonNote')} />
+        </>
+      )}
+
+      <div className="sm:col-span-2">
+        <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
+      </div>
+    </div>
+  );
+}
+
 function SalesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useSalesPipeline(projectId);
-  const { data: saleStatusOpts = [] } = useCustomOptions('sale_status');
   const { data: forecast } = useSalesForecast(projectId);
   const { data: unitsData } = useUnits(projectId);
   const createSale = useCreateSale();
   const updateSale = useUpdateSale();
   const deleteSale = useDeleteSale();
   const approveDiscount = useApproveSaleDiscount();
-  const { data: brokersData } = useBrokers();
-  const brokers = (brokersData as any[]) || [];
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
@@ -3628,26 +4092,8 @@ function SalesTab({ projectId }: { projectId: string }) {
       setSaleFormError('Please select a reason — why was this deal lost?');
       return;
     }
-    // Use T12:00:00 to anchor dates at noon UTC — avoids off-by-one day in any timezone.
-    const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
     try {
-      const payload: Record<string, unknown> = {
-        projectId,
-        unitId: form.unitId,
-        buyer: form.buyer || undefined,
-        salePrice: form.salePrice ? parseFloat(form.salePrice) : undefined,
-        depositAmt: form.depositAmt ? parseFloat(form.depositAmt) : undefined,
-        status: form.status,
-        loiDate: form.loiDate ? toDate(form.loiDate) : undefined,
-        contractDate: form.contractDate ? toDate(form.contractDate) : undefined,
-        closingDate: form.closingDate ? toDate(form.closingDate) : undefined,
-        expectedCloseDate: form.expectedCloseDate ? toDate(form.expectedCloseDate) : undefined,
-        notes: form.notes || undefined,
-        lostReason: form.status === 'CANCELLED' ? form.lostReason : undefined,
-        lostReasonNote: form.status === 'CANCELLED' ? (form.lostReasonNote || undefined) : undefined,
-        brokerId: form.brokerId || undefined,
-        brokerCommissionPct: form.brokerCommissionPct ? parseFloat(form.brokerCommissionPct) : undefined,
-      };
+      const payload = buildSalePayload(form, projectId);
       if (editId) {
         await updateSale.mutateAsync({ id: editId, data: payload });
         addToast({ title: 'Sale updated', color: 'success' });
@@ -3673,9 +4119,6 @@ function SalesTab({ projectId }: { projectId: string }) {
       addToast({ title: errMsg(e, 'Failed to delete sale'), color: 'danger' });
     }
   };
-
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [field]: e.target.value }));
 
   if (isLoading) return <LoadingState />;
 
@@ -3875,89 +4318,12 @@ function SalesTab({ projectId }: { projectId: string }) {
           <ModalHeader>{editId ? 'Edit Sale' : 'Add Sale'}</ModalHeader>
           <ModalBody>
             <FormError message={saleFormError} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Select
-                size="sm"
-                label="Unit"
-                isRequired
-                selectedKeys={form.unitId ? [form.unitId] : []}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setForm((f) => ({ ...f, unitId: val }));
-                }}
-              >
-                {units.map((u: any) => (
-                  <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
-                ))}
-              </Select>
-              <Input size="sm" label="Buyer" value={form.buyer} onChange={set('buyer')} />
-              <Input size="sm" label="Sale Price ($)" type="number" value={form.salePrice} onChange={set('salePrice')} />
-              <Input size="sm" label="Deposit Amount ($)" type="number" value={form.depositAmt} onChange={set('depositAmt')} />
-              <Select
-                size="sm"
-                label="Status"
-                selectedKeys={form.status ? [form.status] : []}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setForm((f) => ({ ...f, status: val }));
-                }}
-              >
-                {saleStatusOpts.map((o) => (
-                  <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
-                ))}
-              </Select>
-              <Input size="sm" label="LOI Date" type="date" value={form.loiDate} onChange={set('loiDate')} />
-              <Input size="sm" label="Contract Date" type="date" value={form.contractDate} onChange={set('contractDate')} />
-              <Input size="sm" label="Closing Date" type="date" value={form.closingDate} onChange={set('closingDate')} />
-              <Input size="sm" label="Expected Close" type="date" value={form.expectedCloseDate} onChange={set('expectedCloseDate')} />
-
-              {/* Phase 4: broker attribution — commission is stamped on close */}
-              <Select
-                size="sm"
-                label="Broker (optional)"
-                selectedKeys={form.brokerId ? [form.brokerId] : []}
-                onSelectionChange={(keys) => setForm((f) => ({ ...f, brokerId: (Array.from(keys)[0] as string) || '' }))}
-              >
-                {[{ id: '', name: '— none —', company: '' }, ...brokers].map((b: any) => (
-                  <SelectItem key={b.id}>{b.id ? `${b.name}${b.company ? ` · ${b.company}` : ''}` : '— none —'}</SelectItem>
-                ))}
-              </Select>
-              {form.brokerId && (
-                <Input
-                  size="sm" type="number" label="Commission % override"
-                  value={form.brokerCommissionPct} onChange={set('brokerCommissionPct')}
-                  description="Blank = broker default; stamped on close"
-                />
-              )}
-
-              {/* Slice 6: lost-reason picker — only shown when cancelling */}
-              {form.status === 'CANCELLED' && (
-                <>
-                  <Select
-                    size="sm"
-                    label="Why lost?"
-                    isRequired
-                    description="Captured for the lost-deal heatmap"
-                    selectedKeys={form.lostReason ? [form.lostReason] : []}
-                    isInvalid={form.status === 'CANCELLED' && !form.lostReason && saleFormError !== null}
-                    errorMessage="Required when cancelling"
-                    onSelectionChange={(keys) => {
-                      const val = Array.from(keys)[0] as string;
-                      if (val) setForm((f) => ({ ...f, lostReason: val }));
-                    }}
-                  >
-                    {LOST_REASONS.map((r) => (
-                      <SelectItem key={r.key}>{r.label}</SelectItem>
-                    ))}
-                  </Select>
-                  <Input size="sm" label="Reason note (optional)" value={form.lostReasonNote} onChange={set('lostReasonNote')} />
-                </>
-              )}
-
-              <div className="sm:col-span-2">
-                <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
-              </div>
-            </div>
+            <SaleFormFields
+              form={form}
+              setForm={setForm}
+              unitOptions={units}
+              formError={saleFormError}
+            />
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={handleSaleFormClose}>Cancel</Button>
@@ -3999,7 +4365,7 @@ function SalesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Buildings Tab ----
-const EMPTY_BUILDING = { name: '', totalSqft: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
+const EMPTY_BUILDING = { name: '', llcName: '', totalSqft: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
 
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
@@ -4057,6 +4423,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     setEditId(b.id);
     setForm({
       name: b.name || '',
+      llcName: b.llcName || '',
       totalSqft: b.totalSqft?.toString() || '',
       stories: b.stories?.toString() || '',
       buildingType: b.buildingType || '',
@@ -4102,6 +4469,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       const payload: Record<string, unknown> = {
         projectId,
         name: form.name.trim(),
+        llcName: form.llcName.trim() || undefined,
         totalSqft: form.totalSqft ? parseFloat(form.totalSqft) : undefined,
         stories: form.stories ? parseInt(form.stories) : undefined,
         buildingType: form.buildingType.trim() || undefined,
@@ -4309,6 +4677,9 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                   >
                     {b.name}
                   </Link>
+                  {b.llcName && (
+                    <p className="text-xs text-gray-400 truncate mt-0.5" title={b.llcName}>{b.llcName}</p>
+                  )}
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                     {b.buildingType && (
                       <span className="text-xs text-gray-400 truncate">{b.buildingType}</span>
@@ -4364,6 +4735,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                   size="sm" label="Building Name" isRequired
                   value={form.name} onChange={set('name')}
                   isInvalid={!!formErrors.name} errorMessage={formErrors.name}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <Input
+                  size="sm" label="LLC Name"
+                  placeholder="e.g. Prime Leander I LLC"
+                  description="Legal entity that owns this building"
+                  value={form.llcName} onChange={set('llcName')}
                 />
               </div>
               <Select
@@ -4709,8 +5088,12 @@ function RevenueTab({ projectId }: { projectId: string }) {
   const pip = pipeline as any;
   const li = leaseIncome as any;
 
-  const closedSalesValue = (pip?.CLOSED || []).reduce((s: number, sale: any) => s + (sale.salePrice || 0), 0);
-  const underContractCount = (pip?.UNDER_CONTRACT || []).length;
+  // GET /sales/pipeline returns { byStatus, avgDaysToClose, totalPipelineValue, closedRevenue }.
+  // The per-status sale arrays are nested under `byStatus` — NOT at the root — and salePrice
+  // arrives as a Decimal-serialized string, so never sum it with a bare `+`. Use the totals the
+  // API already computes (see SalesTab / OverviewTab, which read it the same way).
+  const closedSalesValue = pip?.closedRevenue || 0;
+  const underContractCount = pip?.byStatus?.UNDER_CONTRACT?.length || 0;
   const monthlyLease = li?.total || 0;
 
   return (
@@ -4720,7 +5103,10 @@ function RevenueTab({ projectId }: { projectId: string }) {
         <StatCard label="Closed Sales" value={fmt(closedSalesValue)} variant="revenue" colorScheme="green" />
         <StatCard label="Under Contract" value={String(underContractCount)} variant="revenue" colorScheme="brand" />
         <StatCard label="Monthly Lease Income" value={fmt(monthlyLease)} variant="revenue" colorScheme="teal" />
-        <StatCard label="Annual Rent" value={fmt(monthlyLease * 12)} variant="revenue" colorScheme="blue" />
+        {/* Run-rate, not a forecast: the lease-income endpoint returns monthly x 12 and is
+            not free-rent or escalation aware. The schedule-accurate figure lives on the
+            Leases rent roll below ("Next 12 Months"). */}
+        <StatCard label="Annual Run-Rate" value={fmt(monthlyLease * 12)} variant="revenue" colorScheme="blue" helpText="Current monthly x 12" />
       </div>
       <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mb-0">Sales Pipeline</p>
       <SalesTab projectId={projectId} />
@@ -5496,8 +5882,8 @@ function DrawsTab({ projectId }: { projectId: string }) {
 
   const drawList = draws as any[];
   const totalDraws = drawList.length;
-  const funded = drawList.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
-  const pending = drawList.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + Number(d.amount || 0), 0);
+  const funded = drawList.filter((d) => d.status === 'FUNDED').reduce((s: number, d: any) => s + fundedAmount(d), 0);
+  const pending = drawList.filter((d) => ['SUBMITTED', 'APPROVED'].includes(d.status)).reduce((s: number, d: any) => s + fundedAmount(d), 0);
 
   const openAddDraw = () => {
     setEditingDrawId(null);

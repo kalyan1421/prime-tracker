@@ -43,8 +43,11 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Update a notification preference' })
   setPreference(
     @CurrentUser('sub') userId: string,
-    @Body() body: { type: NotificationType; enabled: boolean },
+    // Both channels optional and independent: the settings page changes one at a time,
+    // and emailEnabled:null (clear the override back to the tier default) is distinct
+    // from omitting the field.
+    @Body() body: { type: NotificationType; enabled?: boolean; emailEnabled?: boolean | null },
   ) {
-    return this.service.setPreference(userId, body.type, body.enabled);
+    return this.service.setPreference(userId, body.type, body.enabled, body.emailEnabled);
   }
 }
