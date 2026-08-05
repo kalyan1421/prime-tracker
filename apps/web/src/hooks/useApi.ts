@@ -641,12 +641,34 @@ export function useToggleUserActive() {
 }
 
 // ---- Audit ----
-export function useAuditLog(params?: { action?: string; entity?: string; limit?: number }) {
+export function useAuditLog(params?: {
+  action?: string;
+  entity?: string;
+  userId?: string;
+  startDate?: string;
+  endDate?: string;
+  page?: number;
+  limit?: number;
+}) {
   const can = useCan('audit:view');
   return useQuery({
     queryKey: ['audit', params],
     queryFn: () => api.get('/audit', { params }).then((r) => r.data),
     enabled: can,
+    // Paging through a log is a read-back-and-forth motion; without this every page
+    // change blanks the table and re-runs the empty state.
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Distinct actions/entities/actors present in the log — populates the filter controls. */
+export function useAuditFilterOptions() {
+  const can = useCan('audit:view');
+  return useQuery({
+    queryKey: ['audit', 'filters'],
+    queryFn: () => api.get('/audit/filters').then((r) => r.data),
+    enabled: can,
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -834,6 +856,19 @@ export function useDeleteUser() {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/users/${id}`).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+/**
+ * Admin reset of another user's password. Returns { sessionsRevoked } — surface it, the
+ * admin should know the user was signed out everywhere.
+ *
+ * No cache invalidation: nothing in the users list reflects a password.
+ */
+export function useSetUserPassword() {
+  return useMutation({
+    mutationFn: ({ id, newPassword }: { id: string; newPassword: string }) =>
+      api.patch(`/users/${id}/password`, { newPassword }).then((r) => r.data),
   });
 }
 

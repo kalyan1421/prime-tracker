@@ -8,7 +8,8 @@ import {
 import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiMinus, FiEye, FiEyeOff, FiSliders, FiLock } from 'react-icons/fi';
 import {
   useUsers, useUpdateUserRole, useUpdateUserRoles, useToggleUserActive, useCreateUser, useUpdateUser, useDeleteUser,
-  useAuditLog, useQBStatus, useQBSync,
+  useSetUserPassword,
+  useAuditLog, useAuditFilterOptions, useQBStatus, useQBSync,
   useRoleCounts, useRoleDefinitions,
   useCustomOptions, useCreateCustomOption, useDeleteCustomOption,
   type CustomOption,
@@ -157,6 +158,7 @@ function UsersPanel() {
   const updateUser = useUpdateUser();
   const availableRoles = currentUser?.role === 'SUPER_ADMIN' ? ROLES : ROLES.filter((r) => r !== 'SUPER_ADMIN');
   const deleteUser = useDeleteUser();
+  const setUserPassword = useSetUserPassword();
 
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
@@ -170,9 +172,13 @@ function UsersPanel() {
   // local state for the multi-role picker (mirrors selectedUser.roles until saved)
   const [pendingRoles, setPendingRoles] = useState<string[]>([]);
   const [rolesChanged, setRolesChanged] = useState(false);
+  const [pwForm, setPwForm] = useState({ newPassword: '', confirm: '' });
+  const [pwError, setPwError] = useState('');
+  const [showPw, setShowPw] = useState(false);
 
   const { isOpen: isCreateOpen, onOpen: onCreateOpen, onClose: onCreateClose } = useDisclosure();
   const { isOpen: isEditOpen, onOpen: onEditOpen, onClose: onEditClose } = useDisclosure();
+  const { isOpen: isPwOpen, onOpen: onPwOpen, onClose: onPwClose } = useDisclosure();
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState />;
@@ -513,28 +519,38 @@ function UsersPanel() {
               </div>
 
               {/* Action buttons */}
-              <div className="flex gap-2 pt-2 border-t border-gray-100">
+              <div className="flex flex-col gap-2 pt-2 border-t border-gray-100">
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="bordered"
+                    startContent={<FiEdit2 />}
+                    className="flex-1"
+                    onPress={() => {
+                      setEditForm({ name: selectedUser.name, email: selectedUser.email, phone: selectedUser.phone ?? '', jobTitle: selectedUser.jobTitle ?? '' });
+                      onEditOpen();
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    color="danger"
+                    variant="flat"
+                    startContent={<FiTrash2 />}
+                    className="flex-1"
+                    onPress={() => setShowDeleteConfirm(true)}
+                  >
+                    Delete
+                  </Button>
+                </div>
                 <Button
                   size="sm"
-                  variant="bordered"
-                  startContent={<FiEdit2 />}
-                  className="flex-1"
-                  onPress={() => {
-                    setEditForm({ name: selectedUser.name, email: selectedUser.email, phone: selectedUser.phone ?? '', jobTitle: selectedUser.jobTitle ?? '' });
-                    onEditOpen();
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  color="danger"
                   variant="flat"
-                  startContent={<FiTrash2 />}
-                  className="flex-1"
-                  onPress={() => setShowDeleteConfirm(true)}
+                  startContent={<FiLock />}
+                  onPress={() => { setPwForm({ newPassword: '', confirm: '' }); setPwError(''); onPwOpen(); }}
                 >
-                  Delete
+                  Reset password
                 </Button>
               </div>
             </CardBody>
@@ -680,6 +696,88 @@ function UsersPanel() {
         </ModalContent>
       </Modal>
 
+      {/* Reset Password Modal.
+          No "current password" field — an admin uses this precisely when the user
+          cannot sign in. The self-service path (/profile) does require it. */}
+      <Modal isOpen={isPwOpen} onClose={onPwClose} scrollBehavior="inside">
+        <ModalContent>
+          <ModalHeader className="flex flex-col gap-0.5">
+            <span>Reset password</span>
+            <span className="text-xs font-normal text-gray-500">{selectedUser?.name} · {selectedUser?.email}</span>
+          </ModalHeader>
+          <ModalBody>
+            <div className="flex flex-col gap-3">
+              <Input
+                size="sm"
+                label="New password"
+                type={showPw ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={pwForm.newPassword}
+                isInvalid={pwForm.newPassword.length > 0 && pwForm.newPassword.length < 8}
+                errorMessage={
+                  pwForm.newPassword.length > 0 && pwForm.newPassword.length < 8
+                    ? 'At least 8 characters'
+                    : undefined
+                }
+                onChange={(e) => { setPwForm((f) => ({ ...f, newPassword: e.target.value })); setPwError(''); }}
+                endContent={
+                  <button type="button" className="text-gray-400" onClick={() => setShowPw((v) => !v)}>
+                    {showPw ? <FiEyeOff /> : <FiEye />}
+                  </button>
+                }
+              />
+              <Input
+                size="sm"
+                label="Confirm password"
+                type={showPw ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={pwForm.confirm}
+                isInvalid={pwForm.confirm.length > 0 && pwForm.confirm !== pwForm.newPassword}
+                errorMessage={
+                  pwForm.confirm.length > 0 && pwForm.confirm !== pwForm.newPassword
+                    ? 'Passwords do not match'
+                    : undefined
+                }
+                onChange={(e) => { setPwForm((f) => ({ ...f, confirm: e.target.value })); setPwError(''); }}
+              />
+              <p className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                This signs <strong>{selectedUser?.name}</strong> out of every device. Tell them the
+                new password over a channel they already trust — it is not emailed to them.
+              </p>
+              {pwError && <p className="text-xs text-red-600">{pwError}</p>}
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={onPwClose}>Cancel</Button>
+            <Button
+              size="sm"
+              color="primary"
+              isLoading={setUserPassword.isPending}
+              isDisabled={pwForm.newPassword.length < 8 || pwForm.newPassword !== pwForm.confirm}
+              onPress={async () => {
+                try {
+                  const r = await setUserPassword.mutateAsync({
+                    id: selectedUser.id,
+                    newPassword: pwForm.newPassword,
+                  });
+                  addToast({
+                    title: `Password reset for ${selectedUser.name}`,
+                    description: `${r?.sessionsRevoked ?? 0} active session(s) signed out.`,
+                    color: 'success',
+                  });
+                  setPwForm({ newPassword: '', confirm: '' });
+                  onPwClose();
+                } catch (err: any) {
+                  setPwError(err?.response?.data?.message || 'Could not reset password');
+                }
+              }}
+            >
+              Reset password
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* Delete Confirm Modal */}
       <Modal isOpen={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} scrollBehavior="inside">
         <ModalContent>
@@ -776,76 +874,275 @@ function IntegrationsPanel() {
 }
 
 // ---- Audit Log Panel ----
+const AUDIT_ACTION_STYLE: Record<string, string> = {
+  CREATE: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  UPDATE: 'bg-blue-50 text-blue-700 border-blue-200',
+  DELETE: 'bg-red-50 text-red-700 border-red-200',
+  ROLE_CHANGE: 'bg-amber-50 text-amber-700 border-amber-200',
+  LOGIN: 'bg-slate-50 text-slate-500 border-slate-200',
+  LOGOUT: 'bg-slate-50 text-slate-500 border-slate-200',
+};
+
+/** Relative-day heading, so a long log reads as "when" before "what". */
+function dayLabel(iso: string) {
+  const d = new Date(iso);
+  const today = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOf(today) - startOf(d)) / 86_400_000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+}
+
+const DATE_PRESETS = [
+  { key: '', label: 'All time' },
+  { key: '1', label: 'Today' },
+  { key: '7', label: '7 days' },
+  { key: '30', label: '30 days' },
+  { key: '90', label: '90 days' },
+];
+
+const PAGE_SIZE = 50;
+
 function AuditPanel() {
-  const [actionFilter, setActionFilter] = useState('');
-  const { data, isLoading, error } = useAuditLog({
-    action: actionFilter || undefined,
-    limit: 100,
+  const [action, setAction] = useState('');
+  const [entity, setEntity] = useState('');
+  const [userId, setUserId] = useState('');
+  const [days, setDays] = useState('');
+  const [page, setPage] = useState(1);
+
+  // A preset is turned into an absolute startDate here rather than on the server, so the
+  // boundary follows the viewer's own midnight instead of the API host's.
+  const startDate = days
+    ? new Date(Date.now() - (Number(days) - 1) * 86_400_000).toISOString().slice(0, 10)
+    : undefined;
+
+  const { data: options } = useAuditFilterOptions();
+  const { data, isLoading, error, isFetching } = useAuditLog({
+    action: action || undefined,
+    entity: entity || undefined,
+    userId: userId || undefined,
+    startDate,
+    page,
+    limit: PAGE_SIZE,
   });
+
+  // Any filter change invalidates the current page number.
+  const setFilter = (fn: () => void) => { fn(); setPage(1); };
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState />;
 
-  // GET /audit returns a paginated wrapper ({ events, total, page, limit }),
-  // not a bare array.
+  // GET /audit returns a paginated wrapper ({ events, total, page, limit }).
   const events = (data as any)?.events || [];
+  const total = (data as any)?.total ?? 0;
+  const opts = (options as any) || {};
+  const activeCount = [action, entity, userId, days].filter(Boolean).length;
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Group consecutive events by calendar day for the date separators.
+  const groups: { day: string; rows: any[] }[] = [];
+  for (const e of events) {
+    const label = dayLabel(e.createdAt);
+    if (groups.length && groups[groups.length - 1].day === label) groups[groups.length - 1].rows.push(e);
+    else groups.push({ day: label, rows: [e] });
+  }
 
   return (
     <div className="mt-4">
-      <div className="flex justify-between mb-4">
-        <p className="font-semibold text-sm text-gray-600">{events.length} events</p>
-        <Select
-          size="sm"
-          className="w-[160px]"
-          placeholder="All actions"
-          selectedKeys={actionFilter ? [actionFilter] : []}
-          onSelectionChange={(keys) => {
-            const val = Array.from(keys)[0] as string;
-            setActionFilter(val || '');
-          }}
-        >
-          {['CREATE', 'UPDATE', 'DELETE', 'LOGIN', 'LOGOUT', 'MFA_VERIFY', 'QB_SYNC', 'ROLE_CHANGE'].map((a) => (
-            <SelectItem key={a}>{a}</SelectItem>
-          ))}
-        </Select>
-      </div>
+      {/* Filter bar */}
+      <Card shadow="sm" className="mb-3">
+        <CardBody className="py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              size="sm" aria-label="Action" className="w-[170px]" placeholder="All actions"
+              selectedKeys={action ? [action] : []}
+              onSelectionChange={(k) => setFilter(() => setAction((Array.from(k)[0] as string) || ''))}
+            >
+              {((opts.actions ?? []) as any[]).map((a) => (
+                <SelectItem key={a.value} textValue={a.value}>
+                  {a.value.replace(/_/g, ' ')} ({a.count})
+                </SelectItem>
+              ))}
+            </Select>
 
-      <Card shadow="sm">
-        <CardBody className="p-0">
-          <div className="overflow-x-auto">
-            <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Timestamp</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">User</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Action</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Entity</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Entity ID</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">IP</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((e: any) => (
-                  <tr key={e.id} className="border-b border-gray-50">
-                    <td className="py-2 px-3 text-xs text-gray-500 whitespace-nowrap">
-                      {new Date(e.createdAt).toLocaleString()}
-                    </td>
-                    <td className="py-2 px-3">{e.user?.name || e.userId || '\u2014'}</td>
-                    <td className="py-2 px-3"><StatusBadge status={e.action} /></td>
-                    <td className="py-2 px-3">{e.entity || '\u2014'}</td>
-                    <td className="py-2 px-3 font-mono text-xs text-gray-500">
-                      {e.entityId ? e.entityId.substring(0, 8) + '\u2026' : '\u2014'}
-                    </td>
-                    <td className="py-2 px-3 text-xs text-gray-500">{e.ipAddress || '\u2014'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table></div>
+            <Select
+              size="sm" aria-label="Entity" className="w-[190px]" placeholder="All entities"
+              selectedKeys={entity ? [entity] : []}
+              onSelectionChange={(k) => setFilter(() => setEntity((Array.from(k)[0] as string) || ''))}
+            >
+              {((opts.entities ?? []) as any[]).map((e) => (
+                <SelectItem key={e.value} textValue={e.value}>{e.value} ({e.count})</SelectItem>
+              ))}
+            </Select>
+
+            <Select
+              size="sm" aria-label="User" className="w-[200px]" placeholder="Anyone"
+              selectedKeys={userId ? [userId] : []}
+              onSelectionChange={(k) => setFilter(() => setUserId((Array.from(k)[0] as string) || ''))}
+            >
+              {((opts.actors ?? []) as any[]).map((u) => (
+                <SelectItem key={u.value} textValue={u.label}>{u.label} ({u.count})</SelectItem>
+              ))}
+            </Select>
+
+            <div className="flex items-center gap-1 ml-auto">
+              {DATE_PRESETS.map((p) => (
+                <button
+                  key={p.key || 'all'}
+                  onClick={() => setFilter(() => setDays(p.key))}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                    days === p.key
+                      ? 'bg-slate-800 text-white border-slate-800'
+                      : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 mt-2.5 text-xs text-gray-500">
+            {/* The server's total, not events.length — the page holds at most 50, and
+                reporting that as the count made a 716-event log read as "50 events". */}
+            <span>
+              <strong className="text-gray-700">{total.toLocaleString()}</strong> event{total === 1 ? '' : 's'}
+              {activeCount > 0 && ' matching'}
+            </span>
+            {isFetching && <Spinner size="sm" />}
+            {activeCount > 0 && (
+              <button
+                className="text-blue-600 hover:underline"
+                onClick={() => setFilter(() => { setAction(''); setEntity(''); setUserId(''); setDays(''); })}
+              >
+                Clear {activeCount} filter{activeCount === 1 ? '' : 's'}
+              </button>
+            )}
           </div>
         </CardBody>
       </Card>
+
+      <Card shadow="sm">
+        <CardBody className="p-0">
+          {events.length === 0 ? (
+            <div className="py-12 text-center text-sm text-gray-400">
+              No audit events match these filters.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[680px]">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase w-[92px]">Time</th>
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">User</th>
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase w-[120px]">Action</th>
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Entity</th>
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Details</th>
+                    <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase w-[110px]">IP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((g) => (
+                    <React.Fragment key={g.day}>
+                      <tr className="bg-gray-50/70">
+                        <td colSpan={6} className="py-1.5 px-3 text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                          {g.day}
+                        </td>
+                      </tr>
+                      {g.rows.map((e: any) => (
+                        <tr key={e.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                          <td className="py-2 px-3 text-xs text-gray-500 whitespace-nowrap">
+                            {new Date(e.createdAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className="text-gray-800">{e.user?.name || '\u2014'}</span>
+                            {e.user?.email && <span className="block text-[11px] text-gray-400">{e.user.email}</span>}
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-bold tracking-wide ${AUDIT_ACTION_STYLE[e.action] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+                              {e.action.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className="text-gray-700">{e.entity || '\u2014'}</span>
+                            {e.entityId && (
+                              <span className="block font-mono text-[10px] text-gray-400" title={e.entityId}>
+                                {e.entityId.substring(0, 8)}…
+                              </span>
+                            )}
+                          </td>
+                          {/* metadata was recorded on 265 of these events and never shown —
+                              it is where "why" lives (PASSWORD_RESET_BY_ADMIN, sessionsRevoked). */}
+                          <td className="py-2 px-3 text-xs text-gray-500 max-w-[280px]">
+                            <AuditDetails event={e} />
+                          </td>
+                          <td className="py-2 px-3 text-xs text-gray-400">{e.ipAddress || '\u2014'}</td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table></div>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {lastPage > 1 && (
+        <div className="flex items-center justify-between mt-3">
+          <p className="text-xs text-gray-500">
+            Page {page} of {lastPage}
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="bordered" isDisabled={page <= 1} onPress={() => setPage((p) => p - 1)}>
+              Previous
+            </Button>
+            <Button size="sm" variant="bordered" isDisabled={page >= lastPage} onPress={() => setPage((p) => p + 1)}>
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/**
+ * The human-readable "what changed" for one event.
+ *
+ * Prefers metadata (an explicit note the writer chose to leave, e.g.
+ * PASSWORD_RESET_BY_ADMIN) and falls back to naming the fields in newValues. Full
+ * old/new payloads are deliberately not rendered inline — some carry encrypted loan
+ * fields and long document blobs, and a log you cannot skim is a log nobody reads.
+ */
+function AuditDetails({ event }: { event: any }) {
+  const meta = event.metadata && typeof event.metadata === 'object' ? event.metadata : null;
+  if (meta) {
+    const entries = Object.entries(meta).filter(([, v]) => v !== null && v !== undefined);
+    if (entries.length) {
+      return (
+        <span className="flex flex-wrap gap-1">
+          {entries.slice(0, 3).map(([k, v]) => (
+            <span key={k} className="inline-block bg-gray-100 rounded px-1.5 py-0.5 text-[10px] text-gray-600">
+              {k === 'event' ? String(v).replace(/_/g, ' ').toLowerCase() : `${k}: ${String(v)}`}
+            </span>
+          ))}
+        </span>
+      );
+    }
+  }
+  const changed = event.newValues && typeof event.newValues === 'object'
+    ? Object.keys(event.newValues)
+    : [];
+  if (changed.length) {
+    return (
+      <span className="text-[11px] text-gray-400">
+        {changed.slice(0, 4).join(', ')}{changed.length > 4 ? ` +${changed.length - 4}` : ''}
+      </span>
+    );
+  }
+  return <span className="text-gray-300">—</span>;
 }
 
 // ---- Roles Panel ----

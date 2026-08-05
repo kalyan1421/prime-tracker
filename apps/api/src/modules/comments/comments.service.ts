@@ -1,10 +1,73 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CommentType } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import { resolveMentions } from './mentions';
 
 @Injectable()
 export class CommentsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(CommentsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationsService,
+  ) {}
+
+  /**
+   * Fan out the notifications a new comment produces.
+   *
+   * Two independent audiences:
+   *   - the comment's DEPARTMENT (FINANCIAL -> finance, SALES -> sales, …) via
+   *     notifyNewComment. That method has existed since the notifications module was
+   *     written and was never called from anywhere, so posting a comment notified nobody.
+   *   - anyone @mentioned by name, who is told regardless of department or project
+   *     membership.
+   *
+   * Never allowed to fail the write: the comment is the user's work, a notification is a
+   * side effect, and losing the former because the latter threw is not a trade worth
+   * making. Failures are logged rather than swallowed silently.
+   */
+  private async notifyForComment(params: {
+    commentType: CommentType;
+    content: string;
+    authorId: string;
+    projectId?: string;
+    projectName?: string;
+    unit?: any;
+    where: string;
+    link?: string;
+  }) {
+    try {
+      await this.notifications.notifyNewComment({
+        commentType: params.commentType,
+        content: params.content,
+        projectId: params.projectId,
+        projectName: params.projectName,
+        unit: params.unit,
+      });
+
+      // Only active users are mention candidates — naming a deactivated account should
+      // not resurrect it as a recipient.
+      const users = await this.prisma.user.findMany({
+        where: { isActive: true },
+        select: { id: true, name: true, email: true },
+      });
+      const mentioned = resolveMentions(params.content, users);
+      if (mentioned.length === 0) return;
+
+      const author = users.find((u) => u.id === params.authorId);
+      await this.notifications.notifyCommentMention({
+        mentionedUserIds: mentioned,
+        authorId: params.authorId,
+        authorName: author?.name || 'Someone',
+        content: params.content,
+        where: params.where,
+        link: params.link,
+      });
+    } catch (err) {
+      this.logger.warn(`Comment notification failed: ${err}`);
+    }
+  }
 
   // ---- Unit Comments ----
 
@@ -19,12 +82,35 @@ export class CommentsService {
   }
 
   async createUnitComment(unitId: string, userId: string, content: string, commentType: CommentType = CommentType.MARKETING) {
-    return this.prisma.unitComment.create({
+    const comment = await this.prisma.unitComment.create({
       data: { unitId, userId, content, commentType },
       include: {
         user: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
+
+    // The project is reached through building, and notifyNewComment needs that shape to
+    // scope recipients; a unit whose building or project is missing simply gets no
+    // department routing rather than throwing.
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: unitId },
+      select: {
+        unitNumber: true,
+        building: { select: { project: { select: { id: true, name: true } } } },
+      },
+    });
+    const projectId = unit?.building?.project?.id;
+    await this.notifyForComment({
+      commentType,
+      content,
+      authorId: userId,
+      projectName: unit?.building?.project?.name,
+      unit: unit as any,
+      where: `a comment on Unit ${unit?.unitNumber ?? ''}`.trim(),
+      link: projectId ? `/projects/${projectId}/units/${unitId}` : undefined,
+    });
+
+    return comment;
   }
 
   async updateUnitComment(id: string, userId: string, content: string) {
@@ -58,12 +144,28 @@ export class CommentsService {
   }
 
   async createProjectComment(projectId: string, userId: string, content: string, commentType: CommentType = CommentType.MARKETING) {
-    return this.prisma.projectComment.create({
+    const comment = await this.prisma.projectComment.create({
       data: { projectId, userId, content, commentType },
       include: {
         user: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
+
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { name: true },
+    });
+    await this.notifyForComment({
+      commentType,
+      content,
+      authorId: userId,
+      projectId,
+      projectName: project?.name,
+      where: `a comment on ${project?.name ?? 'a project'}`,
+      link: `/projects/${projectId}/comments`,
+    });
+
+    return comment;
   }
 
   async updateProjectComment(id: string, userId: string, content: string) {

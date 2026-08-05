@@ -1,6 +1,7 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import React, { useState, useMemo, useEffect } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
+import { MentionTextarea } from '../components/MentionTextarea';
 import {
   Card, CardBody, CardHeader, Button, Tabs, Tab, Progress, Chip, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -2295,6 +2296,8 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
   const { data, isLoading } = useUnitComments(unitId);
   const createComment = useCreateComment();
   const deleteComment = useDeleteComment();
+  // See UnitDetailPage: /users would 403 for most roles that can comment.
+  const { data: mentionUsers } = useAssignableUsers();
   const [text, setText] = useState('');
   const [commentType, setCommentType] = useState('MARKETING');
 
@@ -2353,15 +2356,15 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
         >
           {['MARKETING', 'SALES', 'FINANCIAL'].map((t) => <SelectItem key={t}>{t}</SelectItem>)}
         </Select>
-        <Textarea
-          size="sm"
+        <MentionTextarea
           minRows={1}
           maxRows={3}
-          placeholder="Add a comment..."
+          placeholder="Add a comment… use @ to mention someone"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
+          onSubmit={handleSubmit}
+          users={(mentionUsers as any[]) || []}
           className="flex-1"
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
         />
         <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending}>
           <FiSend />
@@ -5950,6 +5953,8 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useProjectComments(projectId);
   const createComment = useCreateComment();
   const deleteComment = useDeleteComment();
+  // See UnitDetailPage: /users would 403 for most roles that can comment.
+  const { data: mentionUsers } = useAssignableUsers();
   const [text, setText] = useState('');
   const [commentType, setCommentType] = useState('MARKETING');
   const [filterType, setFilterType] = useState('');
@@ -6058,15 +6063,15 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
             >
               {TYPE_ORDER.map((t) => <SelectItem key={t}>{t}</SelectItem>)}
             </Select>
-            <Textarea
-              size="sm"
+            <MentionTextarea
               minRows={1}
               maxRows={4}
-              placeholder="Write a comment..."
+              placeholder="Write a comment… use @ to mention someone"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={setText}
+              onSubmit={handleSubmit}
+              users={(mentionUsers as any[]) || []}
               className="flex-1"
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
             />
             <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending}>
               <FiSend />

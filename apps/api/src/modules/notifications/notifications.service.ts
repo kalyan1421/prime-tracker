@@ -44,6 +44,9 @@ export const NOTIFICATION_TIERS = {
   FREE_RENT_ENDING_30: 'ACTION',
   DEPOSIT_OUTSTANDING: 'ACTION',
   RENT_OVERDUE: 'ACTION',
+  // Addressed at one named person, unlike COMMENT_* which broadcasts to a department.
+  // Being named is a request for a reply, so it emails by default.
+  COMMENT_MENTION: 'ACTION',
 
   // ---- FYI: awareness only ----
   LEASE_EXPIRING_30: 'FYI',
@@ -71,6 +74,70 @@ export const NOTIFICATION_TIERS = {
 type _Unclassified = Exclude<NotificationType, keyof typeof NOTIFICATION_TIERS>;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _tiersAreExhaustive: [_Unclassified] extends [never] ? true : never = true;
+
+// ============================================================================
+// Recurrence
+//
+// Two different things are called "a notification":
+//
+//   RECURRING — a standing CONDITION ("this invoice is overdue"). The daily cron
+//               re-evaluates it and calls send() again on every run for as long as
+//               the condition holds.
+//   EVENT     — something that HAPPENED once ("Ravi commented on Unit 101").
+//
+// Only the first kind may be suppressed. An event is never a duplicate: two comments
+// on the same unit produce the same title and are still two distinct things the user
+// needs to see.
+//
+// This distinction was missing, so every cron run inserted a fresh unread row per
+// still-overdue item. One run on 2026-07-29 created 2,185 rows — 215 rent alerts times
+// ten recipients — and the next run would have done it again. From the user's side the
+// bell is permanently red and "mark all as read" looks broken, because by the next
+// morning the same alerts are back as new rows.
+// ============================================================================
+
+/** How long a read alert stays suppressed before the standing condition re-raises it. */
+export const RENOTIFY_COOLDOWN_HOURS = 24 * 7;
+
+export const RECURRING_TYPES = {
+  // Cron-driven standing conditions — re-raised until resolved.
+  MILESTONE_OVERDUE: true,
+  LEASE_EXPIRING_30: true,
+  LEASE_EXPIRING_7: true,
+  LOAN_MATURITY_60: true,
+  BUDGET_VARIANCE: true,
+  PAYMENT_OVERDUE: true,
+  PAYMENT_DUE_7: true,
+  RENT_OVERDUE: true,
+  DEPOSIT_OUTSTANDING: true,
+  SNAG_OVERDUE: true,
+  INTERIOR_HANDOVER_DUE: true,
+  DRAW_FUNDING_OVERDUE: true,
+  FREE_RENT_ENDING_30: true,
+
+  // Discrete events — always delivered, never deduplicated.
+  COMMENT_FINANCIAL: false,
+  COMMENT_SALES: false,
+  COMMENT_MARKETING: false,
+  COMMENT_MENTION: false,
+  DRAW_REQUEST_SUBMITTED: false,
+  DRAW_REQUEST_APPROVED: false,
+  DRAW_REQUEST_FUNDED: false,
+  LEAD_ASSIGNED: false,
+  LEAD_STATUS_CHANGED: false,
+  INTERIOR_PHASE_CHANGED: false,
+  UNIT_SOLD: false,
+  LEASE_ADDED: false,
+  LEASE_ACTIVATED: false,
+  LEASE_TERMINATED: false,
+  LEASE_RENT_CHANGED: false,
+  TI_DISBURSED: false,
+} as const satisfies Record<string, boolean>;
+
+/** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
+type _UnclassifiedRecurrence = Exclude<NotificationType, keyof typeof RECURRING_TYPES>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _recurrenceIsExhaustive: [_UnclassifiedRecurrence] extends [never] ? true : never = true;
 
 /**
  * Portfolio owners. They are recipients of every routed event regardless of
@@ -229,7 +296,10 @@ export class NotificationsService {
     const prefByUser = new Map(prefs.map((p) => [p.userId, p]));
 
     // `enabled` gates in-app delivery, and a muted type means muted entirely.
-    const targetUserIds = userIds.filter((id) => prefByUser.get(id)?.enabled !== false);
+    const enabledUserIds = userIds.filter((id) => prefByUser.get(id)?.enabled !== false);
+    if (enabledUserIds.length === 0) return;
+
+    const targetUserIds = await this.suppressAlreadyPending(enabledUserIds, type, title);
     if (targetUserIds.length === 0) return;
 
     // Create in-app notifications
@@ -278,6 +348,46 @@ export class NotificationsService {
    * Role-targeted delivery. Pass `projectId` to get project-scoped routing
    * (leadership always included); omit it for the legacy role-global behaviour.
    */
+  /**
+   * Drop recipients who already have this exact alert pending.
+   *
+   * Applies only to RECURRING types — a standing condition the cron re-evaluates every
+   * run. A recipient is skipped when they have the same (type, title) alert that is
+   * either still unread, or was read less than RENOTIFY_COOLDOWN_HOURS ago:
+   *
+   *   still unread  — a second identical row adds no information, it just inflates the
+   *                   badge and buries everything else.
+   *   read recently — they have seen it and are presumably acting on it. Re-raising the
+   *                   same item every morning is what made "mark all as read" look
+   *                   broken. After the cooldown it does re-raise, which is the point of
+   *                   a standing alert: still overdue a week later is worth saying again.
+   *
+   * EVENT types are never suppressed — see RECURRING_TYPES.
+   */
+  private async suppressAlreadyPending(
+    userIds: string[],
+    type: NotificationType,
+    title: string,
+  ): Promise<string[]> {
+    if (!RECURRING_TYPES[type as keyof typeof RECURRING_TYPES]) return userIds;
+
+    const cooldownStart = new Date(Date.now() - RENOTIFY_COOLDOWN_HOURS * 3_600_000);
+    const pending = await this.prisma.notification.findMany({
+      where: {
+        userId: { in: userIds },
+        type,
+        title,
+        OR: [{ readAt: null }, { createdAt: { gte: cooldownStart } }],
+      },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+
+    if (pending.length === 0) return userIds;
+    const suppressed = new Set(pending.map((p) => p.userId));
+    return userIds.filter((id) => !suppressed.has(id));
+  }
+
   async sendToRoles(params: {
     roles: string[];
     type: NotificationType;
@@ -435,7 +545,13 @@ export class NotificationsService {
     });
   }
 
-  async notifyNewComment(comment: { commentType: string; content: string; projectId?: string; unit?: { building: { project: { id: string; name: string } } } }) {
+  async notifyNewComment(comment: {
+    commentType: string;
+    content: string;
+    projectId?: string;
+    projectName?: string;
+    unit?: { building: { project: { id: string; name: string } } };
+  }) {
     const typeMap: Record<string, { roles: string[]; notifType: NotificationType }> = {
       FINANCIAL: { roles: ['FINANCE', 'ACCOUNTING'], notifType: NotificationType.COMMENT_FINANCIAL },
       SALES: { roles: ['SALES'], notifType: NotificationType.COMMENT_SALES },
@@ -444,7 +560,10 @@ export class NotificationsService {
     const cfg = typeMap[comment.commentType];
     if (!cfg) return;
     const projId = comment.projectId || comment.unit?.building?.project?.id;
-    const projName = comment.unit?.building?.project?.name || 'a project';
+    // A project-level comment has no `unit`, so reading the name only off the unit path
+    // made every one of them say "in a project". Callers pass projectName directly.
+    const projName =
+      comment.projectName || comment.unit?.building?.project?.name || 'a project';
     await this.sendToRoles({
       roles: cfg.roles,
       projectId: projId,
@@ -452,6 +571,37 @@ export class NotificationsService {
       title: `New ${comment.commentType.charAt(0) + comment.commentType.slice(1).toLowerCase()} Comment`,
       body: `A new ${comment.commentType.toLowerCase()} comment was added in ${projName}: "${comment.content.slice(0, 80)}${comment.content.length > 80 ? '…' : ''}"`,
       link: projId ? `/projects/${projId}/comments` : undefined,
+    });
+  }
+
+  /**
+   * Someone was named in a comment.
+   *
+   * Sent directly to the mentioned users rather than through sendToRoles: being named is
+   * personal, so it must reach them whether or not they hold the role that comment's
+   * department routes to, and whether or not they are a member of that project. The
+   * author is excluded — mentioning yourself is not a request for your own attention.
+   */
+  async notifyCommentMention(params: {
+    mentionedUserIds: string[];
+    authorId: string;
+    authorName: string;
+    content: string;
+    where: string;
+    link?: string;
+  }) {
+    const recipients = params.mentionedUserIds.filter((id) => id !== params.authorId);
+    if (recipients.length === 0) return;
+
+    const excerpt =
+      params.content.length > 140 ? `${params.content.slice(0, 140)}…` : params.content;
+
+    await this.send({
+      userIds: recipients,
+      type: NotificationType.COMMENT_MENTION,
+      title: `${params.authorName} mentioned you`,
+      body: `In ${params.where}: "${excerpt}"`,
+      link: params.link,
     });
   }
 

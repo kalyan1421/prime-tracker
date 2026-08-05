@@ -3,6 +3,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { SetUserPasswordDto } from './dto/set-password.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
@@ -111,6 +112,18 @@ export class UsersController {
     @CurrentUser('sub') actorId: string,
   ) {
     return this.usersService.toggleActive(id, body.isActive, actorId);
+  }
+
+  @Patch(':id/password')
+  @RequirePermissions('user:manage')
+  @ApiOperation({ summary: "Reset another user's password (revokes all their sessions)" })
+  setPassword(
+    @Param('id') id: string,
+    @Body() body: SetUserPasswordDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('role') actorRole: string,
+  ) {
+    return this.usersService.setPassword(id, body.newPassword, { id: actorId, role: actorRole });
   }
 
   @Put(':id')

@@ -1384,6 +1384,10 @@ enum NotificationType {
   DEPOSIT_OUTSTANDING
   TI_DISBURSED
   RENT_OVERDUE
+  // Someone was @mentioned by name in a comment. Distinct from COMMENT_* (which routes
+  // by department) because it is addressed at one person, so it is ACTION-tier and
+  // reaches them whether or not they follow that comment's department.
+  COMMENT_MENTION
 }
 
 model Notification {

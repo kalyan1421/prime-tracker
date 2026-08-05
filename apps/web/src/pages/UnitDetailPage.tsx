@@ -6,11 +6,12 @@ import {
 } from '@heroui/react';
 import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
+import { MentionTextarea } from '../components/MentionTextarea';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
-  useLeaseRentPeriods, useUnitObligationSummary,
+  useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -1700,6 +1701,9 @@ function InlineComments({ unitId }: { unitId: string }) {
   const { data, isLoading } = useUnitComments(unitId);
   const createComment = useCreateComment();
   const deleteComment = useDeleteComment();
+  // /users/assignable is gated on project:view, which every role holds — unlike
+  // /users (user:manage), which would 403 for anyone who can actually post a comment.
+  const { data: mentionUsers } = useAssignableUsers();
   const [text, setText] = useState('');
   const [commentType, setCommentType] = useState('MARKETING');
 
@@ -1764,15 +1768,15 @@ function InlineComments({ unitId }: { unitId: string }) {
         >
           {['MARKETING', 'SALES', 'FINANCIAL'].map((t) => <SelectItem key={t}>{t}</SelectItem>)}
         </Select>
-        <Textarea
-          size="sm"
+        <MentionTextarea
           minRows={1}
           maxRows={3}
-          placeholder="Add a comment..."
+          placeholder="Add a comment… use @ to mention someone"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
+          onSubmit={handleSubmit}
+          users={(mentionUsers as any[]) || []}
           className="flex-1"
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
         />
         <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending} className="self-start sm:self-auto">
           <FiSend />

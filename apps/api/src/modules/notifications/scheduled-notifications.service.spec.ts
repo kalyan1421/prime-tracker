@@ -4,6 +4,8 @@ import {
   NotificationsService,
   NOTIFICATION_TIERS,
   LEADERSHIP_ROLES,
+  RECURRING_TYPES,
+  RENOTIFY_COOLDOWN_HOURS,
 } from './notifications.service';
 
 const mockPrisma = {
@@ -352,7 +354,11 @@ describe('NotificationsService — recipient routing', () => {
       },
       projectMember: { findMany: jest.fn().mockResolvedValue([]) },
       notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
-      notification: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      notification: {
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+        // send() checks for an already-pending identical alert before writing.
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const config = { get: jest.fn((_k: string, d?: string) => d) };
     service = new NotificationsService(prisma, config as any, undefined as any);
@@ -467,7 +473,10 @@ describe('NotificationsService.notifyDrawFundingOverdue', () => {
       },
       projectMember: { findMany: jest.fn().mockResolvedValue([]) },
       notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
-      notification: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      notification: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const config = { get: jest.fn((_k: string, d?: string) => d) };
     service = new NotificationsService(prisma, config as any, undefined as any);
@@ -535,7 +544,10 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
       },
       projectMember: { findMany: jest.fn().mockResolvedValue([]) },
       notificationPreference: { findMany: jest.fn().mockResolvedValue([]), upsert: jest.fn() },
-      notification: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      notification: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const config = { get: jest.fn((_k: string, d?: string) => d) };
     service = new NotificationsService(prisma, config as any, undefined as any);
@@ -569,11 +581,12 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
       'DEPOSIT_OUTSTANDING',
       'TI_DISBURSED',
       'RENT_OVERDUE',
+      'COMMENT_MENTION',
     ] as const) {
       expect(Object.values(NotificationType)).toContain(type);
       expect(NOTIFICATION_TIERS).toHaveProperty(type);
     }
-    expect(Object.values(NotificationType)).toHaveLength(28);
+    expect(Object.values(NotificationType)).toHaveLength(29);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {
@@ -703,5 +716,87 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ update: { enabled: true, emailEnabled: null } }),
     );
+  });
+});
+
+/**
+ * Re-notification suppression.
+ *
+ * The daily cron re-evaluates standing conditions and calls send() again on every run
+ * for as long as the condition holds. Without suppression each run wrote a fresh unread
+ * row per still-overdue item — one run on 2026-07-29 produced 2,185 rows — so the bell
+ * was permanently red and "mark all as read" appeared not to stick.
+ */
+describe('NotificationsService — re-notification suppression', () => {
+  let service: NotificationsService;
+  let prisma: any;
+
+  const pending = (userId: string) => ({ userId });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      projectMember: { findMany: jest.fn().mockResolvedValue([]) },
+      notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
+      notification: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const config = { get: jest.fn((_k: string, d?: string) => d) };
+    service = new NotificationsService(prisma, config as any, undefined as any);
+  });
+
+  const send = (type: NotificationType, userIds = ['u1']) =>
+    service.send({ userIds, type, title: 'Rent overdue (29d): Mathnasium', body: 'B' });
+
+  it('writes a recurring alert when the user has nothing pending for it', async () => {
+    await send(NotificationType.RENT_OVERDUE);
+    expect(prisma.notification.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses a recurring alert the user already has pending', async () => {
+    prisma.notification.findMany.mockResolvedValue([pending('u1')]);
+    await send(NotificationType.RENT_OVERDUE);
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+  });
+
+  it('suppresses per-user, not for the whole batch', async () => {
+    // u1 already has it; u2 does not. u2 must still be told.
+    prisma.notification.findMany.mockResolvedValue([pending('u1')]);
+    await send(NotificationType.RENT_OVERDUE, ['u1', 'u2']);
+
+    expect(prisma.notification.createMany).toHaveBeenCalledTimes(1);
+    const rows = prisma.notification.createMany.mock.calls[0][0].data;
+    expect(rows.map((r: any) => r.userId)).toEqual(['u2']);
+  });
+
+  it('matches on unread OR recently-read, so a read-but-still-overdue item stays quiet', async () => {
+    await send(NotificationType.RENT_OVERDUE);
+    const where = prisma.notification.findMany.mock.calls[0][0].where;
+    expect(where.OR).toEqual([
+      { readAt: null },
+      { createdAt: { gte: expect.any(Date) } },
+    ]);
+    // Cooldown window is a week back, not "since the epoch" — the alert does return.
+    const cutoff = where.OR[1].createdAt.gte as Date;
+    const hoursBack = (Date.now() - cutoff.getTime()) / 3_600_000;
+    expect(hoursBack).toBeGreaterThan(RENOTIFY_COOLDOWN_HOURS - 1);
+    expect(hoursBack).toBeLessThan(RENOTIFY_COOLDOWN_HOURS + 1);
+  });
+
+  it('NEVER suppresses a discrete event — two comments share a title and are two things', async () => {
+    prisma.notification.findMany.mockResolvedValue([pending('u1')]);
+    await send(NotificationType.COMMENT_SALES);
+    expect(prisma.notification.createMany).toHaveBeenCalledTimes(1);
+    // The suppression query is not even issued for event types.
+    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+  });
+
+  it('classifies every notification type as recurring or event', () => {
+    for (const type of Object.values(NotificationType)) {
+      expect(RECURRING_TYPES).toHaveProperty(type);
+    }
   });
 });

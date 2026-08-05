@@ -80,4 +80,59 @@ export class AuditService {
 
     return { events, total, page, limit };
   }
+
+  /**
+   * The values that actually occur in the log, for populating the filter controls.
+   *
+   * Derived rather than hard-coded: the admin UI previously listed a fixed set of
+   * actions that included two (MFA_VERIFY, QB_SYNC) which no code path ever writes, so
+   * selecting them returned an empty table with no explanation. Entities are worse —
+   * there are 25 of them and the list grows with every module.
+   *
+   * Counts ride along so each option can show its size, which turns the filter into a
+   * summary of the log as well as a control.
+   */
+  async filterOptions() {
+    const [actions, entities, actorRows] = await Promise.all([
+      this.prisma.auditEvent.groupBy({
+        by: ['action'],
+        _count: { action: true },
+        orderBy: { _count: { action: 'desc' } },
+      }),
+      this.prisma.auditEvent.groupBy({
+        by: ['entity'],
+        _count: { entity: true },
+        orderBy: { _count: { entity: 'desc' } },
+      }),
+      this.prisma.auditEvent.groupBy({
+        by: ['userId'],
+        _count: { userId: true },
+        orderBy: { _count: { userId: 'desc' } },
+        take: 50,
+      }),
+    ]);
+
+    const actorIds = actorRows.map((r) => r.userId).filter((id): id is string => !!id);
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: actorIds } },
+      select: { id: true, name: true, email: true },
+    });
+    const userById = new Map(users.map((u) => [u.id, u]));
+
+    return {
+      actions: actions.map((a) => ({ value: a.action, count: a._count.action })),
+      entities: entities
+        .filter((e) => !!e.entity)
+        .map((e) => ({ value: e.entity, count: e._count.entity })),
+      // Actors whose user row was deleted are dropped: filtering by an id with no name
+      // is not something anyone can act on, and the events stay visible unfiltered.
+      actors: actorRows
+        .filter((r) => r.userId && userById.has(r.userId))
+        .map((r) => ({
+          value: r.userId as string,
+          label: userById.get(r.userId as string)!.name || userById.get(r.userId as string)!.email,
+          count: r._count.userId,
+        })),
+    };
+  }
 }

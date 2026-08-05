@@ -56,15 +56,24 @@ function NotificationPanel() {
   const navigate = useNavigate();
 
   const notifications = (data?.notifications as any[]) || [];
-  const unread = notifications.filter((n: any) => !n.readAt);
+  // Same reason as the badge: gating this control on the fetched page meant that a user
+  // whose newest 20 were read but who still had older unread ones saw no "Mark all read"
+  // at all — the only way to clear them was to scroll back and open each one.
+  const unreadCount = (data?.unreadCount as number) ?? 0;
 
   return (
     <div className="w-[min(340px,90vw)]">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <p className="font-semibold text-sm text-gray-700">Notifications</p>
-        {unread.length > 0 && (
+        <div className="flex items-baseline gap-2">
+          <p className="font-semibold text-sm text-gray-700">Notifications</p>
+          {unreadCount > 0 && (
+            <span className="text-[11px] text-gray-400">{unreadCount} unread</span>
+          )}
+        </div>
+        {unreadCount > 0 && (
           <button
-            className="text-xs text-blue-600 hover:underline"
+            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+            disabled={markRead.isPending}
             onClick={() => markRead.mutate(undefined)}
           >
             Mark all read
@@ -292,8 +301,13 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { data: notifData } = useNotifications(20);
   useNotificationsSocket(); // establishes real-time push; falls back to stale polling silently
 
-  const notifications = (notifData?.notifications as any[]) || [];
-  const unreadCount = notifications.filter((n: any) => !n.readAt).length;
+  // Count unread from the SERVER's tally, not from the 20 rows this panel fetched.
+  // Filtering the page counts only what happens to be on it, so once a user has more
+  // than 20 notifications the badge reports whatever share of the newest 20 is unread —
+  // it reads 0 while 200 older ones are still unread, then jumps back to non-zero as
+  // soon as a new notification pushes an older unread row into view. That is why the
+  // bell appeared to "forget" that everything had been marked read.
+  const unreadCount = (notifData?.unreadCount as number) ?? 0;
 
   const handleLogout = async () => {
     try {
