@@ -215,6 +215,7 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
   );
 }
 import { fmt, fmtPct, fmtDate, errMsg } from '../utils/fmt';
+import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields } from '../components/LeaseFormFields';
 import { FormError } from '../components/FormError';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
@@ -240,32 +241,45 @@ const TAB_TITLE_MAP: Record<string, string> = {
   activity: 'Activity Log',
 };
 
-const ALL_ROLES = [
-  'SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP',
-  'PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING', 'LEGAL', 'VIEWER',
-];
-
-const TAB_ROLES: Record<string, string[]> = {
-  overview: ALL_ROLES,
-  construction: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER', 'CONSTRUCTION'],
-  budget: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER'],
-  revenue: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'SALES'],
-  units: ALL_ROLES,
-  milestones: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'PROJECT_MANAGER', 'CONSTRUCTION', 'VIEWER'],
-  leads: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'],
-  draws: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER', 'CONSTRUCTION'],
-  vendors: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'AR_AP', 'PROJECT_MANAGER', 'CONSTRUCTION', 'LEGAL'],
-  documents: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING', 'LEGAL'],
-  tasks: ALL_ROLES,
-  comments: ALL_ROLES,
-  activity: ['SUPER_ADMIN', 'FOUNDER'],
+/**
+ * Which permission(s) a tab needs. A tab shows when the viewer holds ANY of them.
+ *
+ * This replaced a hardcoded ROLE list. Two gating systems had drifted apart: the role
+ * lists were stricter than the permission map, so roles were denied tabs their own
+ * permissions granted — LEGAL/MARKETING/SALES/VIEWER held building:view but could not
+ * open Construction, a PROJECT_MANAGER with sales:view could not open Revenue, AR_AP
+ * could not reach Documents, and an EXECUTIVE with audit:view could not see the
+ * Activity Log. The permission map is the source of truth the API enforces, so the UI
+ * now reads from it and there is only one place left to change.
+ *
+ * Each permission below is the one the tab's own list endpoint actually enforces —
+ * verified against the controllers, not inferred from the name. Notably `tasks` is
+ * gated by project:view (task:view is defined but never enforced) and `comments` by
+ * unit:view.
+ */
+const TAB_PERMISSIONS: Record<string, string[]> = {
+  overview: [],                    // reachable by anyone who can open the project
+  construction: ['building:view'],
+  budget: ['budget:view'],
+  // Composed tab: Sales pipeline + Leases. Visible with EITHER, and each section is
+  // gated separately below so a lease-only role never triggers a sales 403.
+  revenue: ['sales:view', 'lease:view'],
+  units: ['unit:view'],
+  milestones: ['milestone:view'],
+  leads: ['lead:view'],
+  draws: ['draw:view'],
+  vendors: ['vendor:view'],
+  documents: ['document:view'],
+  tasks: ['project:view'],
+  comments: ['unit:view'],
+  activity: ['audit:view'],
 };
 
 
 export default function ProjectDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, hasAnyPermission } = useAuthStore();
   const role = user?.role || '';
   const { data: project, isLoading, error } = useProject(id!);
   const { data: health } = useProjectHealth(id ?? '');
@@ -281,7 +295,10 @@ export default function ProjectDetailPage() {
     }))
     : undefined;
 
-  const visibleTabs = TAB_MAP.filter((t) => (TAB_ROLES[t] ?? ALL_ROLES).includes(role));
+  const visibleTabs = TAB_MAP.filter((t) => {
+    const needed = TAB_PERMISSIONS[t] ?? [];
+    return needed.length === 0 || hasAnyPermission(...needed);
+  });
   const requestedTab = tab || 'overview';
   const activeTab = visibleTabs.includes(requestedTab) ? requestedTab : (visibleTabs[0] || 'overview');
 
@@ -396,40 +413,117 @@ const EMPTY_PROJECT = {
 
 const MEMBER_ROLES = ['PROJECT_MANAGER', 'CONSTRUCTION', 'FINANCE', 'SALES', 'LEGAL', 'VIEWER', 'TEAM_MEMBER'];
 
+/**
+ * A sensible project role for someone, derived from the role they already hold in the
+ * system — picking "Team member" for a Finance user every time is just friction. Falls
+ * back to TEAM_MEMBER for anything without an obvious project-side equivalent.
+ */
+const PROJECT_ROLE_FROM_SYSTEM_ROLE: Record<string, string> = {
+  PROJECT_MANAGER: 'PROJECT_MANAGER',
+  CONSTRUCTION: 'CONSTRUCTION',
+  FINANCE: 'FINANCE',
+  ACCOUNTING: 'FINANCE',
+  AR_AP: 'FINANCE',
+  SALES: 'SALES',
+  MARKETING: 'SALES',
+  LEGAL: 'LEGAL',
+  VIEWER: 'VIEWER',
+};
+const defaultProjectRole = (systemRole?: string) =>
+  PROJECT_ROLE_FROM_SYSTEM_ROLE[systemRole ?? ''] ?? 'TEAM_MEMBER';
+
+/**
+ * A membership's roles. `roles[]` is the source of truth; `role` is the mirrored primary
+ * kept for older rows and readers, so fall back to it when the array is empty.
+ */
+const memberRoles = (m: any): string[] =>
+  (m?.roles?.length ? m.roles : [m?.role || 'TEAM_MEMBER']) as string[];
+
 function TeamMembersCard({ projectId }: { projectId: string }) {
-  const { user: currentUser } = useAuthStore();
-  const canEdit = ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER'].includes(currentUser?.role ?? '');
+  const { user: currentUser, hasPermission } = useAuthStore();
+  // Gate on the permission the API actually enforces (project:edit) rather than a
+  // hardcoded role list, which drifted from the backend and silently hid the controls
+  // from roles that were in fact allowed to use them.
+  const canEdit = hasPermission('project:edit');
 
   const { data: members = [] } = useProjectMembers(projectId);
   const { data: allUsers = [] } = useUsers();
   const addMember = useAddProjectMember();
   const removeMember = useRemoveProjectMember();
   const { isOpen, onOpen, onClose } = useDisclosure();
-  const [selectedUserId, setSelectedUserId] = useState('');
-  const [memberRole, setMemberRole] = useState('TEAM_MEMBER');
 
-  const memberIds = new Set((members as any[]).map((m: any) => m.userId));
-  const availableUsers = (allUsers as any[]).filter((u: any) => !memberIds.has(u.id) && u.id !== currentUser?.id);
+  const [search, setSearch] = useState('');
+  // userId -> the project roles staged for them. Several people can be added in one go,
+  // and each may hold SEVERAL roles on this project (Finance AND Legal, say).
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [removeTarget, setRemoveTarget] = useState<any>(null);
+  const [savingRoleFor, setSavingRoleFor] = useState<string | null>(null);
+
+  const memberList = members as any[];
+  const memberIds = new Set(memberList.map((m) => m.userId));
+  // The current user is deliberately NOT excluded — a PM adding themselves to a project
+  // they just created is normal, and leaving it out forced a trip to the admin screens.
+  const candidates = (allUsers as any[]).filter((u: any) => !memberIds.has(u.id) && u.isActive !== false);
+
+  const q = search.trim().toLowerCase();
+  const visible = q
+    ? candidates.filter((u: any) =>
+        [u.name, u.email, u.role].some((f: string) => (f || '').toLowerCase().includes(q)))
+    : candidates;
+
+  const pickedIds = Object.keys(picked);
+
+  const toggle = (u: any) =>
+    setPicked((p) => {
+      const next = { ...p };
+      if (next[u.id]) delete next[u.id];
+      else next[u.id] = [defaultProjectRole(u.role)];
+      return next;
+    });
+
+  const closeAdd = () => { setPicked({}); setSearch(''); onClose(); };
 
   const handleAdd = async () => {
-    if (!selectedUserId) return;
+    if (pickedIds.length === 0) return;
+    // Added one call per person so a single failure cannot silently drop the rest —
+    // the toast reports exactly how many landed.
+    const results = await Promise.allSettled(
+      pickedIds.map((userId) =>
+        addMember.mutateAsync({ projectId, data: { userId, roles: picked[userId] } })),
+    );
+    const ok = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.length - ok;
+    if (ok > 0) {
+      addToast({ title: `${ok} member${ok === 1 ? '' : 's'} added`, color: 'success' });
+    }
+    if (failed > 0) {
+      addToast({ title: `${failed} could not be added`, color: 'danger' });
+    }
+    closeAdd();
+  };
+
+  /** POST /members is an upsert, so re-posting with new roles changes them in place. */
+  const handleRoleChange = async (userId: string, roles: string[]) => {
+    if (roles.length === 0) return; // a member with no role at all is meaningless
+    setSavingRoleFor(userId);
     try {
-      await addMember.mutateAsync({ projectId, data: { userId: selectedUserId, role: memberRole } });
-      addToast({ title: 'Team member added', color: 'success' });
-      setSelectedUserId('');
-      setMemberRole('TEAM_MEMBER');
-      onClose();
-    } catch {
-      addToast({ title: 'Failed to add member', color: 'danger' });
+      await addMember.mutateAsync({ projectId, data: { userId, roles } });
+      addToast({ title: 'Role updated', color: 'success' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to update role'), color: 'danger' });
+    } finally {
+      setSavingRoleFor(null);
     }
   };
 
-  const handleRemove = async (userId: string) => {
+  const handleRemove = async () => {
+    if (!removeTarget) return;
     try {
-      await removeMember.mutateAsync({ projectId, userId });
-      addToast({ title: 'Member removed', color: 'success' });
-    } catch {
-      addToast({ title: 'Failed to remove member', color: 'danger' });
+      await removeMember.mutateAsync({ projectId, userId: removeTarget.userId });
+      addToast({ title: `${removeTarget.user?.name || 'Member'} removed from project`, color: 'success' });
+      setRemoveTarget(null);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to remove member'), color: 'danger' });
     }
   };
 
@@ -438,7 +532,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
       <CardHeader className="pb-0 flex justify-between items-center">
         <p className="font-semibold text-sm text-gray-700">
           Team Members
-          <span className="ml-2 text-xs font-normal text-gray-400">{(members as any[]).length}</span>
+          <span className="ml-2 text-xs font-normal text-gray-400">{memberList.length}</span>
         </p>
         {canEdit && (
           <Button size="sm" variant="light" color="primary" startContent={<FiPlus className="text-xs" />} onPress={onOpen}>
@@ -447,36 +541,70 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
         )}
       </CardHeader>
       <CardBody>
-        {(members as any[]).length === 0 ? (
-          <p className="text-xs text-gray-400 py-2">No team members assigned yet.</p>
+        {memberList.length === 0 ? (
+          <div className="py-4 text-center">
+            <FiUsers className="mx-auto text-gray-300 w-6 h-6 mb-1.5" />
+            <p className="text-xs text-gray-400">No team members assigned yet.</p>
+            {canEdit && (
+              <p className="text-[11px] text-gray-400 mt-1">
+                Project-scoped roles only see projects they are a member of.
+              </p>
+            )}
+          </div>
         ) : (
-          <div className="flex flex-col gap-2">
-            {(members as any[]).map((m: any) => (
-              <div key={m.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-gray-50 transition-colors">
-                <div className="flex items-center gap-2.5">
-                  <Avatar
-                    size="sm"
-                    name={m.user?.name}
-                    src={m.user?.avatarUrl}
-                    className="shrink-0"
-                  />
-                  <div>
-                    <p className="text-xs font-medium text-gray-800">{m.user?.name}</p>
-                    <p className="text-[11px] text-gray-400">{m.user?.email}</p>
+          <div className="flex flex-col gap-1">
+            {memberList.map((m: any) => (
+              <div key={m.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-gray-50 transition-colors">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Avatar size="sm" name={m.user?.name} src={m.user?.avatarUrl} className="shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-800 truncate">
+                      {m.user?.name}
+                      {m.userId === currentUser?.id && <span className="text-gray-400 font-normal">{' (you)'}</span>}
+                    </p>
+                    <p className="text-[11px] text-gray-400 truncate">{m.user?.email}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Chip size="sm" variant="flat" color="default" className="text-[10px]">
-                    {(m.role || 'TEAM_MEMBER').replace(/_/g, ' ')}
-                  </Chip>
-                  {canEdit && (
-                    <Button
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* OWNER is assigned automatically to whoever created the project and is
+                      not one of the assignable MEMBER_ROLES. Rendering it through the
+                      Select left the control BLANK (no matching option) and would have
+                      let someone silently demote the owner — show it read-only instead. */}
+                  {canEdit && !memberRoles(m).includes('OWNER') ? (
+                    <Select
                       size="sm"
-                      variant="light"
-                      color="danger"
-                      isIconOnly
-                      onPress={() => handleRemove(m.userId)}
-                      aria-label="Remove member"
+                      selectionMode="multiple"
+                      aria-label={`Project roles for ${m.user?.name}`}
+                      className="w-[190px]"
+                      selectedKeys={new Set(memberRoles(m))}
+                      isDisabled={savingRoleFor === m.userId}
+                      onSelectionChange={(keys) => {
+                        const next = Array.from(keys as Set<string>);
+                        if (next.join() !== memberRoles(m).join()) handleRoleChange(m.userId, next);
+                      }}
+                    >
+                      {MEMBER_ROLES.map((r) => (
+                        <SelectItem key={r} textValue={r.replace(/_/g, ' ')}>{r.replace(/_/g, ' ')}</SelectItem>
+                      ))}
+                    </Select>
+                  ) : (
+                    <div className="flex flex-wrap gap-1 justify-end max-w-[190px]">
+                      {memberRoles(m).map((r: string) => (
+                        <Chip
+                          key={r} size="sm" variant="flat"
+                          color={r === 'OWNER' ? 'primary' : 'default'}
+                          className="text-[10px]"
+                        >
+                          {r.replace(/_/g, ' ')}
+                        </Chip>
+                      ))}
+                    </div>
+                  )}
+                  {canEdit && m.role !== 'OWNER' && (
+                    <Button
+                      size="sm" variant="light" color="danger" isIconOnly
+                      onPress={() => setRemoveTarget(m)}
+                      aria-label={`Remove ${m.user?.name}`}
                     >
                       <FiX className="text-xs" />
                     </Button>
@@ -488,45 +616,139 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
         )}
       </CardBody>
 
-      <Modal isOpen={isOpen} onClose={onClose} size="sm">
+      {/* ── Add members ─────────────────────────────────────────────────────── */}
+      <Modal isOpen={isOpen} onClose={closeAdd} size="2xl" scrollBehavior="inside">
         <ModalContent>
-          <ModalHeader className="border-b border-gray-100 text-sm">Add Team Member</ModalHeader>
-          <ModalBody className="py-5">
-            <Select
+          <ModalHeader className="border-b border-gray-100 text-sm flex-col items-start gap-0.5">
+            <span>Add Team Members</span>
+            <span className="text-[11px] font-normal text-gray-400">
+              Members are what project-scoped roles are allowed to see — a PM or Sales user
+              only sees projects they are on.
+            </span>
+          </ModalHeader>
+          <ModalBody className="py-4">
+            <Input
               size="sm"
-              label="User"
-              placeholder="Select a user"
-              selectedKeys={selectedUserId ? [selectedUserId] : []}
-              onSelectionChange={(keys) => setSelectedUserId((Array.from(keys)[0] as string) || '')}
-            >
-              {availableUsers.map((u: any) => (
-                <SelectItem key={u.id} description={u.role?.replace(/_/g, ' ')}>
-                  {u.name}
-                </SelectItem>
-              ))}
-            </Select>
-            <Select
-              size="sm"
-              label="Role on Project"
-              className="mt-3"
-              selectedKeys={[memberRole]}
-              onSelectionChange={(keys) => setMemberRole((Array.from(keys)[0] as string) || 'TEAM_MEMBER')}
-            >
-              {MEMBER_ROLES.map((r) => (
-                <SelectItem key={r}>{r.replace(/_/g, ' ')}</SelectItem>
-              ))}
-            </Select>
+              autoFocus
+              placeholder="Search by name, email or role"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              startContent={<FiSearch className="text-gray-400 text-sm" />}
+              isClearable
+              onClear={() => setSearch('')}
+            />
+
+            {pickedIds.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {pickedIds.map((id) => {
+                  const u = (allUsers as any[]).find((x: any) => x.id === id);
+                  return (
+                    <Chip key={id} size="sm" variant="flat" color="primary" onClose={() => toggle({ id })}>
+                      {u?.name || id}
+                    </Chip>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="mt-3 border border-gray-100 rounded-xl divide-y divide-gray-50 max-h-[340px] overflow-y-auto">
+              {visible.length === 0 ? (
+                <div className="py-8 text-center">
+                  <FiUsers className="mx-auto text-gray-300 w-6 h-6 mb-1.5" />
+                  <p className="text-xs text-gray-400">
+                    {candidates.length === 0
+                      ? 'Everyone is already on this project.'
+                      : 'No one matches that search.'}
+                  </p>
+                </div>
+              ) : (
+                visible.map((u: any) => {
+                  const isPicked = !!picked[u.id];
+                  return (
+                    <div
+                      key={u.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => toggle(u)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(u); } }}
+                      className={`flex items-center justify-between gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                        isPicked ? 'bg-blue-50/60' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Avatar size="sm" name={u.name} src={u.avatarUrl} className="shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-gray-800 truncate">
+                            {u.name}
+                            {u.id === currentUser?.id && <span className="text-gray-400 font-normal">{' (you)'}</span>}
+                          </p>
+                          <p className="text-[11px] text-gray-400 truncate">{u.email}</p>
+                        </div>
+                        <Chip size="sm" variant="flat" className="text-[10px] shrink-0">
+                          {(u.role || '').replace(/_/g, ' ')}
+                        </Chip>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        {isPicked && (
+                          <Select
+                            size="sm"
+                            selectionMode="multiple"
+                            aria-label={`Project roles for ${u.name}`}
+                            className="w-[190px]"
+                            selectedKeys={new Set(picked[u.id])}
+                            onSelectionChange={(keys) => {
+                              const next = Array.from(keys as Set<string>);
+                              // Never leave someone staged with zero roles.
+                              setPicked((p) => ({ ...p, [u.id]: next.length ? next : [defaultProjectRole(u.role)] }));
+                            }}
+                          >
+                            {MEMBER_ROLES.map((r) => (
+                              <SelectItem key={r} textValue={r.replace(/_/g, ' ')}>{r.replace(/_/g, ' ')}</SelectItem>
+                            ))}
+                          </Select>
+                        )}
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${
+                          isPicked ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
+                        }`}>
+                          {isPicked && <FiCheck className="text-white text-[10px]" />}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </ModalBody>
           <ModalFooter className="border-t border-gray-100">
-            <Button size="sm" variant="light" onPress={onClose}>Cancel</Button>
+            <Button size="sm" variant="light" onPress={closeAdd}>Cancel</Button>
             <Button
               size="sm"
               color="primary"
               onPress={handleAdd}
-              isDisabled={!selectedUserId}
+              isDisabled={pickedIds.length === 0}
               isLoading={addMember.isPending}
             >
-              Add to Project
+              {pickedIds.length > 1 ? `Add ${pickedIds.length} members` : 'Add to Project'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* ── Remove confirmation ─────────────────────────────────────────────── */}
+      <Modal isOpen={!!removeTarget} onClose={() => setRemoveTarget(null)} size="sm">
+        <ModalContent>
+          <ModalHeader className="text-sm">Remove from project?</ModalHeader>
+          <ModalBody className="py-4">
+            <p className="text-sm text-gray-600">
+              <span className="font-medium text-gray-800">{removeTarget?.user?.name}</span> will lose
+              access to this project if their role is project-scoped. Their work and comments stay.
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={() => setRemoveTarget(null)}>Cancel</Button>
+            <Button size="sm" color="danger" onPress={handleRemove} isLoading={removeMember.isPending}>
+              Remove
             </Button>
           </ModalFooter>
         </ModalContent>
@@ -3442,126 +3664,8 @@ function MilestonesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Leases Tab ----
-const EMPTY_LEASE = {
-  unitId: '', tenantName: '', tenantContact: '', tenantEmail: '', tenantPhone: '', monthlyRent: '',
-  leaseStart: '', leaseEnd: '', termMonths: '', escalationPct: '',
-  securityDeposit: '', rentDueDay: '', status: 'DRAFT', notes: '',
-};
-
-// Use T12:00:00 to anchor the date at noon UTC — avoids off-by-one day in any timezone.
+/** Local date input (YYYY-MM-DD) -> midday UTC ISO, so no timezone shifts the day. */
 const toApiDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
-
-/** Shared by the LeasesTab modal and the UnitsTab "unit just became LEASED" prompt. */
-function validateLeaseForm(form: Record<string, string>): Record<string, string> {
-  const errs: Record<string, string> = {};
-  if (!form.tenantName.trim()) errs.tenantName = 'Required';
-  if (!form.monthlyRent) errs.monthlyRent = 'Required';
-  if (!form.leaseStart) errs.leaseStart = 'Required';
-  if (!form.leaseEnd) errs.leaseEnd = 'Required';
-  if (form.rentDueDay) {
-    const d = Number(form.rentDueDay);
-    if (!Number.isInteger(d) || d < 1 || d > 31) errs.rentDueDay = 'Must be a whole number between 1 and 31';
-  }
-  return errs;
-}
-
-/** Lease payload WITHOUT unitId — immutable on update, the UpdateLeaseDto rejects it. */
-function buildLeasePayload(form: Record<string, string>): Record<string, unknown> {
-  return {
-    tenantName: form.tenantName,
-    tenantContact: form.tenantContact || undefined,
-    tenantEmail: form.tenantEmail || undefined,
-    tenantPhone: form.tenantPhone || undefined,
-    monthlyRent: parseFloat(form.monthlyRent),
-    leaseStart: toApiDate(form.leaseStart),
-    leaseEnd: toApiDate(form.leaseEnd),
-    termMonths: form.termMonths ? parseInt(form.termMonths) : undefined,
-    escalationPct: form.escalationPct ? parseFloat(form.escalationPct) : undefined,
-    securityDeposit: form.securityDeposit ? parseFloat(form.securityDeposit) : undefined,
-    rentDueDay: form.rentDueDay ? parseInt(form.rentDueDay, 10) : undefined,
-    status: form.status,
-    notes: form.notes || undefined,
-  };
-}
-
-/**
- * The one and only lease field set. Rendered by the LeasesTab create/edit modal and by the
- * UnitsTab post-status-change prompt so the two can never drift apart.
- */
-function LeaseFormFields({
-  form, setForm, errors = {}, clearError, unitOptions, lockUnit = false,
-}: {
-  form: Record<string, string>;
-  setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  errors?: Record<string, string>;
-  clearError?: (field: string) => void;
-  unitOptions: any[];
-  lockUnit?: boolean;
-}) {
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((f) => ({ ...f, [field]: e.target.value }));
-    clearError?.(field);
-  };
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <Select
-        size="sm"
-        label="Unit"
-        isRequired
-        isDisabled={lockUnit}
-        description={lockUnit ? 'Locked to the unit you just updated' : undefined}
-        selectedKeys={form.unitId ? [form.unitId] : []}
-        onSelectionChange={(keys) => {
-          const val = Array.from(keys)[0] as string;
-          if (val) setForm((f) => ({ ...f, unitId: val }));
-        }}
-      >
-        {unitOptions.map((u: any) => (
-          <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
-        ))}
-      </Select>
-      <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} isInvalid={!!errors.tenantName} errorMessage={errors.tenantName} />
-      <Input size="sm" label="Contact Person" value={form.tenantContact} onChange={set('tenantContact')} />
-      <Input size="sm" label="Tenant Email" type="email" value={form.tenantEmail} onChange={set('tenantEmail')} />
-      <Input size="sm" label="Tenant Phone" type="tel" value={form.tenantPhone} onChange={set('tenantPhone')} />
-      <Input size="sm" label="Monthly Rent ($)" isRequired type="number" value={form.monthlyRent} onChange={set('monthlyRent')} isInvalid={!!errors.monthlyRent} errorMessage={errors.monthlyRent} />
-      <Input size="sm" label="Lease Start" isRequired type="date" value={form.leaseStart} onChange={set('leaseStart')} isInvalid={!!errors.leaseStart} errorMessage={errors.leaseStart} />
-      <Input size="sm" label="Lease End" isRequired type="date" value={form.leaseEnd} onChange={set('leaseEnd')} isInvalid={!!errors.leaseEnd} errorMessage={errors.leaseEnd} />
-      <Input size="sm" label="Term (months)" type="number" value={form.termMonths} onChange={set('termMonths')} />
-      <Input size="sm" label="Escalation %" type="number" value={form.escalationPct} onChange={set('escalationPct')} />
-      <Input size="sm" label="Security Deposit ($)" type="number" value={form.securityDeposit} onChange={set('securityDeposit')} />
-      {/* Drives the due date on every generated rent invoice. Blank = the 1st. */}
-      <Input
-        size="sm"
-        label="Rent Due Day (1-31)"
-        type="number"
-        min={1}
-        max={31}
-        value={form.rentDueDay}
-        onChange={set('rentDueDay')}
-        isInvalid={!!errors.rentDueDay}
-        errorMessage={errors.rentDueDay}
-        description="Day of the month rent is due. Leave blank to bill on the 1st."
-      />
-      <Select
-        size="sm"
-        label="Status"
-        selectedKeys={form.status ? [form.status] : []}
-        onSelectionChange={(keys) => {
-          const val = Array.from(keys)[0] as string;
-          if (val) setForm((f) => ({ ...f, status: val }));
-        }}
-      >
-        {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((v) => (
-          <SelectItem key={v} textValue={v}>{v}</SelectItem>
-        ))}
-      </Select>
-      <div className="sm:col-span-2">
-        <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
-      </div>
-    </div>
-  );
-}
 
 function LeasesTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
@@ -3602,6 +3706,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
     setForm({
       unitId: l.unitId || l.unit?.id || '',
       tenantName: l.tenantName || '',
+      tenantLegalName: l.tenantLegalName || '',
+      tenantBrand: l.tenantBrand || '',
       tenantContact: l.tenantContact || '',
       tenantEmail: l.tenantEmail || '',
       tenantPhone: l.tenantPhone || '',
@@ -3609,9 +3715,13 @@ function LeasesTab({ projectId }: { projectId: string }) {
       leaseStart: (l.leaseStart || l.startDate) ? (l.leaseStart || l.startDate).slice(0, 10) : '',
       leaseEnd: (l.leaseEnd || l.endDate) ? (l.leaseEnd || l.endDate).slice(0, 10) : '',
       termMonths: l.termMonths?.toString() || '',
+      rentPerSqft: l.rentPerSqft?.toString() || '',
       escalationPct: (l.escalationPct ?? l.annualEscalation)?.toString() || '',
+      escalationFreq: l.escalationFreq != null ? String(l.escalationFreq) : '',
       securityDeposit: l.securityDeposit?.toString() || '',
       rentDueDay: l.rentDueDay != null ? String(l.rentDueDay) : '',
+      freeRentMonths: l.freeRentMonths ? String(l.freeRentMonths) : '',
+      freeRentStartDate: l.freeRentStartDate ? String(l.freeRentStartDate).slice(0, 10) : '',
       status: l.status || 'DRAFT',
       notes: l.notes || '',
     });
@@ -4371,7 +4481,7 @@ function SalesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Buildings Tab ----
-const EMPTY_BUILDING = { name: '', llcName: '', totalSqft: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
+const EMPTY_BUILDING = { name: '', llcName: '', totalSqft: '', acreage: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
 
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
@@ -4431,6 +4541,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       name: b.name || '',
       llcName: b.llcName || '',
       totalSqft: b.totalSqft?.toString() || '',
+      acreage: b.acreage?.toString() || '',
       stories: b.stories?.toString() || '',
       buildingType: b.buildingType || '',
       phase: b.phase || 'PRE_DEVELOPMENT',
@@ -4477,6 +4588,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         name: form.name.trim(),
         llcName: form.llcName.trim() || undefined,
         totalSqft: form.totalSqft ? parseFloat(form.totalSqft) : undefined,
+        acreage: form.acreage ? parseFloat(form.acreage) : undefined,
         stories: form.stories ? parseInt(form.stories) : undefined,
         buildingType: form.buildingType.trim() || undefined,
         phase: form.phase || undefined,
@@ -4759,7 +4871,10 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                   setForm((f) => ({ ...f, buildingType: val || '' }));
                 }}
               >
-                {['RESIDENTIAL', 'COMMERCIAL', 'MIXED_USE', 'INDUSTRIAL', 'PARKING', 'AMENITY', 'RETAIL', 'OFFICE'].map((v) => (
+                {/* LOT is a real BuildingType (raw-land parcel, sold by acreage, usually no
+                    units inside) and was missing here, so land parcels could not be created
+                    or corrected from the UI at all. */}
+                {['RESIDENTIAL', 'COMMERCIAL', 'MIXED_USE', 'INDUSTRIAL', 'PARKING', 'AMENITY', 'RETAIL', 'OFFICE', 'LOT'].map((v) => (
                   <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
                 ))}
               </Select>
@@ -4767,6 +4882,11 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                 size="sm" label="Total Sqft" type="number" step="1"
                 value={form.totalSqft} onChange={set('totalSqft')}
                 isInvalid={!!formErrors.totalSqft} errorMessage={formErrors.totalSqft}
+              />
+              <Input
+                size="sm" label="Acreage" type="number" step="0.01" min={0}
+                value={form.acreage} onChange={set('acreage')}
+                description="Land area — the key figure for LOT parcels"
               />
               <Input
                 size="sm" label="Stories" type="number" min={1} max={200}
@@ -5114,10 +5234,16 @@ function RevenueTab({ projectId }: { projectId: string }) {
             Leases rent roll below ("Next 12 Months"). */}
         <StatCard label="Annual Run-Rate" value={fmt(monthlyLease * 12)} variant="revenue" colorScheme="blue" helpText="Current monthly x 12" />
       </div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mb-0">Sales Pipeline</p>
-      <SalesTab projectId={projectId} />
-      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mt-8 mb-0">Leases / Rent Roll</p>
-      <LeasesTab projectId={projectId} />
+      {/* Gated per section: the tab opens with sales:view OR lease:view, so without
+          these a role holding only one of them would load the other half and 403. */}
+      <PermissionGate permission="sales:view">
+        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mb-0">Sales Pipeline</p>
+        <SalesTab projectId={projectId} />
+      </PermissionGate>
+      <PermissionGate permission="lease:view">
+        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mt-8 mb-0">Leases / Rent Roll</p>
+        <LeasesTab projectId={projectId} />
+      </PermissionGate>
     </div>
   );
 }
