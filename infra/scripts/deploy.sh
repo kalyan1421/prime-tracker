@@ -17,6 +17,13 @@ DEPLOY_BUCKET="${DEPLOY_BUCKET:-prime-tracker-documents-221082191502}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 APP_URL="${APP_URL:-https://98-89-192-161.nip.io}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
+# The .env below is rewritten from scratch on every deploy, so anything set by hand on the
+# box is silently lost. Mail settings live here for the same reason STORAGE_DRIVER/S3_BUCKET
+# do: without MAIL_DRIVER=ses the mailer falls back to smtp, finds no SMTP_HOST, and disables
+# email entirely (in-app notifications only) — a silent regression, not a startup failure.
+# SMTP_FROM must be an SES-verified identity or every send is rejected.
+MAIL_DRIVER="${MAIL_DRIVER:-ses}"
+SMTP_FROM="${SMTP_FROM:-Prime Tracker <kalyan91333@gmail.com>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # ── SSM helper ─────────────────────────────────────────────────────────────────
@@ -114,7 +121,7 @@ for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
         --region ${AWS_REGION} --query Parameter.Value --output text 2>/dev/null || echo "")
   echo "\$P=\$V"
 done > apps/api/.env
-printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\n" >> apps/api/.env
+printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\nMAIL_DRIVER=${MAIL_DRIVER}\nSMTP_FROM=${SMTP_FROM}\n" >> apps/api/.env
 printf "DIRECT_URL=%s\n" "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
 chmod 600 apps/api/.env
 echo "=== .env written ==="
