@@ -1,12 +1,17 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Card, CardBody, CardHeader, Chip, Tooltip } from '@heroui/react';
+import { Card, CardBody, CardHeader, Chip, Tooltip, Button, Select, SelectItem, useDisclosure, addToast } from '@heroui/react';
 import {
   FiArrowLeft, FiHome, FiUsers, FiDollarSign, FiKey, FiCreditCard, FiFileText, FiClock,
+  FiPlus, FiEdit2, FiUpload,
 } from 'react-icons/fi';
 import {
   useBuilding, useUnits, useLeases, useLoans, useDocuments, useBuildingFinancialSummary,
+  useUploadDocument,
 } from '../hooks/useApi';
+import { BuildingFormModal } from '../components/BuildingFormModal';
+import { AddUnitModal } from '../components/AddUnitModal';
+import { AddLoanModal } from '../components/AddLoanModal';
 import { useAuthStore } from '../store/authStore';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, StatCard } from '../components/ui';
@@ -22,6 +27,17 @@ const STATUS_FILL: Record<string, string> = {
   OCCUPIED:            'bg-amber-100 text-amber-700 hover:bg-amber-200',
   UNDER_CONSTRUCTION:  'bg-orange-100 text-orange-700 hover:bg-orange-200',
 };
+
+/**
+ * Document categories offered on a building.
+ *
+ * Subset of DocCategory: the ones that attach to a structure. Sale/lead-specific kinds
+ * (LOI, BOOKING_AGREEMENT, RECEIPT) belong to a transaction, not to the asset.
+ */
+const BUILDING_DOC_CATEGORIES = [
+  'GENERAL', 'PERMIT', 'CONTRACT', 'FINANCIAL', 'DRAWING', 'PHOTO', 'LEGAL',
+  'DEED', 'NOC', 'POSSESSION_CERTIFICATE',
+];
 
 const fmtMoney = (n: number) => {
   if (!n) return '$0';
@@ -49,15 +65,15 @@ export default function BuildingDetailPage() {
   const canViewLeases = hasPermission('lease:view');
 
   const { data: building, isLoading: bLoading, error: bError } = useBuilding(buildingId!);
-  const { data: allUnits } = useUnits(projectId || '');
+  // Scoped to the building, not the project. These used to fetch every unit and every
+  // loan in the project and filter in the browser; both endpoints take a buildingId.
+  const { data: buildingUnits } = useUnits(projectId || '', buildingId);
   const { data: allLeases } = useLeases(projectId || '');
-  const { data: allLoans } = useLoans(projectId || '');
+  const { data: buildingLoans } = useLoans(projectId || '', buildingId);
   const { data: docs } = useDocuments({ buildingId });
   const { data: budgetSummary } = useBuildingFinancialSummary(canViewBudget ? (buildingId || '') : '');
 
-  const units = useMemo(() => {
-    return ((allUnits as any[]) || []).filter((u) => u.buildingId === buildingId);
-  }, [allUnits, buildingId]);
+  const units = useMemo(() => (buildingUnits as any[]) || [], [buildingUnits]);
 
   const leases = useMemo(() => {
     const arr = (allLeases as any[]) || [];
@@ -66,9 +82,43 @@ export default function BuildingDetailPage() {
     );
   }, [allLeases, buildingId]);
 
-  const loans = useMemo(() => {
-    return ((allLoans as any[]) || []).filter((l) => l.buildingId === buildingId);
-  }, [allLoans, buildingId]);
+  const loans = useMemo(() => (buildingLoans as any[]) || [], [buildingLoans]);
+
+  // Write actions. Gated on the same permissions the endpoints enforce — the read hooks
+  // already refuse to fire without them, so a mismatch here would render a control whose
+  // only outcome is a 403.
+  const canEditBuilding = hasPermission('building:edit');
+  const canEditUnits = hasPermission('unit:edit');
+  const canEditLoans = hasPermission('loan:edit');
+  // 'document:upload' — NOT 'document:edit', which is not a permission at all. The
+  // name must match what POST /documents enforces, or the control renders for everyone
+  // and 403s for most of them.
+  const canUploadDocs = hasPermission('document:upload');
+
+  const editBuilding = useDisclosure();
+  const addUnit = useDisclosure();
+  const addLoan = useDisclosure();
+
+  const uploadDoc = useUploadDocument();
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [uploadCategory, setUploadCategory] = useState('GENERAL');
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';                       // allow re-picking the same file
+    if (!file || !buildingId) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('buildingId', buildingId);
+    fd.append('category', uploadCategory);
+    try {
+      await uploadDoc.mutateAsync(fd);
+      addToast({ title: `Uploaded ${file.name}`, color: 'success' });
+    } catch (err: any) {
+      const m = err?.response?.data?.message;
+      addToast({ title: Array.isArray(m) ? m[0] : (m || 'Upload failed'), color: 'danger' });
+    }
+  };
 
   if (bLoading) return <LoadingState />;
   if (bError || !building) return <ErrorState message="Building not found" />;
@@ -129,6 +179,11 @@ export default function BuildingDetailPage() {
             {b.stories && <span>{b.stories} stories</span>}
           </div>
         </div>
+        {canEditBuilding && (
+          <Button size="sm" variant="bordered" startContent={<FiEdit2 />} onPress={editBuilding.onOpen}>
+            Edit building
+          </Button>
+        )}
       </div>
 
       {/* KPI tiles */}
@@ -170,6 +225,11 @@ export default function BuildingDetailPage() {
             <div className="flex items-center gap-2">
               <FiUsers className="text-blue-600" />
               <p className="font-semibold text-sm text-gray-700">Unit grid</p>
+              {canEditUnits && (
+                <Button size="sm" variant="light" isIconOnly onPress={addUnit.onOpen} aria-label="Add unit">
+                  <FiPlus className="text-sm" />
+                </Button>
+              )}
             </div>
             <div className="flex items-center gap-2 text-[10px] text-gray-500">
               {['AVAILABLE', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'].map((s) => (
@@ -182,7 +242,15 @@ export default function BuildingDetailPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {units.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-8">No units in this building yet.</div>
+              <div className="text-center py-8">
+                <p className="text-sm text-gray-400">No units in this building yet.</p>
+                {canEditUnits && (
+                  <Button size="sm" variant="flat" color="primary" className="mt-3"
+                    startContent={<FiPlus className="text-xs" />} onPress={addUnit.onOpen}>
+                    Add the first unit
+                  </Button>
+                )}
+              </div>
             ) : (
               <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-1.5">
                 {units.map((u: any) => {
@@ -246,11 +314,16 @@ export default function BuildingDetailPage() {
       {/* Linked loans + Documents */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card shadow="sm">
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FiCreditCard className="text-blue-600" />
               <p className="font-semibold text-sm text-gray-700">Linked loans</p>
             </div>
+            {canEditLoans && (
+              <Button size="sm" variant="light" startContent={<FiPlus className="text-xs" />} onPress={addLoan.onOpen}>
+                Attach
+              </Button>
+            )}
           </CardHeader>
           <CardBody className="pt-0">
             {loans.length === 0 ? (
@@ -280,7 +353,37 @@ export default function BuildingDetailPage() {
               <FiFileText className="text-violet-600" />
               <p className="font-semibold text-sm text-gray-700">Documents</p>
             </div>
-            <span className="text-xs text-gray-400 tabular-nums">{((docs as any[]) || []).length}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 tabular-nums">{((docs as any[]) || []).length}</span>
+              {canUploadDocs && (
+                <>
+                  {/* Category is chosen BEFORE the file picker opens, because the picker
+                      is a native dialog — there is no moment after it closes to ask. */}
+                  <Select
+                    aria-label="Document category"
+                    size="sm"
+                    className="w-[130px]"
+                    selectedKeys={[uploadCategory]}
+                    onSelectionChange={(k) => {
+                      const v = Array.from(k)[0] as string;
+                      if (v) setUploadCategory(v);
+                    }}
+                  >
+                    {BUILDING_DOC_CATEGORIES.map((c) => (
+                      <SelectItem key={c} textValue={c.replace(/_/g, ' ')}>{c.replace(/_/g, ' ')}</SelectItem>
+                    ))}
+                  </Select>
+                  <Button
+                    size="sm" variant="light" isLoading={uploadDoc.isPending}
+                    startContent={<FiUpload className="text-xs" />}
+                    onPress={() => fileRef.current?.click()}
+                  >
+                    Upload
+                  </Button>
+                  <input ref={fileRef} type="file" className="hidden" onChange={handleUpload} />
+                </>
+              )}
+            </div>
           </CardHeader>
           <CardBody className="pt-0">
             {!docs || (docs as any[]).length === 0 ? (
@@ -301,6 +404,26 @@ export default function BuildingDetailPage() {
           </CardBody>
         </Card>
       </div>
+
+      {/* Write-action modals. Each is create/edit only — deletion stays where the
+          confirmation flow and its force-delete rules already live. */}
+      <BuildingFormModal
+        isOpen={editBuilding.isOpen}
+        onClose={editBuilding.onClose}
+        projectId={projectId || ''}
+        building={b}
+      />
+      <AddUnitModal
+        isOpen={addUnit.isOpen}
+        onClose={addUnit.onClose}
+        building={{ id: buildingId || '', name: b.name }}
+      />
+      <AddLoanModal
+        isOpen={addLoan.isOpen}
+        onClose={addLoan.onClose}
+        projectId={projectId || ''}
+        building={{ id: buildingId || '', name: b.name }}
+      />
     </div>
   );
 }

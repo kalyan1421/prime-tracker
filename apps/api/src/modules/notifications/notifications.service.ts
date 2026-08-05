@@ -44,6 +44,9 @@ export const NOTIFICATION_TIERS = {
   FREE_RENT_ENDING_30: 'ACTION',
   DEPOSIT_OUTSTANDING: 'ACTION',
   RENT_OVERDUE: 'ACTION',
+  // Addressed at one named person, unlike COMMENT_* which broadcasts to a department.
+  // Being named is a request for a reply, so it emails by default.
+  COMMENT_MENTION: 'ACTION',
 
   // ---- FYI: awareness only ----
   LEASE_EXPIRING_30: 'FYI',
@@ -71,6 +74,70 @@ export const NOTIFICATION_TIERS = {
 type _Unclassified = Exclude<NotificationType, keyof typeof NOTIFICATION_TIERS>;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _tiersAreExhaustive: [_Unclassified] extends [never] ? true : never = true;
+
+// ============================================================================
+// Recurrence
+//
+// Two different things are called "a notification":
+//
+//   RECURRING — a standing CONDITION ("this invoice is overdue"). The daily cron
+//               re-evaluates it and calls send() again on every run for as long as
+//               the condition holds.
+//   EVENT     — something that HAPPENED once ("Ravi commented on Unit 101").
+//
+// Only the first kind may be suppressed. An event is never a duplicate: two comments
+// on the same unit produce the same title and are still two distinct things the user
+// needs to see.
+//
+// This distinction was missing, so every cron run inserted a fresh unread row per
+// still-overdue item. One run on 2026-07-29 created 2,185 rows — 215 rent alerts times
+// ten recipients — and the next run would have done it again. From the user's side the
+// bell is permanently red and "mark all as read" looks broken, because by the next
+// morning the same alerts are back as new rows.
+// ============================================================================
+
+/** How long a read alert stays suppressed before the standing condition re-raises it. */
+export const RENOTIFY_COOLDOWN_HOURS = 24 * 7;
+
+export const RECURRING_TYPES = {
+  // Cron-driven standing conditions — re-raised until resolved.
+  MILESTONE_OVERDUE: true,
+  LEASE_EXPIRING_30: true,
+  LEASE_EXPIRING_7: true,
+  LOAN_MATURITY_60: true,
+  BUDGET_VARIANCE: true,
+  PAYMENT_OVERDUE: true,
+  PAYMENT_DUE_7: true,
+  RENT_OVERDUE: true,
+  DEPOSIT_OUTSTANDING: true,
+  SNAG_OVERDUE: true,
+  INTERIOR_HANDOVER_DUE: true,
+  DRAW_FUNDING_OVERDUE: true,
+  FREE_RENT_ENDING_30: true,
+
+  // Discrete events — always delivered, never deduplicated.
+  COMMENT_FINANCIAL: false,
+  COMMENT_SALES: false,
+  COMMENT_MARKETING: false,
+  COMMENT_MENTION: false,
+  DRAW_REQUEST_SUBMITTED: false,
+  DRAW_REQUEST_APPROVED: false,
+  DRAW_REQUEST_FUNDED: false,
+  LEAD_ASSIGNED: false,
+  LEAD_STATUS_CHANGED: false,
+  INTERIOR_PHASE_CHANGED: false,
+  UNIT_SOLD: false,
+  LEASE_ADDED: false,
+  LEASE_ACTIVATED: false,
+  LEASE_TERMINATED: false,
+  LEASE_RENT_CHANGED: false,
+  TI_DISBURSED: false,
+} as const satisfies Record<string, boolean>;
+
+/** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
+type _UnclassifiedRecurrence = Exclude<NotificationType, keyof typeof RECURRING_TYPES>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _recurrenceIsExhaustive: [_UnclassifiedRecurrence] extends [never] ? true : never = true;
 
 /**
  * Portfolio owners. They are recipients of every routed event regardless of
@@ -217,8 +284,10 @@ export class NotificationsService {
     body: string;
     link?: string;
     projectName?: string;
+    /** Stable identity of the condition — required for RECURRING types. See Notification.dedupeKey. */
+    dedupeKey?: string;
   }) {
-    const { type, title, body, link } = params;
+    const { type, title, body, link, dedupeKey } = params;
     const userIds = [...new Set(params.userIds ?? [])];
     if (userIds.length === 0) return;
 
@@ -229,12 +298,15 @@ export class NotificationsService {
     const prefByUser = new Map(prefs.map((p) => [p.userId, p]));
 
     // `enabled` gates in-app delivery, and a muted type means muted entirely.
-    const targetUserIds = userIds.filter((id) => prefByUser.get(id)?.enabled !== false);
+    const enabledUserIds = userIds.filter((id) => prefByUser.get(id)?.enabled !== false);
+    if (enabledUserIds.length === 0) return;
+
+    const targetUserIds = await this.suppressAlreadyPending(enabledUserIds, type, dedupeKey);
     if (targetUserIds.length === 0) return;
 
     // Create in-app notifications
     await this.prisma.notification.createMany({
-      data: targetUserIds.map((userId) => ({ userId, type, title, body, link })),
+      data: targetUserIds.map((userId) => ({ userId, type, title, body, link, dedupeKey })),
     });
 
     // Push real-time to connected clients
@@ -278,6 +350,60 @@ export class NotificationsService {
    * Role-targeted delivery. Pass `projectId` to get project-scoped routing
    * (leadership always included); omit it for the legacy role-global behaviour.
    */
+  /**
+   * Drop recipients who already have this alert pending.
+   *
+   * Applies only to RECURRING types — a standing condition the cron re-evaluates every
+   * run. A recipient is skipped when they hold the same (type, dedupeKey) alert that is
+   * either still unread, or was read less than RENOTIFY_COOLDOWN_HOURS ago:
+   *
+   *   still unread  — a second identical row adds no information, it just inflates the
+   *                   badge and buries everything else.
+   *   read recently — they have seen it and are presumably acting on it. Re-raising the
+   *                   same item every morning is what made "mark all as read" look
+   *                   broken. After the cooldown it does re-raise, which is the point of
+   *                   a standing alert: still overdue a week later is worth saying again.
+   *
+   * Matching is on dedupeKey, NEVER on title. Seven recurring types put a live day
+   * counter in the title — "Rent overdue (29d): Mathnasium" is "(30d)" tomorrow — so a
+   * title match silently never fired for exactly the types that produced the backlog.
+   * A recurring type that reaches here without a key is a bug in its trigger, so it is
+   * logged loudly and delivered rather than silently dropped or silently duplicated.
+   *
+   * EVENT types are never suppressed — see RECURRING_TYPES.
+   */
+  private async suppressAlreadyPending(
+    userIds: string[],
+    type: NotificationType,
+    dedupeKey?: string,
+  ): Promise<string[]> {
+    if (!RECURRING_TYPES[type as keyof typeof RECURRING_TYPES]) return userIds;
+
+    if (!dedupeKey) {
+      this.logger.error(
+        `Recurring notification ${type} sent without a dedupeKey — it will re-raise on ` +
+          'every cron run. Add one to its notify* method.',
+      );
+      return userIds;
+    }
+
+    const cooldownStart = new Date(Date.now() - RENOTIFY_COOLDOWN_HOURS * 3_600_000);
+    const pending = await this.prisma.notification.findMany({
+      where: {
+        userId: { in: userIds },
+        type,
+        dedupeKey,
+        OR: [{ readAt: null }, { createdAt: { gte: cooldownStart } }],
+      },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+
+    if (pending.length === 0) return userIds;
+    const suppressed = new Set(pending.map((p) => p.userId));
+    return userIds.filter((id) => !suppressed.has(id));
+  }
+
   async sendToRoles(params: {
     roles: string[];
     type: NotificationType;
@@ -285,6 +411,8 @@ export class NotificationsService {
     body: string;
     link?: string;
     projectId?: string | null;
+    /** Stable identity of the condition — required for RECURRING types. */
+    dedupeKey?: string;
   }) {
     const userIds = await this.resolveRecipients({ roles: params.roles, projectId: params.projectId });
     await this.send({ ...params, userIds });
@@ -378,6 +506,7 @@ export class NotificationsService {
       roles: ['PROJECT_MANAGER'],
       projectId: milestone.projectId,
       type: NotificationType.MILESTONE_OVERDUE,
+      dedupeKey: `milestone:${milestone.id}`,
       title: `Milestone Overdue: ${milestone.title}`,
       body: `The milestone "${milestone.title}" in project ${milestone.project.name} is now overdue.`,
       link,
@@ -398,6 +527,7 @@ export class NotificationsService {
       roles: ['PROJECT_MANAGER', 'CONSTRUCTION'],
       projectId: snag.projectId,
       type: NotificationType.SNAG_OVERDUE,
+      dedupeKey: `snag:${snag.id}`,
       title: `Snag overdue: ${short}`,
       body: `A punch-list item${snag.interiorName ? ` in "${snag.interiorName}"` : ''} is ${snag.daysOverdue} day(s) overdue.`,
       link,
@@ -412,6 +542,11 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId,
       type: daysLeft <= 7 ? NotificationType.LEASE_EXPIRING_7 : NotificationType.LEASE_EXPIRING_30,
+      // Keyed on the lease's own id — `unitId` here is really "unitId ?? buildingId",
+      // whichever side of the polymorphic link is set (see the caller). The 30-day and
+      // 7-day alerts are separate types, so the same key in both is correct: crossing
+      // the 7-day threshold is a genuinely new, more urgent alert and must get through.
+      dedupeKey: `lease:${lease.unitId}`,
       title: `Lease Expiring in ${daysLeft} Days`,
       body: `${lease.tenantName}'s lease in ${lease.unit.building.project.name} expires on ${lease.leaseEnd.toLocaleDateString()}.`,
       link,
@@ -429,13 +564,20 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId: loan.projectId,
       type: NotificationType.LOAN_MATURITY_60,
+      dedupeKey: `loan:${loan.id}`,
       title: `Loan Maturing in 60 Days`,
       body: `A loan in project ${loan.project.name} matures on ${loan.maturityDate.toLocaleDateString()}.`,
       link,
     });
   }
 
-  async notifyNewComment(comment: { commentType: string; content: string; projectId?: string; unit?: { building: { project: { id: string; name: string } } } }) {
+  async notifyNewComment(comment: {
+    commentType: string;
+    content: string;
+    projectId?: string;
+    projectName?: string;
+    unit?: { building: { project: { id: string; name: string } } };
+  }) {
     const typeMap: Record<string, { roles: string[]; notifType: NotificationType }> = {
       FINANCIAL: { roles: ['FINANCE', 'ACCOUNTING'], notifType: NotificationType.COMMENT_FINANCIAL },
       SALES: { roles: ['SALES'], notifType: NotificationType.COMMENT_SALES },
@@ -444,7 +586,10 @@ export class NotificationsService {
     const cfg = typeMap[comment.commentType];
     if (!cfg) return;
     const projId = comment.projectId || comment.unit?.building?.project?.id;
-    const projName = comment.unit?.building?.project?.name || 'a project';
+    // A project-level comment has no `unit`, so reading the name only off the unit path
+    // made every one of them say "in a project". Callers pass projectName directly.
+    const projName =
+      comment.projectName || comment.unit?.building?.project?.name || 'a project';
     await this.sendToRoles({
       roles: cfg.roles,
       projectId: projId,
@@ -452,6 +597,37 @@ export class NotificationsService {
       title: `New ${comment.commentType.charAt(0) + comment.commentType.slice(1).toLowerCase()} Comment`,
       body: `A new ${comment.commentType.toLowerCase()} comment was added in ${projName}: "${comment.content.slice(0, 80)}${comment.content.length > 80 ? '…' : ''}"`,
       link: projId ? `/projects/${projId}/comments` : undefined,
+    });
+  }
+
+  /**
+   * Someone was named in a comment.
+   *
+   * Sent directly to the mentioned users rather than through sendToRoles: being named is
+   * personal, so it must reach them whether or not they hold the role that comment's
+   * department routes to, and whether or not they are a member of that project. The
+   * author is excluded — mentioning yourself is not a request for your own attention.
+   */
+  async notifyCommentMention(params: {
+    mentionedUserIds: string[];
+    authorId: string;
+    authorName: string;
+    content: string;
+    where: string;
+    link?: string;
+  }) {
+    const recipients = params.mentionedUserIds.filter((id) => id !== params.authorId);
+    if (recipients.length === 0) return;
+
+    const excerpt =
+      params.content.length > 140 ? `${params.content.slice(0, 140)}…` : params.content;
+
+    await this.send({
+      userIds: recipients,
+      type: NotificationType.COMMENT_MENTION,
+      title: `${params.authorName} mentioned you`,
+      body: `In ${params.where}: "${excerpt}"`,
+      link: params.link,
     });
   }
 
@@ -498,6 +674,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'AR_AP'],
       projectId: p.projectId,
       type: NotificationType.DRAW_FUNDING_OVERDUE,
+      dedupeKey: `draw:${p.projectId}:${p.drawNumber}`,
       title: `Draw funding overdue (${p.daysOverdue}d)`,
       body: `Draw #${p.drawNumber} on ${p.projectName ?? 'a project'} is ${p.daysOverdue} day(s) past its expected funding date.`,
       link: `/projects/${p.projectId}/draws`,
@@ -509,6 +686,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId,
       type: NotificationType.BUDGET_VARIANCE,
+      dedupeKey: `project:${projectId}`,
       title: `Budget Variance Alert: ${projectName}`,
       body: `Project ${projectName} has exceeded budget by ${variancePct.toFixed(1)}% (threshold: 10%).`,
       link: `/projects/${projectId}/budget`,
@@ -527,6 +705,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
       type: NotificationType.PAYMENT_OVERDUE,
+      dedupeKey: `salePayment:${p.saleId}:${p.label}`,
       title: `Payment overdue (${p.daysOverdue}d): ${p.label}`,
       body: `Installment "${p.label}" for ${p.buyer ?? 'a buyer'} in ${p.projectName ?? 'a project'} is ${p.daysOverdue} day(s) overdue.`,
       link: `/projects/${p.projectId}/revenue`,
@@ -545,6 +724,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
       type: NotificationType.PAYMENT_DUE_7,
+      dedupeKey: `salePayment:${p.saleId}:${p.label}`,
       title: `Payment due in ${p.daysLeft}d: ${p.label}`,
       body: `Installment "${p.label}" for ${p.buyer ?? 'a buyer'} in ${p.projectName ?? 'a project'} is due in ${p.daysLeft} day(s).`,
       link: `/projects/${p.projectId}/revenue`,
@@ -677,6 +857,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
       type: NotificationType.FREE_RENT_ENDING_30,
+      dedupeKey: `lease:${p.leaseId}`,
       title: `Free rent ends in ${p.daysLeft}d: ${p.tenantName}`,
       body: `${p.tenantName}'s free-rent period${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} ends ${this.date(
         p.freeRentEnd,
@@ -699,6 +880,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
       type: NotificationType.DEPOSIT_OUTSTANDING,
+      dedupeKey: `lease:${p.leaseId}`,
       title: `Deposit outstanding (${p.daysOverdue}d): ${p.tenantName}`,
       body: `${this.money(p.outstanding)} of ${p.tenantName}'s security deposit${this.at(p.unitLabel)} in ${
         p.projectName ?? 'a project'
@@ -749,6 +931,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
       type: NotificationType.RENT_OVERDUE,
+      dedupeKey: `rentInvoice:${p.invoiceId}`,
       title: `Rent overdue (${p.daysOverdue}d): ${p.tenantName}`,
       body: `${this.money(p.amountOutstanding)} of ${p.tenantName}'s rent${this.at(p.unitLabel)} in ${
         p.projectName ?? 'a project'

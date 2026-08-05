@@ -12,6 +12,15 @@ import { RequirePermissions } from '../../common/decorators/index';
 export class AuditController {
   constructor(private auditService: AuditService) {}
 
+  // Declared before @Get() has no bearing here (distinct paths), but keep it above the
+  // list route so the filter endpoint stays visible next to what it feeds.
+  @Get('filters')
+  @RequirePermissions('audit:view')
+  @ApiOperation({ summary: 'Distinct actions/entities/actors present in the log, with counts' })
+  filterOptions() {
+    return this.auditService.filterOptions();
+  }
+
   @Get()
   @RequirePermissions('audit:view')
   @ApiOperation({ summary: 'List audit events (filter: action, entity, userId, dateRange)' })

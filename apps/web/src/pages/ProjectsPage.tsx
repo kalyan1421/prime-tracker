@@ -13,6 +13,7 @@ import { useProjects, useCreateProject, useUpdateProject, useDeleteProject, useP
 import { HealthScoreRing } from '../components/HealthScoreRing';
 import { fmt } from '../utils/fmt';
 import { StatusBadge, PhaseProgress, ErrorState } from '../components/ui';
+import { PhaseChip } from '../components/PhaseChip';
 import { useAuthStore } from '../store/authStore';
 
 const PHASES = ['PRE_DEVELOPMENT', 'PERMITTING', 'CONSTRUCTION', 'LEASE_UP', 'STABILIZED', 'SOLD_REFI'];
@@ -51,6 +52,27 @@ function BudgetHealthBar({ budget, actuals }: { budget: number; actuals: number 
         </span>
       </div>
       <Progress size="sm" value={pct} color={color} aria-label="Budget health" />
+    </div>
+  );
+}
+
+/**
+ * One figure in the project card's footer row.
+ *
+ * `hint` carries the denominator or unit ("of 20", "open") at a smaller size, so the
+ * number stays the thing the eye lands on. `emphasis` colours the value only when the
+ * count is non-zero — a green 0 reads as a state, a grey 0 reads as nothing to see.
+ */
+function ProjectStat({ label, value, hint, emphasis }: {
+  label: string; value: number; hint?: string; emphasis?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] text-gray-400 truncate">{label}</p>
+      <p className="text-xs font-semibold tabular-nums truncate">
+        <span className={emphasis ?? 'text-gray-700'}>{value}</span>
+        {hint && <span className="ml-1 font-normal text-[10px] text-gray-400">{hint}</span>}
+      </p>
     </div>
   );
 }
@@ -102,31 +124,42 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
           </div>
         </div>
 
-        {p.projectType && (
-          <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="mb-2 text-[10px]">
-            {p.projectType.replace(/_/g, ' ')}
-          </Chip>
-        )}
-
-        <div className="mb-2">
-          <div className="flex justify-between mb-1">
-            <span className="text-[10px] text-gray-500 uppercase tracking-wide">Phase</span>
-            <span className="text-[10px] font-medium text-gray-600">{(p.phase || '').replace(/_/g, ' ')}</span>
-          </div>
-          <PhaseProgress current={p.phase || 'PRE_DEVELOPMENT'} />
+        {/* Type and phase sit together as chips. The phase used to own a labelled
+            six-segment progress bar, which spent a third of the card restating one word
+            — the bar's fill never encoded anything the label did not already say. */}
+        <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+          {p.projectType && (
+            <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="text-[10px]">
+              {p.projectType.replace(/_/g, ' ')}
+            </Chip>
+          )}
+          {p.phase && <PhaseChip phase={p.phase} size="sm" />}
         </div>
 
         <BudgetHealthBar budget={p.budgetTotal ?? 0} actuals={p.actualsTotal ?? 0} />
 
-        <div className="grid grid-cols-2 gap-x-4 mt-3 pt-2 border-t border-gray-50">
-          <div>
-            <p className="text-[10px] text-gray-400">Buildings</p>
-            <p className="text-xs font-semibold text-gray-700">{p._count?.buildings ?? 0}</p>
-          </div>
-          <div>
-            <p className="text-[10px] text-gray-400">Units</p>
-            <p className="text-xs font-semibold text-gray-700">{p.unitCount ?? 0}</p>
-          </div>
+        {/* The four numbers that answer "how is this project doing" without opening it.
+            Tabular figures so they stay aligned as counts change.
+
+            2x2, not 1x4: at three-up on a laptop each card is ~230px wide, and four
+            columns left ~55px per cell — enough to clip "Buildings" to "Buil…" and drop
+            the "of 7" that makes the sales figure mean anything. Two columns give each
+            figure room for its label and its qualifier at any card width. */}
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-3 pt-2.5 border-t border-gray-100">
+          <ProjectStat label="Buildings" value={p._count?.buildings ?? 0} />
+          <ProjectStat label="Units" value={p.unitCount ?? 0} />
+          <ProjectStat
+            label="Sales"
+            value={p.soldCount ?? 0}
+            hint={p.unitCount ? `of ${p.unitCount}` : undefined}
+            emphasis={(p.soldCount ?? 0) > 0 ? 'text-green-700' : undefined}
+          />
+          <ProjectStat
+            label="Leads"
+            value={p.openLeadCount ?? 0}
+            hint={(p.openLeadCount ?? 0) > 0 ? 'open' : undefined}
+            emphasis={(p.openLeadCount ?? 0) > 0 ? 'text-blue-700' : undefined}
+          />
         </div>
         {!showActions && null}
       </CardBody>

@@ -1,6 +1,8 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import React, { useState, useMemo, useEffect } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
+import { MentionTextarea } from '../components/MentionTextarea';
+import { BuildingFormModal } from '../components/BuildingFormModal';
 import {
   Card, CardBody, CardHeader, Button, Tabs, Tab, Progress, Chip, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -38,6 +40,7 @@ import {
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding, useReorderBuildings,
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
+  useLead,
   useProjectDraws, useCreateDraw, useUpdateDraw, useDeleteDraw,
   useDrawSchedule, useUpsertDrawScheduleLine, useDeleteDrawScheduleLine,
   useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
@@ -79,73 +82,6 @@ function ProjectExceptions({ projectId }: { projectId: string }) {
  * building, stored as `coverPhotoPath` on the Building row itself (no separate
  * table). Pass the current path in; receives the new path via onChange.
  */
-function BuildingCoverPhotoUploader({
-  storagePath,
-  onChange,
-}: {
-  storagePath: string;
-  onChange: (path: string) => void;
-}) {
-  const presigned = usePresignedUpload();
-  const fileRef = React.useRef<HTMLInputElement | null>(null);
-  const [previewSrc, setPreviewSrc] = React.useState<string>('');
-
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    const objectUrl = URL.createObjectURL(file);
-    try {
-      const { storagePath: path } = await presigned.mutateAsync({ file, category: 'buildings' });
-      setPreviewSrc(objectUrl);
-      onChange(path);
-      addToast({ title: `Uploaded ${file.name}`, color: 'success' });
-    } catch (err: any) {
-      URL.revokeObjectURL(objectUrl);
-      addToast({ title: err?.message || 'Upload failed', color: 'danger' });
-    }
-  };
-
-  const showPreview = previewSrc || storagePath;
-
-  return (
-    <div>
-      <p className="text-xs font-medium text-gray-700 mb-1.5">Cover photo</p>
-      <div className="flex items-center gap-3">
-        {showPreview ? (
-          <div className="relative w-32 h-20 rounded border border-gray-200 overflow-hidden bg-gray-100">
-            {previewSrc ? (
-              <img src={previewSrc} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Photo saved</div>
-            )}
-          </div>
-        ) : (
-          <div className="w-32 h-20 rounded border border-dashed border-gray-300 flex items-center justify-center text-xs text-gray-400">
-            No photo
-          </div>
-        )}
-        <div className="flex flex-col gap-1.5">
-          <Button
-            size="sm" variant="flat"
-            onPress={() => fileRef.current?.click()}
-            isLoading={presigned.isPending}
-            startContent={<FiPlus className="text-xs" />}
-          >
-            {storagePath ? 'Replace' : 'Upload'}
-          </Button>
-          {storagePath && (
-            <Button size="sm" variant="light" color="danger" onPress={() => { setPreviewSrc(''); onChange(''); }}>
-              Remove
-            </Button>
-          )}
-        </div>
-        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
-      </div>
-    </div>
-  );
-}
-
 /**
  * Slice 7: Milestone photo strip.
  * Inline thumbnails with a "+ Upload" button. Uses presigned URLs so the file
@@ -783,6 +719,73 @@ function fundedAmount(d: any): number {
   return Number(d?.approvedAmount ?? d?.amount ?? 0);
 }
 
+/**
+ * Bar/dot colours for the unit-status mix.
+ *
+ * Separate from STATUS_COLORS, which yields HeroUI semantic names ("success") suitable
+ * for a Chip's `color` prop but not usable as a background class on a bar segment.
+ * Same hues, so a status reads identically whether it appears as a chip or a segment.
+ */
+const UNIT_STATUS_BAR: Record<string, { bar: string; dot: string }> = {
+  AVAILABLE:          { bar: 'bg-emerald-500', dot: 'bg-emerald-500' },
+  UNDER_CONTRACT:     { bar: 'bg-amber-500',   dot: 'bg-amber-500' },
+  LEASE_PENDING:      { bar: 'bg-amber-400',   dot: 'bg-amber-400' },
+  LEASED:             { bar: 'bg-blue-500',    dot: 'bg-blue-500' },
+  OCCUPIED:           { bar: 'bg-indigo-500',  dot: 'bg-indigo-500' },
+  SOLD:               { bar: 'bg-violet-500',  dot: 'bg-violet-500' },
+  UNDER_CONSTRUCTION: { bar: 'bg-slate-400',   dot: 'bg-slate-400' },
+};
+
+/**
+ * The unit mix as a proportion, not a row of chips.
+ *
+ * This card previously rendered one chip per present status. On a project whose units
+ * are all in one state that is a single chip in a card the grid stretches to match its
+ * taller neighbour — a card mostly made of empty space, which is what prompted the
+ * question. Chips also could not answer the question the title poses: a "mix" is a set
+ * of proportions, and seven separate counts do not show one.
+ *
+ * The footer is pushed down with mt-auto, so any height the grid hands this card becomes
+ * breathing room between the breakdown and the summary rather than a void beneath both.
+ */
+function UnitStatusMix({ counts, total, buildingCount }: {
+  counts: Record<string, number>; total: number; buildingCount: number;
+}) {
+  const present = UNIT_STATUS_ORDER.filter((s) => (counts[s] ?? 0) > 0);
+  const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Proportion bar. aria-hidden because the same figures follow as real text —
+          a screen reader should read the list, not a decorative strip. */}
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100" aria-hidden="true">
+        {present.map((s) => (
+          <div
+            key={s}
+            className={UNIT_STATUS_BAR[s]?.bar ?? 'bg-gray-300'}
+            style={{ width: `${pct(counts[s])}%` }}
+          />
+        ))}
+      </div>
+
+      <ul className="mt-3 space-y-1.5">
+        {present.map((s) => (
+          <li key={s} className="flex items-center gap-2 text-xs">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${UNIT_STATUS_BAR[s]?.dot ?? 'bg-gray-300'}`} />
+            <span className="flex-1 truncate text-gray-600">{s.replace(/_/g, ' ').toLowerCase()}</span>
+            <span className="font-semibold tabular-nums text-gray-800">{counts[s]}</span>
+            <span className="w-10 text-right tabular-nums text-gray-400">{Math.round(pct(counts[s]))}%</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-auto pt-3 text-[11px] text-gray-400">
+        {total} unit{total === 1 ? '' : 's'} across {buildingCount} building{buildingCount === 1 ? '' : 's'}
+      </p>
+    </div>
+  );
+}
+
 function OverviewTab({ project: p }: { project: any }) {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
@@ -1045,13 +1048,7 @@ function OverviewTab({ project: p }: { project: any }) {
           </CardHeader>
           <CardBody>
             {unitCount > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {UNIT_STATUS_ORDER.filter((status) => unitStatusCounts[status] > 0).map((status) => (
-                  <Chip key={status} size="sm" variant="flat" color={STATUS_COLORS[status] || 'default'} className="text-[10px]">
-                    <span className="font-bold">{unitStatusCounts[status]}</span> {status.replace(/_/g, ' ')}
-                  </Chip>
-                ))}
-              </div>
+              <UnitStatusMix counts={unitStatusCounts} total={unitCount} buildingCount={buildings.length} />
             ) : (
               <EmptyState title="No units yet" message="Units appear here once buildings have units." />
             )}
@@ -2294,6 +2291,8 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
   const { data, isLoading } = useUnitComments(unitId);
   const createComment = useCreateComment();
   const deleteComment = useDeleteComment();
+  // See UnitDetailPage: /users would 403 for most roles that can comment.
+  const { data: mentionUsers } = useAssignableUsers();
   const [text, setText] = useState('');
   const [commentType, setCommentType] = useState('MARKETING');
 
@@ -2352,15 +2351,15 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
         >
           {['MARKETING', 'SALES', 'FINANCIAL'].map((t) => <SelectItem key={t}>{t}</SelectItem>)}
         </Select>
-        <Textarea
-          size="sm"
+        <MentionTextarea
           minRows={1}
           maxRows={3}
-          placeholder="Add a comment..."
+          placeholder="Add a comment… use @ to mention someone"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
+          onSubmit={handleSubmit}
+          users={(mentionUsers as any[]) || []}
           className="flex-1"
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
         />
         <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending}>
           <FiSend />
@@ -4506,24 +4505,70 @@ function SalesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Buildings Tab ----
-const EMPTY_BUILDING = { name: '', llcName: '', totalSqft: '', acreage: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
+/**
+ * Tint for a building's placeholder cover, keyed to its type.
+ *
+ * A flat grey block for every photo-less building would read as "image failed to load".
+ * Tinting by type makes the placeholder carry a little information, so a card without a
+ * photo still looks deliberate — and the retail block stays distinguishable from the
+ * parking structure at a glance.
+ */
+const BUILDING_COVER_TINT: Record<string, string> = {
+  RESIDENTIAL: 'from-blue-50 to-blue-100 text-blue-300',
+  COMMERCIAL:  'from-emerald-50 to-emerald-100 text-emerald-300',
+  MIXED_USE:   'from-violet-50 to-violet-100 text-violet-300',
+  INDUSTRIAL:  'from-amber-50 to-amber-100 text-amber-300',
+  RETAIL:      'from-teal-50 to-teal-100 text-teal-300',
+  OFFICE:      'from-indigo-50 to-indigo-100 text-indigo-300',
+  PARKING:     'from-slate-100 to-slate-200 text-slate-400',
+  AMENITY:     'from-pink-50 to-pink-100 text-pink-300',
+  LOT:         'from-lime-50 to-lime-100 text-lime-400',
+};
+
+/** Fixed-height cover band for a building card: the photo, or a typed placeholder. */
+function BuildingCover({ building }: { building: any }) {
+  const [failed, setFailed] = useState(false);
+  const url = building.coverPhotoUrl as string | undefined;
+  const showPhoto = !!building.coverPhotoPath && !!url && !failed;
+  const tint = BUILDING_COVER_TINT[building.buildingType] ?? 'from-gray-50 to-gray-100 text-gray-300';
+
+  if (showPhoto) {
+    return (
+      <div className="w-full h-28 shrink-0 bg-gray-100 overflow-hidden">
+        <img
+          src={url}
+          alt=""
+          className="w-full h-full object-cover"
+          // A broken URL previously faded the <img> to 30% and left an empty band. Fall
+          // through to the placeholder instead, so a dead link looks the same as no photo.
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`w-full h-28 shrink-0 flex items-center justify-center bg-gradient-to-br ${tint}`}
+      aria-hidden="true"
+    >
+      <FiHome className="text-3xl" />
+    </div>
+  );
+}
 
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('building:edit');
-  const { data: projectPhaseOpts = [] } = useCustomOptions('project_phase');
-
   const { data, isLoading, error } = useBuildings(projectId);
-  const createBuilding = useCreateBuilding();
-  const updateBuilding = useUpdateBuilding();
   const deleteBuilding = useDeleteBuilding();
   const reorderBuildings = useReorderBuildings();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
 
-  const [form, setForm] = useState<Record<string, string>>(EMPTY_BUILDING);
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  // Form state lives in BuildingFormModal now; this tab tracks only WHICH building is
+  // being edited.
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; unitCount: number } | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
@@ -4555,24 +4600,11 @@ function BuildingsTab({ projectId }: { projectId: string }) {
 
   const openCreate = () => {
     setEditId(null);
-    setForm({ ...EMPTY_BUILDING });
-    setFormErrors({});
     onFormOpen();
   };
 
   const openEdit = (b: any) => {
     setEditId(b.id);
-    setForm({
-      name: b.name || '',
-      llcName: b.llcName || '',
-      totalSqft: b.totalSqft?.toString() || '',
-      acreage: b.acreage?.toString() || '',
-      stories: b.stories?.toString() || '',
-      buildingType: b.buildingType || '',
-      phase: b.phase || 'PRE_DEVELOPMENT',
-      coverPhotoPath: b.coverPhotoPath || '',
-    });
-    setFormErrors({});
     onFormOpen();
   };
 
@@ -4584,54 +4616,6 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     });
     setForceDelete(false);
     onDeleteOpen();
-  };
-
-  const validateForm = (): boolean => {
-    const errs: Record<string, string> = {};
-    if (!form.name.trim()) errs.name = 'Building name is required';
-    else if (form.name.length > 120) errs.name = 'Max 120 characters';
-
-    if (form.totalSqft) {
-      const v = parseFloat(form.totalSqft);
-      if (isNaN(v) || v <= 0) errs.totalSqft = 'Must be a positive number';
-    }
-    if (form.stories) {
-      const v = parseInt(form.stories);
-      if (isNaN(v) || v < 1 || v > 200) errs.stories = 'Must be between 1 and 200';
-    }
-    // buildingType is now an enum — no length check needed
-
-    setFormErrors(errs);
-    return Object.keys(errs).length === 0;
-  };
-
-  const handleSave = async () => {
-    if (!validateForm()) return;
-    try {
-      const payload: Record<string, unknown> = {
-        projectId,
-        name: form.name.trim(),
-        llcName: form.llcName.trim() || undefined,
-        totalSqft: form.totalSqft ? parseFloat(form.totalSqft) : undefined,
-        acreage: form.acreage ? parseFloat(form.acreage) : undefined,
-        stories: form.stories ? parseInt(form.stories) : undefined,
-        buildingType: form.buildingType.trim() || undefined,
-        phase: form.phase || undefined,
-        coverPhotoPath: form.coverPhotoPath || undefined,
-      };
-      if (editId) {
-        // Don't send projectId on update (the API DTO omits it)
-        const { projectId: _omit, ...updateData } = payload;
-        await updateBuilding.mutateAsync({ id: editId, data: updateData });
-        addToast({ title: 'Building updated', color: 'success' });
-      } else {
-        await createBuilding.mutateAsync(payload);
-        addToast({ title: 'Building created', color: 'success' });
-      }
-      onFormClose();
-    } catch (e) {
-      addToast({ title: errMsg(e, 'Failed to save building'), color: 'danger' });
-    }
   };
 
   const handleDelete = async () => {
@@ -4647,11 +4631,6 @@ function BuildingsTab({ projectId }: { projectId: string }) {
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to delete building'), color: 'danger' });
     }
-  };
-
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((f) => ({ ...f, [field]: e.target.value }));
-    if (formErrors[field]) setFormErrors((errs) => ({ ...errs, [field]: '' }));
   };
 
   const allBuildings = allBuildingsRaw;
@@ -4800,17 +4779,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {buildings.map((b: any) => (
             <Card key={b.id} shadow="sm">
-              {/* Slice 1: cover photo — bleeds to card edges as visual identity */}
-              {b.coverPhotoPath && (
-                <div className="w-full h-28 bg-gray-100 overflow-hidden">
-                  <img
-                    src={(b as any).coverPhotoUrl || ''}
-                    alt=""
-                    className="w-full h-full object-cover"
-                    onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
-                  />
-                </div>
-              )}
+              {/* Cover band — ALWAYS rendered, at a fixed height.
+                  It used to be conditional, so within one grid row a building with a
+                  photo pushed its title 112px down while a building without one kept its
+                  title at the top and collected the leftover height as dead space at the
+                  bottom. Same row, two different card structures. Reserving the band
+                  unconditionally means every title, chip and stat line aligns across the
+                  grid; a building with no photo gets a placeholder rather than a hole. */}
+              <BuildingCover building={b} />
               <CardHeader className="pb-0 flex justify-between items-start">
                 <div className="flex-1 min-w-0 pr-2">
                   {/* Sprint B: building name links to the per-building dashboard */}
@@ -4867,91 +4843,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {/* Create / Edit Building Modal */}
-      <Modal isOpen={isFormOpen} onClose={onFormClose} size="md">
-        <ModalContent>
-          <ModalHeader>{editId ? 'Edit Building' : 'Add Building'}</ModalHeader>
-          <ModalBody>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
-                <Input
-                  size="sm" label="Building Name" isRequired
-                  value={form.name} onChange={set('name')}
-                  isInvalid={!!formErrors.name} errorMessage={formErrors.name}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <Input
-                  size="sm" label="LLC Name"
-                  placeholder="e.g. Prime Leander I LLC"
-                  description="Legal entity that owns this building"
-                  value={form.llcName} onChange={set('llcName')}
-                />
-              </div>
-              <Select
-                size="sm" label="Building Type"
-                selectedKeys={form.buildingType ? [form.buildingType] : []}
-                onSelectionChange={(k) => {
-                  const val = Array.from(k)[0] as string;
-                  setForm((f) => ({ ...f, buildingType: val || '' }));
-                }}
-              >
-                {/* LOT is a real BuildingType (raw-land parcel, sold by acreage, usually no
-                    units inside) and was missing here, so land parcels could not be created
-                    or corrected from the UI at all. */}
-                {['RESIDENTIAL', 'COMMERCIAL', 'MIXED_USE', 'INDUSTRIAL', 'PARKING', 'AMENITY', 'RETAIL', 'OFFICE', 'LOT'].map((v) => (
-                  <SelectItem key={v}>{v.replace(/_/g, ' ')}</SelectItem>
-                ))}
-              </Select>
-              <Input
-                size="sm" label="Total Sqft" type="number" step="1"
-                value={form.totalSqft} onChange={set('totalSqft')}
-                isInvalid={!!formErrors.totalSqft} errorMessage={formErrors.totalSqft}
-              />
-              <Input
-                size="sm" label="Acreage" type="number" step="0.01" min={0}
-                value={form.acreage} onChange={set('acreage')}
-                description="Land area — the key figure for LOT parcels"
-              />
-              <Input
-                size="sm" label="Stories" type="number" min={1} max={200}
-                value={form.stories} onChange={set('stories')}
-                isInvalid={!!formErrors.stories} errorMessage={formErrors.stories}
-              />
-              {/* Slice 3: building-level phase — Project.phase is derived from max of buildings */}
-              <div className="sm:col-span-2">
-                <Select
-                  size="sm" label="Phase"
-                  description="Project phase is automatically the most-advanced building"
-                  selectedKeys={form.phase ? [form.phase] : []}
-                  onSelectionChange={(k) => {
-                    const val = Array.from(k)[0] as string;
-                    if (val) setForm((f) => ({ ...f, phase: val }));
-                  }}
-                >
-                  {projectPhaseOpts.map((o) => (
-                    <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
-                  ))}
-                </Select>
-              </div>
-
-              {/* Slice 1: cover photo — visual identity for the building card */}
-              <div className="sm:col-span-2">
-                <BuildingCoverPhotoUploader
-                  storagePath={form.coverPhotoPath}
-                  onChange={(path) => setForm((f) => ({ ...f, coverPhotoPath: path }))}
-                />
-              </div>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button size="sm" variant="light" onPress={onFormClose}>Cancel</Button>
-            <Button size="sm" color="primary" onPress={handleSave} isLoading={createBuilding.isPending || updateBuilding.isPending}>
-              {editId ? 'Save Changes' : 'Add Building'}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      {/* Create / Edit Building — the form lives in components/BuildingFormModal so the
+          building detail page opens the same one instead of growing a copy. */}
+      <BuildingFormModal
+        isOpen={isFormOpen}
+        onClose={onFormClose}
+        projectId={projectId}
+        building={editId ? allBuildingsRaw.find((x: any) => x.id === editId) : undefined}
+      />
 
       {/* Delete Confirmation — shows unit count and requires explicit force checkbox */}
       <Modal isOpen={isDeleteOpen} onClose={onDeleteClose} isDismissable={false} size="sm">
@@ -5290,6 +5189,47 @@ const ACTIVITY_TYPES_TAB = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP
 const ACTIVITY_ICONS_TAB: Record<string, string> = {
   CALL: '📞', EMAIL: '📧', MEETING: '🤝', SITE_VISIT: '🏗️', FOLLOW_UP: '🔔', NOTE: '📝', STATUS_CHANGE: '🔄',
 };
+
+/**
+ * The units a lead is considering, in the project Leads tab.
+ *
+ * The list row and the panel header both show only `lead.unitId` — the single primary
+ * link — so a lead tracked against several units looked like it had one. The waitlist
+ * lives on a separate join (LeadUnitInterest) that only `GET /leads/:id` returns, hence
+ * the extra fetch; the list payload deliberately stays lean.
+ *
+ * The primary unit is mirrored into that join server-side, so it appears here too and
+ * is marked, rather than being silently duplicated as an unlabelled chip.
+ */
+function LeadUnitsOfInterest({ leadId, primaryUnitId }: { leadId: string; primaryUnitId?: string | null }) {
+  const { data: detail } = useLead(leadId);
+  const interests: any[] = detail?.unitInterests ?? [];
+  if (interests.length === 0) return null;
+
+  return (
+    <div className="mt-2.5">
+      <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-1">
+        Units of interest ({interests.length})
+      </p>
+      <div className="flex flex-wrap gap-1">
+        {interests.map((i) => {
+          const isPrimary = i.unitId === primaryUnitId;
+          return (
+            <span
+              key={i.id}
+              title={isPrimary ? 'Primary unit on this lead' : undefined}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                isPrimary ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-600'
+              }`}
+            >
+              {i.unit?.unitNumber ?? '—'}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const { data: leads, isLoading } = useLeads({ projectId } as any);
@@ -5710,7 +5650,13 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                   {selectedLead.phone && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiPhone size={9} />{selectedLead.phone}</p>}
                   {selectedLead.budget && <p className="text-[11px] font-semibold text-stone-600 mt-1">${Number(selectedLead.budget).toLocaleString()} budget</p>}
                   {selectedLead.unit?.unitNumber && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />Unit {selectedLead.unit.unitNumber}</p>}
+                  {/* A building-linked lead showed nothing here — the panel only ever
+                      rendered the unit, so half the polymorphic link was invisible. */}
+                  {!selectedLead.unit && selectedLead.building?.name && (
+                    <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />{selectedLead.building.name}</p>
+                  )}
                 </div>
+                <LeadUnitsOfInterest leadId={selectedLead.id} primaryUnitId={selectedLead.unitId} />
                 {!['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
                   <button
                     onClick={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, unitId: selectedLead.unitId || '', buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}
@@ -5902,6 +5848,8 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useProjectComments(projectId);
   const createComment = useCreateComment();
   const deleteComment = useDeleteComment();
+  // See UnitDetailPage: /users would 403 for most roles that can comment.
+  const { data: mentionUsers } = useAssignableUsers();
   const [text, setText] = useState('');
   const [commentType, setCommentType] = useState('MARKETING');
   const [filterType, setFilterType] = useState('');
@@ -6010,15 +5958,15 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
             >
               {TYPE_ORDER.map((t) => <SelectItem key={t}>{t}</SelectItem>)}
             </Select>
-            <Textarea
-              size="sm"
+            <MentionTextarea
               minRows={1}
               maxRows={4}
-              placeholder="Write a comment..."
+              placeholder="Write a comment… use @ to mention someone"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={setText}
+              onSubmit={handleSubmit}
+              users={(mentionUsers as any[]) || []}
               className="flex-1"
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
             />
             <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending}>
               <FiSend />

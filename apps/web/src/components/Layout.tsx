@@ -29,7 +29,10 @@ const BASE_NAV_ITEMS = [
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
   { label: 'Investors', icon: FiBriefcase, path: '/investors', permission: 'investor:view' },
   { label: 'Brokers', icon: FiUsers, path: '/brokers', permission: 'broker:view' },
-  { label: 'Reports', icon: FiPieChart, pathKey: 'reports', roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER', 'SALES', 'MARKETING'] },
+  // Any-of: the Reports hub holds four independently gated report tabs, so the link
+  // shows when the viewer can see at least one of them. This was a role list, which
+  // let CONSTRUCTION and VIEWER through to a page where every tab was empty.
+  { label: 'Reports', icon: FiPieChart, pathKey: 'reports', anyPermission: ['financial:view', 'sales:view', 'lease:view', 'loan:view'] },
   { label: 'Admin', icon: FiUsers, path: '/admin', permission: 'user:manage' },
 ];
 
@@ -40,10 +43,20 @@ function getDashPath(role: string) {
   return '/';
 }
 
-function getReportsPath(role: string) {
-  if (['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'].includes(role)) return '/reports/founder';
-  if (['CONSTRUCTION', 'PROJECT_MANAGER'].includes(role)) return '/reports/construction';
-  if (['SALES', 'MARKETING'].includes(role)) return '/reports/sales';
+/**
+ * Where the "Reports" nav item points.
+ *
+ * Driven by permissions, not by role name, because the destinations are themselves
+ * permission-gated and the two lists drifted: PROJECT_MANAGER was sent to
+ * /reports/construction, which requires financial:view (ConstructionReportsPage renders
+ * only the portfolio report) — a permission PROJECT_MANAGER does not hold. The link was
+ * visible and clicking it bounced them silently back to "/".
+ *
+ * Ordered most-specific first; /reports is the hub and gates each of its tabs itself.
+ */
+function getReportsPath(hasPermission: (p: string) => boolean) {
+  if (hasPermission('financial:view')) return '/reports/founder';
+  if (hasPermission('sales:view')) return '/reports/sales';
   return '/reports';
 }
 
@@ -53,15 +66,24 @@ function NotificationPanel() {
   const navigate = useNavigate();
 
   const notifications = (data?.notifications as any[]) || [];
-  const unread = notifications.filter((n: any) => !n.readAt);
+  // Same reason as the badge: gating this control on the fetched page meant that a user
+  // whose newest 20 were read but who still had older unread ones saw no "Mark all read"
+  // at all — the only way to clear them was to scroll back and open each one.
+  const unreadCount = (data?.unreadCount as number) ?? 0;
 
   return (
     <div className="w-[min(340px,90vw)]">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <p className="font-semibold text-sm text-gray-700">Notifications</p>
-        {unread.length > 0 && (
+        <div className="flex items-baseline gap-2">
+          <p className="font-semibold text-sm text-gray-700">Notifications</p>
+          {unreadCount > 0 && (
+            <span className="text-[11px] text-gray-400">{unreadCount} unread</span>
+          )}
+        </div>
+        {unreadCount > 0 && (
           <button
-            className="text-xs text-blue-600 hover:underline"
+            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+            disabled={markRead.isPending}
             onClick={() => markRead.mutate(undefined)}
           >
             Mark all read
@@ -131,10 +153,10 @@ function Sidebar({
   mobileOpen: boolean;
   onMobileClose: () => void;
 }) {
-  const { hasPermission, user } = useAuthStore();
+  const { hasPermission, hasAnyPermission, user } = useAuthStore();
   const role = user?.role ?? '';
   const dashPath = getDashPath(role);
-  const reportsPath = getReportsPath(role);
+  const reportsPath = getReportsPath(hasPermission);
 
   const navItems = BASE_NAV_ITEMS.map((item) => ({
     ...item,
@@ -154,7 +176,7 @@ function Sidebar({
     <div className="flex flex-col gap-1 px-2">
       {navItems.map((item) => {
         if (item.permission && !hasPermission(item.permission)) return null;
-        if (item.roles && !item.roles.includes(role)) return null;
+        if (item.anyPermission && !hasAnyPermission(...item.anyPermission)) return null;
         const Icon = item.icon;
         const isDashItem = item.pathKey === 'dashboard';
         const isReportsItem = item.pathKey === 'reports';
@@ -241,7 +263,7 @@ function Sidebar({
             <div className="flex flex-col gap-1 px-2">
               {navItems.map((item) => {
                 if (item.permission && !hasPermission(item.permission)) return null;
-                if (item.roles && !item.roles.includes(role)) return null;
+                if (item.anyPermission && !hasAnyPermission(...item.anyPermission)) return null;
                 const Icon = item.icon;
                 const isDashItem = item.pathKey === 'dashboard';
                 const isReportsItem = item.pathKey === 'reports';
@@ -289,8 +311,13 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { data: notifData } = useNotifications(20);
   useNotificationsSocket(); // establishes real-time push; falls back to stale polling silently
 
-  const notifications = (notifData?.notifications as any[]) || [];
-  const unreadCount = notifications.filter((n: any) => !n.readAt).length;
+  // Count unread from the SERVER's tally, not from the 20 rows this panel fetched.
+  // Filtering the page counts only what happens to be on it, so once a user has more
+  // than 20 notifications the badge reports whatever share of the newest 20 is unread —
+  // it reads 0 while 200 older ones are still unread, then jumps back to non-zero as
+  // soon as a new notification pushes an older unread row into view. That is why the
+  // bell appeared to "forget" that everything had been marked read.
+  const unreadCount = (notifData?.unreadCount as number) ?? 0;
 
   const handleLogout = async () => {
     try {

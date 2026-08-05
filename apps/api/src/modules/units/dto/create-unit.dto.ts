@@ -1,7 +1,8 @@
 import {
   IsString, IsNotEmpty, MinLength, MaxLength,
-  IsOptional, IsNumber, IsPositive, IsBoolean, IsInt, Min,
+  IsOptional, IsNumber, IsPositive, IsBoolean, IsInt, Min, IsEnum,
 } from 'class-validator';
+import { UnitStatus } from '@prisma/client';
 
 export class CreateUnitDto {
   @IsString() @IsNotEmpty()
@@ -13,8 +14,12 @@ export class CreateUnitDto {
   @IsString() @IsNotEmpty()
   unitType!: string;
 
-  @IsOptional() @IsString()
-  status?: string;
+  // Validated against the UnitStatus enum, not accepted as any string. Until the column
+  // became an enum this took @IsString(), so a typo'd status was written verbatim and the
+  // unit then failed to appear in every status-filtered query and had no colour or label
+  // in the UI — invisible rather than wrong.
+  @IsOptional() @IsEnum(UnitStatus)
+  status?: UnitStatus;
 
   @IsOptional() @IsInt() @Min(1)
   sqft?: number;

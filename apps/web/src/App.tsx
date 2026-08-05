@@ -34,8 +34,13 @@ import CashflowPage from './pages/CashflowPage';
 import BrokersPage from './pages/BrokersPage';
 import ReceivablesPage from './pages/ReceivablesPage';
 
-function ProtectedRoute({ children, permission }: { children: React.ReactNode; permission?: string }) {
-  const { isAuthenticated, hasPermission } = useAuthStore();
+/**
+ * `permission` accepts an array for pages that are a hub over several independently
+ * gated sections (Reports): the page opens if the viewer can see at least one section,
+ * and each section gates itself.
+ */
+function ProtectedRoute({ children, permission }: { children: React.ReactNode; permission?: string | string[] }) {
+  const { isAuthenticated, hasAnyPermission } = useAuthStore();
   // Zustand's persist middleware rehydrates from localStorage asynchronously
   // (even though localStorage is sync, `await storage.getItem` creates a
   // microtask). We defer routing until after the first mount so the microtask
@@ -45,7 +50,10 @@ function ProtectedRoute({ children, permission }: { children: React.ReactNode; p
 
   if (!hydrated) return null;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (permission && !hasPermission(permission)) return <Navigate to="/" replace />;
+  if (permission) {
+    const needed = Array.isArray(permission) ? permission : [permission];
+    if (!hasAnyPermission(...needed)) return <Navigate to="/" replace />;
+  }
   return <ErrorBoundary section="page">{children}</ErrorBoundary>;
 }
 
@@ -79,8 +87,8 @@ export default function App() {
         <Route path="projects/:id/units/:unitId" element={<UnitDetailPage />} />
         <Route path="projects/:id/buildings/:buildingId" element={<ProtectedRoute permission="building:view"><BuildingDetailPage /></ProtectedRoute>} />
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="leads" element={<LeadsPage />} />
+        <Route path="reports" element={<ProtectedRoute permission={['financial:view', 'sales:view', 'lease:view', 'loan:view']}><ReportsPage /></ProtectedRoute>} />
+        <Route path="leads" element={<ProtectedRoute permission="lead:view"><LeadsPage /></ProtectedRoute>} />
         {/* Unified into a single Leads section — old Lead Dashboard route now redirects. */}
         <Route path="leads/dashboard" element={<Navigate to="/leads" replace />} />
         <Route path="campaigns" element={<ProtectedRoute permission="campaign:view"><CampaignsPage /></ProtectedRoute>} />
@@ -94,13 +102,13 @@ export default function App() {
         <Route path="receivables" element={<ProtectedRoute permission="interior:finance"><ReceivablesPage /></ProtectedRoute>} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings/notifications" element={<SettingsPage />} />
-        <Route path="dashboard/founder" element={<FounderDashboardPage />} />
-        <Route path="dashboard/construction" element={<ConstructionDashboardPage />} />
-        <Route path="dashboard/sales" element={<SalesDashboardPage />} />
-        <Route path="dashboard/finance" element={<FinanceDashboardPage />} />
-        <Route path="reports/founder" element={<FounderReportsPage />} />
-        <Route path="reports/construction" element={<ConstructionReportsPage />} />
-        <Route path="reports/sales" element={<SalesReportsPage />} />
+        <Route path="dashboard/founder" element={<ProtectedRoute permission="unit:view"><FounderDashboardPage /></ProtectedRoute>} />
+        <Route path="dashboard/construction" element={<ProtectedRoute permission="unit:view"><ConstructionDashboardPage /></ProtectedRoute>} />
+        <Route path="dashboard/sales" element={<ProtectedRoute permission="unit:view"><SalesDashboardPage /></ProtectedRoute>} />
+        <Route path="dashboard/finance" element={<ProtectedRoute permission="financial:view"><FinanceDashboardPage /></ProtectedRoute>} />
+        <Route path="reports/founder" element={<ProtectedRoute permission="financial:view"><FounderReportsPage /></ProtectedRoute>} />
+        <Route path="reports/construction" element={<ProtectedRoute permission="financial:view"><ConstructionReportsPage /></ProtectedRoute>} />
+        <Route path="reports/sales" element={<ProtectedRoute permission="sales:view"><SalesReportsPage /></ProtectedRoute>} />
         <Route
           path="investors"
           element={

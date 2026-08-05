@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useRef } from 'react';
 import { useReactToPrint } from 'react-to-print';
 import { Card, CardHeader, CardBody, Tabs, Tab, Button } from '@heroui/react';
 import { FiDownload } from 'react-icons/fi';
@@ -247,18 +246,16 @@ function DrawRequestsTab() {
 export default function ConstructionReportsPage() {
   const { user, hasPermission } = useAuthStore();
   const canViewFinancials = hasPermission('financial:view');
-  const navigate = useNavigate();
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Construction Reports' });
 
-  useEffect(() => {
-    if (!user?.role) return;
-    if (!['PROJECT_MANAGER', 'CONSTRUCTION'].includes(user.role)) {
-      if (['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'].includes(user.role)) navigate('/reports/founder', { replace: true });
-      else if (['SALES', 'MARKETING'].includes(user.role)) navigate('/reports/sales', { replace: true });
-      else navigate('/reports', { replace: true });
-    }
-  }, [user?.role, navigate]);
+  // The role-based redirect that used to live here is gone. It was a third gate on top
+  // of the route's <ProtectedRoute permission> and the sidebar's, keyed on role names
+  // rather than permissions, and the three had drifted apart: a PROJECT_MANAGER opening
+  // the Reports link was sent here, bounced to /reports/construction (which needs
+  // financial:view they do not hold), then to "/", then by RootRedirect to their
+  // dashboard — a link that silently went nowhere. Access is decided once, by the route
+  // gate; every panel below gates its own query.
 
   return (
     <div>

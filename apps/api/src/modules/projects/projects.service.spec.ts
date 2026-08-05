@@ -19,6 +19,8 @@ const mockPrisma = {
     findMany: jest.fn().mockResolvedValue([]),
     aggregate: jest.fn().mockResolvedValue({ _sum: { monthlyRent: 0 } }),
   },
+  // findAll groups units by building to compute the per-project sold count.
+  unit: { groupBy: jest.fn().mockResolvedValue([]) },
   projectComment: { findMany: jest.fn().mockResolvedValue([]) },
   unitComment: { findMany: jest.fn().mockResolvedValue([]) },
 };
@@ -58,23 +60,42 @@ const mockEncryption = {
       const projects = [
         {
           id: '1', name: 'Shops at Panther Creek', status: 'ACTIVE', phase: 'CONSTRUCTION',
-          buildings: [{ _count: { units: 4 } }],
+          buildings: [{ id: 'b1', _count: { units: 4 } }],
           budgetLines: [{ baselineAmt: 1000, revisedAmt: 1200 }],
           actuals: [{ amount: 500 }],
+          _count: { leads: 3 },
         },
         {
           id: '2', name: 'Premier Sports Complex', status: 'ACTIVE', phase: 'PERMITTING',
-          buildings: [], budgetLines: [], actuals: [],
+          buildings: [], budgetLines: [], actuals: [], _count: { leads: 0 },
         },
       ];
       mockPrisma.project.findMany.mockResolvedValue(projects);
+      // 2 of building b1's 4 units are sold.
+      mockPrisma.unit.groupBy.mockResolvedValue([{ buildingId: 'b1', _count: { _all: 2 } }]);
 
       const result = await service.findAll({});
 
       expect(mockPrisma.project.findMany).toHaveBeenCalled();
       expect(result).toHaveLength(2);
       // computed fields surface on each row
-      expect((result as any[])[0]).toMatchObject({ unitCount: 4, budgetTotal: 1200, actualsTotal: 500 });
+      expect((result as any[])[0]).toMatchObject({
+        unitCount: 4, soldCount: 2, openLeadCount: 3, budgetTotal: 1200, actualsTotal: 500,
+      });
+      // A project with no buildings gets zero, not undefined — the card renders it raw.
+      expect((result as any[])[1]).toMatchObject({ unitCount: 0, soldCount: 0, openLeadCount: 0 });
+    });
+
+    it('skips the sold-units query entirely when no project has a building', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: '3', name: 'Land only', status: 'ACTIVE', phase: 'PRE_DEVELOPMENT',
+          buildings: [], budgetLines: [], actuals: [], _count: { leads: 0 } },
+      ]);
+
+      const result = await service.findAll({});
+
+      expect(mockPrisma.unit.groupBy).not.toHaveBeenCalled();
+      expect((result as any[])[0]).toMatchObject({ unitCount: 0, soldCount: 0 });
     });
 
     it('should filter by status', async () => {
