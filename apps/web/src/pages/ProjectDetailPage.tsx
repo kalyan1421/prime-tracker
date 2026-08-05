@@ -38,6 +38,7 @@ import {
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding, useReorderBuildings,
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
+  useLead,
   useProjectDraws, useCreateDraw, useUpdateDraw, useDeleteDraw,
   useDrawSchedule, useUpsertDrawScheduleLine, useDeleteDrawScheduleLine,
   useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
@@ -5291,6 +5292,47 @@ const ACTIVITY_ICONS_TAB: Record<string, string> = {
   CALL: '📞', EMAIL: '📧', MEETING: '🤝', SITE_VISIT: '🏗️', FOLLOW_UP: '🔔', NOTE: '📝', STATUS_CHANGE: '🔄',
 };
 
+/**
+ * The units a lead is considering, in the project Leads tab.
+ *
+ * The list row and the panel header both show only `lead.unitId` — the single primary
+ * link — so a lead tracked against several units looked like it had one. The waitlist
+ * lives on a separate join (LeadUnitInterest) that only `GET /leads/:id` returns, hence
+ * the extra fetch; the list payload deliberately stays lean.
+ *
+ * The primary unit is mirrored into that join server-side, so it appears here too and
+ * is marked, rather than being silently duplicated as an unlabelled chip.
+ */
+function LeadUnitsOfInterest({ leadId, primaryUnitId }: { leadId: string; primaryUnitId?: string | null }) {
+  const { data: detail } = useLead(leadId);
+  const interests: any[] = detail?.unitInterests ?? [];
+  if (interests.length === 0) return null;
+
+  return (
+    <div className="mt-2.5">
+      <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-1">
+        Units of interest ({interests.length})
+      </p>
+      <div className="flex flex-wrap gap-1">
+        {interests.map((i) => {
+          const isPrimary = i.unitId === primaryUnitId;
+          return (
+            <span
+              key={i.id}
+              title={isPrimary ? 'Primary unit on this lead' : undefined}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                isPrimary ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-600'
+              }`}
+            >
+              {i.unit?.unitNumber ?? '—'}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const { data: leads, isLoading } = useLeads({ projectId } as any);
   const { data: projectUnits } = useUnits(projectId);
@@ -5710,7 +5752,13 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                   {selectedLead.phone && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiPhone size={9} />{selectedLead.phone}</p>}
                   {selectedLead.budget && <p className="text-[11px] font-semibold text-stone-600 mt-1">${Number(selectedLead.budget).toLocaleString()} budget</p>}
                   {selectedLead.unit?.unitNumber && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />Unit {selectedLead.unit.unitNumber}</p>}
+                  {/* A building-linked lead showed nothing here — the panel only ever
+                      rendered the unit, so half the polymorphic link was invisible. */}
+                  {!selectedLead.unit && selectedLead.building?.name && (
+                    <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />{selectedLead.building.name}</p>
+                  )}
                 </div>
+                <LeadUnitsOfInterest leadId={selectedLead.id} primaryUnitId={selectedLead.unitId} />
                 {!['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
                   <button
                     onClick={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, unitId: selectedLead.unitId || '', buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}

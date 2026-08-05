@@ -29,7 +29,10 @@ const BASE_NAV_ITEMS = [
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
   { label: 'Investors', icon: FiBriefcase, path: '/investors', permission: 'investor:view' },
   { label: 'Brokers', icon: FiUsers, path: '/brokers', permission: 'broker:view' },
-  { label: 'Reports', icon: FiPieChart, pathKey: 'reports', roles: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER', 'SALES', 'MARKETING'] },
+  // Any-of: the Reports hub holds four independently gated report tabs, so the link
+  // shows when the viewer can see at least one of them. This was a role list, which
+  // let CONSTRUCTION and VIEWER through to a page where every tab was empty.
+  { label: 'Reports', icon: FiPieChart, pathKey: 'reports', anyPermission: ['financial:view', 'sales:view', 'lease:view', 'loan:view'] },
   { label: 'Admin', icon: FiUsers, path: '/admin', permission: 'user:manage' },
 ];
 
@@ -131,7 +134,7 @@ function Sidebar({
   mobileOpen: boolean;
   onMobileClose: () => void;
 }) {
-  const { hasPermission, user } = useAuthStore();
+  const { hasPermission, hasAnyPermission, user } = useAuthStore();
   const role = user?.role ?? '';
   const dashPath = getDashPath(role);
   const reportsPath = getReportsPath(role);
@@ -154,7 +157,7 @@ function Sidebar({
     <div className="flex flex-col gap-1 px-2">
       {navItems.map((item) => {
         if (item.permission && !hasPermission(item.permission)) return null;
-        if (item.roles && !item.roles.includes(role)) return null;
+        if (item.anyPermission && !hasAnyPermission(...item.anyPermission)) return null;
         const Icon = item.icon;
         const isDashItem = item.pathKey === 'dashboard';
         const isReportsItem = item.pathKey === 'reports';
@@ -241,7 +244,7 @@ function Sidebar({
             <div className="flex flex-col gap-1 px-2">
               {navItems.map((item) => {
                 if (item.permission && !hasPermission(item.permission)) return null;
-                if (item.roles && !item.roles.includes(role)) return null;
+                if (item.anyPermission && !hasAnyPermission(...item.anyPermission)) return null;
                 const Icon = item.icon;
                 const isDashItem = item.pathKey === 'dashboard';
                 const isReportsItem = item.pathKey === 'reports';

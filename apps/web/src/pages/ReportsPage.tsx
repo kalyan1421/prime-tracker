@@ -395,17 +395,25 @@ const REPORT_TAB_TITLES: Record<string, string> = {
   debt: 'Debt & Financing',
 };
 
-const REPORT_TAB_ROLES: Record<string, string[]> = {
-  portfolio: ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING', 'PROJECT_MANAGER'],
-  sales:     ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'],
-  revenue:   ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'SALES'],
-  debt:      ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE'],
+/**
+ * Each tab renders exactly one report endpoint, so the tab is visible precisely when
+ * the viewer holds that endpoint's permission — no second list to keep in sync.
+ *
+ * This replaced a hard-coded role list, which had the two failure modes that list
+ * always has: it read `user.role` only, so a multi-role user was judged on their
+ * primary role alone; and it drifted from the server guard, showing tabs whose only
+ * request came back 403 (PROJECT_MANAGER on portfolio, MARKETING on sales).
+ */
+const REPORT_TAB_PERMISSIONS: Record<string, string> = {
+  portfolio: 'financial:view',   // GET /reports/portfolio
+  sales:     'sales:view',       // GET /reports/sales-summary
+  revenue:   'lease:view',       // GET /reports/revenue
+  debt:      'loan:view',        // GET /reports/debt
 };
 
 // ---- Main Reports Page ----
 export default function ReportsPage() {
-  const { user } = useAuthStore();
-  const role = user?.role || '';
+  const { hasPermission } = useAuthStore();
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Reports' });
 
@@ -416,8 +424,8 @@ export default function ReportsPage() {
   const projList = projects as any[];
   const filterProject = projectId ? projList.find((p) => p.id === projectId)?.name : undefined;
 
-  const visibleTabs = Object.keys(REPORT_TAB_ROLES).filter((key) =>
-    REPORT_TAB_ROLES[key].includes(role)
+  const visibleTabs = Object.keys(REPORT_TAB_PERMISSIONS).filter((key) =>
+    hasPermission(REPORT_TAB_PERMISSIONS[key])
   );
 
   const renderTab = (key: string) => {

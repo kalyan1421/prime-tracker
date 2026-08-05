@@ -3,6 +3,29 @@ import { useEffect } from 'react';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 
+/**
+ * Permission gate for read queries.
+ *
+ * Every read hook below that hits a `@RequirePermissions`-guarded route folds this
+ * into its `enabled`. The reason is a bug class this file kept reproducing: a page or
+ * widget is gated on one permission, but the hooks it calls need a different one, so a
+ * role that legitimately reaches the screen fires a request the server refuses. The
+ * user sees a red toast on a screen they are allowed to open, and nothing indicates
+ * which of the eight parallel queries failed.
+ *
+ * Gating per call site does not hold — a hook picks up a new caller and the gate is
+ * missed. The permission belongs to the endpoint, so it lives with the hook that calls
+ * it. A role without the permission now gets `undefined` (the same shape as "still
+ * loading"), never a 403, and the surrounding component decides what to render.
+ *
+ * This is deliberately NOT a security control. The server guard is. This only stops
+ * the client asking questions it already knows the answer to.
+ */
+function useCan(...permissions: string[]) {
+  const hasAnyPermission = useAuthStore((s) => s.hasAnyPermission);
+  return hasAnyPermission(...permissions);
+}
+
 // ---- Dashboard ----
 export function useDashboard() {
   return useQuery({
@@ -104,34 +127,38 @@ export function useProjectActivity(projectId: string, page = 1) {
 // tab's filter (backend prioritizes unitId > buildingId > projectId, same as the
 // dedicated useBuildingFinancialSummary/useUnitFinancialSummary hooks below).
 export function useFinancialSummary(projectId: string, buildingId?: string, unitId?: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['financials', projectId, buildingId, unitId],
     queryFn: () => api.get('/budgets/summary', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 export function useBuildingFinancialSummary(buildingId: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['financials', 'building', buildingId],
     queryFn: () => api.get('/budgets/summary', { params: { buildingId } }).then((r) => r.data),
-    enabled: !!buildingId,
+    enabled: can && (!!buildingId),
   });
 }
 
 export function useUnitFinancialSummary(unitId: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['financials', 'unit', unitId],
     queryFn: () => api.get('/budgets/summary', { params: { unitId } }).then((r) => r.data),
-    enabled: !!unitId,
+    enabled: can && (!!unitId),
   });
 }
 
 export function useBudgetByBuildingUnitReport(projectId: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['financials', 'report', projectId],
     queryFn: () => api.get('/budgets/report', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -139,26 +166,29 @@ export function useBudgetByBuildingUnitReport(projectId: string) {
 // buildingId/unitId narrow a project-wide list down to one building or unit — used by
 // the Budget tab's filter. Omit both for the project-wide list (existing behavior).
 export function useBudgetLines(projectId: string, buildingId?: string, unitId?: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['budgets', projectId, buildingId, unitId],
     queryFn: () => api.get('/budgets', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 export function useBuildingBudgetLines(buildingId: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['budgets', 'building', buildingId],
     queryFn: () => api.get('/budgets', { params: { buildingId } }).then((r) => r.data),
-    enabled: !!buildingId,
+    enabled: can && (!!buildingId),
   });
 }
 
 export function useUnitBudgetLines(unitId: string) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['budgets', 'unit', unitId],
     queryFn: () => api.get('/budgets', { params: { unitId } }).then((r) => r.data),
-    enabled: !!unitId,
+    enabled: can && (!!unitId),
   });
 }
 
@@ -199,10 +229,11 @@ export function useDeleteBudget() {
 
 // ---- Milestones ----
 export function useMilestones(projectId: string) {
+  const can = useCan('milestone:view');
   return useQuery({
     queryKey: ['milestones', projectId],
     queryFn: () => api.get('/milestones', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -316,27 +347,30 @@ export function useDeleteComment() {
 
 // ---- Monthly Lease Income ----
 export function useMonthlyLeaseIncome(projectId: string) {
+  const can = useCan('unit:view');
   return useQuery({
     queryKey: ['lease-income', projectId],
     queryFn: () => api.get('/units/lease-income', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 // ---- Leases ----
 export function useLeases(projectId: string) {
+  const can = useCan('lease:view');
   return useQuery({
     queryKey: ['leases', projectId],
     queryFn: () => api.get('/leases', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 export function useRentRoll(projectId: string) {
+  const can = useCan('lease:view');
   return useQuery({
     queryKey: ['rent-roll', projectId],
     queryFn: () => api.get('/leases/rent-roll', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -380,10 +414,11 @@ export function useDeleteLease() {
 
 // ---- Sales ----
 export function useSalesPipeline(projectId: string) {
+  const can = useCan('sales:view');
   return useQuery({
     queryKey: ['sales', projectId],
     queryFn: () => api.get('/sales/pipeline', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -432,10 +467,11 @@ export function useDeleteSale() {
 
 // ---- Loans ----
 export function useLoans(projectId: string) {
+  const can = useCan('loan:view');
   return useQuery({
     queryKey: ['loans', projectId],
     queryFn: () => api.get('/loans', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -471,19 +507,21 @@ export function useDeleteLoan() {
 }
 
 export function useMonthlyPayments(projectId: string) {
+  const can = useCan('loan:view');
   return useQuery({
     queryKey: ['monthly-payments', projectId],
     queryFn: () => api.get('/loans/monthly-payments', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 // ---- Commitments ----
 export function useCommitments(projectId: string, buildingId?: string, unitId?: string) {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['commitments', projectId, buildingId, unitId],
     queryFn: () => api.get('/commitments', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -524,10 +562,11 @@ export function useDeleteCommitment() {
 
 // ---- KPI ----
 export function useKpiHistory(projectId: string) {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['kpi', projectId],
     queryFn: () => api.get('/kpi/history', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -563,13 +602,14 @@ export function useAssignableUsers() {
 }
 
 export function useUsers(enabled = true) {
+  const can = useCan('user:manage');
   return useQuery({
     queryKey: ['users'],
     queryFn: () => api.get('/users').then((r) => r.data),
-    // /users requires user:manage. Callers that render for every role (the project
-    // Team Members card) must pass false when the viewer cannot manage users, or the
-    // request 403s on every render. Defaults true so existing call sites are unchanged.
-    enabled,
+    // `can` covers the user:manage check the call sites used to do by hand. The
+    // parameter is still honoured for callers that suppress the fetch for their own
+    // reasons (a collapsed panel, a modal that has not opened yet).
+    enabled: enabled && can,
   });
 }
 
@@ -602,9 +642,11 @@ export function useToggleUserActive() {
 
 // ---- Audit ----
 export function useAuditLog(params?: { action?: string; entity?: string; limit?: number }) {
+  const can = useCan('audit:view');
   return useQuery({
     queryKey: ['audit', params],
     queryFn: () => api.get('/audit', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -797,59 +839,75 @@ export function useDeleteUser() {
 
 // ---- Roles ----
 export function useRoleCounts() {
+  const can = useCan('user:manage');
   return useQuery({
     queryKey: ['roles', 'counts'],
     queryFn: () => api.get('/users/roles').then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useRoleDefinitions() {
+  const can = useCan('user:manage');
   return useQuery({
     queryKey: ['roles', 'definitions'],
     queryFn: () => api.get('/users/roles/definitions').then((r) => r.data),
+    enabled: can,
   });
 }
 
 // ---- Reports ----
 export function usePortfolioReport() {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['report-portfolio'],
     queryFn: () => api.get('/reports/portfolio').then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useSalesReport() {
+  const can = useCan('sales:view');
   return useQuery({
     queryKey: ['report-sales'],
     queryFn: () => api.get('/reports/sales-summary').then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useRevenueReport() {
+  const can = useCan('lease:view');
   return useQuery({
     queryKey: ['report-revenue'],
     queryFn: () => api.get('/reports/revenue').then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useDebtReport() {
+  const can = useCan('loan:view');
   return useQuery({
     queryKey: ['report-debt'],
     queryFn: () => api.get('/reports/debt').then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useUnitSalesReport() {
+  const can = useCan('sales:view');
   return useQuery({
     queryKey: ['report-unit-sales'],
     queryFn: () => api.get('/reports/unit-sales').then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useVacancyReport(params?: { projectId?: string; minDays?: number }) {
+  const can = useCan('sales:view');
   return useQuery({
     queryKey: ['report-vacancy', params],
     queryFn: () => api.get('/reports/vacancy', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -930,23 +988,25 @@ export interface NotificationPreference {
 
 // ---- Leads ----
 export function useLeadDashboard(params?: { projectId?: string }) {
+  const can = useCan('lead:view');
   return useQuery({
     queryKey: ['leads', 'dashboard', params],
     queryFn: () => api.get('/leads/dashboard', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useLeads(
   params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string; brokerId?: string },
-  // Opt-out for callers that must not fire the request at all — /leads requires
-  // lead:view, so a role without it would 403 just by rendering the caller.
-  // Defaults true, so every existing call site is unchanged.
+  // The lead:view check that used to live here is now `can`, below. The parameter
+  // remains for callers that suppress the fetch for their own reasons.
   enabled = true,
 ) {
+  const can = useCan('lead:view');
   return useQuery({
     queryKey: ['leads', params],
     queryFn: () => api.get('/leads', { params }).then((r) => r.data),
-    enabled,
+    enabled: enabled && can,
   });
 }
 
@@ -1021,9 +1081,11 @@ export function useConvertLead() {
 // ---- Campaigns (Sprint 2 — marketing-spend attribution) ----
 
 export function useCampaigns(params?: { projectId?: string; status?: string; channel?: string }) {
+  const can = useCan('campaign:view');
   return useQuery({
     queryKey: ['campaigns', params],
     queryFn: () => api.get('/campaigns', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1036,23 +1098,29 @@ export function useCampaign(id: string) {
 }
 
 export function useCampaignPerformance(params?: { projectId?: string; from?: string; to?: string }) {
+  const can = useCan('campaign:view');
   return useQuery({
     queryKey: ['campaigns', 'performance', params],
     queryFn: () => api.get('/campaigns/performance', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useCampaignSpendTrend(params?: { projectId?: string; monthsBack?: number }) {
+  const can = useCan('campaign:view');
   return useQuery({
     queryKey: ['campaigns', 'spend-trend', params],
     queryFn: () => api.get('/campaigns/spend-trend', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useCampaignSpendByCampaign(params?: { projectId?: string }) {
+  const can = useCan('campaign:view');
   return useQuery({
     queryKey: ['campaigns', 'spend-by-campaign', params],
     queryFn: () => api.get('/campaigns/spend-by-campaign', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1098,42 +1166,52 @@ export function useRecordCampaignSpend() {
 
 // ---- Role-Based Dashboards ----
 export function useFounderDashboard() {
+  const can = useCan('unit:view');
   return useQuery({
     queryKey: ['dashboard', 'founder'],
     queryFn: () => api.get('/dashboard/founder').then((r) => r.data),
     staleTime: 5 * 60 * 1000,
+    enabled: can,
   });
 }
 
 export function useFinanceDashboard() {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['dashboard', 'finance'],
     queryFn: () => api.get('/dashboard/finance').then((r) => r.data),
     staleTime: 5 * 60 * 1000,
+    enabled: can,
   });
 }
 
 export function useConstructionDashboard() {
+  const can = useCan('unit:view');
   return useQuery({
     queryKey: ['dashboard', 'construction'],
     queryFn: () => api.get('/dashboard/construction').then((r) => r.data),
     staleTime: 5 * 60 * 1000,
+    enabled: can,
   });
 }
 
 export function useSalesDashboard() {
+  const can = useCan('unit:view');
   return useQuery({
     queryKey: ['dashboard', 'sales'],
     queryFn: () => api.get('/dashboard/sales').then((r) => r.data),
     staleTime: 5 * 60 * 1000,
+    enabled: can,
   });
 }
 
 // ---- QuickBooks ----
 export function useQBStatus() {
+  const can = useCan('quickbooks:manage');
   return useQuery({
     queryKey: ['qb-status'],
     queryFn: () => api.get('/quickbooks/status').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1150,34 +1228,40 @@ export function useQBSync() {
 
 // ---- Cash Flow ----
 export function useCashFlow(projectId: string) {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['cashflow', projectId],
     queryFn: () => api.get('/cashflow', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 export function useCashFlowForecast(projectId: string, months?: number) {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['cashflow-forecast', projectId, months],
     queryFn: () => api.get('/cashflow/forecast', { params: { projectId, months } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 /** Portfolio-wide cashflow forecast across the viewer's projects. */
 export function useCashflowPortfolio(months?: number) {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['cashflow-portfolio', months],
     queryFn: () => api.get('/cashflow/portfolio', { params: { months } }).then((r) => r.data),
+    enabled: can,
   });
 }
 
 /** Budget cash-obligations by category, M/Q/A. Omit projectId for portfolio. */
 export function useBudgetObligations(projectId?: string, granularity: 'month' | 'quarter' | 'year' = 'month') {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['budget-obligations', projectId ?? 'portfolio', granularity],
     queryFn: () => api.get('/cashflow/obligations', { params: { projectId, granularity } }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1206,10 +1290,11 @@ export function useDeleteCashFlowEntry() {
 
 // ---- Draw Management ----
 export function useProjectDraws(projectId: string) {
+  const can = useCan('draw:view');
   return useQuery({
     queryKey: ['draws', projectId],
     queryFn: () => api.get('/loans/draws', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -1303,9 +1388,11 @@ export function useDeleteDrawScheduleLine() {
 
 // ---- Vendors ----
 export function useVendors() {
+  const can = useCan('vendor:view');
   return useQuery({
     queryKey: ['vendors'],
     queryFn: () => api.get('/vendors').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1328,18 +1415,20 @@ export function useUpdateVendor() {
 
 // ---- Contracts ----
 export function useContracts(projectId: string) {
+  const can = useCan('vendor:view');
   return useQuery({
     queryKey: ['contracts', projectId],
     queryFn: () => api.get('/contracts', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
 export function useContractSummary(projectId: string) {
+  const can = useCan('vendor:view');
   return useQuery({
     queryKey: ['contracts-summary', projectId],
     queryFn: () => api.get('/contracts/summary', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -1413,19 +1502,21 @@ export function useAddContractPayment() {
 
 // ---- Documents ----
 export function useDocuments(params: { projectId?: string; unitId?: string; buildingId?: string; interiorProjectId?: string }) {
+  const can = useCan('document:view');
   return useQuery({
     queryKey: ['documents', params],
     queryFn: () => api.get('/documents', { params }).then((r) => r.data),
-    enabled: !!(params.projectId || params.unitId || params.interiorProjectId),
+    enabled: can && (!!(params.projectId || params.unitId || params.interiorProjectId)),
     staleTime: 0, // S3 signed URLs must always be fresh — never serve from cache
   });
 }
 
 export function useInteriorDocuments(interiorProjectId?: string) {
+  const can = useCan('document:view');
   return useQuery({
     queryKey: ['documents', { interiorProjectId }],
     queryFn: () => api.get('/documents', { params: { interiorProjectId } }).then((r) => r.data),
-    enabled: !!interiorProjectId,
+    enabled: can && (!!interiorProjectId),
     staleTime: 0,
   });
 }
@@ -1475,9 +1566,11 @@ export function useReplaceDocument() {
 
 // ---- Investors ----
 export function useInvestors() {
+  const can = useCan('investor:view');
   return useQuery({
     queryKey: ['investors'],
     queryFn: () => api.get('/investors').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1490,9 +1583,11 @@ export function useInvestor(id: string) {
 }
 
 export function useInvestorSummary() {
+  const can = useCan('investor:view');
   return useQuery({
     queryKey: ['investor-summary'],
     queryFn: () => api.get('/investors/summary').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1680,9 +1775,11 @@ export function useDeleteTaskAttachment() {
 // ---- Organizations ----
 
 export function useOrganizations() {
+  const can = useCan('org:manage');
   return useQuery({
     queryKey: ['organizations'],
     queryFn: () => api.get('/organizations').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -1755,10 +1852,11 @@ export function useBudgetRevisions(budgetLineId: string | undefined) {
 }
 /** Project-wide budget change log (every revision across all lines, newest first). */
 export function useProjectBudgetRevisions(projectId: string | undefined) {
+  const can = useCan('budget:view');
   return useQuery({
     queryKey: ['budget-revisions', 'project', projectId],
     queryFn: () => api.get('/budgets/revisions', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 export function useCreateBudgetRevision() {
@@ -1787,6 +1885,7 @@ export function useApproveBudgetRevision() {
 
 // ─────────── Slice 6: Sales forecast ───────────
 export function useSalesForecast(projectId: string | undefined) {
+  const can = useCan('sales:view');
   return useQuery({
     queryKey: ['sales-forecast', projectId],
     queryFn: () => api.get('/sales/forecast', { params: { projectId } }).then((r) => r.data as {
@@ -1795,7 +1894,7 @@ export function useSalesForecast(projectId: string | undefined) {
       byStage: Array<{ stage: string; count: number; value: number; weighted: number; probability: number }>;
       closedYtd: number;
     }),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
     staleTime: 60_000,
   });
 }
@@ -1898,10 +1997,11 @@ export function useRenameDrawDocument() {
 
 // Actuals (POSTed expenses) — for variance computation
 export function useActuals(projectId: string | undefined, buildingId?: string, unitId?: string) {
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['actuals', projectId, buildingId, unitId],
     queryFn: () => api.get('/actuals', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -1984,6 +2084,7 @@ export function useDeleteMilestonePhoto() {
  * schedule line.
  */
 export function useProjectDrawSchedules(projectId: string | undefined) {
+  const can = useCan('loan:view');
   return useQuery({
     queryKey: ['project-draw-schedules', projectId],
     queryFn: async () => {
@@ -2006,7 +2107,7 @@ export function useProjectDrawSchedules(projectId: string | undefined) {
       );
       return schedules.flat();
     },
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -2015,9 +2116,11 @@ export function useProjectDrawSchedules(projectId: string | undefined) {
 // ============================================================================
 
 export function useInteriorProjects(params?: { unitId?: string; buildingId?: string; status?: string }) {
+  const can = useCan('interior:view');
   return useQuery({
     queryKey: ['interior', params],
     queryFn: () => api.get('/interior', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -2030,9 +2133,11 @@ export function useInteriorProject(id?: string) {
 }
 
 export function useInteriorPortfolio() {
+  const can = useCan('interior:view');
   return useQuery({
     queryKey: ['interior', 'portfolio'],
     queryFn: () => api.get('/interior/portfolio').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -2068,9 +2173,11 @@ export function useAdvanceInteriorPhase() {
 
 // ─────── Interior package templates ───────
 export function useInteriorTemplates() {
+  const can = useCan('interior:view');
   return useQuery({
     queryKey: ['interior', 'templates'],
     queryFn: () => api.get('/interior/templates').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -2182,9 +2289,11 @@ export function useSalePayments(saleId?: string) {
 }
 
 export function useReceivables(weeks = 4) {
+  const can = useCan('interior:finance');
   return useQuery({
     queryKey: ['receivables', weeks],
     queryFn: () => api.get('/sales/receivables', { params: { weeks } }).then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -2243,10 +2352,11 @@ export function useDeleteSalePayment() {
 // ============================================================================
 
 export function useDailyLogs(projectId?: string, buildingId?: string) {
+  const can = useCan('dailylog:view');
   return useQuery({
     queryKey: ['daily-logs', projectId, buildingId ?? 'all'],
     queryFn: () => api.get('/daily-logs', { params: { projectId, buildingId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can && (!!projectId),
   });
 }
 
@@ -2301,16 +2411,20 @@ export function useRemoveDailyLogPhoto() {
 // ============================================================================
 
 export function useBrokers(includeInactive = false) {
+  const can = useCan('broker:view');
   return useQuery({
     queryKey: ['brokers', includeInactive],
     queryFn: () => api.get('/brokers', { params: { includeInactive } }).then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useBrokerReport() {
+  const can = useCan('broker:view');
   return useQuery({
     queryKey: ['brokers', 'report'],
     queryFn: () => api.get('/brokers/report').then((r) => r.data),
+    enabled: can,
   });
 }
 
@@ -2368,10 +2482,11 @@ export function useMarkBrokerCommissionPaid() {
 // ============================================================================
 
 export function useUnitWaitlist(unitId?: string) {
+  const can = useCan('lead:view');
   return useQuery({
     queryKey: ['unit-waitlist', unitId],
     queryFn: () => api.get('/leads/waitlist', { params: { unitId } }).then((r) => r.data),
-    enabled: !!unitId,
+    enabled: can && (!!unitId),
   });
 }
 

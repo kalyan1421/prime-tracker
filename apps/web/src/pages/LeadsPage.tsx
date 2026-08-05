@@ -230,20 +230,70 @@ function ConvertToSaleModal({ isOpen, onClose, lead }: { isOpen: boolean; onClos
   );
 }
 
-function LeadDetailPanel({ lead }: { lead: any }) {
+function LeadDetailPanel({ lead: selected }: { lead: any }) {
   const { isOpen: isConvertOpen, onOpen: onConvertOpen, onClose: onConvertClose } = useDisclosure();
+  const updateLead = useUpdateLead();
+
+  // The parent holds the clicked row as component state, so it is a snapshot taken at
+  // click time — an edit made from inside this panel invalidated the query but left
+  // that snapshot untouched, and the panel kept showing the old status. Prefer the
+  // live record and fall back to the snapshot only until the first fetch lands.
+  const { data: fresh } = useLead(selected?.id);
+  const lead = fresh ?? selected;
+  // Status options are configurable per org, so read them rather than hard-coding
+  // the enum — the same source the filter chips and the edit form use.
+  const { data: statusOpts = [] } = useCustomOptions('lead_status');
+
+  // Moving a lead along the pipeline is the single most frequent action on this page,
+  // and it used to require opening the edit modal, changing one field and saving.
+  // The project Leads tab already had an inline control; this makes the two match.
+  const changeStatus = async (next: string) => {
+    if (!next || next === lead.status) return;
+    try {
+      await updateLead.mutateAsync({ id: lead.id, data: { status: next } });
+      addToast({ title: `Moved to ${next.replace('_', ' ').toLowerCase()}`, color: 'success' });
+    } catch {
+      addToast({ title: 'Could not update status', color: 'danger' });
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-4">
-        <div>
+      <div className="flex items-start justify-between gap-2 mb-4">
+        <div className="min-w-0">
           <h3 className="font-semibold text-gray-800">{lead.name || 'Unnamed Lead'}</h3>
           <p className="text-xs text-gray-500">{lead.project?.name}</p>
         </div>
-        <Chip size="sm" color={STATUS_COLORS[lead.status] || 'default'} variant="flat">
-          {lead.status.replace('_', ' ')}
-        </Chip>
+        <Select
+          aria-label="Lead status"
+          size="sm"
+          variant="flat"
+          className="w-[150px] shrink-0"
+          selectedKeys={lead.status ? new Set([lead.status]) : new Set()}
+          isDisabled={updateLead.isPending}
+          onSelectionChange={(keys) => changeStatus(Array.from(keys)[0] as string)}
+          renderValue={() => (
+            <span className="text-xs font-semibold uppercase tracking-wide">
+              {(lead.status || '').replace('_', ' ')}
+            </span>
+          )}
+        >
+          {(statusOpts as any[]).map((o) => (
+            <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
+          ))}
+        </Select>
       </div>
+
+      {/* The linked unit/building. The lead card shows this, but the detail panel did
+          not, so a lead attached to a unit read as if it had none. */}
+      {(lead.unit || lead.building) && (
+        <div className="mb-3 flex items-center gap-1.5 text-xs text-gray-600">
+          <FiHome className="shrink-0 text-gray-400" />
+          {lead.unit
+            ? <span>Unit <span className="font-medium">{lead.unit.unitNumber}</span></span>
+            : <span>Building <span className="font-medium">{lead.building.name}</span></span>}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 text-sm">
         {lead.email && (

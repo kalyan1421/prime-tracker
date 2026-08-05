@@ -89,6 +89,32 @@ export class LeadsService {
   // ─────── Multi-unit interest / per-unit waitlist ───────
 
   /** Record that a lead is interested in a unit (idempotent on lead+unit). */
+  /**
+   * Keep the lead's primary unit visible in "Units of interest".
+   *
+   * Lead.unitId (the single primary link) and LeadUnitInterest (the many-to-many
+   * waitlist) are different things, and nothing joined them — so a lead showing
+   * "Unit 102" on its card still read "Not on any unit waitlist yet" in its detail
+   * panel. Whatever the modelling intent, a unit the lead is explicitly attached to
+   * IS a unit they are interested in, so the primary link is mirrored into the list.
+   *
+   * Idempotent (unique on leadId+unitId) and never removes rows: de-selecting the
+   * primary unit leaves the interest behind, which is right — interest outlives the
+   * current link, and removing it is an explicit action in the panel.
+   */
+  private async mirrorPrimaryUnitAsInterest(leadId: string, unitId?: string | null) {
+    if (!unitId) return;
+    try {
+      await this.prisma.leadUnitInterest.upsert({
+        where: { leadId_unitId: { leadId, unitId } },
+        create: { leadId, unitId },
+        update: {},
+      });
+    } catch {
+      // Never fail the lead write over the mirror — the link itself is what matters.
+    }
+  }
+
   async addInterest(leadId: string, unitId: string, note?: string) {
     if (!unitId) throw new BadRequestException('unitId is required');
     const [lead, unit] = await Promise.all([
@@ -194,7 +220,7 @@ export class LeadsService {
       });
       if (!building) throw new BadRequestException('Building does not belong to the specified project');
     }
-    return this.prisma.lead.create({
+    const created = await this.prisma.lead.create({
       data: {
         ...rest,
         unitId: unitId ?? null,
@@ -212,6 +238,8 @@ export class LeadsService {
         createdByUser: { select: { id: true, name: true } },
       },
     });
+    await this.mirrorPrimaryUnitAsInterest(created.id, created.unitId);
+    return created;
   }
 
   async update(id: string, data: {
@@ -232,9 +260,22 @@ export class LeadsService {
   }) {
     const existing = await this.findById(id);
     const { budget, unitId, buildingId, ...rest } = data;
-    // XOR check: only enforce if BOTH would end up set after this update.
-    const effectiveUnitId = unitId === undefined ? existing.unitId : unitId;
-    const effectiveBuildingId = buildingId === undefined ? existing.buildingId : buildingId;
+
+    // A lead attaches to a unit XOR a building, so SETTING one implicitly clears the
+    // other — moving a lead from a building to a unit is a switch, not an error.
+    //
+    // Previously the caller had to send the opposite side as null itself. The project
+    // Leads tab has no Building field and so never could, which made "pick a unit" on a
+    // building-linked lead fail with "A lead can attach to either a unit or a building,
+    // not both" — an error about a combination the user never asked for. Resolving it
+    // here fixes every caller rather than one form.
+    const clearsBuilding = unitId !== undefined && unitId !== null;
+    const clearsUnit = buildingId !== undefined && buildingId !== null;
+    const nextUnitId = clearsUnit ? null : unitId;
+    const nextBuildingId = clearsBuilding ? null : buildingId;
+
+    const effectiveUnitId = nextUnitId === undefined ? existing.unitId : nextUnitId;
+    const effectiveBuildingId = nextBuildingId === undefined ? existing.buildingId : nextBuildingId;
     if (effectiveUnitId && effectiveBuildingId) {
       throw new BadRequestException('A lead can attach to either a unit or a building, not both');
     }
@@ -252,12 +293,12 @@ export class LeadsService {
       });
       if (!building) throw new BadRequestException('Building does not belong to this lead\'s project');
     }
-    return this.prisma.lead.update({
+    const updated = await this.prisma.lead.update({
       where: { id },
       data: {
         ...rest,
-        ...(unitId !== undefined ? { unitId } : {}),
-        ...(buildingId !== undefined ? { buildingId } : {}),
+        ...(nextUnitId !== undefined ? { unitId: nextUnitId } : {}),
+        ...(nextBuildingId !== undefined ? { buildingId: nextBuildingId } : {}),
         budget: budget !== undefined ? budget : undefined,
       },
       include: {
@@ -268,6 +309,8 @@ export class LeadsService {
         createdByUser: { select: { id: true, name: true } },
       },
     });
+    await this.mirrorPrimaryUnitAsInterest(id, updated.unitId);
+    return updated;
   }
 
   async delete(id: string) {
