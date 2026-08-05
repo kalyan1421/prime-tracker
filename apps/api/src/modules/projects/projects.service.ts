@@ -5,6 +5,14 @@ import { isProjectScopedRole, isMultiRoleProjectScoped } from '@prime-tracker/sh
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 
+/**
+ * Lead statuses that are NOT "open". Mirrors LeadsService's own definition
+ * (`status: { notIn: [...] }` in its dashboard query) — a lead is open until it has
+ * either converted or died. Kept as one constant so the project card's figure and the
+ * Leads module's figure cannot drift apart.
+ */
+const OPEN_LEAD_EXCLUDED = ['CONVERTED', 'LOST', 'DEAD'];
+
 export interface ListProjectsParams {
   status?: string;
   phase?: string;
@@ -99,7 +107,17 @@ export class ProjectsService {
       this.prisma.project.findMany({
         where,
         include: {
-          _count: { select: { buildings: { where: { deletedAt: null } }, milestones: true, budgetLines: { where: { deletedAt: null } } } },
+          // `leads` is counted with the SAME predicate LeadsService uses for its "open"
+          // figure, so the project card and the Leads module can never disagree about
+          // what an open lead is.
+          _count: {
+            select: {
+              buildings: { where: { deletedAt: null } },
+              milestones: true,
+              budgetLines: { where: { deletedAt: null } },
+              leads: { where: { status: { notIn: OPEN_LEAD_EXCLUDED } } },
+            },
+          },
           buildings: { where: { deletedAt: null }, include: { _count: { select: { units: { where: { deletedAt: null } } } } } },
           budgetLines: { where: { deletedAt: null }, select: { baselineAmt: true, revisedAmt: true } },
           actuals: { select: { amount: true } },
@@ -111,14 +129,32 @@ export class ProjectsService {
       paginated ? this.prisma.project.count({ where }) : Promise.resolve(0),
     ]);
 
+    // Sold units, in ONE grouped query rather than loading unit rows.
+    //
+    // Prisma allows only a single filtered `_count` per relation, so the sold figure
+    // cannot ride along beside the existing total-units count. Selecting the units
+    // themselves would pull a row per unit per project — fine for two projects, not for
+    // a real portfolio. Grouping by building and folding the result back through the
+    // buildings already included keeps it to one extra round trip whatever the size.
+    const buildingIds = rawProjects.flatMap((p) => p.buildings.map((b) => b.id)).filter(Boolean);
+    const soldRows = buildingIds.length
+      ? await this.prisma.unit.groupBy({
+          by: ['buildingId'],
+          where: { buildingId: { in: buildingIds }, deletedAt: null, status: 'SOLD' },
+          _count: { _all: true },
+        })
+      : [];
+    const soldByBuilding = new Map(soldRows.map((r) => [r.buildingId, r._count._all]));
+
     const projects = rawProjects.map((p) => {
       const unitCount = p.buildings.reduce((sum, b) => sum + b._count.units, 0);
+      const soldCount = p.buildings.reduce((sum, b) => sum + (soldByBuilding.get(b.id) ?? 0), 0);
       const budgetTotal = p.budgetLines.reduce(
         (sum, b) => sum + Number(b.revisedAmt ?? b.baselineAmt ?? 0), 0,
       );
       const actualsTotal = p.actuals.reduce((sum, a) => sum + Number(a.amount ?? 0), 0);
       const { buildings, budgetLines, actuals, ...rest } = p;
-      return { ...rest, unitCount, budgetTotal, actualsTotal };
+      return { ...rest, unitCount, soldCount, openLeadCount: p._count.leads, budgetTotal, actualsTotal };
     });
 
     if (paginated) {

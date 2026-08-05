@@ -785,6 +785,73 @@ function fundedAmount(d: any): number {
   return Number(d?.approvedAmount ?? d?.amount ?? 0);
 }
 
+/**
+ * Bar/dot colours for the unit-status mix.
+ *
+ * Separate from STATUS_COLORS, which yields HeroUI semantic names ("success") suitable
+ * for a Chip's `color` prop but not usable as a background class on a bar segment.
+ * Same hues, so a status reads identically whether it appears as a chip or a segment.
+ */
+const UNIT_STATUS_BAR: Record<string, { bar: string; dot: string }> = {
+  AVAILABLE:          { bar: 'bg-emerald-500', dot: 'bg-emerald-500' },
+  UNDER_CONTRACT:     { bar: 'bg-amber-500',   dot: 'bg-amber-500' },
+  LEASE_PENDING:      { bar: 'bg-amber-400',   dot: 'bg-amber-400' },
+  LEASED:             { bar: 'bg-blue-500',    dot: 'bg-blue-500' },
+  OCCUPIED:           { bar: 'bg-indigo-500',  dot: 'bg-indigo-500' },
+  SOLD:               { bar: 'bg-violet-500',  dot: 'bg-violet-500' },
+  UNDER_CONSTRUCTION: { bar: 'bg-slate-400',   dot: 'bg-slate-400' },
+};
+
+/**
+ * The unit mix as a proportion, not a row of chips.
+ *
+ * This card previously rendered one chip per present status. On a project whose units
+ * are all in one state that is a single chip in a card the grid stretches to match its
+ * taller neighbour — a card mostly made of empty space, which is what prompted the
+ * question. Chips also could not answer the question the title poses: a "mix" is a set
+ * of proportions, and seven separate counts do not show one.
+ *
+ * The footer is pushed down with mt-auto, so any height the grid hands this card becomes
+ * breathing room between the breakdown and the summary rather than a void beneath both.
+ */
+function UnitStatusMix({ counts, total, buildingCount }: {
+  counts: Record<string, number>; total: number; buildingCount: number;
+}) {
+  const present = UNIT_STATUS_ORDER.filter((s) => (counts[s] ?? 0) > 0);
+  const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Proportion bar. aria-hidden because the same figures follow as real text —
+          a screen reader should read the list, not a decorative strip. */}
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100" aria-hidden="true">
+        {present.map((s) => (
+          <div
+            key={s}
+            className={UNIT_STATUS_BAR[s]?.bar ?? 'bg-gray-300'}
+            style={{ width: `${pct(counts[s])}%` }}
+          />
+        ))}
+      </div>
+
+      <ul className="mt-3 space-y-1.5">
+        {present.map((s) => (
+          <li key={s} className="flex items-center gap-2 text-xs">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${UNIT_STATUS_BAR[s]?.dot ?? 'bg-gray-300'}`} />
+            <span className="flex-1 truncate text-gray-600">{s.replace(/_/g, ' ').toLowerCase()}</span>
+            <span className="font-semibold tabular-nums text-gray-800">{counts[s]}</span>
+            <span className="w-10 text-right tabular-nums text-gray-400">{Math.round(pct(counts[s]))}%</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-auto pt-3 text-[11px] text-gray-400">
+        {total} unit{total === 1 ? '' : 's'} across {buildingCount} building{buildingCount === 1 ? '' : 's'}
+      </p>
+    </div>
+  );
+}
+
 function OverviewTab({ project: p }: { project: any }) {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
@@ -1047,13 +1114,7 @@ function OverviewTab({ project: p }: { project: any }) {
           </CardHeader>
           <CardBody>
             {unitCount > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {UNIT_STATUS_ORDER.filter((status) => unitStatusCounts[status] > 0).map((status) => (
-                  <Chip key={status} size="sm" variant="flat" color={STATUS_COLORS[status] || 'default'} className="text-[10px]">
-                    <span className="font-bold">{unitStatusCounts[status]}</span> {status.replace(/_/g, ' ')}
-                  </Chip>
-                ))}
-              </div>
+              <UnitStatusMix counts={unitStatusCounts} total={unitCount} buildingCount={buildings.length} />
             ) : (
               <EmptyState title="No units yet" message="Units appear here once buildings have units." />
             )}
@@ -4512,6 +4573,58 @@ function SalesTab({ projectId }: { projectId: string }) {
 // ---- Buildings Tab ----
 const EMPTY_BUILDING = { name: '', llcName: '', totalSqft: '', acreage: '', stories: '', buildingType: '', phase: 'PRE_DEVELOPMENT', coverPhotoPath: '' };
 
+/**
+ * Tint for a building's placeholder cover, keyed to its type.
+ *
+ * A flat grey block for every photo-less building would read as "image failed to load".
+ * Tinting by type makes the placeholder carry a little information, so a card without a
+ * photo still looks deliberate — and the retail block stays distinguishable from the
+ * parking structure at a glance.
+ */
+const BUILDING_COVER_TINT: Record<string, string> = {
+  RESIDENTIAL: 'from-blue-50 to-blue-100 text-blue-300',
+  COMMERCIAL:  'from-emerald-50 to-emerald-100 text-emerald-300',
+  MIXED_USE:   'from-violet-50 to-violet-100 text-violet-300',
+  INDUSTRIAL:  'from-amber-50 to-amber-100 text-amber-300',
+  RETAIL:      'from-teal-50 to-teal-100 text-teal-300',
+  OFFICE:      'from-indigo-50 to-indigo-100 text-indigo-300',
+  PARKING:     'from-slate-100 to-slate-200 text-slate-400',
+  AMENITY:     'from-pink-50 to-pink-100 text-pink-300',
+  LOT:         'from-lime-50 to-lime-100 text-lime-400',
+};
+
+/** Fixed-height cover band for a building card: the photo, or a typed placeholder. */
+function BuildingCover({ building }: { building: any }) {
+  const [failed, setFailed] = useState(false);
+  const url = building.coverPhotoUrl as string | undefined;
+  const showPhoto = !!building.coverPhotoPath && !!url && !failed;
+  const tint = BUILDING_COVER_TINT[building.buildingType] ?? 'from-gray-50 to-gray-100 text-gray-300';
+
+  if (showPhoto) {
+    return (
+      <div className="w-full h-28 shrink-0 bg-gray-100 overflow-hidden">
+        <img
+          src={url}
+          alt=""
+          className="w-full h-full object-cover"
+          // A broken URL previously faded the <img> to 30% and left an empty band. Fall
+          // through to the placeholder instead, so a dead link looks the same as no photo.
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`w-full h-28 shrink-0 flex items-center justify-center bg-gradient-to-br ${tint}`}
+      aria-hidden="true"
+    >
+      <FiHome className="text-3xl" />
+    </div>
+  );
+}
+
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('building:edit');
@@ -4804,17 +4917,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {buildings.map((b: any) => (
             <Card key={b.id} shadow="sm">
-              {/* Slice 1: cover photo — bleeds to card edges as visual identity */}
-              {b.coverPhotoPath && (
-                <div className="w-full h-28 bg-gray-100 overflow-hidden">
-                  <img
-                    src={(b as any).coverPhotoUrl || ''}
-                    alt=""
-                    className="w-full h-full object-cover"
-                    onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
-                  />
-                </div>
-              )}
+              {/* Cover band — ALWAYS rendered, at a fixed height.
+                  It used to be conditional, so within one grid row a building with a
+                  photo pushed its title 112px down while a building without one kept its
+                  title at the top and collected the leftover height as dead space at the
+                  bottom. Same row, two different card structures. Reserving the band
+                  unconditionally means every title, chip and stat line aligns across the
+                  grid; a building with no photo gets a placeholder rather than a hole. */}
+              <BuildingCover building={b} />
               <CardHeader className="pb-0 flex justify-between items-start">
                 <div className="flex-1 min-w-0 pr-2">
                   {/* Sprint B: building name links to the per-building dashboard */}
