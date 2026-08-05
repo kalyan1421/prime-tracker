@@ -111,6 +111,15 @@ echo "=== Pulled: \$(git log --oneline -1) ==="
 
 pnpm install --frozen-lockfile 2>&1 | tail -5
 
+# @prime-tracker/shared compiles to dist and the API resolves it from node_modules at
+# runtime. Only apps/api/dist is uploaded, and pnpm install does NOT build workspace
+# packages, so without this the box keeps whatever shared/dist it had from an earlier
+# deploy — shipping new API code against a STALE shared build. That is not theoretical:
+# the multi-role project-scoping fix lives entirely in shared, and locally it appeared
+# to do nothing until the package was rebuilt.
+pnpm --filter @prime-tracker/shared build 2>&1 | tail -3
+echo "=== shared rebuilt ==="
+
 aws s3 cp s3://${DEPLOY_BUCKET}/deploy/api-dist.tar.gz /tmp/api-dist.tar.gz --region ${AWS_REGION}
 tar -xzf /tmp/api-dist.tar.gz -C apps/api/
 echo "=== Dist extracted ==="
