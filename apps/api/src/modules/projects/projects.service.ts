@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, ProjectType } from '@prisma/client';
-import { isProjectScopedRole } from '@prime-tracker/shared';
+import { isProjectScopedRole, isMultiRoleProjectScoped } from '@prime-tracker/shared';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 
@@ -26,9 +26,24 @@ export interface ListProjectsParams {
  */
 export interface ProjectViewer {
   userId: string;
+  /** Primary role only — kept for display/logging. Scoping must use `roles`. */
   role: string;
+  /**
+   * Every role the user holds. Authoritative for scoping: ANY project-scoped role
+   * restricts them to their memberships. Without this a multi-role user whose PRIMARY
+   * role happened to be global saw the entire portfolio despite being a member of one
+   * project.
+   */
+  roles?: string[];
   /** Whether the viewer may see budget/spend aggregates (budget:view). */
   canViewFinancials?: boolean;
+}
+
+/** ANY project-scoped role restricts the viewer; falls back to the primary role. */
+function viewerIsScoped(viewer: ProjectViewer): boolean {
+  return viewer.roles?.length
+    ? isMultiRoleProjectScoped(viewer.roles)
+    : isProjectScopedRole(viewer.role);
 }
 
 @Injectable()
@@ -55,7 +70,7 @@ export class ProjectsService {
     }
 
     // Project-visibility scoping: field roles only see projects they're assigned to.
-    if (viewer && isProjectScopedRole(viewer.role)) {
+    if (viewer && viewerIsScoped(viewer)) {
       where.members = { some: { userId: viewer.userId } };
     }
 
@@ -121,7 +136,7 @@ export class ProjectsService {
   async findById(id: string, viewer?: ProjectViewer) {
     // Scoped roles can only open projects they're assigned to. Checked before the
     // fetch so a non-member can't tell an existing project from a missing one.
-    if (viewer && isProjectScopedRole(viewer.role)) {
+    if (viewer && viewerIsScoped(viewer)) {
       await this.assertViewerCanAccess(id, viewer);
     }
     const project = await this.prisma.project.findUnique({
@@ -324,7 +339,7 @@ export class ProjectsService {
   async getDashboardSummary(viewer?: ProjectViewer) {
     // Scoped viewers only aggregate their member projects.
     const scopeWhere: Prisma.ProjectWhereInput =
-      viewer && isProjectScopedRole(viewer.role)
+      viewer && viewerIsScoped(viewer)
         ? { id: { in: await this.access.accessibleProjectIds(viewer.userId) } }
         : {};
 

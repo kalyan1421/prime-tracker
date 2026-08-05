@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { isProjectScopedRole } from '@prime-tracker/shared';
+import { isProjectScopedRole, isMultiRoleProjectScoped } from '@prime-tracker/shared';
 
 /**
  * Resolves "which project(s) does this request touch?" and answers membership
@@ -188,7 +188,13 @@ const CONTROLLER_ID_ENTITY: Record<string, string> = {
 export class ProjectAccessService {
   constructor(private prisma: PrismaService) {}
 
-  isScoped(role: string | undefined): boolean {
+  /**
+   * `roles` is authoritative when supplied — a user is scoped if ANY role they hold is
+   * project-scoped. `role` alone is the primary only, which let a multi-role user with
+   * a global primary bypass membership entirely.
+   */
+  isScoped(role: string | undefined, roles?: string[]): boolean {
+    if (roles?.length) return isMultiRoleProjectScoped(roles);
     return !!role && isProjectScopedRole(role);
   }
 
@@ -209,11 +215,11 @@ export class ProjectAccessService {
    * memberships yields `[]`, which correctly returns nothing.
    */
   async listProjectScope(
-    viewer: { userId: string; role: string } | undefined,
+    viewer: { userId: string; role: string; roles?: string[] } | undefined,
     explicitProjectId?: string,
   ): Promise<string[] | undefined> {
     if (explicitProjectId) return undefined;
-    if (!viewer || !this.isScoped(viewer.role)) return undefined;
+    if (!viewer || !this.isScoped(viewer.role, viewer.roles)) return undefined;
     return this.accessibleProjectIds(viewer.userId);
   }
 

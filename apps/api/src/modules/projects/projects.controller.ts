@@ -37,6 +37,7 @@ export class ProjectsController {
   getDashboard(
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
     @CurrentUser('permissions') permissions: string[],
   ) {
     return this.projectsService.getDashboardSummary({
@@ -53,11 +54,12 @@ export class ProjectsController {
     @Query() query: ListProjectsDto,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
   ) {
     const canViewArchived = role === 'SUPER_ADMIN' || role === 'FOUNDER';
     return this.projectsService.findAll(
       { ...query, archived: canViewArchived ? query.archived : undefined },
-      { userId, role },
+      { userId, role, roles },
     );
   }
 
@@ -68,8 +70,9 @@ export class ProjectsController {
     @Param('slug') slug: string,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
   ) {
-    return this.projectsService.findBySlug(slug, { userId, role });
+    return this.projectsService.findBySlug(slug, { userId, role, roles });
   }
 
   @Get(':id/activity')
@@ -90,8 +93,9 @@ export class ProjectsController {
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
   ) {
-    return this.projectsService.findById(id, { userId, role });
+    return this.projectsService.findById(id, { userId, role, roles });
   }
 
   @Post()

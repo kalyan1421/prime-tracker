@@ -30,8 +30,9 @@ export class CampaignsController {
     @Query('channel') channel?: CampaignChannel,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.findAll({ projectId, status, channel, viewer: userId && role ? { userId, role } : undefined });
+    return this.service.findAll({ projectId, status, channel, viewer: userId && role ? { userId, role, roles } : undefined });
   }
 
   @Get('performance')
@@ -43,8 +44,9 @@ export class CampaignsController {
     @Query('to') to?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.performance({ projectId, from, to, viewer: userId && role ? { userId, role } : undefined });
+    return this.service.performance({ projectId, from, to, viewer: userId && role ? { userId, role, roles } : undefined });
   }
 
   @Get('spend-trend')
@@ -55,11 +57,12 @@ export class CampaignsController {
     @Query('monthsBack') monthsBack?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
     return this.service.spendTrend({
       projectId,
       monthsBack: monthsBack ? parseInt(monthsBack, 10) : undefined,
-      viewer: userId && role ? { userId, role } : undefined,
+      viewer: userId && role ? { userId, role, roles } : undefined,
     });
   }
 
@@ -70,8 +73,9 @@ export class CampaignsController {
     @Query('projectId') projectId?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.spendByCampaign({ projectId, viewer: userId && role ? { userId, role } : undefined });
+    return this.service.spendByCampaign({ projectId, viewer: userId && role ? { userId, role, roles } : undefined });
   }
 
   @Get(':id')

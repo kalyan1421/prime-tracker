@@ -368,7 +368,7 @@ export class UnitsService {
     unitType?: string;
     projectId?: string;
     search?: string;
-    viewer?: { userId: string; role: string };
+    viewer?: { userId: string; role: string; roles?: string[] };
   }) {
     const where: any = { deletedAt: null };
     if (filters.status) where.status = filters.status;

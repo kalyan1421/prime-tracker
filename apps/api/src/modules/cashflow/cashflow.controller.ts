@@ -35,9 +35,10 @@ export class CashFlowController {
   getPortfolio(
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
     @Query('months') months?: string,
   ) {
-    return this.service.getPortfolioForecast({ userId, role }, months ? parseInt(months, 10) : undefined);
+    return this.service.getPortfolioForecast({ userId, role, roles }, months ? parseInt(months, 10) : undefined);
   }
 
   @Get('obligations')
@@ -46,10 +47,11 @@ export class CashFlowController {
   getObligations(
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
     @Query('projectId') projectId?: string,
     @Query('granularity') granularity?: 'month' | 'quarter' | 'year',
   ) {
-    return this.service.getObligations({ userId, role }, { projectId, granularity });
+    return this.service.getObligations({ userId, role, roles }, { projectId, granularity });
   }
 
   @Post()
