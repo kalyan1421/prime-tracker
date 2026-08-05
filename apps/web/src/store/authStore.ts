@@ -13,6 +13,9 @@ export interface AuthUser {
   permissions: string[];
   mfaEnabled: boolean;
   mfaVerified: boolean;
+  /** How the account signs in. Booleans only — the API never sends the hash. */
+  hasPassword?: boolean;
+  googleLinked?: boolean;
 }
 
 interface AuthState {

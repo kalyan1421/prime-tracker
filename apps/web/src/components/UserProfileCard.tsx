@@ -18,7 +18,7 @@ import {
   Card, CardBody, CardHeader, Button, Input, Avatar, Chip, Divider, addToast,
 } from '@heroui/react';
 import {
-  FiUser, FiMail, FiPhone, FiBriefcase, FiShield, FiClock, FiKey, FiCheck, FiFolder,
+  FiUser, FiMail, FiPhone, FiBriefcase, FiShield, FiClock, FiKey, FiCheck, FiFolder, FiLogIn,
 } from 'react-icons/fi';
 import { useUpdateMyProfile, useUpdateUser, useChangePassword } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
@@ -183,6 +183,21 @@ export function UserProfileCard({ user, mode, visibleProjects }: Props) {
             <p className="font-semibold text-sm text-gray-700">Security</p>
           </CardHeader>
           <CardBody className="pt-1">
+            {/* How this person actually gets in. Without it the password form below
+                appeared for Google-only accounts, who would fill it in and get a 400. */}
+            <div className="flex items-start gap-2 text-sm text-gray-700 mb-2">
+              <FiLogIn className="text-gray-400 mt-0.5 shrink-0" />
+              <div>
+                <p>
+                  {user?.googleLinked && user?.hasPassword
+                    ? 'You can sign in with Google or with your email and password.'
+                    : user?.googleLinked
+                      ? 'You sign in with Google.'
+                      : 'You sign in with your email and password.'}
+                </p>
+                <p className="text-xs text-gray-500">{user?.email}</p>
+              </div>
+            </div>
             <div className="flex items-center gap-2 text-sm text-gray-700 mb-1.5">
               <FiShield className={user?.mfaEnabled ? 'text-green-600' : 'text-gray-400'} />
               {user?.mfaEnabled
@@ -196,7 +211,14 @@ export function UserProfileCard({ user, mode, visibleProjects }: Props) {
               </div>
             )}
             <Divider className="my-3" />
-            <ChangePasswordForm changePassword={changePassword} />
+            {user?.hasPassword === false ? (
+              <p className="text-xs text-gray-500">
+                There is no password on this account — it signs in through Google, so
+                there is nothing to change here.
+              </p>
+            ) : (
+              <ChangePasswordForm changePassword={changePassword} />
+            )}
           </CardBody>
         </Card>
       )}
@@ -254,8 +276,7 @@ function ChangePasswordForm({ changePassword }: { changePassword: ReturnType<typ
       </div>
       {err && <p className="text-xs text-red-600 mt-2">{err}</p>}
       <p className="text-[11px] text-gray-400 mt-2">
-        Changing your password signs you out everywhere else. Accounts that sign in with
-        Google have no password to change.
+        Changing your password signs you out everywhere else. This device stays signed in.
       </p>
       <div className="flex justify-end mt-3">
         <Button size="sm" color="primary" variant="flat" onPress={submit}

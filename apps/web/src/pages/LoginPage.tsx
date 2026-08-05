@@ -5,21 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../lib/api';
 
-const DEV_ACCOUNTS = [
-  { label: 'Super Admin',     email: 'superadmin@prime.dev',  color: 'danger'    as const },
-  { label: 'Founder',         email: 'founder@prime.dev',     color: 'primary'   as const },
-  { label: 'Executive',       email: 'executive@prime.dev',   color: 'primary'   as const },
-  { label: 'Finance',         email: 'finance@prime.dev',     color: 'success'   as const },
-  { label: 'Accounting',      email: 'accounting@prime.dev',  color: 'success'   as const },
-  { label: 'AR/AP',           email: 'arap@prime.dev',        color: 'success'   as const },
-  { label: 'Project Manager', email: 'pm@prime.dev',          color: 'secondary' as const },
-  { label: 'Construction',    email: 'construction@prime.dev',color: 'warning'   as const },
-  { label: 'Sales',           email: 'sales@prime.dev',       color: 'warning'   as const },
-  { label: 'Marketing',       email: 'marketing@prime.dev',   color: 'secondary' as const },
-  { label: 'Legal',           email: 'legal@prime.dev',       color: 'default'   as const },
-  { label: 'Viewer',          email: 'viewer@prime.dev',      color: 'default'   as const },
-];
-
 export default function LoginPage() {
   const navigate = useNavigate();
   const { setAuth } = useAuthStore();
@@ -41,22 +26,6 @@ export default function LoginPage() {
       navigate('/', { replace: true });
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Invalid email or password');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const quickLogin = async (devEmail: string) => {
-    setEmail(devEmail);
-    setPassword('Prime@123');
-    setError('');
-    setLoading(true);
-    try {
-      const { data } = await api.post('/auth/login', { email: devEmail, password: 'Prime@123' });
-      setAuth(data.user, data.accessToken, data.refreshToken);
-      navigate('/', { replace: true });
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Login failed');
     } finally {
       setLoading(false);
     }
@@ -118,34 +87,6 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* Dev Quick Login */}
-          <div className="mt-8">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-xs text-gray-400">
-                <span className="bg-white px-3">Dev Quick Login — all use password: Prime@123</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4">
-              {DEV_ACCOUNTS.map((a) => (
-                <Button
-                  key={a.email}
-                  size="sm"
-                  color={a.color}
-                  variant="flat"
-                  className="flex flex-col h-auto py-2 px-2 items-start text-left"
-                  onPress={() => quickLogin(a.email)}
-                  isDisabled={loading}
-                >
-                  <span className="font-semibold text-xs leading-tight">{a.label}</span>
-                  <span className="text-[10px] opacity-60 font-normal truncate w-full">{a.email}</span>
-                </Button>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>
