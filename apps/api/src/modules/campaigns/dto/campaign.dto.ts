@@ -36,6 +36,13 @@ export class CreateCampaignDto {
 }
 
 export class UpdateCampaignDto {
+  // Re-links the campaign to a different set of projects. Omit the field to leave the
+  // existing links untouched; send [] to make the campaign portfolio-wide again.
+  // (Distinguishing "not sent" from "cleared" is why the service checks for undefined
+  // rather than falsiness.)
+  @IsOptional() @IsArray() @ArrayUnique() @IsString({ each: true })
+  projectIds?: string[];
+
   @IsOptional() @IsString() @MaxLength(200)
   name?: string;
 

@@ -100,6 +100,7 @@ export class CampaignsService {
   }
 
   async update(id: string, data: {
+    projectIds?: string[];
     name?: string;
     channel?: CampaignChannel;
     externalId?: string;
@@ -110,21 +111,53 @@ export class CampaignsService {
     notes?: string;
   }) {
     await this.findById(id);
-    return this.prisma.campaign.update({
-      where: { id },
-      data: {
-        ...data,
-        startDate: data.startDate !== undefined
-          ? (data.startDate ? new Date(data.startDate) : null)
-          : undefined,
-        endDate: data.endDate !== undefined
-          ? (data.endDate ? new Date(data.endDate) : null)
-          : undefined,
-      },
-      include: {
-        projects: { include: { project: { select: { id: true, name: true } } } },
-        createdByUser: { select: { id: true, name: true } },
-      },
+
+    // projectIds is a full replacement of the link set, not a merge: whatever the
+    // caller sends becomes the campaign's projects. `undefined` leaves them alone,
+    // `[]` clears them (portfolio-wide). Validated the same way create() does so an
+    // unknown or soft-deleted project can't be linked.
+    const { projectIds, ...scalars } = data;
+    let relinked: string[] | undefined;
+    if (projectIds !== undefined) {
+      relinked = Array.from(new Set(projectIds));
+      if (relinked.length > 0) {
+        const found = await this.prisma.project.findMany({
+          where: { id: { in: relinked }, deletedAt: null },
+          select: { id: true },
+        });
+        if (found.length !== relinked.length) throw new BadRequestException('One or more projects not found');
+      }
+    }
+
+    const scalarData = {
+      ...scalars,
+      startDate: scalars.startDate !== undefined
+        ? (scalars.startDate ? new Date(scalars.startDate) : null)
+        : undefined,
+      endDate: scalars.endDate !== undefined
+        ? (scalars.endDate ? new Date(scalars.endDate) : null)
+        : undefined,
+    };
+
+    // Swap the join rows and the scalars together — a half-applied re-link would
+    // leave the campaign attributed to the wrong projects.
+    return this.prisma.$transaction(async (tx) => {
+      if (relinked !== undefined) {
+        await tx.campaignProject.deleteMany({ where: { campaignId: id } });
+        if (relinked.length > 0) {
+          await tx.campaignProject.createMany({
+            data: relinked.map((projectId) => ({ campaignId: id, projectId })),
+          });
+        }
+      }
+      return tx.campaign.update({
+        where: { id },
+        data: scalarData,
+        include: {
+          projects: { include: { project: { select: { id: true, name: true } } } },
+          createdByUser: { select: { id: true, name: true } },
+        },
+      });
     });
   }
 
