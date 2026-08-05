@@ -5,7 +5,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
-import { UserRole } from '@prisma/client';
+import { UserRole, UnitStatus } from '@prisma/client';
 
 // ---- Status state machine ----
 // Defines which transitions are legal. Empty array = terminal (no further moves).
@@ -199,7 +199,7 @@ export class UnitsService {
     buildingId: string;
     unitNumber: string;
     unitType: string;
-    status?: string;
+    status?: UnitStatus;
     sqft?: number;
     askingRent?: number;
     askingPrice?: number;
@@ -269,7 +269,7 @@ export class UnitsService {
     input: {
       unitNumber?: string;
       unitType?: string;
-      status?: string;
+      status?: UnitStatus;
       sqft?: number;
       askingRent?: number;
       askingPrice?: number;
@@ -334,7 +334,7 @@ export class UnitsService {
     });
   }
 
-  async updateStatus(id: string, status: string, userRole: UserRole) {
+  async updateStatus(id: string, status: UnitStatus, userRole: UserRole) {
     return this.update(id, { status }, userRole);
   }
 
@@ -364,7 +364,7 @@ export class UnitsService {
   // ---- Cross-Project Inventory ----
 
   async findInventory(filters: {
-    status?: string;
+    status?: UnitStatus;
     unitType?: string;
     projectId?: string;
     search?: string;

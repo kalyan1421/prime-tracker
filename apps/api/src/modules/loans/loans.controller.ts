@@ -23,10 +23,26 @@ export class LoansController {
     return this.service.getMonthlyPayments(projectId);
   }
 
+  /**
+   * `buildingId` returns ONLY loans secured on that building; `projectId` returns the
+   * project's loans plus every building-level loan inside it (findByProject already ORs
+   * on building.projectId). So the building view is a strict subset of the project view,
+   * not a competing definition.
+   *
+   * findByBuilding() has existed since building-level loans shipped and had no route —
+   * the service method was written and never exposed, so the building page had no way to
+   * ask for its own loans and filtered the project's list in the browser instead.
+   */
   @Get()
   @RequirePermissions('loan:view')
-  @ApiOperation({ summary: 'List loans by project (decrypted)' })
-  findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
+  @ApiOperation({ summary: 'List loans by project, or by building (decrypted)' })
+  findAll(
+    @Query('projectId') projectId?: string,
+    @Query('buildingId') buildingId?: string,
+  ) {
+    if (buildingId) return this.service.findByBuilding(buildingId);
+    return this.service.findByProject(projectId as string);
+  }
 
   @Post()
   @RequirePermissions('loan:edit')

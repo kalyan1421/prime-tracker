@@ -287,6 +287,22 @@ model Building {
   @@map("buildings")
 }
 
+/// Lifecycle state of a unit.
+///
+/// Was a free `String @default("AVAILABLE")`. Nothing constrained it, so a typo in any
+/// client wrote a value the UI has no colour, label or ordering for — it would simply
+/// vanish from the status mix and every status-filtered query. The values below are the
+/// five present in the data plus the two the UI already renders.
+enum UnitStatus {
+  AVAILABLE
+  UNDER_CONTRACT
+  LEASE_PENDING
+  LEASED
+  OCCUPIED
+  SOLD
+  UNDER_CONSTRUCTION
+}
+
 model Unit {
   id             String     @id @default(cuid())
   buildingId     String
@@ -303,7 +319,7 @@ model Unit {
   // unit sizes immutable.
   floorArea      Decimal?   @db.Decimal(10, 2)
   mezzanineArea  Decimal?   @db.Decimal(10, 2)
-  status         String @default("AVAILABLE")
+  status         UnitStatus @default(AVAILABLE)
   askingRent     Decimal?   @db.Decimal(12, 2) // per sqft/month
   askingPrice    Decimal?   @db.Decimal(14, 2) // for sale units
   primeOwned     Boolean    @default(false)

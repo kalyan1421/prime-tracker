@@ -264,11 +264,21 @@ export function useDeleteMilestone() {
 }
 
 // ---- Units ----
-export function useUnits(projectId: string) {
+/**
+ * Units for a project, or for a single building when `buildingId` is given.
+ *
+ * The building page used to call this with the projectId and filter in the browser,
+ * pulling every unit in the project to display one building's. The API has supported
+ * `?buildingId=` all along.
+ *
+ * No permission gate: unit:view is held by every role (see the useCan note above).
+ */
+export function useUnits(projectId: string, buildingId?: string) {
   return useQuery({
-    queryKey: ['units', projectId],
-    queryFn: () => api.get('/units', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    queryKey: ['units', projectId, buildingId ?? 'all'],
+    queryFn: () =>
+      api.get('/units', { params: buildingId ? { buildingId } : { projectId } }).then((r) => r.data),
+    enabled: !!buildingId || !!projectId,
   });
 }
 
@@ -466,12 +476,19 @@ export function useDeleteSale() {
 }
 
 // ---- Loans ----
-export function useLoans(projectId: string) {
+/**
+ * Loans for a project, or only those secured on one building.
+ *
+ * Project scope already includes building-level loans (LoansService.findByProject ORs on
+ * building.projectId), so the building scope is a strict subset — not a rival definition.
+ */
+export function useLoans(projectId: string, buildingId?: string) {
   const can = useCan('loan:view');
   return useQuery({
-    queryKey: ['loans', projectId],
-    queryFn: () => api.get('/loans', { params: { projectId } }).then((r) => r.data),
-    enabled: can && (!!projectId),
+    queryKey: ['loans', projectId, buildingId ?? 'all'],
+    queryFn: () =>
+      api.get('/loans', { params: buildingId ? { buildingId } : { projectId } }).then((r) => r.data),
+    enabled: can && (!!buildingId || !!projectId),
   });
 }
 
@@ -802,7 +819,17 @@ export function useUpdateBuilding() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/buildings/${id}`, data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['buildings'] }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['buildings'] });
+      // The single-building read is a DIFFERENT key from the list. Invalidating only the
+      // list left the building detail page showing the values it had before the edit,
+      // which is exactly the screen the edit was launched from.
+      qc.invalidateQueries({ queryKey: ['building', vars.id] });
+      // Project.phase is derived from max(building phases), so a phase edit changes the
+      // project header too.
+      qc.invalidateQueries({ queryKey: ['project'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+    },
   });
 }
 
