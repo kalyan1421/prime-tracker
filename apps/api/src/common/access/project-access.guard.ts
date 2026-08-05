@@ -15,7 +15,7 @@ export class ProjectAccessGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest();
     const user = req.user;
-    if (!user || !this.access.isScoped(user.role)) return true;
+    if (!user || !this.access.isScoped(user.role, user.roles)) return true;
 
     const controllerName = context.getClass().name;
     const projectIds = await this.access.resolveProjectIds(controllerName, req);

@@ -24,8 +24,9 @@ export class LeadsController {
     @Query('projectId') projectId?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.dashboard({ projectId, viewer: userId && role ? { userId, role } : undefined });
+    return this.service.dashboard({ projectId, viewer: userId && role ? { userId, role, roles } : undefined });
   }
 
   @Get()
@@ -43,12 +44,13 @@ export class LeadsController {
     @Query('search') search?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
     return this.service.findAll({
       projectId, status, assignedTo,
       unassigned: unassigned === 'true' || unassigned === '1',
       unitId, buildingId, campaignId, brokerId, search,
-      viewer: userId && role ? { userId, role } : undefined,
+      viewer: userId && role ? { userId, role, roles } : undefined,
     });
   }
 

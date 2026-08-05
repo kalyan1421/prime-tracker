@@ -555,11 +555,22 @@ export function isProjectScopedRole(role: UserRole | string): boolean {
 }
 
 /**
- * A user with multiple roles is globally scoped if ANY role is global.
- * Only restrict to assigned projects when ALL roles are project-scoped.
+ * Whether a user is restricted to the projects they are a member of.
+ *
+ * ANY project-scoped role wins: hold one and you only see your assigned projects,
+ * whatever else you hold. So adding someone to a single project genuinely limits them
+ * to it — the behaviour an admin expects when they assign a project.
+ *
+ * This previously read `every` and, more importantly, was never called: every scoping
+ * site used the single-role `isProjectScopedRole(viewer.role)` against the PRIMARY role
+ * (roles[0]). Two users with the identical role set therefore got different access
+ * purely from array order — [FINANCE, MARKETING] saw every project while
+ * [MARKETING, FINANCE] saw only its own, even though both were members of one project.
+ *
+ * Pass every role the user holds, not just the primary.
  */
 export function isMultiRoleProjectScoped(roles: (UserRole | string)[]): boolean {
-  return roles.every((r) => isProjectScopedRole(r));
+  return roles.some((r) => isProjectScopedRole(r));
 }
 
 // ---- Role Metadata ----

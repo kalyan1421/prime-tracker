@@ -67,7 +67,7 @@ export class CashFlowService {
    * Portfolio forecast across every project the viewer may see. Scoped roles
    * (PM/Construction/Sales/Marketing) are restricted to their member projects.
    */
-  async getPortfolioForecast(viewer: { userId: string; role: string }, months?: number) {
+  async getPortfolioForecast(viewer: { userId: string; role: string; roles?: string[] }, months?: number) {
     const projectIds = this.access.isScoped(viewer.role)
       ? await this.access.accessibleProjectIds(viewer.userId)
       : undefined; // undefined = all projects
@@ -82,7 +82,7 @@ export class CashFlowService {
    * keeps the budget but not the financial module) can run it.
    */
   async getObligations(
-    viewer: { userId: string; role: string },
+    viewer: { userId: string; role: string; roles?: string[] },
     opts: { projectId?: string; granularity?: 'month' | 'quarter' | 'year' } = {},
   ) {
     const granularity = opts.granularity ?? 'month';

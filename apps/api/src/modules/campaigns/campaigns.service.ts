@@ -21,7 +21,7 @@ export class CampaignsService {
 
   // ---- CRUD ----
 
-  async findAll(params: { projectId?: string; status?: CampaignStatus; channel?: CampaignChannel; viewer?: { userId: string; role: string } } = {}) {
+  async findAll(params: { projectId?: string; status?: CampaignStatus; channel?: CampaignChannel; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
     if (params.projectId) where.projects = { some: { projectId: params.projectId } };
     else {
@@ -223,7 +223,7 @@ export class CampaignsService {
    * Months with no spend on a channel are emitted as zero so the line chart has
    * continuous data points instead of gaps.
    */
-  async spendTrend(params: { projectId?: string; monthsBack?: number; viewer?: { userId: string; role: string } } = {}) {
+  async spendTrend(params: { projectId?: string; monthsBack?: number; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const monthsBack = Math.max(1, Math.min(24, params.monthsBack ?? 6));
     const now = new Date();
     const startMonth = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1), 1);
@@ -281,7 +281,7 @@ export class CampaignsService {
    * buckets, last N months only), this always includes every campaign so it's
    * visible even before any spend has been logged.
    */
-  async spendByCampaign(params: { projectId?: string; viewer?: { userId: string; role: string } } = {}) {
+  async spendByCampaign(params: { projectId?: string; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
     if (params.projectId) where.projects = { some: { projectId: params.projectId } };
     else {
@@ -312,7 +312,7 @@ export class CampaignsService {
    * Optionally scoped to a project and a date range. Spend is summed from the ledger
    * (never overwritten); converted-revenue traces Lead.convertedToSaleId → Sale.salePrice.
    */
-  async performance(params: { projectId?: string; from?: string; to?: string; viewer?: { userId: string; role: string } } = {}) {
+  async performance(params: { projectId?: string; from?: string; to?: string; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
     if (params.projectId) where.projects = { some: { projectId: params.projectId } };
     else {

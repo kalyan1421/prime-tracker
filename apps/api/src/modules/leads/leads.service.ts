@@ -17,7 +17,7 @@ export class LeadsService {
     campaignId?: string;
     brokerId?: string;
     search?: string;
-    viewer?: { userId: string; role: string };
+    viewer?: { userId: string; role: string; roles?: string[] };
   } = {}) {
     const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, brokerId, search, viewer } = params;
 
@@ -279,7 +279,7 @@ export class LeadsService {
    * recent activity, and overall conversion rate. One query path per concern so we
    * don't repeat scans; everything filterable by projectId when scoped.
    */
-  async dashboard(params: { projectId?: string; viewer?: { userId: string; role: string } } = {}) {
+  async dashboard(params: { projectId?: string; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const { projectId, viewer } = params;
     const where: Prisma.LeadWhereInput = projectId ? { projectId } : {};
     if (!projectId) {
