@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  UnauthorizedException,
-  BadRequestException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -40,6 +35,48 @@ export class AuthService {
 
   async hashPassword(password: string): Promise<string> {
     return bcrypt.hash(password, 12);
+  }
+
+  /**
+   * Self-service password change. Requires the CURRENT password even though the caller
+   * is already authenticated — an unattended session must not be enough to take over
+   * the account.
+   *
+   * On success every other refresh token is revoked, so a stolen session dies with the
+   * password change. The caller's own access token stays valid until it expires (15m);
+   * revoking it would log the user out of the tab they just used, which teaches people
+   * to avoid changing passwords.
+   */
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    // Google-SSO accounts have no local password. Say so plainly instead of failing
+    // an impossible bcrypt.compare against null.
+    if (!user.passwordHash) {
+      throw new BadRequestException(
+        'This account signs in with Google — there is no password to change.',
+      );
+    }
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    if (!newPassword || newPassword.length < 8) {
+      throw new BadRequestException('New password must be at least 8 characters');
+    }
+    if (await bcrypt.compare(newPassword, user.passwordHash)) {
+      throw new BadRequestException('New password must be different from the current one');
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    const [, revoked] = await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+    return { success: true, sessionsRevoked: revoked.count };
   }
 
   async loginWithPassword(email: string, password: string) {

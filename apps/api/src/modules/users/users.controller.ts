@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Put, Delete, Param, Patch, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
@@ -50,10 +52,13 @@ export class UsersController {
     };
   }
 
+  // No @RequirePermissions: any authenticated user may edit their OWN identity. The
+  // DTO is what keeps this safe — it has no role/roles/isActive/email field, so the
+  // global ValidationPipe rejects an attempt to smuggle one in.
   @Patch('me')
-  @ApiOperation({ summary: 'Update your own profile (name/avatar)' })
+  @ApiOperation({ summary: 'Update your own profile (name, avatar, phone, job title)' })
   updateSelf(
-    @Body() body: { name?: string; avatarUrl?: string },
+    @Body() body: UpdateProfileDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.usersService.updateSelf(userId, body);
@@ -101,10 +106,10 @@ export class UsersController {
 
   @Put(':id')
   @RequirePermissions('user:manage')
-  @ApiOperation({ summary: 'Update user name/email' })
+  @ApiOperation({ summary: "Update another user's details (name, email, phone, job title)" })
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; email?: string },
+    @Body() body: UpdateUserDto,
     @CurrentUser('sub') actorId: string,
   ) {
     return this.usersService.update(id, body, actorId);

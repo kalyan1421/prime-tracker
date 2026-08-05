@@ -13,6 +13,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/index';
 import { ConfigService } from '@nestjs/config';
@@ -125,6 +126,18 @@ export class AuthController {
     @Body() body: { token: string },
   ) {
     return this.authService.verifyMfa(userId, body.token);
+  }
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Change your own password (requires the current one)' })
+  async changePassword(
+    @CurrentUser('sub') userId: string,
+    @Body() body: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(userId, body.currentPassword, body.newPassword);
   }
 
   @Get('me')

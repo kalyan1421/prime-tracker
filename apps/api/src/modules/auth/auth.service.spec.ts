@@ -18,8 +18,11 @@ const mockPrisma = {
     create: jest.fn(),
     findFirst: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
     deleteMany: jest.fn(),
   },
+  // changePassword writes the hash and revokes sessions together.
+  $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
 };
 
 const mockJwtService = {
@@ -159,5 +162,68 @@ describe('AuthService', () => {
       expect(result.refreshToken).toBeDefined();
       expect(mockJwtService.sign).toHaveBeenCalled();
     });
+  });
+});
+
+describe('AuthService.changePassword', () => {
+  const bcrypt = require('bcrypt');
+  let service: AuthService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AuthService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: JwtService, useValue: mockJwtService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: EncryptionService, useValue: mockEncryptionService },
+        { provide: AuditService, useValue: mockAuditService },
+      ],
+    }).compile();
+    service = module.get<AuthService>(AuthService);
+    mockPrisma.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockPrisma.user.update.mockResolvedValue({});
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 2 });
+  });
+
+  const withPassword = async (plain: string) => ({
+    id: 'u1', email: 'a@b.c', passwordHash: await bcrypt.hash(plain, 4),
+  });
+
+  it('rejects a wrong current password', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(await withPassword('Correct-123'));
+    await expect(service.changePassword('u1', 'WRONG', 'BrandNew-456')).rejects.toThrow(/Current password is incorrect/);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('explains itself for a Google-SSO account instead of failing on a null hash', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u1', email: 'a@b.c', passwordHash: null });
+    await expect(service.changePassword('u1', 'anything', 'BrandNew-456')).rejects.toThrow(/signs in with Google/);
+  });
+
+  it('refuses a new password identical to the current one', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(await withPassword('Same-1234'));
+    await expect(service.changePassword('u1', 'Same-1234', 'Same-1234')).rejects.toThrow(/different from the current/);
+  });
+
+  it('refuses a new password under 8 characters', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(await withPassword('Correct-123'));
+    await expect(service.changePassword('u1', 'Correct-123', 'short')).rejects.toThrow(/at least 8 characters/);
+  });
+
+  it('stores a HASH, never the plaintext, and revokes every other session', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(await withPassword('Correct-123'));
+
+    const res = await service.changePassword('u1', 'Correct-123', 'BrandNew-456');
+
+    const written = mockPrisma.user.update.mock.calls[0][0].data.passwordHash;
+    expect(written).not.toBe('BrandNew-456');
+    expect(await bcrypt.compare('BrandNew-456', written)).toBe(true);
+    // A stolen refresh token must not outlive the password it was issued under.
+    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: 'u1', revokedAt: null } }),
+    );
+    expect(res.sessionsRevoked).toBe(2);
   });
 });

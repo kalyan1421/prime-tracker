@@ -6,6 +6,8 @@ export interface AuthUser {
   email: string;
   name: string;
   avatarUrl?: string;
+  phone?: string | null;
+  jobTitle?: string | null;
   role: string;
   roles: string[];
   permissions: string[];
@@ -20,6 +22,7 @@ interface AuthState {
   isAuthenticated: boolean;
 
   setAuth: (user: AuthUser, accessToken: string, refreshToken: string) => void;
+  patchUser: (patch: Partial<AuthUser>) => void;
   updateTokens: (accessToken: string, refreshToken: string) => void;
   setMfaVerified: (verified: boolean) => void;
   logout: () => void;
@@ -45,6 +48,11 @@ export const useAuthStore = create<AuthState>()(
         set((s) => ({
           user: s.user ? { ...s.user, mfaVerified: verified } : null,
         })),
+
+      /** Merge fresh identity fields after a self-profile save, so the TopBar avatar
+          and name update without forcing a re-login. */
+      patchUser: (patch: Partial<AuthUser>) =>
+        set((s) => ({ user: s.user ? { ...s.user, ...patch } : null })),
 
       logout: () =>
         set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false }),

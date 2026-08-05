@@ -5,7 +5,7 @@ import {
   Chip, Tooltip, Button, Badge, Popover, PopoverTrigger, PopoverContent,
 } from '@heroui/react';
 import {
-  FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield,
+  FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield, FiUser,
   FiMenu, FiPieChart, FiBell, FiUsers, FiCheck, FiTarget, FiBriefcase,
   FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp, FiTrendingDown,
 } from 'react-icons/fi';
@@ -352,6 +352,9 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             </button>
           </DropdownTrigger>
           <DropdownMenu aria-label="User menu">
+            <DropdownItem key="profile" startContent={<FiUser />} onPress={() => navigate('/profile')}>
+              My Profile
+            </DropdownItem>
             <DropdownItem key="mfa" startContent={<FiShield />} onPress={onMfaOpen}>
               {user?.mfaEnabled ? 'MFA Settings' : 'Set Up MFA'}
               {user?.mfaEnabled && (

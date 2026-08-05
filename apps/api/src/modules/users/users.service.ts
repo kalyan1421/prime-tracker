@@ -4,6 +4,9 @@ import { AuditService } from '../../common/utils/audit.service';
 import { UserRole, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
+/** Identity fields writable by self or by an admin. Never authorization fields. */
+type ProfileFields = { name?: string; avatarUrl?: string; phone?: string; jobTitle?: string };
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -47,6 +50,8 @@ export class UsersService {
     email: true,
     name: true,
     avatarUrl: true,
+    phone: true,
+    jobTitle: true,
     role: true,
     roles: true,
     isActive: true,
@@ -170,7 +175,20 @@ export class UsersService {
    * display name / avatar — but NOT their email (the OAuth identity key),
    * role, or active status. The actor is always the target (id === actorId).
    */
-  async updateSelf(id: string, data: { name?: string; avatarUrl?: string }) {
+  async updateSelf(id: string, data: ProfileFields) {
+    return this.updateProfile(id, data, id);
+  }
+
+  /**
+   * Identity-only update, used by BOTH `PATCH /users/me` (self) and `PATCH /users/:id`
+   * (admin). One method so the two can never drift on what is writable.
+   *
+   * `actorId` is who performed it, for the audit trail — it differs from `id` when an
+   * admin edits someone else. Nothing here can touch role/roles/isActive/email; those
+   * are separate admin-only routes, and UpdateProfileDto has no such fields, so the
+   * ValidationPipe rejects them before this runs.
+   */
+  async updateProfile(id: string, data: ProfileFields, actorId: string) {
     const patch: Prisma.UserUpdateInput = {};
     if (typeof data.name === 'string' && data.name.trim().length > 0) {
       patch.name = data.name.trim();
@@ -178,8 +196,16 @@ export class UsersService {
     if (typeof data.avatarUrl === 'string') {
       patch.avatarUrl = data.avatarUrl.trim() || null;
     }
+    // Blank clears the field rather than being ignored — otherwise a wrong phone
+    // number could never be removed, only replaced.
+    if (typeof data.phone === 'string') {
+      patch.phone = data.phone.trim() || null;
+    }
+    if (typeof data.jobTitle === 'string') {
+      patch.jobTitle = data.jobTitle.trim() || null;
+    }
     if (Object.keys(patch).length === 0) {
-      throw new BadRequestException('Provide a name or avatarUrl to update');
+      throw new BadRequestException('Provide a name, avatarUrl, phone or jobTitle to update');
     }
     const user = await this.prisma.user.update({
       where: { id },
@@ -189,7 +215,10 @@ export class UsersService {
         email: true,
         name: true,
         avatarUrl: true,
+        phone: true,
+        jobTitle: true,
         role: true,
+        roles: true,
         isActive: true,
         mfaEnabled: true,
         lastLoginAt: true,
@@ -197,7 +226,7 @@ export class UsersService {
       },
     });
     await this.audit.log({
-      userId: id,
+      userId: actorId,
       action: 'UPDATE',
       entity: 'User',
       entityId: id,
@@ -206,18 +235,33 @@ export class UsersService {
     return user;
   }
 
-  async update(id: string, data: { name?: string; email?: string }, actorId: string) {
+  async update(
+    id: string,
+    data: { name?: string; email?: string; phone?: string; jobTitle?: string },
+    actorId: string,
+  ) {
     if (data.email) {
       const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
       if (existing && existing.id !== id) throw new ConflictException('Email already in use');
     }
-    const user = await this.prisma.user.update({ where: { id }, data, select: this.userSelect });
+    // Build the patch field by field rather than spreading the body. The DTO already
+    // rejects unknown keys, but constructing it explicitly means a future field added
+    // to the DTO cannot silently reach Prisma without someone deciding it should.
+    const patch: Prisma.UserUpdateInput = {};
+    if (typeof data.name === 'string' && data.name.trim()) patch.name = data.name.trim();
+    if (typeof data.email === 'string' && data.email.trim()) patch.email = data.email.trim();
+    if (typeof data.phone === 'string') patch.phone = data.phone.trim() || null;
+    if (typeof data.jobTitle === 'string') patch.jobTitle = data.jobTitle.trim() || null;
+    if (Object.keys(patch).length === 0) {
+      throw new BadRequestException('Provide a field to update');
+    }
+    const user = await this.prisma.user.update({ where: { id }, data: patch, select: this.userSelect });
     await this.audit.log({
       userId: actorId,
       action: 'UPDATE',
       entity: 'User',
       entityId: id,
-      newValues: data,
+      newValues: patch,
     });
     return user;
   }
