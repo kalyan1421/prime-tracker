@@ -1401,8 +1401,22 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime         @default(now())
 
+  /// Stable identity of the CONDITION this alert is about, e.g. "invoice:<id>".
+  ///
+  /// Recurring alerts are re-raised by the daily cron for as long as the condition
+  /// holds, and are suppressed while the recipient already has that alert pending. The
+  /// suppression originally keyed on `title`, which silently did nothing for the seven
+  /// types whose title carries a live day counter ("Rent overdue (29d): …" becomes
+  /// "(30d)" tomorrow) — that is 2,150 of the 2,288 rows in the first backlog. The key
+  /// has to be something that does NOT change as the condition ages.
+  ///
+  /// Null for one-off events, which are never deduplicated.
+  dedupeKey String?
+
   @@index([userId, readAt])
   @@index([createdAt])
+  // Serves the suppression lookup: userId IN (…) AND type = … AND dedupeKey = …
+  @@index([userId, type, dedupeKey])
   @@map("notifications")
 }
 

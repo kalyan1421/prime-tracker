@@ -911,11 +911,20 @@ function AuditPanel() {
   const [days, setDays] = useState('');
   const [page, setPage] = useState(1);
 
-  // A preset is turned into an absolute startDate here rather than on the server, so the
-  // boundary follows the viewer's own midnight instead of the API host's.
-  const startDate = days
-    ? new Date(Date.now() - (Number(days) - 1) * 86_400_000).toISOString().slice(0, 10)
-    : undefined;
+  // A preset becomes an absolute instant here, so the boundary is the VIEWER's midnight.
+  //
+  // It must be a full ISO instant, not a YYYY-MM-DD date. `toISOString().slice(0,10)`
+  // formats the UTC calendar day, which is a different day from the viewer's for most of
+  // the world: at 20:00 US Central the UTC date is already tomorrow, so "Today" filtered
+  // from a boundary 5 hours in the future and hid the whole day. Build midnight from
+  // local components, then send the instant and let the server compare instants.
+  const startDate = (() => {
+    if (!days) return undefined;
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);                       // local midnight today
+    d.setDate(d.getDate() - (Number(days) - 1));  // …then back N-1 whole days
+    return d.toISOString();
+  })();
 
   const { data: options } = useAuditFilterOptions();
   const { data, isLoading, error, isFetching } = useAuditLog({

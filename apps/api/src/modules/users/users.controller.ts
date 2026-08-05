@@ -122,8 +122,13 @@ export class UsersController {
     @Body() body: SetUserPasswordDto,
     @CurrentUser('sub') actorId: string,
     @CurrentUser('role') actorRole: string,
+    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.usersService.setPassword(id, body.newPassword, { id: actorId, role: actorRole });
+    return this.usersService.setPassword(id, body.newPassword, {
+      id: actorId,
+      role: actorRole,
+      roles: actorRoles,
+    });
   }
 
   @Put(':id')

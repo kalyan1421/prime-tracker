@@ -43,10 +43,20 @@ function getDashPath(role: string) {
   return '/';
 }
 
-function getReportsPath(role: string) {
-  if (['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'].includes(role)) return '/reports/founder';
-  if (['CONSTRUCTION', 'PROJECT_MANAGER'].includes(role)) return '/reports/construction';
-  if (['SALES', 'MARKETING'].includes(role)) return '/reports/sales';
+/**
+ * Where the "Reports" nav item points.
+ *
+ * Driven by permissions, not by role name, because the destinations are themselves
+ * permission-gated and the two lists drifted: PROJECT_MANAGER was sent to
+ * /reports/construction, which requires financial:view (ConstructionReportsPage renders
+ * only the portfolio report) — a permission PROJECT_MANAGER does not hold. The link was
+ * visible and clicking it bounced them silently back to "/".
+ *
+ * Ordered most-specific first; /reports is the hub and gates each of its tabs itself.
+ */
+function getReportsPath(hasPermission: (p: string) => boolean) {
+  if (hasPermission('financial:view')) return '/reports/founder';
+  if (hasPermission('sales:view')) return '/reports/sales';
   return '/reports';
 }
 
@@ -146,7 +156,7 @@ function Sidebar({
   const { hasPermission, hasAnyPermission, user } = useAuthStore();
   const role = user?.role ?? '';
   const dashPath = getDashPath(role);
-  const reportsPath = getReportsPath(role);
+  const reportsPath = getReportsPath(hasPermission);
 
   const navItems = BASE_NAV_ITEMS.map((item) => ({
     ...item,

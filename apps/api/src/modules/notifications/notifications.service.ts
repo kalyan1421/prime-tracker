@@ -284,8 +284,10 @@ export class NotificationsService {
     body: string;
     link?: string;
     projectName?: string;
+    /** Stable identity of the condition — required for RECURRING types. See Notification.dedupeKey. */
+    dedupeKey?: string;
   }) {
-    const { type, title, body, link } = params;
+    const { type, title, body, link, dedupeKey } = params;
     const userIds = [...new Set(params.userIds ?? [])];
     if (userIds.length === 0) return;
 
@@ -299,12 +301,12 @@ export class NotificationsService {
     const enabledUserIds = userIds.filter((id) => prefByUser.get(id)?.enabled !== false);
     if (enabledUserIds.length === 0) return;
 
-    const targetUserIds = await this.suppressAlreadyPending(enabledUserIds, type, title);
+    const targetUserIds = await this.suppressAlreadyPending(enabledUserIds, type, dedupeKey);
     if (targetUserIds.length === 0) return;
 
     // Create in-app notifications
     await this.prisma.notification.createMany({
-      data: targetUserIds.map((userId) => ({ userId, type, title, body, link })),
+      data: targetUserIds.map((userId) => ({ userId, type, title, body, link, dedupeKey })),
     });
 
     // Push real-time to connected clients
@@ -349,10 +351,10 @@ export class NotificationsService {
    * (leadership always included); omit it for the legacy role-global behaviour.
    */
   /**
-   * Drop recipients who already have this exact alert pending.
+   * Drop recipients who already have this alert pending.
    *
    * Applies only to RECURRING types — a standing condition the cron re-evaluates every
-   * run. A recipient is skipped when they have the same (type, title) alert that is
+   * run. A recipient is skipped when they hold the same (type, dedupeKey) alert that is
    * either still unread, or was read less than RENOTIFY_COOLDOWN_HOURS ago:
    *
    *   still unread  — a second identical row adds no information, it just inflates the
@@ -362,21 +364,35 @@ export class NotificationsService {
    *                   broken. After the cooldown it does re-raise, which is the point of
    *                   a standing alert: still overdue a week later is worth saying again.
    *
+   * Matching is on dedupeKey, NEVER on title. Seven recurring types put a live day
+   * counter in the title — "Rent overdue (29d): Mathnasium" is "(30d)" tomorrow — so a
+   * title match silently never fired for exactly the types that produced the backlog.
+   * A recurring type that reaches here without a key is a bug in its trigger, so it is
+   * logged loudly and delivered rather than silently dropped or silently duplicated.
+   *
    * EVENT types are never suppressed — see RECURRING_TYPES.
    */
   private async suppressAlreadyPending(
     userIds: string[],
     type: NotificationType,
-    title: string,
+    dedupeKey?: string,
   ): Promise<string[]> {
     if (!RECURRING_TYPES[type as keyof typeof RECURRING_TYPES]) return userIds;
+
+    if (!dedupeKey) {
+      this.logger.error(
+        `Recurring notification ${type} sent without a dedupeKey — it will re-raise on ` +
+          'every cron run. Add one to its notify* method.',
+      );
+      return userIds;
+    }
 
     const cooldownStart = new Date(Date.now() - RENOTIFY_COOLDOWN_HOURS * 3_600_000);
     const pending = await this.prisma.notification.findMany({
       where: {
         userId: { in: userIds },
         type,
-        title,
+        dedupeKey,
         OR: [{ readAt: null }, { createdAt: { gte: cooldownStart } }],
       },
       select: { userId: true },
@@ -395,6 +411,8 @@ export class NotificationsService {
     body: string;
     link?: string;
     projectId?: string | null;
+    /** Stable identity of the condition — required for RECURRING types. */
+    dedupeKey?: string;
   }) {
     const userIds = await this.resolveRecipients({ roles: params.roles, projectId: params.projectId });
     await this.send({ ...params, userIds });
@@ -488,6 +506,7 @@ export class NotificationsService {
       roles: ['PROJECT_MANAGER'],
       projectId: milestone.projectId,
       type: NotificationType.MILESTONE_OVERDUE,
+      dedupeKey: `milestone:${milestone.id}`,
       title: `Milestone Overdue: ${milestone.title}`,
       body: `The milestone "${milestone.title}" in project ${milestone.project.name} is now overdue.`,
       link,
@@ -508,6 +527,7 @@ export class NotificationsService {
       roles: ['PROJECT_MANAGER', 'CONSTRUCTION'],
       projectId: snag.projectId,
       type: NotificationType.SNAG_OVERDUE,
+      dedupeKey: `snag:${snag.id}`,
       title: `Snag overdue: ${short}`,
       body: `A punch-list item${snag.interiorName ? ` in "${snag.interiorName}"` : ''} is ${snag.daysOverdue} day(s) overdue.`,
       link,
@@ -522,6 +542,11 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId,
       type: daysLeft <= 7 ? NotificationType.LEASE_EXPIRING_7 : NotificationType.LEASE_EXPIRING_30,
+      // Keyed on the lease's own id — `unitId` here is really "unitId ?? buildingId",
+      // whichever side of the polymorphic link is set (see the caller). The 30-day and
+      // 7-day alerts are separate types, so the same key in both is correct: crossing
+      // the 7-day threshold is a genuinely new, more urgent alert and must get through.
+      dedupeKey: `lease:${lease.unitId}`,
       title: `Lease Expiring in ${daysLeft} Days`,
       body: `${lease.tenantName}'s lease in ${lease.unit.building.project.name} expires on ${lease.leaseEnd.toLocaleDateString()}.`,
       link,
@@ -539,6 +564,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId: loan.projectId,
       type: NotificationType.LOAN_MATURITY_60,
+      dedupeKey: `loan:${loan.id}`,
       title: `Loan Maturing in 60 Days`,
       body: `A loan in project ${loan.project.name} matures on ${loan.maturityDate.toLocaleDateString()}.`,
       link,
@@ -648,6 +674,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'AR_AP'],
       projectId: p.projectId,
       type: NotificationType.DRAW_FUNDING_OVERDUE,
+      dedupeKey: `draw:${p.projectId}:${p.drawNumber}`,
       title: `Draw funding overdue (${p.daysOverdue}d)`,
       body: `Draw #${p.drawNumber} on ${p.projectName ?? 'a project'} is ${p.daysOverdue} day(s) past its expected funding date.`,
       link: `/projects/${p.projectId}/draws`,
@@ -659,6 +686,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING'],
       projectId,
       type: NotificationType.BUDGET_VARIANCE,
+      dedupeKey: `project:${projectId}`,
       title: `Budget Variance Alert: ${projectName}`,
       body: `Project ${projectName} has exceeded budget by ${variancePct.toFixed(1)}% (threshold: 10%).`,
       link: `/projects/${projectId}/budget`,
@@ -677,6 +705,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
       type: NotificationType.PAYMENT_OVERDUE,
+      dedupeKey: `salePayment:${p.saleId}:${p.label}`,
       title: `Payment overdue (${p.daysOverdue}d): ${p.label}`,
       body: `Installment "${p.label}" for ${p.buyer ?? 'a buyer'} in ${p.projectName ?? 'a project'} is ${p.daysOverdue} day(s) overdue.`,
       link: `/projects/${p.projectId}/revenue`,
@@ -695,6 +724,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
       type: NotificationType.PAYMENT_DUE_7,
+      dedupeKey: `salePayment:${p.saleId}:${p.label}`,
       title: `Payment due in ${p.daysLeft}d: ${p.label}`,
       body: `Installment "${p.label}" for ${p.buyer ?? 'a buyer'} in ${p.projectName ?? 'a project'} is due in ${p.daysLeft} day(s).`,
       link: `/projects/${p.projectId}/revenue`,
@@ -827,6 +857,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
       type: NotificationType.FREE_RENT_ENDING_30,
+      dedupeKey: `lease:${p.leaseId}`,
       title: `Free rent ends in ${p.daysLeft}d: ${p.tenantName}`,
       body: `${p.tenantName}'s free-rent period${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} ends ${this.date(
         p.freeRentEnd,
@@ -849,6 +880,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP', 'SALES'],
       projectId: p.projectId,
       type: NotificationType.DEPOSIT_OUTSTANDING,
+      dedupeKey: `lease:${p.leaseId}`,
       title: `Deposit outstanding (${p.daysOverdue}d): ${p.tenantName}`,
       body: `${this.money(p.outstanding)} of ${p.tenantName}'s security deposit${this.at(p.unitLabel)} in ${
         p.projectName ?? 'a project'
@@ -899,6 +931,7 @@ export class NotificationsService {
       roles: ['FINANCE', 'ACCOUNTING', 'AR_AP'],
       projectId: p.projectId,
       type: NotificationType.RENT_OVERDUE,
+      dedupeKey: `rentInvoice:${p.invoiceId}`,
       title: `Rent overdue (${p.daysOverdue}d): ${p.tenantName}`,
       body: `${this.money(p.amountOutstanding)} of ${p.tenantName}'s rent${this.at(p.unitLabel)} in ${
         p.projectName ?? 'a project'

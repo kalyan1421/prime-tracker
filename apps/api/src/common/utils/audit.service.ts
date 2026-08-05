@@ -104,11 +104,13 @@ export class AuditService {
         _count: { entity: true },
         orderBy: { _count: { entity: 'desc' } },
       }),
+      // No `take`: the list is bounded by the user table, not the event table, and a cap
+      // silently omitted low-activity people from the filter with no way to tell the
+      // options were incomplete — the filter just appeared not to contain them.
       this.prisma.auditEvent.groupBy({
         by: ['userId'],
         _count: { userId: true },
         orderBy: { _count: { userId: 'desc' } },
-        take: 50,
       }),
     ]);
 

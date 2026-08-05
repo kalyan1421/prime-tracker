@@ -300,16 +300,26 @@ export class UsersService {
    * The new password is never logged — the audit row records that a reset happened, by
    * whom, and how many sessions it killed.
    */
-  async setPassword(targetId: string, newPassword: string, actor: { id: string; role: string }) {
+  async setPassword(
+    targetId: string,
+    newPassword: string,
+    actor: { id: string; role: string; roles?: string[] },
+  ) {
     const target = await this.prisma.user.findUnique({
       where: { id: targetId },
       select: { id: true, email: true, role: true, roles: true },
     });
     if (!target) throw new NotFoundException('User not found');
 
-    const targetIsSuperAdmin =
-      target.role === 'SUPER_ADMIN' || (target.roles ?? []).includes('SUPER_ADMIN' as UserRole);
-    if (targetIsSuperAdmin && actor.role !== 'SUPER_ADMIN') {
+    const isSuperAdmin = (primary: string, all?: readonly string[] | null) =>
+      primary === 'SUPER_ADMIN' || (all ?? []).includes('SUPER_ADMIN');
+
+    // Both sides read roles[], not just the primary role. Permissions are the union over
+    // roles[] (jwt.strategy.ts), so someone whose primary role is FOUNDER but who also
+    // holds SUPER_ADMIN *is* a super admin — checking `actor.role` alone refused them a
+    // reset they are entitled to perform.
+    const targetIsSuperAdmin = isSuperAdmin(target.role, target.roles as string[]);
+    if (targetIsSuperAdmin && !isSuperAdmin(actor.role, actor.roles)) {
       throw new ForbiddenException("Only a super admin can reset a super admin's password");
     }
 
