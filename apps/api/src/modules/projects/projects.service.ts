@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, ProjectType } from '@prisma/client';
 import { isProjectScopedRole } from '@prime-tracker/shared';
 import { ProjectAccessService } from '../../common/access/project-access.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 
 export interface ListProjectsParams {
   status?: string;
@@ -32,7 +33,11 @@ export interface ProjectViewer {
 
 @Injectable()
 export class ProjectsService {
-  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
+  constructor(
+    private prisma: PrismaService,
+    private access: ProjectAccessService,
+    private encryption: EncryptionService,
+  ) {}
 
   async findAll(params?: ListProjectsParams, viewer?: ProjectViewer) {
     const where: Prisma.ProjectWhereInput = {};
@@ -138,7 +143,10 @@ export class ProjectsService {
       },
     });
     if (!project) throw new NotFoundException('Project not found');
-    return project;
+    // GET /projects/:id feeds ProjectHealthHeader's loan total and the Overview loan
+    // list, both of which read principalAmt/currentBalance/lender straight off these
+    // rows — they now come back null unless rehydrated from the blob.
+    return { ...project, loans: this.encryption.decryptLoans(project.loans) };
   }
 
   async findBySlug(slug: string, viewer?: ProjectViewer) {
@@ -320,7 +328,11 @@ export class ProjectsService {
         actuals: true,
         commitments: true,
         buildings: { include: { units: true } },
-        loans: true,
+        // Only monthlyPayment is consumed here (totalMonthlyMortgage) and it is not an
+        // encrypted field, so no decrypt is needed — but narrow the select so the
+        // ciphertext blob isn't shipped out, and exclude soft-deleted loans, which
+        // this include was silently counting.
+        loans: { where: { deletedAt: null }, select: { monthlyPayment: true } },
         milestones: {
           where: {
             status: { in: ['OVERDUE', 'IN_PROGRESS'] },

@@ -8,9 +8,22 @@ const mockPrisma: any = {
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
 };
 
+// Pass-through EncryptionService double: these suites mock Prisma, so rows already
+// carry plaintext. Real crypto is covered in common/encryption/encryption.service.spec.ts.
+const mockEncryption = {
+  decryptLoan: (l: any) => l,
+  decryptLoans: (l: any[]) => l ?? [],
+  encryptFields: (o: any, fields: string[]) => {
+    const out: any = { ...o };
+    for (const f of fields) out[f] = null;
+    return { ...out, encryptedFields: 'enc' };
+  },
+  decryptFields: (o: any) => o,
+};
+
 function makeService() {
   // ProjectAccessService stub: no scoping in unit tests (undefined = unrestricted).
-  return new UnitsService(mockPrisma as any, { listProjectScope: async () => undefined } as any);
+  return new UnitsService(mockPrisma as any, { listProjectScope: async () => undefined } as any, mockEncryption as any);
 }
 
 const PM: UserRole = 'PROJECT_MANAGER';

@@ -4,6 +4,13 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { Prisma, DrawStatus } from '@prisma/client';
 
+/**
+ * The Loan columns held only inside `encryptedFields`. Any read path that surfaces
+ * one of these must run the row through `EncryptionService.decryptLoan` first —
+ * the columns themselves are null.
+ */
+export const SENSITIVE_LOAN_FIELDS = ['lender', 'principalAmt', 'interestRate', 'currentBalance'] as const;
+
 @Injectable()
 export class LoansService {
   constructor(
@@ -96,12 +103,16 @@ export class LoansService {
     if (typeof data.maturityDate === 'string') {
       data.maturityDate = new Date(data.maturityDate);
     }
-    const encrypted = this.encryption.encryptFields(data as any, ['lender', 'principalAmt', 'interestRate', 'currentBalance']);
-    return this.prisma.loan.create({ data: { ...data, encryptedFields: encrypted.encryptedFields } });
+    // Spread `encrypted`, NOT `data`: encryptFields returns the sensitive keys nulled,
+    // so the plaintext never reaches its own column. Spreading `data` here is exactly
+    // what used to write lender/principal/rate/balance in the clear next to the blob.
+    const encrypted = this.encryption.encryptFields(data as any, SENSITIVE_LOAN_FIELDS as any);
+    return this.prisma.loan.create({ data: encrypted as any });
   }
 
   async update(id: string, data: Prisma.LoanUncheckedUpdateInput) {
-    await this.findById(id);
+    // Decrypted — needed below to re-encrypt the full sensitive set on a partial edit.
+    const existing = await this.findById(id);
 
     // Re-linking to a building: derive projectId the same way create() does, so the
     // loan doesn't fall out of project-scoped queries/dashboards.
@@ -124,10 +135,21 @@ export class LoansService {
       data.maturityDate = new Date(data.maturityDate);
     }
 
-    const sensitiveFields = ['lender', 'principalAmt', 'interestRate', 'currentBalance'];
-    const hasSensitive = sensitiveFields.some((f) => (data as any)[f] !== undefined);
+    // The blob is rewritten WHOLE every time, so it must be built from the merge of
+    // what's stored and what's changing — not from `data` alone. Editing only
+    // currentBalance used to write a blob containing just that field; it looked fine
+    // only because the other three were still readable in their plaintext columns.
+    // With the columns nulled, that same code path would destroy lender, principal
+    // and rate. Always re-encrypt the full set.
+    const hasSensitive = SENSITIVE_LOAN_FIELDS.some((f) => (data as any)[f] !== undefined);
     if (hasSensitive) {
-      const encrypted = this.encryption.encryptFields(data as any, sensitiveFields);
+      const merged: Record<string, unknown> = {};
+      for (const f of SENSITIVE_LOAN_FIELDS) {
+        const incoming = (data as any)[f];
+        merged[f] = incoming !== undefined ? incoming : (existing as any)[f];
+      }
+      const encrypted = this.encryption.encryptFields(merged, SENSITIVE_LOAN_FIELDS as any);
+      for (const f of SENSITIVE_LOAN_FIELDS) (data as any)[f] = null; // clear any legacy plaintext
       (data as any).encryptedFields = encrypted.encryptedFields;
     }
     return this.prisma.loan.update({ where: { id }, data });
@@ -336,9 +358,6 @@ export class LoansService {
   }
 
   private decryptLoan(loan: any) {
-    if (loan.encryptedFields) {
-      return this.encryption.decryptFields(loan);
-    }
-    return loan;
+    return this.encryption.decryptLoan(loan);
   }
 }

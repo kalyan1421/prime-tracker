@@ -3,6 +3,7 @@ import type {
   DrawStatus, DrawApprovalStep, DrawApprovalAction, DrawDocType,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { canTransition, getTransition, DrawAction } from './draw-state-machine';
 
@@ -19,7 +20,11 @@ import { canTransition, getTransition, DrawAction } from './draw-state-machine';
  */
 @Injectable()
 export class DrawsService {
-  constructor(private prisma: PrismaService, private bus: EventBus) {}
+  constructor(
+    private prisma: PrismaService,
+    private bus: EventBus,
+    private encryption: EncryptionService,
+  ) {}
 
   // ─────── Transitions ───────
 
@@ -175,7 +180,8 @@ export class DrawsService {
     const draw = await this.prisma.drawRequest.findUnique({
       where: { id },
       include: {
-        loan: { select: { id: true, lender: true, projectId: true } },
+        // lender is encrypted — select the blob so it can be rehydrated below.
+        loan: { select: { id: true, lender: true, projectId: true, encryptedFields: true } },
         approvals: {
           orderBy: { createdAt: 'asc' },
           include: { actor: { select: { id: true, name: true, email: true } } },
@@ -187,7 +193,8 @@ export class DrawsService {
       },
     });
     if (!draw) throw new NotFoundException('Draw request not found');
-    return draw;
+    // DrawDetailModal renders loan.lender in its header and detail grid.
+    return { ...draw, loan: draw.loan ? this.encryption.decryptLoan(draw.loan) : draw.loan };
   }
 
   // ─────── Internal ───────

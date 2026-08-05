@@ -610,9 +610,13 @@ model Loan {
   // own types (e.g. "SBA 504") without a schema change. The 5 former enum values are
   // seeded as system defaults in custom-options.service.ts.
   loanType        String
-  lender          String // encrypted
-  principalAmt    Decimal   @db.Decimal(14, 2) // encrypted at app level
-  interestRate    Decimal   @db.Decimal(6, 4) // encrypted at app level
+  // lender/principalAmt/interestRate/currentBalance are AES-256-GCM encrypted into
+  // `encryptedFields` and the columns are left NULL. They are nullable for exactly
+  // that reason — the value lives in the blob, not here. Any read path that surfaces
+  // them must call EncryptionService.decryptLoan first.
+  lender          String?
+  principalAmt    Decimal?  @db.Decimal(14, 2)
+  interestRate    Decimal?  @db.Decimal(6, 4)
   termMonths      Int
   maturityDate    DateTime?
   currentBalance  Decimal?  @db.Decimal(14, 2) // encrypted at app level

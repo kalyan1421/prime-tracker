@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../common/cache/cache.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 
 /**
  * Exception aggregator — the data source for the dashboard "Needs Attention" feed.
@@ -37,7 +38,21 @@ const TAG = 'exceptions';
 
 @Injectable()
 export class ExceptionsService {
-  constructor(private prisma: PrismaService, private cache: CacheService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+    private encryption: EncryptionService,
+  ) {}
+
+  /**
+   * Lender is AES-encrypted, so it must be rehydrated before being interpolated into
+   * exception text — otherwise these read "...funding from undefined". Falls back to a
+   * neutral label rather than an empty string if a row cannot be decrypted.
+   */
+  private lenderName(loan: { lender?: string | null; encryptedFields?: string | null } | null): string {
+    if (!loan) return 'the lender';
+    return this.encryption.decryptLoan(loan).lender || 'the lender';
+  }
 
   invalidate() { this.cache.invalidateTag(TAG); }
 
@@ -129,7 +144,7 @@ export class ExceptionsService {
       },
       select: {
         id: true, drawNumber: true, expectedFundingDate: true, projectId: true,
-        loan: { select: { lender: true } },
+        loan: { select: { lender: true, encryptedFields: true } },
         project: { select: { name: true } },
       },
       take: 20,
@@ -141,7 +156,7 @@ export class ExceptionsService {
         severity: days > 7 ? 'critical' : 'warning',
         category: 'draw',
         title: `Draw #${d.drawNumber} funding overdue`,
-        detail: `${days} day${days === 1 ? '' : 's'} past expected funding from ${d.loan.lender}`,
+        detail: `${days} day${days === 1 ? '' : 's'} past expected funding from ${this.lenderName(d.loan)}`,
         meta: d.project?.name,
         href: d.projectId ? `/projects/${d.projectId}/draws` : undefined,
         createdAt: d.expectedFundingDate ?? undefined,
@@ -153,7 +168,7 @@ export class ExceptionsService {
       where: { status: 'SUBMITTED', ...projectFilter },
       select: {
         id: true, drawNumber: true, requestDate: true, projectId: true,
-        loan: { select: { lender: true } },
+        loan: { select: { lender: true, encryptedFields: true } },
         project: { select: { name: true } },
       },
       take: 20,
@@ -165,7 +180,7 @@ export class ExceptionsService {
         severity: days > 3 ? 'warning' : 'info',
         category: 'draw',
         title: `Draw #${d.drawNumber} awaiting approval`,
-        detail: `Submitted ${days} day${days === 1 ? '' : 's'} ago from ${d.loan.lender} — needs internal sign-off`,
+        detail: `Submitted ${days} day${days === 1 ? '' : 's'} ago from ${this.lenderName(d.loan)} — needs internal sign-off`,
         meta: d.project?.name,
         href: d.projectId ? `/projects/${d.projectId}/draws` : undefined,
         createdAt: d.requestDate,
