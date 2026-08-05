@@ -776,13 +776,27 @@ describe('LeaseRentInvoiceService.generateDueThrough (cron)', () => {
     const result = await service.generateDueThrough(d('2026-03-10'));
 
     expect(mockPrisma.lease.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { deletedAt: null, status: 'ACTIVE' } }),
+      expect.objectContaining({
+        where: { deletedAt: null, status: 'ACTIVE', NOT: { unit: { status: 'SOLD' } } },
+      }),
     );
     expect(result.leasesProcessed).toBe(2);
     expect(result.invoicesCreated).toBe(6);
     expect(result.leaseIds).toEqual(['lease-1', 'lease-2']);
     // Bills through the month CONTAINING asOf: Jan, Feb, Mar.
     expect(mockPrisma.leaseRentInvoice.createMany.mock.calls[0][0].data).toHaveLength(3);
+  });
+
+  it('excludes leases on a SOLD unit from billing', async () => {
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+
+    await service.generateDueThrough(d('2026-03-10'));
+
+    // Selling a unit does not end its lease, and the lease stays ACTIVE. Without this
+    // filter the cron kept minting invoices for units Prime no longer owns — six real
+    // leases had accumulated 99 invoices, one billing out to 2032.
+    const where = mockPrisma.lease.findMany.mock.calls[0][0].where;
+    expect(where.NOT).toEqual({ unit: { status: 'SOLD' } });
   });
 
   it('reports zero without writing when every lease is already up to date', async () => {

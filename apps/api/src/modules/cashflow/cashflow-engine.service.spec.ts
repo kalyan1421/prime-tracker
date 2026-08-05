@@ -51,6 +51,17 @@ describe('CashflowEngineService.buildTimeline', () => {
     expect(t.summary.totalInflows).toBe(1300);
   });
 
+  it('excludes lease income from units that have been sold', async () => {
+    prisma.lease.findMany.mockResolvedValue([]);
+
+    await build();
+
+    // One of these leases ran to 2032 — the forecast was projecting rent years out on
+    // units Prime had already sold.
+    const where = prisma.lease.findMany.mock.calls[0][0].where;
+    expect(where.NOT).toEqual({ unit: { status: 'SOLD' } });
+  });
+
   it('spreads ACTIVE lease rent across each in-range month, applying escalation', async () => {
     prisma.lease.findMany.mockResolvedValue([
       { monthlyRent: 1000, leaseStart: d('2026-01-01'), leaseEnd: d('2027-12-31'), escalationPct: 10, escalationFreq: 6 },

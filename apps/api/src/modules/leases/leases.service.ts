@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NOT_ON_SOLD_UNIT } from './lease-filters';
 import { Prisma } from '@prisma/client';
 import { LeaseRentPeriodService, startOfUtcDay, addMonthsUtc } from './lease-rent-period.service';
 import { EventBus } from '../../common/events/event-bus.service';
@@ -114,6 +115,8 @@ export class LeasesService {
       where: {
         status: 'ACTIVE',
         deletedAt: null,
+        // Rent on a sold unit is not Prime's to report.
+        ...NOT_ON_SOLD_UNIT,
         OR: [
           { unit: { building: { projectId } } },
           { building: { projectId } },
