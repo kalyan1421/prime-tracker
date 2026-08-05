@@ -10,6 +10,7 @@ import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
+  useLeaseRentPeriods, useUnitObligationSummary,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -27,6 +28,7 @@ import { SoldUnitPanel } from '../components/SoldUnitPanel';
 import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
 import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
+import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields } from '../components/LeaseFormFields';
 
 
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
@@ -367,21 +369,30 @@ export default function UnitDetailPage() {
   const canCollectRent = hasPermission('rent:collect');
   const canViewBudget = hasPermission('budget:view');
   const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
+  // Derived from `unit` (not `u`) because the early returns below sit between here and
+  // where `activeLease` is computed — hooks cannot live after a conditional return.
+  const activeLeaseId = (unit as any)?.leases?.find(
+    (l: any) => !['EXPIRED', 'TERMINATED'].includes(l.status),
+  )?.id as string | undefined;
+  const { data: rentPeriods = [] } = useLeaseRentPeriods(activeLeaseId);
+  const { data: obligationSummary } = useUnitObligationSummary(unitId);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [leaseModalOpen, setLeaseModalOpen] = useState(false);
   const [leaseIsNew, setLeaseIsNew] = useState(false);
   const [leaseEditId, setLeaseEditId] = useState<string | null>(null);
-  const [leaseForm, setLeaseForm] = useState<Record<string, string>>({
-    tenantName: '', monthlyRent: '', leaseStart: '', leaseEnd: '', termMonths: '', status: 'ACTIVE',
-  });
+  // Shared shape — this page used to keep its own six-field copy, so deposit,
+  // escalation and rent-per-sqft were shown on the card but not editable here.
+  const [leaseForm, setLeaseForm] = useState<Record<string, string>>(EMPTY_LEASE);
+  const [leaseErrors, setLeaseErrors] = useState<Record<string, string>>({});
   const createLease = useCreateLease();
   const updateLease = useUpdateLease();
 
   const openAddLease = () => {
     setLeaseIsNew(true);
     setLeaseEditId(null);
-    setLeaseForm({ tenantName: '', monthlyRent: '', leaseStart: '', leaseEnd: '', termMonths: '', status: 'ACTIVE' });
+    setLeaseForm({ ...EMPTY_LEASE, unitId: unitId || '', status: 'ACTIVE' });
+    setLeaseErrors({});
     setLeaseModalOpen(true);
   };
 
@@ -389,29 +400,39 @@ export default function UnitDetailPage() {
     setLeaseIsNew(false);
     setLeaseEditId(lease.id);
     setLeaseForm({
+      ...EMPTY_LEASE,
+      unitId: lease.unitId || unitId || '',
       tenantName: lease.tenantName || '',
+      tenantLegalName: lease.tenantLegalName || '',
+      tenantBrand: lease.tenantBrand || '',
+      tenantContact: lease.tenantContact || '',
+      tenantEmail: lease.tenantEmail || '',
+      tenantPhone: lease.tenantPhone || '',
       monthlyRent: lease.monthlyRent != null ? String(Number(lease.monthlyRent)) : '',
+      rentPerSqft: lease.rentPerSqft != null ? String(Number(lease.rentPerSqft)) : '',
       leaseStart: lease.leaseStart ? lease.leaseStart.slice(0, 10) : '',
       leaseEnd: lease.leaseEnd ? lease.leaseEnd.slice(0, 10) : '',
       termMonths: lease.termMonths != null ? String(lease.termMonths) : '',
+      escalationPct: lease.escalationPct != null ? String(Number(lease.escalationPct)) : '',
+      escalationFreq: lease.escalationFreq != null ? String(lease.escalationFreq) : '',
+      securityDeposit: lease.securityDeposit != null ? String(Number(lease.securityDeposit)) : '',
+      rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
+      freeRentMonths: lease.freeRentMonths ? String(lease.freeRentMonths) : '',
+      freeRentStartDate: lease.freeRentStartDate ? String(lease.freeRentStartDate).slice(0, 10) : '',
       status: lease.status || 'ACTIVE',
+      notes: lease.notes || '',
     });
+    setLeaseErrors({});
     setLeaseModalOpen(true);
   };
 
   const handleSaveLease = async () => {
-    if (!leaseForm.tenantName.trim() || !leaseForm.monthlyRent || !leaseForm.leaseStart || !leaseForm.leaseEnd) {
-      return addToast({ title: 'Tenant name, rent, and dates are required', color: 'warning' });
+    const errs = validateLeaseForm(leaseForm);
+    if (Object.keys(errs).length > 0) {
+      setLeaseErrors(errs);
+      return addToast({ title: 'Please fix the highlighted fields', color: 'warning' });
     }
-    const toDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
-    const payload = {
-      tenantName: leaseForm.tenantName.trim(),
-      monthlyRent: parseFloat(leaseForm.monthlyRent),
-      leaseStart: toDate(leaseForm.leaseStart),
-      leaseEnd: toDate(leaseForm.leaseEnd),
-      termMonths: leaseForm.termMonths ? parseInt(leaseForm.termMonths, 10) : undefined,
-      status: leaseForm.status || 'ACTIVE',
-    };
+    const payload = buildLeasePayload(leaseForm);
     try {
       if (leaseIsNew) {
         await createLease.mutateAsync({ ...payload, unitId: unitId! });
@@ -488,6 +509,30 @@ export default function UnitDetailPage() {
 
   const u = unit as any;
   const activeLease = u.leases?.find((l: any) => !['EXPIRED', 'TERMINATED'].includes(l.status));
+  // Money arrives as Prisma Decimal, which JSON-serializes to a STRING — always num() it
+  // before arithmetic, or `0 + "500"` becomes `"0500"`.
+  const num = (v: unknown) => Number(v ?? 0) || 0;
+  const today = new Date();
+  // Periods can overlap (a MANUAL period supersedes the generated one it sits inside),
+  // so "the period covering today" is the LATEST-starting match, not the first in the
+  // array — taking the first showed the superseded row and hid the NNN split entirely.
+  const currentPeriod = (rentPeriods as any[])
+    .filter((p) => {
+      const start = new Date(p.startDate);
+      const end = p.endDate ? new Date(p.endDate) : null;
+      return start <= today && (!end || end >= today);
+    })
+    .sort((a, b) => {
+      const d = new Date(b.startDate).getTime() - new Date(a.startDate).getTime();
+      return d !== 0 ? d : (b.sequence ?? 0) - (a.sequence ?? 0);
+    })[0] ?? (rentPeriods as any[])[0];
+  const baseRent = num(currentPeriod?.baseRent);
+  const nnnAmount = num(currentPeriod?.nnnAmount);
+  const kindRow = (k: string) => (obligationSummary as any)?.byKind?.find((b: any) => b.kind === k);
+  const depositAgreed = num(kindRow('SECURITY_DEPOSIT')?.totalAgreed);
+  const depositPending = num(kindRow('SECURITY_DEPOSIT')?.totalPending);
+  const tiAgreed = num(kindRow('TI_ALLOWANCE')?.totalAgreed);
+  const tiPending = num(kindRow('TI_ALLOWANCE')?.totalPending);
   const psf = u.askingPrice && u.sqft ? (Number(u.askingPrice) / u.sqft).toFixed(2) : null;
   const rentPsf = u.askingRent && u.sqft ? ((Number(u.askingRent) * 12) / u.sqft).toFixed(2) : null;
 
@@ -649,25 +694,18 @@ export default function UnitDetailPage() {
       </Modal>
 
       {/* Lease Modal */}
-      <Modal isOpen={leaseModalOpen} onClose={() => setLeaseModalOpen(false)} size="md">
+      <Modal isOpen={leaseModalOpen} onClose={() => setLeaseModalOpen(false)} size="2xl" scrollBehavior="inside">
         <ModalContent>
           <ModalHeader>{leaseIsNew ? 'Add Lease' : 'Edit Lease'}</ModalHeader>
           <ModalBody>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Input label="Tenant Name" size="sm" value={leaseForm.tenantName} onChange={setLease('tenantName')} className="sm:col-span-2" />
-              <Input label="Monthly Rent ($)" size="sm" type="number" value={leaseForm.monthlyRent} onChange={setLease('monthlyRent')} />
-              <Input label="Term (months)" size="sm" type="number" value={leaseForm.termMonths} onChange={setLease('termMonths')} />
-              <Input label="Start Date" size="sm" type="date" value={leaseForm.leaseStart} onChange={setLease('leaseStart')} />
-              <Input label="End Date" size="sm" type="date" value={leaseForm.leaseEnd} onChange={setLease('leaseEnd')} />
-              <Select label="Status" size="sm" selectedKeys={[leaseForm.status]}
-                onSelectionChange={(k) => { const v = Array.from(k)[0] as string; if (v) setLeaseForm((f) => ({ ...f, status: v })); }}
-                className="sm:col-span-2"
-              >
-                {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((s) => (
-                  <SelectItem key={s} textValue={s}>{s}</SelectItem>
-                ))}
-              </Select>
-            </div>
+            <LeaseFormFields
+              form={leaseForm}
+              setForm={setLeaseForm}
+              errors={leaseErrors}
+              clearError={(f) => setLeaseErrors((p) => { const n = { ...p }; delete n[f]; return n; })}
+              unitOptions={u ? [{ id: u.id, unitNumber: u.unitNumber }] : []}
+              lockUnit
+            />
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={() => setLeaseModalOpen(false)}>Cancel</Button>
@@ -817,9 +855,40 @@ export default function UnitDetailPage() {
                   <div className="rounded-xl bg-slate-50 px-3 py-2.5">
                     <p className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Deposit</p>
                     <p className="text-lg font-bold text-slate-700 tabular-nums mt-0.5">{fmt(activeLease.securityDeposit)}</p>
+                    {depositAgreed > 0 && (
+                      <p className="text-[10px] text-slate-500">
+                        {depositPending > 0
+                          ? `${fmt(depositPending)} outstanding`
+                          : depositPending < 0 ? 'Overpaid — refund due' : 'Collected in full'}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
+
+              {/* Rent composition. LeaseRentPeriod enforces baseRent + nnnAmount ==
+                  monthlyRent, so this is the contractual split for whichever period
+                  covers today — not a re-derivation. Only rendered when NNN is actually
+                  in play, so gross leases stay uncluttered. */}
+              {currentPeriod && nnnAmount > 0 && (
+                <div className="rounded-xl border border-gray-100 px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-1.5">
+                    Rent composition{currentPeriod.isFreeRent ? ' — abated this month' : ''}
+                  </p>
+                  <div className="flex items-baseline justify-between text-sm">
+                    <span className="text-gray-600">Base rent</span>
+                    <span className="tabular-nums text-gray-800">{fmt(baseRent)}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-sm">
+                    <span className="text-gray-600">NNN</span>
+                    <span className="tabular-nums text-gray-800">+ {fmt(nnnAmount)}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-sm border-t border-gray-100 mt-1.5 pt-1.5 font-semibold">
+                    <span className="text-gray-700">Monthly rent</span>
+                    <span className="tabular-nums text-gray-900">{fmt(baseRent + nnnAmount)}</span>
+                  </div>
+                </div>
+              )}
 
               {/* Lease timeline */}
               <dl className="text-sm divide-y divide-gray-100">
@@ -837,6 +906,34 @@ export default function UnitDetailPage() {
                     <span className="text-gray-700">{Number(activeLease.escalationPct).toFixed(1)}% every {activeLease.escalationFreq || 12} mo</span>
                   </Row>
                 )}
+                {activeLease.rentDueDay && (
+                  <Row label="Rent due"><span className="text-gray-700">Day {activeLease.rentDueDay}</span></Row>
+                )}
+                {/* Abatement sits inside the term — leaseEnd is unchanged. */}
+                <Row label="Free rent">
+                  {Number(activeLease.freeRentMonths) > 0 ? (
+                    <span className="text-emerald-700 font-medium">
+                      {activeLease.freeRentMonths} mo
+                      {activeLease.freeRentStartDate ? ` from ${fmtDate(activeLease.freeRentStartDate)}` : ''}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">None</span>
+                  )}
+                </Row>
+                {/* TI flows Prime -> tenant, the opposite direction to the deposit, so it
+                    is never summed with it. Sourced from the lease obligation ledger. */}
+                <Row label="TI allowance">
+                  {tiAgreed > 0 ? (
+                    <span className="text-gray-700">
+                      {fmt(tiAgreed)}
+                      <span className="text-gray-400">
+                        {tiPending > 0 ? ` · ${fmt(tiPending)} left to fund` : ' · fully funded'}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">None</span>
+                  )}
+                </Row>
               </dl>
             </div>
           ) : (
