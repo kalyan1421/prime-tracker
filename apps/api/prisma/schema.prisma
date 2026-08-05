@@ -21,6 +21,10 @@ model User {
   name         String
   avatarUrl    String?
   googleId     String?   @unique
+  // Directory fields — self-editable, and editable by an admin on someone else.
+  // Never authorization-relevant, unlike role/roles/isActive.
+  phone        String?
+  jobTitle     String?
   role         UserRole  @default(VIEWER)
   roles        UserRole[]
   isActive     Boolean   @default(true)

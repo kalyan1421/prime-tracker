@@ -532,6 +532,24 @@ export function useKpiHistory(projectId: string) {
 }
 
 // ---- Users (Admin) ----
+/** Self-service identity update. Never accepts role/email/isActive — the API rejects them. */
+export function useUpdateMyProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { name?: string; avatarUrl?: string; phone?: string; jobTitle?: string }) =>
+      api.patch('/users/me', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+/** Requires the current password; the API revokes every other session on success. */
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (data: { currentPassword: string; newPassword: string }) =>
+      api.post('/auth/change-password', data).then((r) => r.data),
+  });
+}
+
 export function useUsers(enabled = true) {
   return useQuery({
     queryKey: ['users'],
@@ -749,7 +767,9 @@ export function useCreateUser() {
 export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name?: string; email?: string } }) =>
+    // Admin edit of another user's details. Role/roles/status have their own routes —
+    // they are not accepted here and the DTO rejects them.
+    mutationFn: ({ id, data }: { id: string; data: { name?: string; email?: string; phone?: string; jobTitle?: string } }) =>
       api.put(`/users/${id}`, data).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   });

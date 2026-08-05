@@ -161,7 +161,7 @@ function UsersPanel() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [selectedUser, setSelectedUser] = useState<any>(null);
-  const [editForm, setEditForm] = useState({ name: '', email: '' });
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', jobTitle: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', email: '', roles: ['VIEWER'] as string[], password: '', confirmPassword: '' });
   const [showCreatePassword, setShowCreatePassword] = useState(false);
@@ -375,7 +375,7 @@ function UsersPanel() {
                             variant="light"
                             onPress={() => {
                               openSidePanel(u);
-                              setEditForm({ name: u.name, email: u.email });
+                              setEditForm({ name: u.name, email: u.email, phone: u.phone ?? '', jobTitle: u.jobTitle ?? '' });
                               onEditOpen();
                             }}
                           >
@@ -520,7 +520,7 @@ function UsersPanel() {
                   startContent={<FiEdit2 />}
                   className="flex-1"
                   onPress={() => {
-                    setEditForm({ name: selectedUser.name, email: selectedUser.email });
+                    setEditForm({ name: selectedUser.name, email: selectedUser.email, phone: selectedUser.phone ?? '', jobTitle: selectedUser.jobTitle ?? '' });
                     onEditOpen();
                   }}
                 >
@@ -649,6 +649,21 @@ function UsersPanel() {
                 value={editForm.email}
                 onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
               />
+              <Input
+                size="sm"
+                label="Job title"
+                value={editForm.jobTitle}
+                onChange={(e) => setEditForm((f) => ({ ...f, jobTitle: e.target.value }))}
+              />
+              <Input
+                size="sm"
+                label="Phone"
+                value={editForm.phone}
+                onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+              />
+              <p className="text-[11px] text-gray-400">
+                Role and account status are changed from the row actions, not here.
+              </p>
             </div>
           </ModalBody>
           <ModalFooter>

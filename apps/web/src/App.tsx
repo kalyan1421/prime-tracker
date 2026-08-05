@@ -16,6 +16,7 @@ import CampaignsPage from './pages/CampaignsPage';
 import VacancyReportPage from './pages/VacancyReportPage';
 import BuildingDetailPage from './pages/BuildingDetailPage';
 import SettingsPage from './pages/SettingsPage';
+import ProfilePage from './pages/ProfilePage';
 import FounderDashboardPage from './pages/FounderDashboardPage';
 import ConstructionDashboardPage from './pages/ConstructionDashboardPage';
 import SalesDashboardPage from './pages/SalesDashboardPage';
@@ -91,6 +92,7 @@ export default function App() {
         <Route path="interior/:id" element={<ProtectedRoute permission="interior:view"><InteriorProjectDetailPage /></ProtectedRoute>} />
         <Route path="brokers" element={<ProtectedRoute permission="broker:view"><BrokersPage /></ProtectedRoute>} />
         <Route path="receivables" element={<ProtectedRoute permission="interior:finance"><ReceivablesPage /></ProtectedRoute>} />
+        <Route path="profile" element={<ProfilePage />} />
         <Route path="settings/notifications" element={<SettingsPage />} />
         <Route path="dashboard/founder" element={<FounderDashboardPage />} />
         <Route path="dashboard/construction" element={<ConstructionDashboardPage />} />
