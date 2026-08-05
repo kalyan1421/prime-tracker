@@ -226,6 +226,9 @@ export class LeadsService {
     budget?: number;
     notes?: string;
     assignedTo?: string | null;
+    // Was reaching Prisma only because the body was never whitelisted. Declared now,
+    // so re-attributing a lead survives the DTO added alongside this.
+    campaignId?: string | null;
   }) {
     const existing = await this.findById(id);
     const { budget, unitId, buildingId, ...rest } = data;

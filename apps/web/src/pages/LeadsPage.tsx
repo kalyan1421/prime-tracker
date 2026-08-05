@@ -417,16 +417,23 @@ function LeadFormModal({
   // Campaign options: portfolio-wide campaigns (projectId null) + campaigns tied to
   // this project. The picker shows both so a lead on Spur Plaza can attribute to
   // either a Spur-specific campaign or a brand-wide Prime Developers push.
-  const { data: portfolioCampaigns } = useCampaigns({ status: 'ACTIVE' });
-  const { data: projectCampaigns } = useCampaigns(form.projectId ? { projectId: form.projectId, status: 'ACTIVE' } : undefined);
+  // PLANNED as well as ACTIVE: a campaign is created PLANNED by default, so filtering
+  // to ACTIVE alone meant a campaign you had just set up never appeared here. PAUSED and
+  // COMPLETED stay out — you should not attribute new leads to those.
+  // Fetched unfiltered because the API takes a single status value, then narrowed here.
+  const ATTRIBUTABLE = ['PLANNED', 'ACTIVE'];
+  const { data: portfolioCampaigns } = useCampaigns();
+  const { data: projectCampaigns } = useCampaigns(form.projectId ? { projectId: form.projectId } : undefined);
   const campaignOptions = (() => {
     const out: Array<{ id: string; name: string; channel: string }> = [];
     const seen = new Set<string>();
     for (const c of ((projectCampaigns as any[]) || [])) {
-      if (!seen.has(c.id)) { out.push(c); seen.add(c.id); }
+      if (ATTRIBUTABLE.includes(c.status) && !seen.has(c.id)) { out.push(c); seen.add(c.id); }
     }
     for (const c of ((portfolioCampaigns as any[]) || [])) {
-      if ((!c.projects || c.projects.length === 0) && !seen.has(c.id)) { out.push(c); seen.add(c.id); }
+      if (ATTRIBUTABLE.includes(c.status) && (!c.projects || c.projects.length === 0) && !seen.has(c.id)) {
+        out.push(c); seen.add(c.id);
+      }
     }
     return out;
   })();
@@ -455,7 +462,9 @@ function LeadFormModal({
     }
     try {
       const payload: Record<string, unknown> = {
-        projectId: form.projectId,
+        // Create only: a lead cannot move between projects, and UpdateLeadDto has no
+        // such field, so sending it on edit is a 400.
+        ...(isEdit ? {} : { projectId: form.projectId }),
         source: form.source,
         status: form.status,
         name: form.name.trim(),
@@ -575,6 +584,14 @@ function LeadFormModal({
               selectedKeys={form.campaignId ? new Set([form.campaignId]) : new Set()}
               onSelectionChange={(keys) => set('campaignId', (Array.from(keys)[0] as string) || '')}
               className="sm:col-span-2"
+              isDisabled={!form.projectId}
+              description={
+                !form.projectId
+                  ? 'Choose a project first — campaigns are listed per project.'
+                  : campaignOptions.length === 0
+                    ? 'No planned or active campaign is linked to this project yet.'
+                    : undefined
+              }
             >
               {campaignOptions.map((c: any) => (
                 <SelectItem key={c.id} textValue={c.name}>{c.name} · {String(c.channel).replace('_', ' ')}</SelectItem>

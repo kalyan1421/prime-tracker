@@ -31,7 +31,7 @@ import {
   useCreateUnit, useUpdateUnit, useDeleteUnit,
   useCreateMilestone, useUpdateMilestone, useDeleteMilestone,
   useCreateLease, useUpdateLease, useDeleteLease,
-  useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount, useBrokers,
+  useCreateSale, useUpdateSale, useDeleteSale, useApproveSaleDiscount, useBrokers, useCampaigns,
   useCreateCommitment, useUpdateCommitment, useDeleteCommitment,
   useCreateBudget, useUpdateBudget, useDeleteBudget, useProjectBudgetRevisions, useSetApprovedBudget,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
@@ -5296,6 +5296,24 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const { data: projectUnits } = useUnits(projectId);
   const createLead = useCreateLead();
   const updateLead = useUpdateLead();
+  // Campaigns attributable from inside a project: those linked to it, plus portfolio-wide
+  // ones. PLANNED counts as well as ACTIVE — a campaign is created PLANNED, so filtering
+  // to ACTIVE alone hid one you had just set up. PAUSED/COMPLETED stay out.
+  const { data: projectCampaignList } = useCampaigns({ projectId });
+  const { data: allCampaignList } = useCampaigns();
+  const leadCampaignOptions = (() => {
+    const ok = ['PLANNED', 'ACTIVE'];
+    const out: any[] = []; const seen = new Set<string>();
+    for (const c of ((projectCampaignList as any[]) || [])) {
+      if (ok.includes(c.status) && !seen.has(c.id)) { out.push(c); seen.add(c.id); }
+    }
+    for (const c of ((allCampaignList as any[]) || [])) {
+      if (ok.includes(c.status) && (!c.projects || c.projects.length === 0) && !seen.has(c.id)) {
+        out.push(c); seen.add(c.id);
+      }
+    }
+    return out;
+  })();
   const deleteLead = useDeleteLead();
   const addActivity = useAddLeadActivity();
   const convertLead = useConvertLead();
@@ -5316,14 +5334,14 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
 
   const { data: activities } = useLeadActivities(selectedLead?.id || '');
 
-  const [form, setForm] = useState({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitId: '', unitInterest: '', budget: '', notes: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitId: '', unitInterest: '', budget: '', notes: '', campaignId: '' });
   const setF = (f: string, v: string) => setForm((prev) => ({ ...prev, [f]: v }));
 
-  const resetForm = () => setForm({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitId: '', unitInterest: '', budget: '', notes: '' });
+  const resetForm = () => setForm({ name: '', email: '', phone: '', source: 'WEBSITE', status: 'NEW', unitId: '', unitInterest: '', budget: '', notes: '', campaignId: '' });
 
   const openNewForm = () => { resetForm(); setEditLead(null); setShowForm(true); };
   const openEditForm = (lead: any) => {
-    setForm({ name: lead.name || '', email: lead.email || '', phone: lead.phone || '', source: lead.source || 'WEBSITE', status: lead.status || 'NEW', unitId: lead.unitId || '', unitInterest: lead.unitInterest || '', budget: lead.budget ? String(Number(lead.budget)) : '', notes: lead.notes || '' });
+    setForm({ name: lead.name || '', email: lead.email || '', phone: lead.phone || '', source: lead.source || 'WEBSITE', status: lead.status || 'NEW', unitId: lead.unitId || '', unitInterest: lead.unitInterest || '', budget: lead.budget ? String(Number(lead.budget)) : '', notes: lead.notes || '', campaignId: lead.campaignId || '' });
     setEditLead(lead);
     setShowForm(true);
   };
@@ -5331,7 +5349,20 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const handleSubmitLead = async () => {
     if (!form.source) return;
     try {
-      const payload: Record<string, unknown> = { projectId, source: form.source, status: form.status, name: form.name || undefined, email: form.email || undefined, phone: form.phone || undefined, unitId: form.unitId || (editLead ? null : undefined), unitInterest: form.unitInterest || undefined, budget: form.budget ? parseFloat(form.budget) : undefined, notes: form.notes || undefined };
+      const payload: Record<string, unknown> = {
+        // projectId is create-only — a lead cannot move project, and UpdateLeadDto
+        // has no such field, so sending it on edit is a 400.
+        ...(editLead ? {} : { projectId }),
+        source: form.source, status: form.status,
+        name: form.name || undefined, email: form.email || undefined, phone: form.phone || undefined,
+        unitId: form.unitId || (editLead ? null : undefined),
+        unitInterest: form.unitInterest || undefined,
+        budget: form.budget ? parseFloat(form.budget) : undefined,
+        notes: form.notes || undefined,
+        // Campaign attribution was missing from this form entirely, so a lead created
+        // or edited from inside a project could never be attributed.
+        campaignId: form.campaignId || (editLead ? null : undefined),
+      };
       if (editLead) {
         await updateLead.mutateAsync({ id: editLead.id, data: payload });
         addToast({ title: 'Lead updated', color: 'success' });
@@ -5808,6 +5839,23 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 })}
               </Select>
               <Input size="sm" label="Notes on interest" placeholder="e.g. 2BR preference" value={form.unitInterest} onChange={(e) => setF('unitInterest', e.target.value)} className="sm:col-span-2" />
+              <Select
+                size="sm"
+                label="Campaign"
+                placeholder="No specific campaign"
+                className="sm:col-span-2"
+                selectedKeys={form.campaignId ? new Set([form.campaignId]) : new Set()}
+                onSelectionChange={(k) => setF('campaignId', (Array.from(k)[0] as string) || '')}
+                description={leadCampaignOptions.length === 0
+                  ? 'No planned or active campaign is linked to this project yet.'
+                  : undefined}
+              >
+                {leadCampaignOptions.map((c: any) => (
+                  <SelectItem key={c.id} textValue={c.name}>
+                    {c.name} · {String(c.channel).replace('_', ' ')}
+                  </SelectItem>
+                ))}
+              </Select>
               <Textarea size="sm" label="Notes" value={form.notes} onChange={(e) => setF('notes', e.target.value)} minRows={2} className="sm:col-span-2" />
             </div>
           </ModalBody>
