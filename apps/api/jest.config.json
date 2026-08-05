@@ -10,5 +10,6 @@
   "testEnvironment": "node",
   "moduleNameMapper": {
     "^@prime-tracker/shared$": "<rootDir>/../../../packages/shared/src/types/index.ts"
-  }
+  },
+  "transformIgnorePatterns": ["/node_modules/\\.pnpm/(?!uuid@)"]
 }

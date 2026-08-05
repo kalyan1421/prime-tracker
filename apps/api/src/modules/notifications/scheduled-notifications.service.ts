@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 import { NotificationsService } from './notifications.service';
 import { LeaseRentInvoiceService } from '../leases/lease-rent-invoice.service';
 
@@ -42,6 +43,7 @@ export class ScheduledNotificationsService {
     private prisma: PrismaService,
     private notifications: NotificationsService,
     private rentInvoices: LeaseRentInvoiceService,
+    private encryption: EncryptionService,
   ) {}
 
   // Run daily at 8:00 AM Central Time
@@ -501,11 +503,15 @@ export class ScheduledNotificationsService {
     const loans = await this.prisma.loan.findMany({
       where: {
         maturityDate: { not: null, gte: now, lte: in60 },
+        // Soft-deleted loans were still generating maturity alerts.
+        deletedAt: null,
       },
       include: { project: { select: { id: true, name: true } } },
     });
 
-    for (const loan of loans) {
+    // lender is encrypted; the notification body embeds it, so decrypt before sending
+    // or every "loan maturing" alert names an undefined lender.
+    for (const loan of this.encryption.decryptLoans(loans)) {
       if (!loan.maturityDate) continue;
       // Sprint 1: Loan.projectId is now nullable to support per-building loans.
       // Building-level loan maturity notifications need their own surface — defer.

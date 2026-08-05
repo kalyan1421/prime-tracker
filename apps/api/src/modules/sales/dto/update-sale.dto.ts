@@ -1,8 +1,12 @@
 import {
   IsString, IsOptional,
-  IsNumber, IsPositive, IsDateString, MaxLength,
+  IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
 } from 'class-validator';
+import { LostReason } from '@prisma/client';
 
+// Note: projectId/unitId/buildingId are deliberately absent — a sale's project and
+// asset link are fixed at creation. update() has no re-link logic, so accepting them
+// would silently ignore the change rather than move the sale.
 export class UpdateSaleDto {
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;
@@ -24,6 +28,16 @@ export class UpdateSaleDto {
 
   @IsOptional() @IsDateString()
   closingDate?: string;
+
+  @IsOptional() @IsDateString()
+  expectedCloseDate?: string;
+
+  // Captured when status -> CANCELLED; update() defaults it to OTHER if omitted.
+  @IsOptional() @IsEnum(LostReason)
+  lostReason?: LostReason;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  lostReasonNote?: string;
 
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;

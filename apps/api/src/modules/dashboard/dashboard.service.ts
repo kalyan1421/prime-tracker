@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../common/cache/cache.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 import { Prisma } from '@prisma/client';
 
 // Roles on the construction dashboard that may see budget/spend/loan figures.
@@ -22,6 +23,7 @@ export class DashboardService {
     private prisma: PrismaService,
     private cache: CacheService,
     private access: ProjectAccessService,
+    private encryption: EncryptionService,
   ) {}
 
   /**
@@ -106,8 +108,9 @@ export class DashboardService {
         if (sale.status === 'UNDER_CONTRACT') underContractValue += Number(sale.salePrice ?? 0);
       }
 
-      // Loans
-      for (const loan of p.loans) {
+      // Loans — principalAmt lives in the encrypted blob, so rehydrate before summing;
+      // reading the column directly now yields null and silently totals 0.
+      for (const loan of this.encryption.decryptLoans(p.loans)) {
         totalLoanPrincipal += Number(loan.principalAmt ?? 0);
         totalLoanMonthlyPayment += Number(loan.monthlyPayment ?? 0);
         totalMonthlyMortgage += Number(loan.monthlyPayment ?? 0);
@@ -284,7 +287,7 @@ export class DashboardService {
       overdueMilestoneCount += overdue;
       inProgressMilestoneCount += inProgress;
 
-      for (const loan of p.loans) {
+      for (const loan of this.encryption.decryptLoans(p.loans)) {
         totalLoanAvailable += Number(loan.principalAmt ?? 0);
         for (const dr of loan.drawRequests) {
           if (dr.status === 'SUBMITTED' || dr.status === 'DRAFT') {
@@ -560,7 +563,7 @@ export class DashboardService {
       let pendingDrawAmt = 0;
       const loansNearMaturity: any[] = [];
 
-      for (const loan of p.loans) {
+      for (const loan of this.encryption.decryptLoans(p.loans)) {
         loanPrincipal += Number(loan.principalAmt);
         monthlyPayment += Number(loan.monthlyPayment ?? 0);
         totalLoanPrincipal += Number(loan.principalAmt);

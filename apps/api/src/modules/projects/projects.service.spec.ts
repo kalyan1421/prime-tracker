@@ -32,11 +32,24 @@ const mockAccess = {
 };
 
 describe('ProjectsService', () => {
+// Pass-through EncryptionService double: these suites mock Prisma, so rows already
+// carry plaintext. Real crypto is covered in common/encryption/encryption.service.spec.ts.
+const mockEncryption = {
+  decryptLoan: (l: any) => l,
+  decryptLoans: (l: any[]) => l ?? [],
+  encryptFields: (o: any, fields: string[]) => {
+    const out: any = { ...o };
+    for (const f of fields) out[f] = null;
+    return { ...out, encryptedFields: 'enc' };
+  },
+  decryptFields: (o: any) => o,
+};
+
   let service: ProjectsService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ProjectsService(mockPrisma as any, mockAccess as any);
+    service = new ProjectsService(mockPrisma as any, mockAccess as any, mockEncryption as any);
   });
 
   describe('findAll', () => {

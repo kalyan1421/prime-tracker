@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
+import { EncryptionService } from '../../common/encryption/encryption.service';
 import { UserRole } from '@prisma/client';
 
 // ---- Status state machine ----
@@ -25,7 +26,11 @@ const STATUS_OVERRIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'FOUNDER'];
 
 @Injectable()
 export class UnitsService {
-  constructor(private prisma: PrismaService, private access: ProjectAccessService) {}
+  constructor(
+    private prisma: PrismaService,
+    private access: ProjectAccessService,
+    private encryption: EncryptionService,
+  ) {}
 
   // ---- Reads ----
 
@@ -46,7 +51,8 @@ export class UnitsService {
         building: { select: { id: true, name: true } },
         leases: { where: { status: 'ACTIVE', deletedAt: null } },
         sales: { where: { deletedAt: null } },
-        loans: { select: { id: true, loanType: true, monthlyPayment: true } },
+        // No decrypt needed — monthlyPayment is not one of the encrypted fields.
+        loans: { where: { deletedAt: null }, select: { id: true, loanType: true, monthlyPayment: true } },
         _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } } } },
       },
       orderBy: [
@@ -73,14 +79,23 @@ export class UnitsService {
           orderBy: { createdAt: 'desc' },
           include: { broker: { select: { id: true, name: true } } },
         },
-        loans: { select: { id: true, loanType: true, lender: true, monthlyPayment: true, principalAmt: true } },
+        // encryptedFields must be selected — lender/principalAmt live only in the blob.
+        // deletedAt filter matches the leases/sales siblings above; a soft-deleted loan
+        // was still rendering in the unit's "Linked Loans" panel.
+        loans: {
+          where: { deletedAt: null },
+          select: {
+            id: true, loanType: true, monthlyPayment: true,
+            lender: true, principalAmt: true, encryptedFields: true,
+          },
+        },
         // Provenance for combined units — which source units were merged in.
         mergedFrom: { select: { id: true, unitNumber: true } },
         _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } } } },
       },
     });
     if (!unit) throw new NotFoundException('Unit not found');
-    return unit;
+    return { ...unit, loans: this.encryption.decryptLoans(unit.loans) };
   }
 
   /**

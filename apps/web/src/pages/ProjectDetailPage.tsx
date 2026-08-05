@@ -3894,10 +3894,16 @@ const LOST_REASONS = [
   { key: 'OTHER', label: 'Other' },
 ];
 
-function buildSalePayload(form: Record<string, string>, projectId: string): Record<string, unknown> {
+// `mode` matters: projectId/unitId are create-only. A sale's project and asset link are
+// fixed once it exists, so UpdateSaleDto rejects them outright — sending them on edit
+// failed every save with "property projectId should not exist".
+function buildSalePayload(
+  form: Record<string, string>,
+  projectId: string,
+  mode: 'create' | 'update' = 'create',
+): Record<string, unknown> {
   return {
-    projectId,
-    unitId: form.unitId,
+    ...(mode === 'create' ? { projectId, unitId: form.unitId } : {}),
     buyer: form.buyer || undefined,
     salePrice: form.salePrice ? parseFloat(form.salePrice) : undefined,
     depositAmt: form.depositAmt ? parseFloat(form.depositAmt) : undefined,
@@ -4093,7 +4099,7 @@ function SalesTab({ projectId }: { projectId: string }) {
       return;
     }
     try {
-      const payload = buildSalePayload(form, projectId);
+      const payload = buildSalePayload(form, projectId, editId ? 'update' : 'create');
       if (editId) {
         await updateSale.mutateAsync({ id: editId, data: payload });
         addToast({ title: 'Sale updated', color: 'success' });

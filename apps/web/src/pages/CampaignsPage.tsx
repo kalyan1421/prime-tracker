@@ -271,8 +271,8 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
   const setProjectIds = (ids: string[]) => setForm((f) => ({ ...f, projectIds: ids }));
 
   // Re-seed the form whenever the modal opens, from the campaign being edited
-  // (or blank for create). Projects are intentionally excluded from edit payloads —
-  // UpdateCampaignDto has no project fields, so they can't be changed after creation.
+  // (or blank for create). projectIds is seeded from the campaign's current links so
+  // the multi-select opens pre-ticked and an unchanged save is a no-op.
   useEffect(() => {
     if (!isOpen) return;
     setForm(campaign ? {
@@ -305,7 +305,9 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
     };
     try {
       if (isEdit) {
-        await update.mutateAsync({ id: campaign.id, data: shared });
+        // projectIds always sent on edit: the service treats it as a full replacement,
+        // and an empty array is a meaningful value here (back to portfolio-wide).
+        await update.mutateAsync({ id: campaign.id, data: { ...shared, projectIds: form.projectIds } });
         addToast({ title: 'Campaign updated', color: 'success' });
       } else {
         await create.mutateAsync({ ...shared, projectIds: form.projectIds });
@@ -327,32 +329,20 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
             <Select size="sm" label="Channel *" selectedKeys={new Set([form.channel])} onSelectionChange={(k) => set('channel', Array.from(k)[0] as string)}>
               {CHANNELS.map((c) => <SelectItem key={c}>{c.replace('_', ' ')}</SelectItem>)}
             </Select>
-            {isEdit ? (
-              <div className="flex flex-col gap-1.5">
-                <p className="text-xs text-gray-500">Projects</p>
-                <div className="flex flex-wrap gap-1">
-                  {((campaign.projects as any[])?.length ?? 0) > 0 ? (
-                    campaign.projects.map((cp: any) => (
-                      <Chip key={cp.project?.id ?? cp.projectId} size="sm" variant="flat">{cp.project?.name}</Chip>
-                    ))
-                  ) : (
-                    <Chip size="sm" variant="flat">All Projects (portfolio-wide)</Chip>
-                  )}
-                </div>
-                <p className="text-[11px] text-gray-400">Projects can't be changed after a campaign is created</p>
-              </div>
-            ) : (
-              <Select
-                size="sm"
-                label="Projects"
-                placeholder="Portfolio-wide (leave empty for all)"
-                selectionMode="multiple"
-                selectedKeys={new Set(form.projectIds)}
-                onSelectionChange={(keys) => setProjectIds(Array.from(keys as Set<string>))}
-              >
-                {projects.map((p) => <SelectItem key={p.id}>{p.name}</SelectItem>)}
-              </Select>
-            )}
+            {/* Editable on create AND edit — UpdateCampaignDto now takes projectIds and
+                the service replaces the link set. Clearing the selection makes the
+                campaign portfolio-wide again. */}
+            <Select
+              size="sm"
+              label="Projects"
+              placeholder="Portfolio-wide (leave empty for all)"
+              selectionMode="multiple"
+              selectedKeys={new Set(form.projectIds)}
+              onSelectionChange={(keys) => setProjectIds(Array.from(keys as Set<string>))}
+              description={form.projectIds.length === 0 ? 'Portfolio-wide — counts toward every project' : undefined}
+            >
+              {projects.map((p) => <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>)}
+            </Select>
             <Input size="sm" label="Planned budget" type="number" value={form.plannedBudget} onChange={(e) => set('plannedBudget', e.target.value)} />
             <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => set('status', Array.from(k)[0] as string)}>
               {STATUSES.map((s) => <SelectItem key={s}>{s}</SelectItem>)}

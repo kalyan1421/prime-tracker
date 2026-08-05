@@ -7,7 +7,14 @@ describe('EncryptionService', () => {
   beforeEach(() => {
     // 32-byte key as 64 hex chars
     const testKey = 'a'.repeat(64);
+    // get() is required as well as getOrThrow(): the constructor reads
+    // ENCRYPTION_KEY_ID and ENCRYPTION_KEY_RETIRED through it for key rotation.
+    // Stubbing only getOrThrow threw "this.config.get is not a function" in
+    // beforeEach, which silently killed all 9 tests in this file.
     const configService = {
+      get: jest.fn((key: string, fallback?: string) =>
+        key === 'ENCRYPTION_KEY_ID' ? 'v1' : (fallback ?? ''),
+      ),
       getOrThrow: jest.fn().mockReturnValue(testKey),
     } as unknown as ConfigService;
     service = new EncryptionService(configService);
@@ -74,9 +81,33 @@ describe('EncryptionService', () => {
 
       expect(result.encryptedFields).toBeDefined();
       expect(typeof result.encryptedFields).toBe('string');
-      // Original fields still present (encrypt adds encryptedFields blob)
+      // Non-sensitive fields are untouched.
       expect(result.id).toBe('123');
       expect(result.notes).toBe('Keep this in plain text');
+      // The named fields are MOVED, not copied: they must come back null so the
+      // caller's insert/update overwrites the column instead of persisting the
+      // plaintext next to its own ciphertext.
+      expect(result.lender).toBeNull();
+      expect(result.principalAmt).toBeNull();
+      expect(result.interestRate).toBeNull();
+      // And the plaintext must not be recoverable from the serialised row.
+      expect(JSON.stringify({ ...result, encryptedFields: undefined }))
+        .not.toContain('First National Bank');
+    });
+
+    it('nulls a sensitive field the caller omitted, so stale plaintext is cleared', () => {
+      // Partial update: only currentBalance supplied. The other columns must still be
+      // explicitly nulled, otherwise an omitted key is a no-op on UPDATE and any
+      // pre-existing plaintext survives in the row.
+      const result = service.encryptFields(
+        { currentBalance: 5 } as Record<string, unknown>,
+        ['lender', 'principalAmt', 'interestRate', 'currentBalance'],
+      );
+      expect(result.lender).toBeNull();
+      expect(result.principalAmt).toBeNull();
+      expect(result.interestRate).toBeNull();
+      expect(result.currentBalance).toBeNull();
+      expect(service.decryptFields(result).currentBalance).toBe(5);
     });
 
     it('should decrypt encryptedFields back to original values', () => {

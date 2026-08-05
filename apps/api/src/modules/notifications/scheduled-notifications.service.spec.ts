@@ -40,12 +40,27 @@ function leaseFixture(over: Record<string, unknown> = {}) {
   };
 }
 
+// Pass-through EncryptionService double: these suites mock Prisma, so rows already
+// carry plaintext. Real crypto is covered in common/encryption/encryption.service.spec.ts.
+const mockEncryption = {
+  decryptLoan: (l: any) => l,
+  decryptLoans: (l: any[]) => l ?? [],
+  encryptFields: (o: any, fields: string[]) => {
+    const out: any = { ...o };
+    for (const f of fields) out[f] = null;
+    return { ...out, encryptedFields: 'enc' };
+  },
+  decryptFields: (o: any) => o,
+};
+
 describe('ScheduledNotificationsService.checkSalePayments', () => {
+
+
   let service: ScheduledNotificationsService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any);
   });
 
   it('flips past-due installments to OVERDUE and notifies; warns on those due within 7 days', async () => {
@@ -96,7 +111,7 @@ describe('ScheduledNotificationsService.checkFreeRentEnding', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any);
   });
 
   /** The window query has no `OR`; the "still abated?" query is the one with `OR`. */
@@ -190,7 +205,7 @@ describe('ScheduledNotificationsService.checkOutstandingDeposits', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any);
   });
 
   it('notifies on a past-due deposit that is not settled, with the pending amount', async () => {
@@ -244,7 +259,7 @@ describe('ScheduledNotificationsService.checkOverdueRent', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any);
+    service = new ScheduledNotificationsService(mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any);
   });
 
   it('notifies on a past-due DUE/PARTIAL invoice with the outstanding balance', async () => {

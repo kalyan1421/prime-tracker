@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
@@ -20,6 +20,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
  */
 @Injectable()
 export class EncryptionService {
+  private readonly logger = new Logger(EncryptionService.name);
   private readonly algorithm = 'aes-256-gcm';
   private readonly currentKeyId: string;
   private readonly currentKey: Buffer;
@@ -96,7 +97,18 @@ export class EncryptionService {
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
   }
 
-  /** Encrypt a JSON object's specified fields */
+  /**
+   * MOVE the named fields into the encrypted blob: they are written to
+   * `encryptedFields` and set to `null` on the returned object.
+   *
+   * The null matters. This previously returned `{ ...obj }` untouched, so callers
+   * persisted the plaintext into its own column *and* an encrypted copy — the
+   * ciphertext was decorative and the real values sat in the clear. Returning null
+   * makes the caller's `prisma.update`/`create` actively overwrite the old plaintext
+   * rather than leave it behind (an omitted key would be a no-op on update).
+   *
+   * Callers must spread the RESULT, not the input object.
+   */
   encryptFields<T extends Record<string, unknown>>(
     obj: T,
     fields: (keyof T)[],
@@ -108,6 +120,9 @@ export class EncryptionService {
       if (obj[field] !== undefined && obj[field] !== null) {
         sensitiveData[field as string] = obj[field];
       }
+      // Null even when the caller omitted the field: on an update this is what
+      // clears any pre-existing plaintext still sitting in the column.
+      (result as Record<string, unknown>)[field as string] = null;
     }
 
     result.encryptedFields = this.encrypt(JSON.stringify(sensitiveData));
@@ -122,8 +137,32 @@ export class EncryptionService {
     try {
       const decrypted = JSON.parse(this.decrypt(obj.encryptedFields));
       return { ...obj, ...decrypted };
-    } catch {
+    } catch (err) {
+      // Now that the columns are null, a failed decrypt means the values are gone
+      // from the response entirely — silence here reads as "loan has no lender"
+      // rather than "this row could not be decrypted". Log loudly; never throw,
+      // so one unreadable row cannot take down a whole dashboard.
+      this.logger.error(
+        `decryptFields failed${(obj as { id?: string }).id ? ` for id=${(obj as { id?: string }).id}` : ''}: ` +
+        `${err instanceof Error ? err.message : String(err)} — encrypted values will be missing from this record`,
+      );
       return obj;
     }
+  }
+
+  /**
+   * Loan-specific convenience: the four AES-protected Loan columns live only in the
+   * blob, so every read path that surfaces them has to rehydrate. Centralised here
+   * because it is needed in dashboards, reports, exceptions, notifications, units
+   * and projects — not just LoansService.
+   */
+  decryptLoan<T extends { encryptedFields?: string | null }>(loan: T): T {
+    if (!loan?.encryptedFields) return loan;
+    return this.decryptFields(loan as unknown as Record<string, unknown> & { encryptedFields?: string }) as unknown as T;
+  }
+
+  /** Batch helper for the many `findMany` read paths. */
+  decryptLoans<T extends { encryptedFields?: string | null }>(loans: T[]): T[] {
+    return (loans || []).map((l) => this.decryptLoan(l));
   }
 }

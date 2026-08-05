@@ -418,7 +418,11 @@ export class NotificationsService {
     });
   }
 
-  async notifyLoanMaturity(loan: { id: string; lender: string; maturityDate: Date; projectId: string; project: { name: string } }) {
+  // lender is nullable: it is an encrypted column that is NULL unless the caller
+  // rehydrated it. Accepted but currently unused — the body names the project, not
+  // the lender. Kept in the signature so callers keep decrypting; if the copy ever
+  // does name the lender, guard against null there.
+  async notifyLoanMaturity(loan: { id: string; lender?: string | null; maturityDate: Date; projectId: string; project: { name: string } }) {
     // Loans and their draws live in the Draws tab; `financials` is not a real tab.
     const link = `/projects/${loan.projectId}/draws`;
     await this.sendToRoles({
