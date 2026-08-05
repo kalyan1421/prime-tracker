@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NOT_ON_SOLD_UNIT } from './lease-filters';
 import {
   DecimalLike,
   addDaysUtc,
@@ -451,7 +452,8 @@ export class LeaseRentInvoiceService {
   async generateDueThrough(asOf: Date = new Date()) {
     const through = startOfUtcDay(asOf);
     const leases = await this.prisma.lease.findMany({
-      where: { deletedAt: null, status: 'ACTIVE' },
+      // A sold unit must stop billing — see NOT_ON_SOLD_UNIT.
+      where: { deletedAt: null, status: 'ACTIVE', ...NOT_ON_SOLD_UNIT },
       include: { rentPeriods: { orderBy: [{ startDate: 'asc' }, { sequence: 'asc' }] } },
     });
 

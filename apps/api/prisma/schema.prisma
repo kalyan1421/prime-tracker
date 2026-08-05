@@ -209,7 +209,11 @@ model ProjectMember {
   id        String   @id @default(cuid())
   projectId String
   userId    String
+  // One membership row per (project, user); a person can hold SEVERAL roles on the same
+  // project (e.g. Finance AND Legal). `role` mirrors roles[0] as the primary, exactly as
+  // User.role mirrors User.roles[0], so every existing read keeps working unchanged.
   role      String   @default("TEAM_MEMBER")
+  roles     String[]
   addedAt   DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)

@@ -294,12 +294,19 @@ export class ProjectsService {
     });
   }
 
-  async addMember(projectId: string, userId: string, role?: string) {
+  /**
+   * Upsert a membership. `roles` takes precedence when both are supplied, and `role` is
+   * kept equal to roles[0] — the same primary-mirrors-first-entry rule UsersService uses,
+   * so anything still reading the scalar keeps working.
+   */
+  async addMember(projectId: string, userId: string, role?: string, roles?: string[]) {
     await this.findById(projectId);
+    const list = roles?.length ? Array.from(new Set(roles)) : [role ?? 'TEAM_MEMBER'];
+    const primary = list[0];
     return this.prisma.projectMember.upsert({
       where: { projectId_userId: { projectId, userId } },
-      create: { projectId, userId, role: role ?? 'TEAM_MEMBER' },
-      update: { role: role ?? 'TEAM_MEMBER' },
+      create: { projectId, userId, role: primary, roles: list },
+      update: { role: primary, roles: list },
       include: {
         user: { select: { id: true, name: true, email: true, avatarUrl: true, role: true } },
       },

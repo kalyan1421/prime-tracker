@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { NotificationsService } from './notifications.service';
 import { LeaseRentInvoiceService } from '../leases/lease-rent-invoice.service';
+import { NOT_ON_SOLD_UNIT } from '../leases/lease-filters';
 
 /**
  * A lease is polymorphic (unitId XOR buildingId), so every leasing check has to fetch
@@ -146,7 +147,7 @@ export class ScheduledNotificationsService {
       where: {
         isFreeRent: true,
         endDate: { gte: now, lte: in30 },
-        lease: { deletedAt: null, status: 'ACTIVE' },
+        lease: { deletedAt: null, status: 'ACTIVE', ...NOT_ON_SOLD_UNIT },
       },
       include: { lease: { include: LEASE_PROJECT_INCLUDE } },
     });
@@ -216,7 +217,7 @@ export class ScheduledNotificationsService {
         kind: 'SECURITY_DEPOSIT',
         dueDate: { lt: now },
         status: { notIn: ['SETTLED', 'WAIVED'] },
-        lease: { deletedAt: null },
+        lease: { deletedAt: null, ...NOT_ON_SOLD_UNIT },
       },
       include: { lease: { include: LEASE_PROJECT_INCLUDE } },
     });
@@ -259,7 +260,7 @@ export class ScheduledNotificationsService {
       where: {
         dueDate: { lt: now },
         status: { in: ['DUE', 'PARTIAL'] },
-        lease: { deletedAt: null },
+        lease: { deletedAt: null, ...NOT_ON_SOLD_UNIT },
       },
       include: { lease: { include: LEASE_PROJECT_INCLUDE } },
     });
@@ -449,6 +450,8 @@ export class ScheduledNotificationsService {
         leaseEnd: { gte: now, lte: in30 },
         status: 'ACTIVE',
         deletedAt: null,
+        // No point chasing a renewal on a unit Prime has sold.
+        ...NOT_ON_SOLD_UNIT,
       },
       // Leases are polymorphic (unit XOR building) — fetch the project down BOTH paths so
       // whole-building leases can be notified on too.

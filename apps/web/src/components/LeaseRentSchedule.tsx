@@ -282,6 +282,22 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
       setRegenErr('NNN must be a number of 0 or more.');
       return;
     }
+    // regenerateFuture only rewrites periods that START in the future — anything
+    // already running or finished is frozen so billed rent is never silently rewritten.
+    // When no period starts after today it is a guaranteed no-op, and the API still
+    // answers 201, so the old unconditional success toast claimed a change that never
+    // happened. Say so instead, and point at the path that does work.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const hasFuturePeriod = periods.some((p) => new Date(p.startDate) > startOfToday);
+    if (!hasFuturePeriod) {
+      setRegenErr(
+        'No period starts after today, so there is nothing to re-cut — periods already ' +
+        'running or finished are frozen. To change base rent or NNN from a date, use ' +
+        '"Add manual period" instead.',
+      );
+      return;
+    }
     try {
       await regenFuture.mutateAsync({
         leaseId,

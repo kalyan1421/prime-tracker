@@ -23,6 +23,7 @@ export const INFLOW_SOURCES = ['salePayments', 'leaseIncome', 'drawSchedule', 'm
 export const OUTFLOW_CATEGORIES = ['loanPayments', 'subcontractorAP', 'interiorTI', 'commissions', 'misc'] as const;
 export type InflowSource = (typeof INFLOW_SOURCES)[number];
 export type OutflowCategory = (typeof OUTFLOW_CATEGORIES)[number];
+import { NOT_ON_SOLD_UNIT } from '../leases/lease-filters';
 
 export interface CashflowMonth {
   month: string; // YYYY-MM
@@ -148,7 +149,8 @@ export class CashflowEngineService {
 
   private async addLeaseIncome(pf: any, keys: string[], add: AddInflow) {
     const leases = await this.prisma.lease.findMany({
-      where: { status: 'ACTIVE', deletedAt: null, ...this.assetProjectFilter(pf) },
+      // Sold units were forecasting rent years out (one lease ran to 2032).
+      where: { status: 'ACTIVE', deletedAt: null, ...NOT_ON_SOLD_UNIT, ...this.assetProjectFilter(pf) },
       select: { monthlyRent: true, leaseStart: true, leaseEnd: true, escalationPct: true, escalationFreq: true },
     });
     for (const l of leases) {

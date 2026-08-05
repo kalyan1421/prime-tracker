@@ -26,7 +26,15 @@ const mockRentInvoices = {
 };
 
 function daysFromNow(n: number) {
-  return new Date(Date.now() + n * 86_400_000);
+  // Nudged an hour TOWARDS now, in whichever direction the offset points. Fixtures are
+  // built at module-evaluation time while the service computes its own `new Date()` when
+  // the check runs, so a value sitting exactly on a window edge (`lte: in30`) dropped
+  // outside it whenever the clock ticked in between — intermittent, roughly one run in
+  // four. Shaving must follow the sign: a flat subtraction pushes PAST-due fixtures
+  // further into the past and turns `daysOverdue: 4` into 5. An hour is far smaller than
+  // any window under test, so every intended inside/outside classification is unchanged.
+  const towardsNow = n >= 0 ? -3_600_000 : 3_600_000;
+  return new Date(Date.now() + n * 86_400_000 + towardsNow);
 }
 
 /** A lease as the leasing checks fetch it: unit-anchored, project resolved. */

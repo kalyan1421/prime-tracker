@@ -65,7 +65,9 @@ export function useProjectMembers(projectId: string) {
 export function useAddProjectMember() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ projectId, data }: { projectId: string; data: { userId: string; role?: string } }) =>
+    // roles[] is the multi-role form (a member may be Finance AND Legal on one project);
+    // role is the legacy single-role field the API still accepts and mirrors from roles[0].
+    mutationFn: ({ projectId, data }: { projectId: string; data: { userId: string; role?: string; roles?: string[] } }) =>
       api.post(`/projects/${projectId}/members`, data).then((r) => r.data),
     onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['project-members', v.projectId] }),
   });

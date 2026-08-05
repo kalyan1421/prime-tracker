@@ -227,6 +227,24 @@ describe('LeasesService.getRentRoll — effective rent, not flat monthlyRent', (
   });
 });
 
+describe('LeasesService.getRentRoll — sold units drop out of the roll', () => {
+  it('filters out leases whose unit is SOLD', async () => {
+    const service = makeService();
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+    mockPrisma.leaseRentPeriod.findMany?.mockResolvedValue?.([]);
+
+    await service.getRentRoll('p1');
+
+    // A lease survives its unit being sold (history), but Prime does not collect that
+    // rent, so it must not inflate the reported roll. Six live leases on sold units
+    // were adding $27,626/mo — 39% of the total.
+    const where = mockPrisma.lease.findMany.mock.calls[0][0].where;
+    expect(where.NOT).toEqual({ unit: { status: 'SOLD' } });
+    // The project-scoping OR must survive alongside it.
+    expect(where.OR).toBeDefined();
+  });
+});
+
 describe('LeasesService — domain events for notification routing', () => {
   let service: LeasesService;
 
