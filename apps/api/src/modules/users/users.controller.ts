@@ -64,6 +64,15 @@ export class UsersController {
     return this.usersService.updateSelf(userId, body);
   }
 
+  // Declared before @Get(':id') — Nest matches routes in order, and otherwise
+  // "assignable" would be captured as an :id and 403 on user:manage.
+  @Get('assignable')
+  @RequirePermissions('project:view')
+  @ApiOperation({ summary: 'Active users that work can be assigned to (any signed-in role)' })
+  findAssignable() {
+    return this.usersService.findAssignable();
+  }
+
   @Get(':id')
   @RequirePermissions('user:manage')
   @ApiOperation({ summary: 'Get user by ID' })

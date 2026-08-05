@@ -15,7 +15,7 @@ import {
   FiAlertCircle, FiCheckCircle, FiClock, FiFilter,
   FiPlus, FiUser, FiMapPin,
 } from 'react-icons/fi';
-import { useAddSnag, useResolveSnag, useUpdateSnag, useUsers } from '../hooks/useApi';
+import { useAddSnag, useResolveSnag, useUpdateSnag, useAssignableUsers } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
 import { FormError } from './FormError';
 
@@ -59,7 +59,7 @@ export function SnagPanel({
   const add     = useAddSnag();
   const resolve = useResolveSnag();
   const update  = useUpdateSnag();
-  const { data: usersData } = useUsers();
+  const { data: usersData } = useAssignableUsers();
   const users: any[] = Array.isArray(usersData) ? usersData : [];
 
   const [filter, setFilter] = useState<SnagStatus | 'ALL'>('ALL');

@@ -10,7 +10,7 @@ import {
 } from 'react-icons/fi';
 import {
   useInteriorProjects, useCreateInterior, useUpdateInterior,
-  useAdvanceInteriorPhase, useApproveInterior, useInteriorTemplates, useUsers,
+  useAdvanceInteriorPhase, useApproveInterior, useInteriorTemplates, useUsers, useAssignableUsers,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
@@ -54,7 +54,7 @@ function PhaseStepper({ current }: { current: string }) {
 export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string; unitNumber?: string; unitSqft?: number }) {
   const { data, isLoading } = useInteriorProjects({ unitId });
   const { data: templatesData } = useInteriorTemplates();
-  const { data: usersData } = useUsers();
+  const { data: usersData } = useAssignableUsers();
   const templates: any[] = Array.isArray(templatesData) ? templatesData : [];
   const users: any[] = Array.isArray(usersData) ? usersData : [];
   const create = useCreateInterior();
