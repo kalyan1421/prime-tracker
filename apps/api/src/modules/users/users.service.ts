@@ -60,6 +60,24 @@ export class UsersService {
     createdAt: true,
   } as const;
 
+  /**
+   * The people a task / lead / snag / fit-out can be assigned to.
+   *
+   * Every assignee picker in the app was calling findAll(), which is `user:manage` —
+   * an admin permission. Non-admins got "Missing permissions: user:manage" and an empty
+   * dropdown, so they could not assign work at all. Choosing a colleague from a list is
+   * not user administration, so this is deliberately a separate, narrower read:
+   * active users only, and only the fields a picker renders — no email verification
+   * state, no MFA flags, no timestamps.
+   */
+  async findAssignable() {
+    return this.prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, email: true, avatarUrl: true, role: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async findAll() {
     return this.prisma.user.findMany({
       select: this.userSelect,

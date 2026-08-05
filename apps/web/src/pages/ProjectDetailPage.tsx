@@ -43,7 +43,7 @@ import {
   useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
   useDocuments, useUploadDocument, useDeleteDocument, useRenameDocument, useReplaceDocument,
-  useUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
+  useUsers, useAssignableUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
   useProjectHealth, useSalesForecast, useExceptions, useProjectActivity,
   useSetMilestoneDependency, useMilestonePhotos, useAttachMilestonePhoto, useDeleteMilestonePhoto,
   usePresignedUpload, useProjectDrawSchedules, useCustomOptions,
@@ -3315,7 +3315,7 @@ const MILESTONE_STATUS_COLOR: Record<string, string> = {
 
 function MilestonesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useMilestones(projectId);
-  const { data: usersData } = useUsers();
+  const { data: usersData } = useAssignableUsers();
   const { data: drawSchedules = [] } = useProjectDrawSchedules(projectId);
   const { data: projectPhaseOpts = [] } = useCustomOptions('project_phase');
   const { data: milestoneStatusOpts = [] } = useCustomOptions('milestone_status');

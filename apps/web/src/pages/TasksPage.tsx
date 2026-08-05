@@ -14,7 +14,7 @@ import {
     useTasks, useTask, useCreateTask, useUpdateTask, useDeleteTask,
     useTaskComments, useCreateTaskComment, useDeleteTaskComment,
     useUploadTaskAttachment, useDeleteTaskAttachment,
-    useProjects, useBuildings, useUnits, useUsers, useCustomOptions,
+    useProjects, useBuildings, useUnits, useUsers, useAssignableUsers, useCustomOptions,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { apiAssetUrl } from '../lib/api';
@@ -78,7 +78,7 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
         assignedTo: filterAssignee || undefined,
     });
     const { data: projects = [] } = useProjects();
-    const { data: allUsers = [] } = useUsers();
+    const { data: allUsers = [] } = useAssignableUsers();
 
     const filteredTasks = search
         ? (tasks as any[]).filter((t: any) =>

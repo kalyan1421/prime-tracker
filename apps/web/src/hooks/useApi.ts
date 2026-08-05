@@ -550,6 +550,18 @@ export function useChangePassword() {
   });
 }
 
+/**
+ * People that work can be assigned to. Use this for any assignee picker — `useUsers()`
+ * hits an admin-only route (`user:manage`), so pickers built on it showed
+ * "Missing permissions: user:manage" and an empty list to every non-admin.
+ */
+export function useAssignableUsers() {
+  return useQuery({
+    queryKey: ['users', 'assignable'],
+    queryFn: () => api.get('/users/assignable').then((r) => r.data),
+  });
+}
+
 export function useUsers(enabled = true) {
   return useQuery({
     queryKey: ['users'],

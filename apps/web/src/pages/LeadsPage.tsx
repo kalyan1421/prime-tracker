@@ -10,7 +10,7 @@ import {
   FiHome, FiBarChart2, FiUser, FiUsers,
 } from 'react-icons/fi';
 import {
-  useLeads, useLeadActivities, useProjects, useUnits, useBuildings, useCampaigns, useUsers,
+  useLeads, useLeadActivities, useProjects, useUnits, useBuildings, useCampaigns, useUsers, useAssignableUsers,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
   useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers, useCustomOptions,
 } from '../hooks/useApi';
@@ -382,7 +382,7 @@ function LeadFormModal({
   projectId?: string;
 }) {
   const { data: projects } = useProjects();
-  const { data: users } = useUsers();
+  const { data: users } = useAssignableUsers();
   const { data: leadStatusOpts = [] } = useCustomOptions('lead_status');
   const createLead = useCreateLead();
   const updateLead = useUpdateLead();
@@ -654,7 +654,7 @@ export default function LeadsPage() {
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const [editLead, setEditLead] = useState<any>(null);
 
-  const { data: users } = useUsers();
+  const { data: users } = useAssignableUsers();
 
   const leadsQuery = {
     status: statusFilter || undefined,
