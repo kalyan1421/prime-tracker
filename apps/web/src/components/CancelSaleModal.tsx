@@ -71,14 +71,17 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
 
   const handleConfirm = async () => {
     try {
+      // refundAmount/penaltyAmount are NOT sent: there is no such column on Sale, no
+      // handling in SalesService.update, and no DTO field — refund/penalty handling is
+      // still an open client question (D18). Sending them tripped forbidNonWhitelisted
+      // and 400'd the whole cancellation. The inputs below are therefore not recorded
+      // anywhere yet; wire them up once the fields exist.
       await updateSale.mutateAsync({
         id: sale.id,
         data: {
           status:         'CANCELLED',
           lostReason:     form.lostReason,
           lostReasonNote: form.lostReasonNote || undefined,
-          refundAmount:   refund  > 0 ? refund  : undefined,
-          penaltyAmount:  penalty > 0 ? penalty : undefined,
         },
       });
       addToast({ title: 'Sale cancelled and unit released', color: 'success' });
@@ -192,16 +195,18 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
                       Unit {sale.unitNumber} → released back to <span className="font-semibold">AVAILABLE</span>
                     </li>
                   )}
-                  {refund > 0 && (
+                  {/* Refund/penalty have no column on Sale yet (client question D18), so
+                      these are shown for the operator's own reckoning — saying "recorded"
+                      would promise a persistence that does not happen. */}
+                  {(refund > 0 || penalty > 0) && (
                     <li className="flex items-start gap-2">
                       <span className="text-red-400 mt-0.5">•</span>
-                      Refund of <span className="font-semibold">{fmt(refund)}</span> recorded
-                    </li>
-                  )}
-                  {penalty > 0 && (
-                    <li className="flex items-start gap-2">
-                      <span className="text-red-400 mt-0.5">•</span>
-                      Penalty of <span className="font-semibold">{fmt(penalty)}</span> recorded
+                      <span>
+                        {refund > 0 && <>Refund of <span className="font-semibold">{fmt(refund)}</span></>}
+                        {refund > 0 && penalty > 0 && ' and '}
+                        {penalty > 0 && <>penalty of <span className="font-semibold">{fmt(penalty)}</span></>}
+                        {' '}<span className="font-semibold">not saved</span> — settle these outside Prime Tracker
+                      </span>
                     </li>
                   )}
                 </ul>

@@ -1,7 +1,8 @@
 import {
   IsString, IsNotEmpty, IsOptional,
-  IsNumber, IsPositive, IsDateString, MaxLength,
+  IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
 } from 'class-validator';
+import { LostReason } from '@prisma/client';
 
 export class CreateSaleDto {
   @IsString() @IsNotEmpty()
@@ -35,6 +36,15 @@ export class CreateSaleDto {
 
   @IsOptional() @IsDateString()
   closingDate?: string;
+
+  @IsOptional() @IsDateString()
+  expectedCloseDate?: string;
+
+  @IsOptional() @IsEnum(LostReason)
+  lostReason?: LostReason;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  lostReasonNote?: string;
 
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
