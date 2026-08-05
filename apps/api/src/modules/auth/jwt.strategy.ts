@@ -50,6 +50,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       role: user.role,
       roles,
       permissions: [...new Set(roles.flatMap((r) => ROLE_PERMISSIONS[r] ?? []))],
+      // Sign-in method, re-read each request so linking Google or setting a password
+      // is reflected without a re-login. Booleans only — never the hash.
+      hasPassword: !!user.passwordHash,
+      googleLinked: !!user.googleId,
       mfaVerified: payload.mfaVerified ?? false,
     };
   }

@@ -121,6 +121,10 @@ export class AuthService {
         avatarUrl: user.avatarUrl,
         role: user.role,
         roles: effectiveRoles,
+        // How this person signs in, so the profile can say so and hide the password
+        // form from Google-only accounts. Booleans only — the hash never leaves here.
+        hasPassword: !!user.passwordHash,
+        googleLinked: !!user.googleId,
         permissions,
         mfaEnabled: user.mfaEnabled,
         mfaVerified: false,
@@ -194,6 +198,8 @@ export class AuthService {
         avatarUrl: user.avatarUrl,
         role: user.role,
         roles: effectiveRoles2,
+        hasPassword: !!user.passwordHash,
+        googleLinked: !!user.googleId,
         permissions: permissions2,
         mfaEnabled: user.mfaEnabled,
         mfaVerified: false,
