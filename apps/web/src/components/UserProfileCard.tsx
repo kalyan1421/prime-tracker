@@ -222,10 +222,14 @@ function ChangePasswordForm({ changePassword }: { changePassword: ReturnType<typ
     try {
       const res = await changePassword.mutateAsync({ currentPassword: cur, newPassword: next });
       setCur(''); setNext(''); setConfirm('');
+      // Short title, detail in the description — the consequence (other sessions being
+      // signed out) is the part people need to read, and cramming it into the title is
+      // what made it truncate.
       addToast({
-        title: res?.sessionsRevoked
-          ? `Password changed — signed out of ${res.sessionsRevoked} other session${res.sessionsRevoked === 1 ? '' : 's'}`
-          : 'Password changed',
+        title: 'Password changed',
+        description: res?.sessionsRevoked
+          ? `You were signed out of ${res.sessionsRevoked} other session${res.sessionsRevoked === 1 ? '' : 's'}. This device stays signed in.`
+          : 'This device stays signed in.',
         color: 'success',
       });
     } catch (e) {
