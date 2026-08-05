@@ -532,10 +532,14 @@ export function useKpiHistory(projectId: string) {
 }
 
 // ---- Users (Admin) ----
-export function useUsers() {
+export function useUsers(enabled = true) {
   return useQuery({
     queryKey: ['users'],
     queryFn: () => api.get('/users').then((r) => r.data),
+    // /users requires user:manage. Callers that render for every role (the project
+    // Team Members card) must pass false when the viewer cannot manage users, or the
+    // request 403s on every render. Defaults true so existing call sites are unchanged.
+    enabled,
   });
 }
 
@@ -900,10 +904,17 @@ export function useLeadDashboard(params?: { projectId?: string }) {
   });
 }
 
-export function useLeads(params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string; brokerId?: string }) {
+export function useLeads(
+  params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string; brokerId?: string },
+  // Opt-out for callers that must not fire the request at all — /leads requires
+  // lead:view, so a role without it would 403 just by rendering the caller.
+  // Defaults true, so every existing call site is unchanged.
+  enabled = true,
+) {
   return useQuery({
     queryKey: ['leads', params],
     queryFn: () => api.get('/leads', { params }).then((r) => r.data),
+    enabled,
   });
 }
 
