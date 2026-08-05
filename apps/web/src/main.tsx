@@ -34,7 +34,24 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <HeroUIProvider>
-      <ToastProvider placement="top-right" />
+      {/* HeroUI's theme puts `truncate` on the toast title, so every message was cut to
+          one line inside a fixed 356px box — "Password changed — signed out of 2 ot…".
+          That hurts most for the ~79 toasts that surface a raw API error, which is
+          exactly when the full text matters. Allow wrapping (capped at 4 lines so a
+          long error cannot grow without bound) and give the box a little more room. */}
+      <ToastProvider
+        placement="top-right"
+        // Clears the fixed TopBar (h-16), which the toast otherwise renders on top of.
+        toastOffset={72}
+        toastProps={{
+          timeout: 5000,
+          classNames: {
+            base: 'sm:w-[400px]',
+            title: 'whitespace-normal break-words overflow-visible text-clip line-clamp-4',
+            description: 'whitespace-normal break-words overflow-visible text-clip line-clamp-6',
+          },
+        }}
+      />
       <QueryClientProvider client={queryClient}>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <App />
