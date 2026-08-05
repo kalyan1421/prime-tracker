@@ -37,10 +37,17 @@ export function ProjectHealthHeader({ project }: { project: any }) {
   // Budget/spend/variance is financial data — hidden from roles without budget:view
   // (e.g. Construction). Those roles still see the occupancy + debt row below.
   const canViewBudget = hasPermission('budget:view');
-  const { data: fin } = useFinancialSummary(project.id);
+  // This header renders on EVERY project page for EVERY role, so an ungated query here
+  // 403s for someone on every single navigation. The budget block was already hidden
+  // from roles without budget:view, but the request still fired — SALES saw
+  // "Missing permissions: budget:view" and "loan:view" just by opening a project.
+  // Passing an empty id disables the query (each hook is `enabled: !!projectId`).
+  const canViewLoans = hasPermission('loan:view');
+  const canViewLeases = hasPermission('lease:view');
+  const { data: fin } = useFinancialSummary(canViewBudget ? project.id : '');
   const { data: units } = useUnits(project.id);
-  const { data: leases } = useLeases(project.id);
-  const { data: loans } = useLoans(project.id);
+  const { data: leases } = useLeases(canViewLeases ? project.id : '');
+  const { data: loans } = useLoans(canViewLoans ? project.id : '');
 
   const summary = useMemo(() => {
     const budget = Number((fin as any)?.budgetTotal ?? 0);
@@ -130,12 +137,17 @@ export function ProjectHealthHeader({ project }: { project: any }) {
             value={summary.activeLeases.toString()}
             help={summary.monthlyRent > 0 ? `${fmtMoney(summary.monthlyRent)}/mo` : 'none active'}
           />
-          <Stat
-            icon={<FiCreditCard />}
-            label="Loan"
-            value={summary.loanTotal > 0 ? fmtMoney(summary.loanTotal) : '—'}
-            help={summary.loanTotal > 0 ? 'outstanding' : 'no loans'}
-          />
+          {/* Hidden rather than shown as "no loans": without loan:view the query is
+              disabled, so a zero here would assert the project has no debt when the
+              viewer simply is not allowed to know. */}
+          {canViewLoans && (
+            <Stat
+              icon={<FiCreditCard />}
+              label="Loan"
+              value={summary.loanTotal > 0 ? fmtMoney(summary.loanTotal) : '—'}
+              help={summary.loanTotal > 0 ? 'outstanding' : 'no loans'}
+            />
+          )}
         </div>
     </div>
   );

@@ -447,7 +447,9 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
   const canEdit = hasPermission('project:edit');
 
   const { data: members = [] } = useProjectMembers(projectId);
-  const { data: allUsers = [] } = useUsers();
+  // /users requires user:manage — only fetched when the viewer can actually add
+  // someone, otherwise every role without it 403s just by rendering this card.
+  const { data: allUsers = [] } = useUsers(canEdit);
   const addMember = useAddProjectMember();
   const removeMember = useRemoveProjectMember();
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -783,6 +785,7 @@ function fundedAmount(d: any): number {
 
 function OverviewTab({ project: p }: { project: any }) {
   const navigate = useNavigate();
+  const { hasPermission } = useAuthStore();
   const goTab = (tab: string) => navigate(`/projects/${p.id}/${tab}`);
   const updateProject = useUpdateProject();
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -838,7 +841,7 @@ function OverviewTab({ project: p }: { project: any }) {
   // "budget"/"spent" numbers for the same project. Pulling from the shared endpoint keeps
   // them always in agreement and adds Committed (contracted-but-unpaid), which wasn't
   // shown anywhere on Overview before.
-  const { data: finSummary } = useFinancialSummary(p.id);
+  const { data: finSummary } = useFinancialSummary(hasPermission('budget:view') ? p.id : '');
   const fin = (finSummary as any) || { budgetTotal: 0, actualTotal: 0, committedTotal: 0 };
   const totalBudget = Number(fin.budgetTotal || 0);
   const totalActuals = Number(fin.actualTotal || 0);
@@ -869,11 +872,25 @@ function OverviewTab({ project: p }: { project: any }) {
   // Revenue, debt service, leads, and draws aren't part of the project payload \u2014
   // one lightweight query each, reusing the same hooks/shapes the Revenue/Leads/Draws
   // tabs already use (server-pre-aggregated where possible).
-  const { data: pipeline } = useSalesPipeline(p.id);
-  const { data: leaseIncome } = useMonthlyLeaseIncome(p.id);
-  const { data: monthlyPayments } = useMonthlyPayments(p.id);
-  const { data: leadsData } = useLeads({ projectId: p.id });
-  const { data: drawsData } = useProjectDraws(p.id);
+  //
+  // Every one of these is permission-gated on the API, and Overview is the one tab
+  // EVERY role can open — so firing them unconditionally guaranteed a wall of
+  // "Missing permissions: loan:view / draw:view / budget:view" for anyone without
+  // the full set. SALES hit three of them just by opening a project. Passing an empty
+  // id disables the query (each hook is `enabled: !!projectId`), so an unpermitted
+  // role makes no request at all and the matching card is hidden below.
+  const canSeeBudget = hasPermission('budget:view');
+  const canSeeSales = hasPermission('sales:view');
+  const canSeeLease = hasPermission('lease:view');
+  const canSeeLoans = hasPermission('loan:view');
+  const canSeeLeads = hasPermission('lead:view');
+  const canSeeDraws = hasPermission('draw:view');
+
+  const { data: pipeline } = useSalesPipeline(canSeeSales ? p.id : '');
+  const { data: leaseIncome } = useMonthlyLeaseIncome(canSeeLease ? p.id : '');
+  const { data: monthlyPayments } = useMonthlyPayments(canSeeLoans ? p.id : '');
+  const { data: leadsData } = useLeads({ projectId: p.id }, canSeeLeads);
+  const { data: drawsData } = useProjectDraws(canSeeDraws ? p.id : '');
 
   const pip = (pipeline as any) || { totalPipelineValue: 0, closedRevenue: 0 };
   const li = (leaseIncome as any) || { total: 0, annualProjection: 0 };
@@ -895,7 +912,10 @@ function OverviewTab({ project: p }: { project: any }) {
         <StatCard label="Available" value={String(unitStatusCounts.AVAILABLE || 0)} colorScheme="green" onClick={() => goTab('units')} />
         <StatCard label="Sold" value={String(unitStatusCounts.SOLD || 0)} colorScheme="gray" onClick={() => goTab('units')} />
         <StatCard label="Active Leads" value={String(leadsActive)} colorScheme="purple" onClick={() => goTab('leads')} />
-        <StatCard label="Monthly Debt Service" value={fmt(mp.total)} colorScheme="red" onClick={() => goTab('draws')} />
+        {/* Same reasoning as the header Loan tile: $0 would read as "no debt". */}
+        {canSeeLoans && (
+          <StatCard label="Monthly Debt Service" value={fmt(mp.total)} colorScheme="red" onClick={() => goTab('draws')} />
+        )}
       </div>
 
       {/* Row 1: Details + Financial Snapshot */}
@@ -936,8 +956,9 @@ function OverviewTab({ project: p }: { project: any }) {
           </CardBody>
         </Card>
 
-        {/* Financial Snapshot \u2014 always visible */}
-        <Card shadow="sm">
+        {/* Financial Snapshot — budget:view. Overview is the one tab every role can
+            open, so each card here has to gate itself or it 403s for someone. */}
+        {canSeeBudget && <Card shadow="sm">
           <CardHeader className="pb-0 flex justify-between items-center">
             <p className="font-semibold text-sm text-gray-700">Financial Snapshot</p>
             <CardNavLink label="View Budget" onPress={() => goTab('budget')} />
@@ -980,7 +1001,7 @@ function OverviewTab({ project: p }: { project: any }) {
               </div>
             )}
           </CardBody>
-        </Card>
+        </Card>}
       </div>
 
       {/* Row 2: Buildings breakdown + Unit status mix */}
@@ -1067,6 +1088,7 @@ function OverviewTab({ project: p }: { project: any }) {
       </Card>
 
       {/* Row 3: Revenue + Leads */}
+      {(canSeeSales || canSeeLease || canSeeLeads) && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card shadow="sm">
           <CardHeader className="pb-0 flex justify-between items-center">
@@ -1122,8 +1144,10 @@ function OverviewTab({ project: p }: { project: any }) {
           </CardBody>
         </Card>
       </div>
+      )}
 
       {/* Row 4: Draws + Loans */}
+      {(canSeeDraws || canSeeLoans) && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card shadow="sm">
           <CardHeader className="pb-0 flex justify-between items-center">
@@ -1183,6 +1207,7 @@ function OverviewTab({ project: p }: { project: any }) {
           </CardBody>
         </Card>
       </div>
+      )}
 
       {/* Row 5: Team Members */}
       <TeamMembersCard projectId={p.id} />
