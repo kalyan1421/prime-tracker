@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseI
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { LeadsService } from './leads.service';
+import { CreateLeadDto, UpdateLeadDto } from './dto/lead.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -76,26 +77,7 @@ export class LeadsController {
   @RequirePermissions('lead:create')
   @ApiOperation({ summary: 'Create a new lead' })
   create(
-    @Body() body: {
-      projectId: string;
-      name?: string;
-      email?: string;
-      phone?: string;
-      source: LeadSource;
-      status?: string;
-      unitId?: string;
-      buildingId?: string;
-      unitInterest?: string;
-      budget?: number;
-      notes?: string;
-      assignedTo?: string;
-      // Sprint 2 — campaign attribution
-      campaignId?: string;
-      utmSource?: string;
-      utmMedium?: string;
-      utmCampaign?: string;
-      utmContent?: string;
-    },
+    @Body() body: CreateLeadDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.create({ ...body, createdBy: userId });
@@ -106,19 +88,7 @@ export class LeadsController {
   @ApiOperation({ summary: 'Update a lead' })
   update(
     @Param('id') id: string,
-    @Body() body: {
-      name?: string;
-      email?: string;
-      phone?: string;
-      source?: LeadSource;
-      status?: string;
-      unitId?: string | null;
-      buildingId?: string | null;
-      unitInterest?: string;
-      budget?: number;
-      notes?: string;
-      assignedTo?: string | null;
-    },
+    @Body() body: UpdateLeadDto,
   ) {
     return this.service.update(id, body);
   }
