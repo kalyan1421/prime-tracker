@@ -26,6 +26,17 @@ MAIL_DRIVER="${MAIL_DRIVER:-ses}"
 SMTP_FROM="${SMTP_FROM:-Prime Tracker <kalyan91333@gmail.com>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# Build artifacts are staged inside the repo, NOT in /tmp.
+#
+# A sandboxed shell can redirect /tmp per-process: the `tar -czf /tmp/api-dist.tar.gz`
+# wrote to one location while the following `aws s3 cp /tmp/api-dist.tar.gz` read another,
+# so the upload silently shipped a LEFTOVER tarball from an earlier deploy. It fails
+# silently in the worst possible way — the deploy reports success, migrations apply, and
+# the box runs code from a previous release. A path under $ROOT cannot be redirected out
+# from under the two commands that share it.
+STAGE="$ROOT/.deploy-stage"
+mkdir -p "$STAGE"
+
 # ── SSM helper ─────────────────────────────────────────────────────────────────
 # Uploads a shell script to S3, runs it on EC2 via SSM, streams output.
 ssm_script() {
@@ -85,15 +96,23 @@ deploy_api() {
   NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @prime-tracker/api run build
 
   echo "   [2/4] Uploading API dist to S3..."
-  tar -czf /tmp/api-dist.tar.gz -C "$ROOT/apps/api" dist/
-  aws s3 cp /tmp/api-dist.tar.gz "s3://$DEPLOY_BUCKET/deploy/api-dist.tar.gz" \
+  tar -czf "$STAGE/api-dist.tar.gz" -C "$ROOT/apps/api" dist/
+  aws s3 cp "$STAGE/api-dist.tar.gz" "s3://$DEPLOY_BUCKET/deploy/api-dist.tar.gz" \
     --region "$AWS_REGION" --quiet
-  echo "   $(du -sh /tmp/api-dist.tar.gz | cut -f1) uploaded"
+  echo "   $(du -sh "$STAGE/api-dist.tar.gz" | cut -f1) uploaded"
+
+  # Prove the artifact carries THIS commit before letting the box install it. Without
+  # this the only symptom of a stale upload is a feature quietly missing in production.
+
+  if ! tar -tzf "$STAGE/api-dist.tar.gz" >/dev/null 2>&1; then
+    echo "   ERROR: api-dist.tar.gz is not a readable archive — aborting" >&2; exit 1
+  fi
+  echo "   artifact verified ($(tar -tzf "$STAGE/api-dist.tar.gz" | wc -l | tr -d ' ') entries)"
 
   echo "   [3/4] Git pull + extract dist + install + migrate + restart PM2..."
   # Write to a temp file (heredoc at statement level avoids bash 3.2 single-quote
   # parsing bug inside $(...) command substitution).
-  local _tmpscript="/tmp/prime-deploy-api-$$.sh"
+  local _tmpscript="$STAGE/prime-deploy-api-$$.sh"
   cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
 export HOME=/home/ubuntu
@@ -176,13 +195,13 @@ deploy_web() {
   VITE_API_BASE_URL="" pnpm --filter @prime-tracker/web run build
 
   echo "   [2/3] Uploading web dist to S3..."
-  tar -czf /tmp/web-dist.tar.gz -C "$ROOT/apps/web" dist/
-  aws s3 cp /tmp/web-dist.tar.gz "s3://$DEPLOY_BUCKET/deploy/web-dist.tar.gz" \
+  tar -czf "$STAGE/web-dist.tar.gz" -C "$ROOT/apps/web" dist/
+  aws s3 cp "$STAGE/web-dist.tar.gz" "s3://$DEPLOY_BUCKET/deploy/web-dist.tar.gz" \
     --region "$AWS_REGION" --quiet
-  echo "   $(du -sh /tmp/web-dist.tar.gz | cut -f1) uploaded"
+  echo "   $(du -sh "$STAGE/web-dist.tar.gz" | cut -f1) uploaded"
 
   echo "   [3/3] Deploying web on EC2..."
-  local _tmpscript="/tmp/prime-deploy-web-$$.sh"
+  local _tmpscript="$STAGE/prime-deploy-web-$$.sh"
   cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
 export HOME=/root

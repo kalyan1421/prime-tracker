@@ -150,3 +150,4 @@ prisma/migrations/**/migration_lock.toml
 .DS_Store
 apps/api/uploads/
 PrimeTracker_Data.xlsx
+.deploy-stage/
