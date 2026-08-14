@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { UpdateOrgSettingsDto } from './dto/update-org-settings.dto';
 
 @ApiTags('Organizations')
 @ApiBearerAuth()
@@ -82,5 +83,39 @@ export class OrganizationsController {
     @CurrentUser('sub') actorId: string,
   ) {
     return this.orgService.removeMember(orgId, userId, actorId);
+  }
+
+  // ---- Settings ----
+  //
+  // 'org:manage' matches every other route on this controller and resolves to SUPER_ADMIN
+  // and FOUNDER. Correct for these: saleStageProbabilities is a company-wide financial
+  // assumption feeding the lender-facing weighted forecast, not a per-user preference.
+
+  @Get(':id/settings')
+  @RequirePermissions('org:manage')
+  @ApiOperation({
+    summary: 'Get organization settings',
+    description:
+      'Returns the schema defaults with usingDefaults=true when no settings row exists. ' +
+      'Never creates a row.',
+  })
+  getSettings(@Param('id') id: string) {
+    return this.orgService.getSettings(id);
+  }
+
+  @Patch(':id/settings')
+  @RequirePermissions('org:manage')
+  @ApiOperation({
+    summary: 'Update organization settings (partial upsert)',
+    description:
+      'Creates the settings row if absent. Supplied fields are merged over the current ' +
+      'values, so omitted fields and stages are left untouched.',
+  })
+  updateSettings(
+    @Param('id') id: string,
+    @Body() body: UpdateOrgSettingsDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.orgService.updateSettings(id, body, userId);
   }
 }

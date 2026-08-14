@@ -106,7 +106,10 @@ export class SalePaymentsService {
 
   /**
    * Seed a schedule from one of Prime's standard templates. Percentages are
-   * applied to the sale's salePrice. (Confirm Prime's real templates — D15.)
+   * applied to the sale's salePrice. 10/40/50 and 30/40/30 are Prime's confirmed
+   * standard splits (client, 2026-08-14); a deal that needs anything else is built
+   * installment-by-installment through addPayment, which takes either a flat amount
+   * or a percentOfPrice.
    */
   async applyTemplate(saleId: string, templateKey: keyof typeof PAYMENT_TEMPLATES) {
     const sale = await this.getSale(saleId);
@@ -175,6 +178,14 @@ export class SalePaymentsService {
       if (!payment) throw new NotFoundException('Sale payment not found');
       if (payment.status === 'PAID' || payment.status === 'WAIVED') {
         throw new BadRequestException('This installment is already settled');
+      }
+      // Separate message on purpose: "already settled" would read as though the money
+      // arrived. It did not — the sale it belonged to was cancelled, and collecting
+      // against it now would create money the refund/penalty ledger never accounted for.
+      if (payment.status === 'CANCELLED') {
+        throw new BadRequestException(
+          'This installment was cancelled with its sale and can no longer be collected',
+        );
       }
 
       const total = new Prisma.Decimal(payment.amount);
@@ -262,6 +273,55 @@ export class SalePaymentsService {
     return reverted.count;
   }
 
+  // ─────── Sale cancellation (S1) ───────
+
+  /**
+   * Total actually collected against this sale, as a Decimal.
+   *
+   * Called INSIDE the cancelling transaction so the figure the ledger reconciles against
+   * is the figure that was true at that instant — a payment logged a millisecond later
+   * belongs to the next decision, not this one. The result is then SNAPSHOTTED onto
+   * SaleCancellation.totalCollected and never recomputed on read.
+   */
+  async sumCollected(tx: Prisma.TransactionClient, saleId: string): Promise<Prisma.Decimal> {
+    const agg = await tx.salePayment.aggregate({
+      where: { saleId },
+      _sum: { paidAmount: true },
+    });
+    return new Prisma.Decimal(agg._sum.paidAmount ?? 0);
+  }
+
+  /**
+   * Void the remainder of a cancelled sale's schedule.
+   *
+   * CANCELLED, not WAIVED: WAIVED means Prime FORGAVE an installment the buyer owed, and
+   * that is a real commercial concession someone has to sign off. An installment on a
+   * dead sale was never owed — the trigger it was waiting for will never fire. Bucketing
+   * the two together would put cancelled scaffolding into the concessions report.
+   *
+   * Nothing is DELETED and nothing with money against it is touched: `paidAmount > 0` is
+   * the record of what a buyer actually handed over, and the refund/penalty ledger is
+   * what accounts for it. This is the same boundary applyInteriorCancelled draws above,
+   * and this method is the "separate refund concern" that comment defers to.
+   */
+  async voidScheduleOnCancellation(
+    tx: Prisma.TransactionClient,
+    saleId: string,
+  ): Promise<number> {
+    const voided = await tx.salePayment.updateMany({
+      where: {
+        saleId,
+        // PARTIALLY_PAID is absent by design as well as by the paidAmount guard: an
+        // installment someone has part-paid is a live balance the ledger settles, not
+        // scaffolding to void.
+        status: { in: ['SCHEDULED', 'DUE', 'OVERDUE'] },
+        paidAmount: 0,
+      },
+      data: { status: 'CANCELLED' },
+    });
+    return voided.count;
+  }
+
   // ─────── Internal ───────
 
   private async getSale(saleId: string) {
@@ -309,7 +369,11 @@ export class SalePaymentsService {
   }
 }
 
-/** Standard installment templates (percentages of salePrice). Confirm with Prime (D15). */
+/**
+ * Prime's standard installment templates (percentages of salePrice), confirmed by the
+ * client on 2026-08-14. Customisation is per-installment via addPayment rather than a
+ * third template — a bespoke deal is a bespoke schedule, not another fixed split.
+ */
 export const PAYMENT_TEMPLATES = {
   '10-40-50': [
     { label: 'Deposit', percentOfPrice: 10, trigger: 'ON_SIGNING' as SalePaymentTrigger },

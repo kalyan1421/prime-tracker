@@ -3,11 +3,16 @@ import {
   IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
 } from 'class-validator';
 import { LostReason } from '@prisma/client';
+import { SaleCancellationFieldsDto } from './sale-cancellation.dto';
 
 // Note: projectId/unitId/buildingId are deliberately absent — a sale's project and
 // asset link are fixed at creation. update() has no re-link logic, so accepting them
 // would silently ignore the change rather than move the sale.
-export class UpdateSaleDto {
+//
+// Extends the cancellation fields rather than listing them here: they are one coherent
+// group that also has to be strippable from the body before it reaches Prisma (none of
+// them is a column on Sale), and the controller does that by name from one place.
+export class UpdateSaleDto extends SaleCancellationFieldsDto {
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;
 

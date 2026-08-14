@@ -2037,6 +2037,38 @@ export function useOrganization(id: string) {
   });
 }
 
+/**
+ * Org-level tuning (sale-stage probabilities and the alert thresholds).
+ *
+ * The server returns the schema defaults when no row exists — same shape, with
+ * `usingDefaults: true` — so callers never need a "not configured yet" branch.
+ * Gated on org:manage because that is what the endpoint requires; without the guard the
+ * query fires and 403s for everyone else.
+ */
+export function useOrgSettings(orgId?: string) {
+  const can = useCan('org:manage');
+  return useQuery({
+    queryKey: ['org-settings', orgId],
+    queryFn: () => api.get(`/organizations/${orgId}/settings`).then((r) => r.data),
+    enabled: !!orgId && can,
+  });
+}
+
+export function useUpdateOrgSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orgId, data }: { orgId: string; data: Record<string, unknown> }) =>
+      api.patch(`/organizations/${orgId}/settings`, data).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['org-settings', v.orgId] });
+      // The forecast reads these probabilities, so a saved change that left the pipeline
+      // numbers stale would look like the setting had not applied.
+      qc.invalidateQueries({ queryKey: ['sales-forecast'] });
+      qc.invalidateQueries({ queryKey: ['sales'] });
+    },
+  });
+}
+
 export function useCreateOrganization() {
   const qc = useQueryClient();
   return useMutation({

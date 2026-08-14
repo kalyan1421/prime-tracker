@@ -9,6 +9,7 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
+import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
 import { UserRole, SalePaymentTrigger } from '@prisma/client';
 import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
 
@@ -62,13 +63,58 @@ export class SalesController {
 
   @Put(':id')
   @RequirePermissions('sales:edit')
-  @ApiOperation({ summary: 'Update sale (atomically updates unit status on CLOSED)' })
+  @ApiOperation({
+    summary:
+      'Update sale (atomically updates unit status on CLOSED; on CANCELLED also records ' +
+      'the refund/penalty ledger and voids the unpaid schedule)',
+  })
   update(
     @Param('id') id: string,
     @Body() body: UpdateSaleDto,
     @CurrentUser('sub') userId?: string,
   ) {
-    return this.service.update(id, body as any, userId);
+    // The cancellation fields are split out here rather than passed through: none of them
+    // is a column on Sale, so leaving them in the body would hand Prisma unknown fields.
+    // They are on the DTO because ValidationPipe runs forbidNonWhitelisted — an undeclared
+    // field 400s the entire cancellation, which is why the modal stopped sending them.
+    const {
+      cancellationDisposition,
+      refundAmount,
+      penaltyAmount,
+      refundPaidAt,
+      refundReference,
+      cancellationNote,
+      ...saleFields
+    } = body;
+    return this.service.update(id, saleFields as any, userId, {
+      disposition: cancellationDisposition,
+      refundAmount,
+      penaltyAmount,
+      refundPaidAt,
+      refundReference,
+      note: cancellationNote,
+    });
+  }
+
+  /** GET /api/sales/:id/cancellation — what became of the money on a cancelled sale. */
+  @Get(':id/cancellation')
+  @RequirePermissions('sales:view')
+  @ApiOperation({ summary: 'Refund/penalty ledger for a cancelled sale (null if none)' })
+  getCancellation(@Param('id') id: string) {
+    return this.service.getCancellation(id);
+  }
+
+  /**
+   * POST /api/sales/:id/cancellation/settle — Finance decides a DECIDE_LATER after the
+   * fact, or stamps the reference once the refund has actually cleared. Gated on
+   * payment:log (Finance / Accounting / AR-AP), not sales:edit: this is the money
+   * decision the cancel dialog deliberately lets Sales defer.
+   */
+  @Post(':id/cancellation/settle')
+  @RequirePermissions('payment:log')
+  @ApiOperation({ summary: 'Settle a DECIDE_LATER cancellation, or record the refund payment' })
+  settleCancellation(@Param('id') id: string, @Body() body: SettleSaleCancellationDto) {
+    return this.service.settleCancellation(id, body);
   }
 
   @Delete(':id')

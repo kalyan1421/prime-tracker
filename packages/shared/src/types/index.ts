@@ -98,6 +98,41 @@ export enum SaleStatus {
   CANCELLED = 'CANCELLED',
 }
 
+/**
+ * Probability a deal at each stage eventually closes, used to weight the pipeline forecast.
+ *
+ * These mirror the `OrgSettings.saleStageProbabilities` column default in schema.prisma and
+ * the fallback map in `SalesForecastService`. Kept here so the API (validating writes) and
+ * the web settings UI (rendering the form) agree on the baseline without either owning it.
+ */
+export const DEFAULT_SALE_STAGE_PROBABILITIES: Record<string, number> = {
+  PROSPECT: 0.1,
+  LOI_SIGNED: 0.35,
+  UNDER_CONTRACT: 0.75,
+  CLOSED: 1.0,
+  CANCELLED: 0.0,
+};
+
+/**
+ * The stages whose probability can actually be configured.
+ *
+ * CLOSED and CANCELLED are deliberately excluded: the forecast filters both out of the
+ * in-flight set before weighting anything, so their probabilities have no effect on
+ * `totalPipelineValue` or `weightedForecast`. A settings form must not offer a field that
+ * does nothing, and the API rejects writes to them for the same reason.
+ *
+ * Ordered from earliest stage to latest — the API enforces that the values do not decrease
+ * along this order, and the UI should render them in it.
+ */
+export const WRITABLE_SALE_STAGE_PROBABILITIES = [
+  'PROSPECT',
+  'LOI_SIGNED',
+  'UNDER_CONTRACT',
+] as const;
+
+export type WritableSaleStageProbability =
+  (typeof WRITABLE_SALE_STAGE_PROBABILITIES)[number];
+
 export enum QBSyncStatus {
   PENDING = 'PENDING',
   SYNCED = 'SYNCED',

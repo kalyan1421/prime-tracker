@@ -73,6 +73,7 @@ model User {
   interiorProjects             InteriorProject[]           @relation("InteriorPM")
   snagItems                    SnagItem[]                  @relation("SnagAssignee")
   discountApprovedSales        Sale[]                      @relation("SaleDiscountApprover")
+  cancelledSales               SaleCancellation[]          @relation("SaleCancelledBy")
   dailyLogs                    DailyLog[]                  @relation("DailyLogAuthor")
   // Leasing depth — rent timeline + deposit/TI ledger
   leaseRentPeriods             LeaseRentPeriod[]           @relation("LeaseRentPeriodCreator")
@@ -891,6 +892,8 @@ model Sale {
   // Sale Payment Schedule (milestone-linked installments) + interior fit-out context
   payments         SalePayment[]
   interiorProjects InteriorProject[]
+  // What became of the money already collected when this sale was cancelled (S1).
+  cancellation     SaleCancellation?
 
   @@index([projectId])
   @@index([unitId])
@@ -909,6 +912,52 @@ enum LostReason {
   TIMING_OFF
   NO_RESPONSE
   OTHER
+}
+
+/// What Prime does with the money already collected on a cancelled sale.
+/// DECIDE_LATER is the default and is deliberate — it lets Sales cancel at 6pm without
+/// Finance in the room. Without it you get zeros typed in to clear the dialog, which is
+/// worse than no data because it looks like a record.
+enum SaleCancellationDisposition {
+  REFUND // the whole collected amount goes back to the buyer
+  FORFEIT // Prime keeps the whole collected amount as a penalty
+  NET // split — part refunded, part retained
+  DECIDE_LATER // cancelled now, Finance settles the money later
+}
+
+/// The outcome of a cancellation — one row per Sale.
+///
+/// Deliberately a transition record, not columns on Sale. Two loose numbers on the sale
+/// have no relationship to the money actually collected and no record of when it moved.
+/// Mirrors LeasesService.settleDeposit: this records a DECISION, it does not move money.
+/// SalePayment.paidAmount keeps meaning "what was collected" and is never rewritten.
+///
+/// Deliberately NOT per-installment: Prime refunds a buyer, not an installment. The
+/// totalCollected snapshot is what preserves accuracy instead.
+model SaleCancellation {
+  id              String                      @id @default(cuid())
+  saleId          String                      @unique
+  sale            Sale                        @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  cancelledAt     DateTime                    @default(now())
+  cancelledById   String?
+  cancelledBy     User?                       @relation("SaleCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  /// SNAPSHOT of sum(SalePayment.paidAmount) taken inside the cancelling transaction, so
+  /// the ledger cannot drift when someone later edits or re-logs an installment.
+  totalCollected  Decimal                     @db.Decimal(14, 2)
+  disposition     SaleCancellationDisposition @default(DECIDE_LATER)
+  refundAmount    Decimal                     @default(0) @db.Decimal(14, 2)
+  penaltyAmount   Decimal                     @default(0) @db.Decimal(14, 2)
+  /// When the money ACTUALLY moved — deliberately distinct from cancelledAt, which is
+  /// when the decision was made. A decision recorded is not a cheque written.
+  refundPaidAt    DateTime?
+  refundReference String?
+  note            String?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+
+  @@index([disposition])
+  @@index([cancelledAt])
+  @@map("sale_cancellations")
 }
 
 // ---- Leases ----
@@ -2347,6 +2396,9 @@ enum SalePaymentStatus {
   PAID
   OVERDUE
   WAIVED
+  /// Void — the sale it belonged to was cancelled. Distinct from WAIVED, which means
+  /// FORGIVEN: an installment on a dead sale was never owed, it was not let off.
+  CANCELLED
 }
 
 enum SalePaymentTrigger {

@@ -115,7 +115,7 @@ the items that still **block scope or build** and must be confirmed at kickoff (
 | C11 | **City Approval** | Approver of record? Hard-block to Procurement or just tracked? | 🔴 Blocks build |
 | C12 | **Interior spend tracking** | How is actual-vs-quote tracked today? | 🟠 Blocks build |
 | C13–C14 | **Interior billing/encryption** | Encrypt contract values like loans? Single billing entity? | 🟢 Good to know |
-| D15 | **Sale installment structure** | 1–2 real examples to build templates | 🔴 Blocks build |
+| ~~D15~~ | ~~**Sale installment structure**~~ | ✅ **ANSWERED 2026-08-14** — 10/40/50 and 30/40/30 are Prime's real templates, plus per-installment customisation. All three already built (`PAYMENT_TEMPLATES` + `addPayment`). | ✅ Closed |
 | D16 | **Deposit handling** | Deposit becomes first installment, or stays a separate field? | 🔴 Blocks build |
 | D17 | **Who records payments** | Finance/Accounting only, or Sales too? | 🔴 Blocks build |
 | D18 | **Sale cancellation** | Release unit? Refund? Penalty? Walk through it. | 🔴 Blocks build |
@@ -384,7 +384,7 @@ signature; all resolve at M0/kickoff.)*
 6. **`payment:log` scope** — Finance/Accounting only **vs** Sales too (D17). → **Recommend Finance/Accounting/AR-AP**; revisit if Sales needs it.
 7. **Project visibility** — everyone sees all **vs** assignment-scoped (G30). → **Decision required** — scope-affecting; recommend assignment-scoping for CONSTRUCTION/SALES via `ProjectMember`, all-visible for leadership/finance.
 8. **Interior contract encryption** — AES like loans **vs** plain (C13). → **Recommend AES** for parity if values are commercially sensitive; cheap to add.
-9. **Schedule templates** — capture Prime's 1–2 real installment structures (D15) — **adoption lever**, build early.
+9. ~~**Schedule templates**~~ — ✅ **CLOSED 2026-08-14.** Prime confirmed 10/40/50 and 30/40/30, plus a customise option. All three were already built (`PAYMENT_TEMPLATES`, `applyTemplate`, and `addPayment` for bespoke installments) — no work required.
 10. **WhatsApp provider** — Twilio (easier) **vs** Meta (cheaper at scale) — only when prioritized; needs a verified business account.
 11. **Investor operating model** — equity per-project vs portfolio; capital-call/distribution process (B6–B8) — **blocks any investor-module enhancement**; gather before committing line items.
 12. **Data migration** — volume/format/horizon unknown (A1–A5) — **could insert a dedicated migration sub-phase**; size after answers.

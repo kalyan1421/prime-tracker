@@ -1,18 +1,25 @@
 /**
  * CancelSaleModal — Structured sale cancellation flow.
  *
- * Collects: reason, reason note, refund amount, penalty amount.
- * Shows a consequences summary before confirming.
- * Uses the existing useUpdateSale hook — sets status = CANCELLED.
+ * Collects the reason and, when money has been collected, what happens to it: refunded,
+ * forfeited, or split. Those amounts are now PERSISTED as a SaleCancellation ledger row —
+ * until 2026-08-14 they were collected here and silently discarded, which is why this file
+ * used to tell the user they were "not saved".
+ *
+ * The server enforces `refundAmount + penaltyAmount === totalCollected` for every
+ * disposition except DECIDE_LATER, as a service check AND a DB constraint. This modal
+ * mirrors that rule locally so the failure is caught before the round trip — but the server
+ * is the authority, and it recomputes the collected total inside its own transaction rather
+ * than trusting anything sent from here.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   Button, Select, SelectItem, Input, Textarea, Chip, addToast,
 } from '@heroui/react';
 import { FiAlertTriangle, FiDollarSign, FiInfo } from 'react-icons/fi';
-import { useUpdateSale } from '../hooks/useApi';
+import { useUpdateSale, useSalePayments } from '../hooks/useApi';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -37,33 +44,98 @@ const LOST_REASONS = [
   { key: 'OTHER',                  label: 'Other' },
 ];
 
+/**
+ * What happens to money already collected. Mirrors the server's
+ * `SaleCancellationDisposition` enum.
+ *
+ * DECIDE_LATER is the DEFAULT and is client-locked: it is what lets someone cancel at 6pm
+ * without Finance in the room. Forcing a decision here would just produce zeros typed in to
+ * clear the dialog, which is worse than no data because it looks like a record.
+ */
+const DISPOSITIONS = [
+  { key: 'DECIDE_LATER', label: 'Decide later — leave it to Finance',
+    hint: 'Records the amount collected and leaves the outcome open. Finance settles it from the sale later.' },
+  { key: 'REFUND', label: 'Refund everything to the buyer',
+    hint: 'The whole collected amount goes back to the buyer.' },
+  { key: 'FORFEIT', label: 'Prime retains everything',
+    hint: 'The whole collected amount is forfeited by the buyer and retained.' },
+  { key: 'NET', label: 'Split — part refunded, part retained',
+    hint: 'Enter both figures. They must add up to exactly what was collected.' },
+];
+
 import { errMsg } from '../utils/fmt';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+
+/** Cents-accurate money compare — avoids 0.1 + 0.2 style drift rejecting a valid split. */
+const money = (n: number) => Math.round(n * 100);
 
 // ─── component ────────────────────────────────────────────────────────────────
 
 export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps) {
   const updateSale = useUpdateSale();
 
+  // The collected total is what the invariant reconciles against. It is derived from the
+  // payment schedule rather than passed in, because the caller renders a sale row that does
+  // not carry it — and a stale number here would produce a confusing server-side refusal.
+  const { data: payments, isLoading: paymentsLoading } = useSalePayments(isOpen ? sale.id : undefined);
+  const totalCollected = useMemo(
+    () => ((payments as any[]) ?? []).reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0),
+    [payments],
+  );
+  const nothingCollected = totalCollected <= 0;
+
   const [step, setStep]   = useState<'form' | 'confirm'>('form');
   const [form, setForm]   = useState({
     lostReason:     '',
     lostReasonNote: '',
+    disposition:    'DECIDE_LATER',
     refundAmount:   '',
     penaltyAmount:  '',
+    refundReference: '',
   });
   const set = (f: keyof typeof form) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((p) => ({ ...p, [f]: e.target.value }));
 
-  const refund  = parseFloat(form.refundAmount)  || 0;
-  const penalty = parseFloat(form.penaltyAmount) || 0;
+  const EMPTY = {
+    lostReason: '', lostReasonNote: '', disposition: 'DECIDE_LATER',
+    refundAmount: '', penaltyAmount: '', refundReference: '',
+  };
+
+  // REFUND and FORFEIT are fully determined by the collected total, so the amounts are
+  // derived rather than typed. Only NET needs two free figures — which is also the only
+  // disposition where the operator can get the sum wrong.
+  const { refund, penalty } = useMemo(() => {
+    switch (form.disposition) {
+      case 'REFUND':  return { refund: totalCollected, penalty: 0 };
+      case 'FORFEIT': return { refund: 0, penalty: totalCollected };
+      case 'NET':     return {
+        refund: parseFloat(form.refundAmount) || 0,
+        penalty: parseFloat(form.penaltyAmount) || 0,
+      };
+      default:        return { refund: 0, penalty: 0 };
+    }
+  }, [form.disposition, form.refundAmount, form.penaltyAmount, totalCollected]);
+
+  const decided = form.disposition !== 'DECIDE_LATER';
+  // Mirrors the server invariant. Compared in cents so a 30000.00 + 20000.00 split is not
+  // rejected by binary floating point.
+  const reconciles = !decided || money(refund + penalty) === money(totalCollected);
+  const outBy = refund + penalty - totalCollected;
 
   const handleProceed = () => {
     if (!form.lostReason) {
       addToast({ title: 'Select a cancellation reason', color: 'warning' });
+      return;
+    }
+    if (!reconciles) {
+      addToast({
+        title: `Refund and penalty must add up to ${fmt(totalCollected)} — currently ${
+          outBy > 0 ? 'over' : 'short'} by ${fmt(Math.abs(outBy))}`,
+        color: 'warning',
+      });
       return;
     }
     setStep('confirm');
@@ -71,23 +143,33 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
 
   const handleConfirm = async () => {
     try {
-      // refundAmount/penaltyAmount are NOT sent: there is no such column on Sale, no
-      // handling in SalesService.update, and no DTO field — refund/penalty handling is
-      // still an open client question (D18). Sending them tripped forbidNonWhitelisted
-      // and 400'd the whole cancellation. The inputs below are therefore not recorded
-      // anywhere yet; wire them up once the fields exist.
+      // The ledger fields ride along with the cancellation so the server does both in ONE
+      // transaction: a sale can never be cancelled — and its unit released back to market —
+      // with the collected money unaccounted for. Amounts are omitted entirely for
+      // DECIDE_LATER, where the invariant deliberately does not apply.
       await updateSale.mutateAsync({
         id: sale.id,
         data: {
           status:         'CANCELLED',
           lostReason:     form.lostReason,
           lostReasonNote: form.lostReasonNote || undefined,
+          cancellationDisposition: form.disposition,
+          ...(decided ? { refundAmount: refund, penaltyAmount: penalty } : {}),
+          // Only accepted when there is actually a refund to reference.
+          ...(decided && refund > 0 && form.refundReference
+            ? { refundReference: form.refundReference }
+            : {}),
         },
       });
-      addToast({ title: 'Sale cancelled and unit released', color: 'success' });
+      addToast({
+        title: decided
+          ? 'Sale cancelled, unit released, settlement recorded'
+          : 'Sale cancelled and unit released — settlement left for Finance',
+        color: 'success',
+      });
       onClose();
       setStep('form');
-      setForm({ lostReason: '', lostReasonNote: '', refundAmount: '', penaltyAmount: '' });
+      setForm(EMPTY);
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to cancel sale'), color: 'danger' });
     }
@@ -95,7 +177,7 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
 
   const handleClose = () => {
     setStep('form');
-    setForm({ lostReason: '', lostReasonNote: '', refundAmount: '', penaltyAmount: '' });
+    setForm(EMPTY);
     onClose();
   };
 
@@ -141,27 +223,80 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
                 size="sm" minRows={2}
               />
 
-              {/* financials */}
+              {/* financial settlement — only meaningful when money has actually arrived */}
               <div className="rounded-xl bg-gray-50 p-3 space-y-2.5">
                 <p className="text-xs font-semibold text-gray-500 flex items-center gap-1.5">
-                  <FiDollarSign size={12} /> Financial Settlement (optional)
+                  <FiDollarSign size={12} /> Financial settlement
                 </p>
-                <div className="flex gap-2">
-                  <Input
-                    size="sm" type="number" label="Refund to buyer ($)"
-                    placeholder="0"
-                    value={form.refundAmount} onChange={set('refundAmount')}
-                  />
-                  <Input
-                    size="sm" type="number" label="Penalty / forfeiture ($)"
-                    placeholder="0"
-                    value={form.penaltyAmount} onChange={set('penaltyAmount')}
-                  />
-                </div>
-                {(refund > 0 || penalty > 0) && (
-                  <p className="text-xs text-gray-400">
-                    Net: {fmt(penalty - refund)} {penalty > refund ? 'retained' : 'refunded'}
+
+                {paymentsLoading ? (
+                  <p className="text-xs text-gray-400">Checking what has been collected…</p>
+                ) : nothingCollected ? (
+                  // No money in, nothing to settle. Showing a disposition picker here would
+                  // be asking a question with no answer.
+                  <p className="text-xs text-gray-500">
+                    Nothing has been collected on this sale, so there is nothing to settle.
                   </p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-500">Collected so far</span>
+                      <span className="font-semibold text-gray-700">{fmt(totalCollected)}</span>
+                    </div>
+
+                    <Select
+                      label="What happens to it?"
+                      size="sm"
+                      selectedKeys={[form.disposition]}
+                      onSelectionChange={(k) =>
+                        setForm((p) => ({
+                          ...p,
+                          disposition: (Array.from(k)[0] as string) || 'DECIDE_LATER',
+                          // Clear the free figures when leaving NET, so a stale split cannot
+                          // be submitted under a disposition that derives its own amounts.
+                          refundAmount: '', penaltyAmount: '',
+                        }))
+                      }
+                    >
+                      {DISPOSITIONS.map((d) => (
+                        <SelectItem key={d.key} textValue={d.label}>{d.label}</SelectItem>
+                      ))}
+                    </Select>
+                    <p className="text-[11px] text-gray-400">
+                      {DISPOSITIONS.find((d) => d.key === form.disposition)?.hint}
+                    </p>
+
+                    {/* Only NET needs two typed figures — the others are fully determined
+                        by the collected total, so deriving them removes the only way to get
+                        the sum wrong. */}
+                    {form.disposition === 'NET' && (
+                      <>
+                        <div className="flex gap-2">
+                          <Input
+                            size="sm" type="number" label="Refund to buyer ($)" placeholder="0"
+                            value={form.refundAmount} onChange={set('refundAmount')}
+                          />
+                          <Input
+                            size="sm" type="number" label="Prime retains ($)" placeholder="0"
+                            value={form.penaltyAmount} onChange={set('penaltyAmount')}
+                          />
+                        </div>
+                        <p className={`text-xs ${reconciles ? 'text-green-600' : 'text-amber-600'}`}>
+                          {reconciles
+                            ? `Balances against ${fmt(totalCollected)} collected.`
+                            : `${outBy > 0 ? 'Over' : 'Short'} by ${fmt(Math.abs(outBy))} — must total ${fmt(totalCollected)}.`}
+                        </p>
+                      </>
+                    )}
+
+                    {decided && refund > 0 && (
+                      <Input
+                        size="sm" label="Refund reference (optional)"
+                        placeholder="Cheque no., ACH reference…"
+                        value={form.refundReference} onChange={set('refundReference')}
+                      />
+                    )}
+                  </>
                 )}
               </div>
             </ModalBody>
@@ -195,17 +330,35 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
                       Unit {sale.unitNumber} → released back to <span className="font-semibold">AVAILABLE</span>
                     </li>
                   )}
-                  {/* Refund/penalty have no column on Sale yet (client question D18), so
-                      these are shown for the operator's own reckoning — saying "recorded"
-                      would promise a persistence that does not happen. */}
-                  {(refund > 0 || penalty > 0) && (
+                  {/* These ARE persisted now, as a SaleCancellation ledger row. The old
+                      copy said "not saved" and was correct at the time — the amounts were
+                      collected and discarded. Saying it now would be the opposite lie. */}
+                  <li className="flex items-start gap-2">
+                    <span className="text-red-400 mt-0.5">•</span>
+                    <span>
+                      Unpaid installments → <span className="font-semibold">CANCELLED</span>; anything
+                      already paid is left untouched
+                    </span>
+                  </li>
+                  {!nothingCollected && decided && (
                     <li className="flex items-start gap-2">
                       <span className="text-red-400 mt-0.5">•</span>
                       <span>
-                        {refund > 0 && <>Refund of <span className="font-semibold">{fmt(refund)}</span></>}
-                        {refund > 0 && penalty > 0 && ' and '}
-                        {penalty > 0 && <>penalty of <span className="font-semibold">{fmt(penalty)}</span></>}
-                        {' '}<span className="font-semibold">not saved</span> — settle these outside Prime Tracker
+                        Of {fmt(totalCollected)} collected:{' '}
+                        {refund > 0 && <><span className="font-semibold">{fmt(refund)}</span> refunded to the buyer</>}
+                        {refund > 0 && penalty > 0 && ', '}
+                        {penalty > 0 && <><span className="font-semibold">{fmt(penalty)}</span> retained by Prime</>}
+                        {' '}— recorded against this sale
+                      </span>
+                    </li>
+                  )}
+                  {!nothingCollected && !decided && (
+                    <li className="flex items-start gap-2">
+                      <span className="text-red-400 mt-0.5">•</span>
+                      <span>
+                        <span className="font-semibold">{fmt(totalCollected)}</span> collected is recorded as
+                        outstanding — <span className="font-semibold">Finance still has to decide</span> whether
+                        it is refunded or retained
                       </span>
                     </li>
                   )}

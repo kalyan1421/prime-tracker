@@ -209,11 +209,24 @@ concern" that comment defers to.
 project sees the same hardcoded numbers. Size: S. Wire the read, fall back to the
 default, expose it in settings.
 
-### 2.3 — S7 · Payment-schedule templates + custom
+### 2.3 — S7 · Payment-schedule templates + custom — ✅ **ALREADY BUILT, no work**
 
-Ship **10/40/50** and **30/40/30** as named templates, plus a "Customise" path that
-starts from a template and lets the user edit each installment. Builds on the existing
-`SalePayment` model — no schema change expected.
+Audited 2026-08-14. Everything the client asked for exists:
+
+| Asked for | Where it already is |
+|---|---|
+| 10/40/50 template | `PAYMENT_TEMPLATES['10-40-50']` — `sale-payments.service.ts:313` |
+| 30/40/30 template | `PAYMENT_TEMPLATES['30-40-30']` — same block |
+| Apply a template | `applyTemplate()` + `POST` route in `sales.controller.ts:120` |
+| Template buttons in the UI | `SalePaymentPanel.tsx:127,130` |
+| **Customise** | "Add installment" (`SalePaymentPanel.tsx:116`) → `addPayment()`, accepting either a flat `amount` or a `percentOfPrice`; plus per-row edit, delete and log-payment |
+
+Both templates use `ON_SIGNING` / `FIXED_DATE` / `ON_HANDOVER` triggers and refuse to
+apply over an existing schedule, which is the correct guard.
+
+**D15 is closed.** The client confirmed both splits on 2026-08-14. The stale
+`(Confirm with Prime — D15)` TODOs have been removed from `sale-payments.service.ts`, and
+`PRD_Prime_Tracker.md` no longer lists D15 as blocking. No build.
 
 ---
 
@@ -406,6 +419,7 @@ re-alerting everyone.
 
 | Ref | Question | Why it blocks | Blocks what |
 |---|---|---|---|
+| **S2** | **Can a cancelled sale be reopened?** | Never answered. Nothing in the code blocks reviving a dead deal, yet `CancelSaleModal` tells the user *"This action cannot be undone"* — an assertion the system does not enforce. The new ledger write is an upsert precisely so a re-cancellation does not 500, which quietly assumes reopening IS possible. Either enforce the copy or correct it; right now they disagree. | The copy, and whether a status guard is needed. |
 | **S3** | **Does discount approval survive a unit swap to a more expensive unit?** | Proposed rule: carry forward only if the new discount % is ≤ the approved one, else re-gate. Most likely decision in this plan to be overruled, and cheap to get wrong in Prime's favour. | Only the approval branch of 5.1. The rest of the swap can be built. |
 | **Deposit** | **When the sitting tenant buys, is the deposit refunded or netted off the purchase price?** | From `SALE_ON_TENANTED_UNIT_SPEC.md` blocking Q2, still unanswered. Decides whether `CREDIT_TO_SALE` is the **default** disposition or merely available. Today `DECIDE_LATER` fires silently and leaves real money PENDING against a dead lease on a sold unit, with no owner. | That spec's phase 3 (R3 + R6). |
 | T3 | Editing a past, already-invoiced rent period — *"needs a short call with Finance"* ✅ agreed | The mechanism (R22) is **built**. The call is about **who holds `lease:history:correct`** — no role is granted it explicitly today, so only Founder/Super Admin have it via blanket grants. **It is also a sequencing gate:** the third-party-sale branch touches `capAtTermination` and `voidAfter`, the same code R22 uses, and that spec says land it *after* the Finance walkthrough so the two aren't explained at once. | Permission assignment, **and the timing of Phase 5.2**. |

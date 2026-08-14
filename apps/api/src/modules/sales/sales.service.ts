@@ -1,10 +1,57 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { Prisma, UserRole } from '@prisma/client';
+import { Prisma, UserRole, SaleCancellationDisposition } from '@prisma/client';
 import { EventBus } from '../../common/events/event-bus.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 import { LeasesService } from '../leases/leases.service';
 import { startOfUtcDay } from '../leases/lease-rent-period.service';
+import { SalePaymentsService } from './sale-payments.service';
+
+/** What the caller may say about the money when cancelling a sale. All optional. */
+export interface SaleCancellationInput {
+  disposition?: SaleCancellationDisposition;
+  refundAmount?: number;
+  penaltyAmount?: number;
+  refundPaidAt?: string | Date;
+  refundReference?: string;
+  note?: string;
+}
+
+/** Money is compared at the precision it is stored at — Decimal(14,2). */
+function money(value: unknown): Prisma.Decimal {
+  return new Prisma.Decimal((value ?? 0) as Prisma.Decimal.Value).toDecimalPlaces(2);
+}
+
+/**
+ * THE invariant. Every dollar collected on a cancelled sale is either given back or
+ * kept — there is no third place for it to be.
+ *
+ * DECIDE_LATER is exempt because no decision exists yet, which is the entire point of
+ * that state: it lets Sales cancel at 6pm without Finance in the room. The alternative
+ * is zeros typed in to clear the dialog, and a row of zeros that looks like a record is
+ * worse than no row at all.
+ *
+ * Named figures in the message, same shape as assertRentInvariant: whoever hits this has
+ * to be able to see which of the three numbers is wrong without opening the database.
+ */
+export function assertCancellationReconciles(row: {
+  disposition: SaleCancellationDisposition;
+  totalCollected: Prisma.Decimal;
+  refundAmount: Prisma.Decimal;
+  penaltyAmount: Prisma.Decimal;
+}): void {
+  if (row.disposition === 'DECIDE_LATER') return;
+  const accounted = row.refundAmount.plus(row.penaltyAmount).toDecimalPlaces(2);
+  const collected = row.totalCollected.toDecimalPlaces(2);
+  if (accounted.equals(collected)) return;
+  throw new BadRequestException(
+    `Cancellation ledger does not reconcile: refund (${row.refundAmount.toFixed(2)}) + ` +
+      `penalty (${row.penaltyAmount.toFixed(2)}) = ${accounted.toFixed(2)}, but ` +
+      `${collected.toFixed(2)} was collected on this sale. Off by ` +
+      `${accounted.sub(collected).toFixed(2)}. Every dollar collected must be recorded ` +
+      `as refunded or retained — or choose DECIDE_LATER to leave the decision to Finance.`,
+  );
+}
 
 @Injectable()
 export class SalesService {
@@ -13,6 +60,7 @@ export class SalesService {
     private bus: EventBus,
     private statusEvents: UnitStatusEventService,
     private leases: LeasesService,
+    private salePayments: SalePaymentsService,
   ) {}
 
   /**
@@ -66,7 +114,12 @@ export class SalesService {
   }
 
   async findById(id: string) {
-    const s = await this.prisma.sale.findUnique({ where: { id }, include: { unit: true } });
+    // cancellation comes along for the ride: a CANCELLED sale whose detail view cannot
+    // say what happened to the buyer's money is the gap S1 exists to close.
+    const s = await this.prisma.sale.findUnique({
+      where: { id },
+      include: { unit: true, cancellation: true },
+    });
     if (!s || s.deletedAt) throw new NotFoundException('Sale not found');
     return s;
   }
@@ -156,6 +209,11 @@ export class SalesService {
     data: Prisma.SaleUncheckedUpdateInput,
     /** Stamped onto any occupancy event this update causes. */
     updatedById?: string,
+    /**
+     * What becomes of the money already collected. Only consulted on the transition INTO
+     * CANCELLED; omitted entirely means DECIDE_LATER, which is the client-locked default.
+     */
+    cancellation?: SaleCancellationInput,
   ) {
     const sale = await this.findById(id);
     for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
@@ -336,23 +394,32 @@ export class SalesService {
       });
       result = outcome.sale;
       applied = outcome.applied;
-    } else if (cancelling && sale.unitId) {
+    } else if (cancelling) {
       // Cancelling a sale must RELEASE the unit it was holding, or the unit stays stuck
       // in UNDER_CONTRACT forever (backend-issue #1). Only flip a unit that was *reserved*
       // by this sale — never override a SOLD/LEASED/OCCUPIED unit. Restart time-on-market.
-      // (Refund/penalty handling is a separate, client-defined flow — discovery item D18.)
-      const unit = await this.prisma.unit.findUnique({
-        where: { id: sale.unitId },
-        select: { status: true },
-      });
-      const reserved = unit && ['UNDER_CONTRACT', 'LEASE_PENDING'].includes(unit.status);
-      if (reserved) {
-        // Interactive transaction rather than the array form this used to use: the
-        // occupancy event needs the unit's prior status, and array-form operations
-        // cannot read a value produced inside the same transaction.
-        const unitId = sale.unitId;
-        result = await this.prisma.$transaction(async (tx) => {
-          const updated = await tx.sale.update({ where: { id }, data: dataWithActivity });
+      const unit = sale.unitId
+        ? await this.prisma.unit.findUnique({
+            where: { id: sale.unitId },
+            select: { status: true },
+          })
+        : null;
+      const reserved = !!unit && ['UNDER_CONTRACT', 'LEASE_PENDING'].includes(unit.status);
+      const unitId = sale.unitId;
+
+      // ONE transaction for the whole cancellation. The refund/penalty ledger (S1) is not
+      // a follow-up step: a sale whose unit went back on the market with no account of the
+      // money already collected is the exact hole this feature closes, so it must not be
+      // reachable by one half succeeding. A ledger that does not reconcile therefore fails
+      // the cancellation outright rather than releasing the unit and losing the money.
+      //
+      // Interactive rather than the array form: the occupancy event needs the unit's prior
+      // status, and array-form operations cannot read a value produced in the same
+      // transaction.
+      result = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.sale.update({ where: { id }, data: dataWithActivity });
+        await this.recordCancellation(tx, id, cancellation, updatedById);
+        if (reserved && unitId) {
           const before = await tx.unit.findUniqueOrThrow({
             where: { id: unitId },
             select: { status: true },
@@ -373,11 +440,9 @@ export class SalesService {
             },
             tx,
           );
-          return updated;
-        });
-      } else {
-        result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
-      }
+        }
+        return updated;
+      });
     } else {
       result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
     }
@@ -424,6 +489,160 @@ export class SalesService {
       }
     }
     return result;
+  }
+
+  // ─────── Cancellation ledger (S1) ───────
+
+  /**
+   * Record what became of the money already collected, and void the rest of the schedule.
+   *
+   * Deliberately conservative, exactly like LeasesService.settleDeposit: this records a
+   * DECISION, it does not move money. SalePayment.paidAmount keeps meaning "what was
+   * collected" — overloading it to also mean "refunded" would corrupt every receivables
+   * and collections figure. Finance records the actual refund in their own system and
+   * stamps refundPaidAt/refundReference here when it clears.
+   *
+   * Runs inside the caller's cancelling transaction so the ledger and the unit release
+   * are one atomic act.
+   */
+  private async recordCancellation(
+    tx: Prisma.TransactionClient,
+    saleId: string,
+    input: SaleCancellationInput | undefined,
+    cancelledById?: string,
+  ) {
+    // Summed INSIDE the transaction and then frozen onto the row. Recomputing this on
+    // read would let an installment edited months later silently restate a settlement
+    // that was correct when it was agreed.
+    const totalCollected = await this.salePayments.sumCollected(tx, saleId);
+
+    const disposition = input?.disposition ?? 'DECIDE_LATER';
+    const refundAmount = money(input?.refundAmount);
+    const penaltyAmount = money(input?.penaltyAmount);
+
+    assertCancellationReconciles({ disposition, totalCollected, refundAmount, penaltyAmount });
+    const refundPaidAt = this.parseRefundPaidAt(input?.refundPaidAt, refundAmount);
+
+    const row = {
+      cancelledAt: new Date(),
+      cancelledById: cancelledById ?? null,
+      totalCollected,
+      disposition,
+      refundAmount,
+      penaltyAmount,
+      refundPaidAt,
+      refundReference: input?.refundReference ?? null,
+      note: input?.note ?? null,
+    };
+
+    // upsert, not create: nothing stops a CANCELLED sale being moved back to PROSPECT and
+    // then cancelled again, and the second cancellation would hit @unique(saleId) as a
+    // raw 500. The row records the outcome of THE cancellation this sale is currently
+    // under, so a re-cancellation legitimately replaces it — with a freshly taken
+    // totalCollected, since money may have moved in between. The superseded figures stay
+    // in the audit log.
+    const record = await tx.saleCancellation.upsert({
+      where: { saleId },
+      create: { saleId, ...row },
+      update: row,
+    });
+
+    await this.salePayments.voidScheduleOnCancellation(tx, saleId);
+    return record;
+  }
+
+  /** The ledger for a cancelled sale, or null if it was cancelled before S1 shipped. */
+  async getCancellation(saleId: string) {
+    await this.findById(saleId); // 404 if the sale is missing
+    return this.prisma.saleCancellation.findUnique({ where: { saleId } });
+  }
+
+  /**
+   * Finance settling a DECIDE_LATER after the fact, or stamping the reference once the
+   * refund has actually cleared.
+   *
+   * Reconciles against the SNAPSHOT, never a fresh sum — the amount collected at the
+   * moment of cancellation is the amount being disposed of, whatever has happened to the
+   * installment rows since.
+   */
+  async settleCancellation(
+    saleId: string,
+    input: {
+      disposition?: SaleCancellationDisposition;
+      refundAmount?: number;
+      penaltyAmount?: number;
+      refundPaidAt?: string | Date;
+      refundReference?: string;
+      note?: string;
+    },
+  ) {
+    const existing = await this.prisma.saleCancellation.findUnique({ where: { saleId } });
+    if (!existing) {
+      throw new NotFoundException('This sale has no cancellation record to settle');
+    }
+
+    const disposition = input.disposition ?? existing.disposition;
+    // A decision, once made, can be CORRECTED — Finance gets numbers wrong like anyone
+    // else, and the audit log carries the change. It cannot be UN-made: reverting to
+    // DECIDE_LATER would erase the fact that somebody decided, which is the one thing
+    // this row exists to remember.
+    if (disposition === 'DECIDE_LATER' && existing.disposition !== 'DECIDE_LATER') {
+      throw new BadRequestException(
+        `This cancellation was already settled as ${existing.disposition} and cannot be ` +
+          `returned to DECIDE_LATER. Correct the amounts, or record a new disposition.`,
+      );
+    }
+
+    const totalCollected = new Prisma.Decimal(existing.totalCollected);
+    const refundAmount =
+      input.refundAmount !== undefined ? money(input.refundAmount) : money(existing.refundAmount);
+    const penaltyAmount =
+      input.penaltyAmount !== undefined ? money(input.penaltyAmount) : money(existing.penaltyAmount);
+
+    assertCancellationReconciles({ disposition, totalCollected, refundAmount, penaltyAmount });
+    const refundPaidAt =
+      input.refundPaidAt !== undefined
+        ? this.parseRefundPaidAt(input.refundPaidAt, refundAmount)
+        : existing.refundPaidAt;
+    // Guards the case where the amounts are corrected to zero refund on a row that was
+    // already stamped as paid — the DB CHECK would reject it anyway, less legibly.
+    if (refundPaidAt && refundAmount.lte(0)) {
+      throw new BadRequestException(
+        'This cancellation is marked as refunded, so the refund amount cannot be zero. ' +
+          'Clear refundPaidAt if no money moved.',
+      );
+    }
+
+    return this.prisma.saleCancellation.update({
+      where: { saleId },
+      data: {
+        disposition,
+        refundAmount,
+        penaltyAmount,
+        refundPaidAt,
+        refundReference: input.refundReference ?? existing.refundReference,
+        note: input.note ?? existing.note,
+      },
+    });
+  }
+
+  /** `refundPaidAt` says money moved; with nothing to refund that is a contradiction. */
+  private parseRefundPaidAt(
+    value: string | Date | undefined | null,
+    refundAmount: Prisma.Decimal,
+  ): Date | null {
+    if (value == null || value === '') return null;
+    const at = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(at.getTime())) {
+      throw new BadRequestException('refundPaidAt is not a valid date');
+    }
+    if (refundAmount.lte(0)) {
+      throw new BadRequestException(
+        'refundPaidAt records the day the refund actually moved, but this cancellation ' +
+          'refunds nothing. Set a refund amount, or leave refundPaidAt empty.',
+      );
+    }
+    return at;
   }
 
   /** Founder/Co-Founder records sign-off on an over-threshold discount. */

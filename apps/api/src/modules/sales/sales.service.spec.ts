@@ -1,5 +1,6 @@
-import { ForbiddenException } from '@nestjs/common';
-import { SalesService } from './sales.service';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { SalesService, assertCancellationReconciles } from './sales.service';
 
 const mockPrisma: any = {
   sale: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn() },
@@ -7,6 +8,8 @@ const mockPrisma: any = {
   project: { findUnique: jest.fn() },
   orgSettings: { findUnique: jest.fn() },
   broker: { findUnique: jest.fn() },
+  // Cancellation ledger (S1). Written inside the same transaction as the unit release.
+  saleCancellation: { upsert: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   // Closing a sale looks for the tenancies to end (H3). Defaults to "no lease on this
   // unit" so the existing suites stay about the sale; the H3 cases override it. findMany,
   // not findFirst: a unit can hold more than one non-terminated lease.
@@ -35,9 +38,21 @@ const mockStatusEvents = { record: jest.fn(), recordIfChanged: jest.fn() };
 // assert the SALE side; the tenancy end has its own coverage in leases.service.spec.
 const mockLeases = { endTenancyWithin: jest.fn().mockResolvedValue({}) };
 
+// The installment side of a cancellation (S1). What it does to the schedule is asserted
+// in sale-payments.service.spec — here it is the source of `totalCollected` and the proof
+// that the sweep is invoked from inside the cancelling transaction.
+const mockSalePayments = {
+  sumCollected: jest.fn().mockResolvedValue(new Prisma.Decimal(0)),
+  voidScheduleOnCancellation: jest.fn().mockResolvedValue(0),
+};
+
 function makeService() {
   return new SalesService(
-    mockPrisma as any, mockBus as any, mockStatusEvents as any, mockLeases as any,
+    mockPrisma as any,
+    mockBus as any,
+    mockStatusEvents as any,
+    mockLeases as any,
+    mockSalePayments as any,
   );
 }
 
@@ -55,6 +70,9 @@ describe('SalesService.update — unit-status side effects', () => {
     // occupancy event's fromStatus. Default to a reserved unit — the state the CLOSE
     // and CANCEL paths are actually reached from.
     mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+    mockPrisma.saleCancellation.upsert.mockResolvedValue({ id: 'sc1' });
+    mockSalePayments.sumCollected.mockResolvedValue(new Prisma.Decimal(0));
+    mockSalePayments.voidScheduleOnCancellation.mockResolvedValue(0);
     stubCloseTxn();
   });
 
@@ -607,5 +625,359 @@ describe('SalesService — a closed sale ends the sitting tenancy', () => {
     ).rejects.toThrow(/already been collected/);
 
     expect(mockBus.emit).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S1 — the cancellation refund/penalty ledger
+//
+// CancelSaleModal collected a refund and a penalty and update() threw them away
+// (deferred as "discovery item D18"), so a sale could be killed with real collected money
+// on it and nothing recorded about where that money went. The fix is a transition row
+// with an invariant, not two loose columns on Sale: see SaleCancellation.
+// ---------------------------------------------------------------------------
+
+/** Every disposition that carries a decision — i.e. everything but DECIDE_LATER. */
+const DECIDED = ['REFUND', 'FORFEIT', 'NET'] as const;
+
+describe('assertCancellationReconciles — the invariant, in isolation', () => {
+  const dec = (n: number) => new Prisma.Decimal(n);
+
+  it.each(DECIDED)('refuses a %s that leaves collected money unaccounted for', (disposition) => {
+    expect(() =>
+      assertCancellationReconciles({
+        disposition,
+        totalCollected: dec(50_000),
+        refundAmount: dec(20_000),
+        penaltyAmount: dec(10_000),
+      }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('names all three figures so the wrong one is visible without opening the database', () => {
+    try {
+      assertCancellationReconciles({
+        disposition: 'NET',
+        totalCollected: dec(50_000),
+        refundAmount: dec(20_000),
+        penaltyAmount: dec(10_000),
+      });
+      throw new Error('expected the invariant to throw');
+    } catch (e: any) {
+      expect(e).toBeInstanceOf(BadRequestException);
+      expect(e.message).toContain('20000.00'); // refund
+      expect(e.message).toContain('10000.00'); // penalty
+      expect(e.message).toContain('50000.00'); // collected
+      expect(e.message).toContain('-20000.00'); // the shortfall, signed
+      expect(e.message).toContain('DECIDE_LATER'); // and the way out
+    }
+  });
+
+  it('accepts DECIDE_LATER with nothing allocated — that IS the state', () => {
+    expect(() =>
+      assertCancellationReconciles({
+        disposition: 'DECIDE_LATER',
+        totalCollected: dec(50_000),
+        refundAmount: dec(0),
+        penaltyAmount: dec(0),
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts a full REFUND, a full FORFEIT and a NET split of the same collected sum', () => {
+    const cases = [
+      { disposition: 'REFUND' as const, refundAmount: dec(50_000), penaltyAmount: dec(0) },
+      { disposition: 'FORFEIT' as const, refundAmount: dec(0), penaltyAmount: dec(50_000) },
+      { disposition: 'NET' as const, refundAmount: dec(45_000), penaltyAmount: dec(5_000) },
+    ];
+    for (const c of cases) {
+      expect(() => assertCancellationReconciles({ ...c, totalCollected: dec(50_000) })).not.toThrow();
+    }
+  });
+
+  it('reconciles at the precision the money is stored at (Decimal(14,2))', () => {
+    // 33333.34 + 16666.66 is exactly 50000.00 in Decimal and NOT in binary floats.
+    expect(() =>
+      assertCancellationReconciles({
+        disposition: 'NET',
+        totalCollected: dec(50_000),
+        refundAmount: dec(33_333.34),
+        penaltyAmount: dec(16_666.66),
+      }),
+    ).not.toThrow();
+  });
+
+  it('holds when NOTHING was collected — zero is still an amount that must reconcile', () => {
+    expect(() =>
+      assertCancellationReconciles({
+        disposition: 'FORFEIT',
+        totalCollected: dec(0),
+        refundAmount: dec(0),
+        penaltyAmount: dec(1_000),
+      }),
+    ).toThrow(/0.00 was collected/);
+  });
+});
+
+describe('SalesService.update — cancellation ledger', () => {
+  let service: SalesService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.sale.update.mockImplementation((args: any) =>
+      Promise.resolve({ id: args.where.id, status: args.data.status }),
+    );
+    mockPrisma.unit.update.mockResolvedValue({});
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+    mockPrisma.saleCancellation.upsert.mockImplementation((args: any) =>
+      Promise.resolve({ id: 'sc1', ...args.create }),
+    );
+    mockSalePayments.sumCollected.mockResolvedValue(new Prisma.Decimal(50_000));
+    mockSalePayments.voidScheduleOnCancellation.mockResolvedValue(2);
+    // A reserved unit-level sale — the state a cancellation is actually reached from.
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', unitId: 'u1', projectId: 'pr1', unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+  });
+
+  it('defaults to DECIDE_LATER and needs no amounts — cancelling at 6pm without Finance', async () => {
+    await service.update('s1', { status: 'CANCELLED' } as any, 'user-1');
+
+    expect(mockPrisma.saleCancellation.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { saleId: 's1' },
+        create: expect.objectContaining({
+          saleId: 's1',
+          disposition: 'DECIDE_LATER',
+          cancelledById: 'user-1',
+        }),
+      }),
+    );
+    const data = mockPrisma.saleCancellation.upsert.mock.calls[0][0].create;
+    expect(data.refundAmount.toString()).toBe('0');
+    expect(data.penaltyAmount.toString()).toBe('0');
+    // Collected money is still SNAPSHOTTED, even with the decision deferred — that is what
+    // Finance will reconcile against later, and it must be the figure from cancel-time.
+    expect(data.totalCollected.toString()).toBe('50000');
+  });
+
+  it.each(DECIDED)('accepts a reconciling %s', async (disposition) => {
+    const split: Record<string, { refundAmount: number; penaltyAmount: number }> = {
+      REFUND: { refundAmount: 50_000, penaltyAmount: 0 },
+      FORFEIT: { refundAmount: 0, penaltyAmount: 50_000 },
+      NET: { refundAmount: 30_000, penaltyAmount: 20_000 },
+    };
+
+    await service.update(
+      's1',
+      { status: 'CANCELLED' } as any,
+      'user-1',
+      { disposition, ...split[disposition] },
+    );
+
+    expect(mockPrisma.saleCancellation.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ disposition }) }),
+    );
+    expect(mockPrisma.unit.update).toHaveBeenCalled(); // and the unit still went back to market
+  });
+
+  it('REFUSES the whole cancellation when the ledger does not reconcile', async () => {
+    await expect(
+      service.update('s1', { status: 'CANCELLED' } as any, 'user-1', {
+        disposition: 'NET',
+        refundAmount: 20_000,
+        penaltyAmount: 10_000,
+      }),
+    ).rejects.toThrow(/does not reconcile/);
+
+    // The point of doing this inside the transaction: a sale whose unit went back on the
+    // market with the money unaccounted for is the exact hole S1 closes. Nothing is
+    // written, so the operator fixes the numbers rather than discovering the gap later.
+    expect(mockPrisma.saleCancellation.upsert).not.toHaveBeenCalled();
+    expect(mockSalePayments.voidScheduleOnCancellation).not.toHaveBeenCalled();
+  });
+
+  it('snapshots totalCollected rather than storing a reference to be recomputed', async () => {
+    mockSalePayments.sumCollected.mockResolvedValue(new Prisma.Decimal(12_500.5));
+
+    await service.update('s1', { status: 'CANCELLED' } as any, 'user-1');
+
+    // Summed INSIDE the transaction (the mock $transaction passes mockPrisma through as
+    // tx), then frozen onto the row.
+    expect(mockSalePayments.sumCollected).toHaveBeenCalledWith(mockPrisma, 's1');
+    const data = mockPrisma.saleCancellation.upsert.mock.calls[0][0].create;
+    expect(data.totalCollected.toString()).toBe('12500.5');
+  });
+
+  it('voids the rest of the schedule in the same transaction', async () => {
+    await service.update('s1', { status: 'CANCELLED' } as any, 'user-1');
+
+    expect(mockSalePayments.voidScheduleOnCancellation).toHaveBeenCalledWith(mockPrisma, 's1');
+  });
+
+  it('records the ledger for a BUILDING-level sale, which has no unit to release', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'UNDER_CONTRACT', unitId: null, buildingId: 'b1', projectId: 'pr1', unit: null,
+    });
+
+    await service.update('s1', { status: 'CANCELLED' } as any, 'user-1', {
+      disposition: 'FORFEIT', penaltyAmount: 50_000,
+    });
+
+    expect(mockPrisma.saleCancellation.upsert).toHaveBeenCalled();
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+  });
+
+  it('records the ledger even when the unit is NOT the cancelling sale\'s to release', async () => {
+    // A closed sale being cancelled: the unit reads SOLD and must not be touched. The
+    // money still has to be accounted for — the two concerns are independent.
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'CLOSED', unitId: 'u1', projectId: 'pr1', unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ status: 'SOLD' });
+
+    await service.update('s1', { status: 'CANCELLED' } as any, 'user-1');
+
+    expect(mockPrisma.saleCancellation.upsert).toHaveBeenCalled();
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+  });
+
+  it('records refundPaidAt only when there is a refund to have been paid', async () => {
+    await expect(
+      service.update('s1', { status: 'CANCELLED' } as any, 'user-1', {
+        disposition: 'FORFEIT',
+        penaltyAmount: 50_000,
+        refundPaidAt: '2026-08-14',
+      }),
+    ).rejects.toThrow(/refunds nothing/);
+  });
+
+  it('writes NO ledger row when the sale was already CANCELLED', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'CANCELLED', unitId: 'u1', projectId: 'pr1', unit: {},
+    });
+
+    await service.update('s1', { lostReasonNote: 'corrected the note' } as any, 'user-1');
+
+    // One cancellation, one ledger row (@unique on saleId). Editing a cancelled sale is
+    // not a second cancellation.
+    expect(mockPrisma.saleCancellation.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('SalesService.settleCancellation — Finance decides later', () => {
+  let service: SalesService;
+
+  const existing = (over: any = {}) => ({
+    id: 'sc1',
+    saleId: 's1',
+    totalCollected: new Prisma.Decimal(50_000),
+    disposition: 'DECIDE_LATER',
+    refundAmount: new Prisma.Decimal(0),
+    penaltyAmount: new Prisma.Decimal(0),
+    refundPaidAt: null,
+    refundReference: null,
+    note: null,
+    ...over,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.saleCancellation.findUnique.mockResolvedValue(existing());
+    mockPrisma.saleCancellation.update.mockImplementation((args: any) =>
+      Promise.resolve({ ...existing(), ...args.data }),
+    );
+  });
+
+  it('404s when the sale has no cancellation to settle', async () => {
+    mockPrisma.saleCancellation.findUnique.mockResolvedValue(null);
+    await expect(service.settleCancellation('s1', { disposition: 'REFUND' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('settles a DECIDE_LATER once the amounts reconcile', async () => {
+    await service.settleCancellation('s1', {
+      disposition: 'NET', refundAmount: 45_000, penaltyAmount: 5_000,
+    });
+
+    expect(mockPrisma.saleCancellation.update).toHaveBeenCalledWith({
+      where: { saleId: 's1' },
+      data: expect.objectContaining({ disposition: 'NET' }),
+    });
+  });
+
+  it('reconciles against the SNAPSHOT, not a fresh sum of the installments', async () => {
+    // Installments edited since the cancellation must not move the goalposts. The service
+    // never asks SalePaymentsService for a new total on this path.
+    await expect(
+      service.settleCancellation('s1', { disposition: 'REFUND', refundAmount: 40_000 }),
+    ).rejects.toThrow(/50000.00 was collected/);
+    expect(mockSalePayments.sumCollected).not.toHaveBeenCalled();
+  });
+
+  it('refuses to return a settled cancellation to DECIDE_LATER', async () => {
+    // A decision can be corrected; it cannot be un-made. Reverting would erase the fact
+    // that somebody decided, which is the one thing this row exists to remember.
+    mockPrisma.saleCancellation.findUnique.mockResolvedValue(
+      existing({ disposition: 'FORFEIT', penaltyAmount: new Prisma.Decimal(50_000) }),
+    );
+
+    await expect(
+      service.settleCancellation('s1', { disposition: 'DECIDE_LATER' }),
+    ).rejects.toThrow(/cannot be returned to DECIDE_LATER/);
+  });
+
+  it('records when the money ACTUALLY moved, separately from when it was decided', async () => {
+    mockPrisma.saleCancellation.findUnique.mockResolvedValue(
+      existing({ disposition: 'REFUND', refundAmount: new Prisma.Decimal(50_000) }),
+    );
+
+    await service.settleCancellation('s1', {
+      refundPaidAt: '2026-09-01', refundReference: 'ACH-88421',
+    });
+
+    expect(mockPrisma.saleCancellation.update).toHaveBeenCalledWith({
+      where: { saleId: 's1' },
+      data: expect.objectContaining({
+        refundPaidAt: new Date('2026-09-01'),
+        refundReference: 'ACH-88421',
+        disposition: 'REFUND', // untouched — this call is about the payment, not the decision
+      }),
+    });
+  });
+
+  it('will not mark a refund paid when the disposition refunds nothing', async () => {
+    mockPrisma.saleCancellation.findUnique.mockResolvedValue(
+      existing({ disposition: 'FORFEIT', penaltyAmount: new Prisma.Decimal(50_000) }),
+    );
+
+    await expect(
+      service.settleCancellation('s1', { refundPaidAt: '2026-09-01' }),
+    ).rejects.toThrow(/refunds nothing/);
+  });
+
+  it('leaves omitted fields alone rather than blanking them', async () => {
+    mockPrisma.saleCancellation.findUnique.mockResolvedValue(
+      existing({
+        disposition: 'REFUND',
+        refundAmount: new Prisma.Decimal(50_000),
+        refundReference: 'ACH-88421',
+        note: 'Buyer financing fell through',
+      }),
+    );
+
+    await service.settleCancellation('s1', {});
+
+    expect(mockPrisma.saleCancellation.update).toHaveBeenCalledWith({
+      where: { saleId: 's1' },
+      data: expect.objectContaining({
+        refundReference: 'ACH-88421',
+        note: 'Buyer financing fell through',
+      }),
+    });
   });
 });

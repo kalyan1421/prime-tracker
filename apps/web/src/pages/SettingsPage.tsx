@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { Card, CardBody, CardHeader, Switch, Chip, Tooltip, addToast } from '@heroui/react';
-import { FiBell, FiMail, FiMessageCircle, FiSmartphone, FiAlertCircle, FiInfo } from 'react-icons/fi';
+import { FiBell, FiMail, FiMessageCircle, FiSmartphone, FiAlertCircle, FiInfo, FiSettings } from 'react-icons/fi';
 import {
   useNotificationPreferences,
   useUpdateNotificationPreference,
+  useOrganizations,
   type NotificationPreference,
 } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
+import { ForecastProbabilitiesPanel } from '../components/ForecastProbabilitiesPanel';
 
 // ─── notification type config ────────────────────────────────────────────────
 
@@ -166,6 +169,17 @@ export default function SettingsPage() {
   const updatePref = useUpdateNotificationPreference();
   const [pendingType, setPendingType] = useState<string | null>(null);
 
+  // Org-level settings are gated on org:manage (Founder / Super Admin). The hook already
+  // refuses to fire without it, but gating here as well keeps the section out of the page
+  // entirely rather than rendering an empty card for everyone else.
+  const { hasPermission } = useAuthStore();
+  const canManageOrg = hasPermission('org:manage');
+  const { data: orgs } = useOrganizations();
+  // Prime is a single organization (client-confirmed 2026-08-14), so the first row is the
+  // one. Reading it from the list rather than hardcoding an id keeps this correct if that
+  // ever changes.
+  const orgId = Array.isArray(orgs) ? (orgs[0] as any)?.id : undefined;
+
   const list: NotificationPreference[] = Array.isArray(prefs) ? prefs : [];
 
   // The API is the source of truth for which types exist; TYPE_LABELS only adds
@@ -199,10 +213,27 @@ export default function SettingsPage() {
       {/* page header */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+          <FiSettings className="text-blue-600" size={18} />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">Settings</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Your notification preferences{canManageOrg ? ', and organization-wide defaults' : ''}.
+          </p>
+        </div>
+      </div>
+
+      {/* Org-level settings. Hidden entirely without org:manage rather than shown disabled —
+          these are company-wide financial assumptions, not personal preferences. */}
+      {canManageOrg && <ForecastProbabilitiesPanel orgId={orgId} />}
+
+      {/* ── notification preferences ── */}
+      <div className="flex items-center gap-3 pt-2">
+        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
           <FiBell className="text-blue-600" size={18} />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-gray-800">Notification Preferences</h1>
+          <h2 className="text-lg font-bold text-gray-800">Notification Preferences</h2>
           <p className="text-sm text-gray-500 mt-0.5">
             In-app and email are set separately. Leave email on <span className="font-medium">Default</span> to
             follow the recommendation for that kind of alert.
