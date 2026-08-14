@@ -1,4 +1,5 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { PROJECT_MEMBER_ROLES } from '@prime-tracker/shared';
 import { ProjectsService } from './projects.service';
 
 const mockPrisma = {
@@ -201,6 +202,73 @@ const mockEncryption = {
       await service.create({ name: 'New', slug: 'new', location: 'TX' });
 
       expect(mockPrisma.projectMember.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addMember', () => {
+    // findById() runs first in addMember — give it a project to find.
+    const found = {
+      id: 'p1', name: 'Shops at Panther Creek',
+      buildings: [], milestones: [], budgetLines: [], commitments: [],
+      actuals: [], loans: [], sales: [], kpiSnapshots: [],
+    };
+    beforeEach(() => {
+      mockPrisma.project.findUnique.mockResolvedValue(found);
+      mockPrisma.projectMember.upsert.mockResolvedValue({ id: 'pm-1' });
+    });
+
+    it.each(PROJECT_MEMBER_ROLES)('accepts the fixed-list role %s', async (r) => {
+      await service.addMember('p1', 'u1', r);
+
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ update: { role: r, roles: [r] } }),
+      );
+    });
+
+    it('rejects a typo in the single `role` field', async () => {
+      await expect(service.addMember('p1', 'u1', 'PROJET_MANAGER'))
+        .rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.projectMember.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects one bad entry among otherwise valid `roles`', async () => {
+      await expect(service.addMember('p1', 'u1', undefined, ['FINANCE', 'LEGAAL']))
+        .rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.projectMember.upsert).not.toHaveBeenCalled();
+    });
+
+    // OWNER is stamped by create() and is not assignable — the picker must not be able to
+    // fabricate one, so it is absent from the list and rejected like any other unknown.
+    it('rejects OWNER, which only the server may assign', async () => {
+      await expect(service.addMember('p1', 'u1', 'OWNER'))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('names the offending value AND the allowed set in the error', async () => {
+      await expect(service.addMember('p1', 'u1', 'MANAGER')).rejects.toThrow(
+        `Invalid project member role 'MANAGER'. Allowed roles: ${PROJECT_MEMBER_ROLES.join(', ')}`,
+      );
+    });
+
+    it('defaults to TEAM_MEMBER when neither role nor roles is supplied', async () => {
+      await service.addMember('p1', 'u1');
+
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: { projectId: 'p1', userId: 'u1', role: 'TEAM_MEMBER', roles: ['TEAM_MEMBER'] },
+        }),
+      );
+    });
+
+    it('dedupes roles and keeps the primary mirroring roles[0]', async () => {
+      await service.addMember('p1', 'u1', 'VIEWER', ['LEGAL', 'FINANCE', 'LEGAL']);
+
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // `roles` wins over the legacy scalar, and role === roles[0]
+          update: { role: 'LEGAL', roles: ['LEGAL', 'FINANCE'] },
+        }),
+      );
     });
   });
 

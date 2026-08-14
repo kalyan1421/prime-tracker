@@ -611,6 +611,50 @@ export const ROLE_META: Record<UserRole, { label: string; description: string; c
   [UserRole.VIEWER]: { label: 'Viewer', description: 'Read-only access to projects, buildings, units, and milestones', category: 'support' },
 };
 
+// ---- Project Team Member Roles ----
+
+/**
+ * The fixed set of titles a project team member may hold (`ProjectMember.role` / `.roles`).
+ * Client decision 2026-08-14: project-team roles are a closed list, not free text — a typo
+ * used to persist silently and then render as an unrecognised chip forever.
+ *
+ * This is NOT `UserRole`. A system role grants permissions portfolio-wide; this is only a
+ * label for what someone does on ONE project. The values overlap deliberately (a Finance
+ * user is normally the FINANCE member) but the sets differ: TEAM_MEMBER has no UserRole
+ * equivalent, and MARKETING / ACCOUNTING / AR_AP map onto SALES and FINANCE here.
+ *
+ * `OWNER` is deliberately absent. The server stamps it on whoever creates a project and it
+ * is never assignable through the add-member API — including it would let a caller demote
+ * or fabricate an owner.
+ */
+export const PROJECT_MEMBER_ROLES = [
+  'PROJECT_MANAGER',
+  'CONSTRUCTION',
+  'FINANCE',
+  'SALES',
+  'LEGAL',
+  'VIEWER',
+  'TEAM_MEMBER',
+] as const;
+
+export type ProjectMemberRole = (typeof PROJECT_MEMBER_ROLES)[number];
+
+/** True when a value is one of the assignable project-team titles. */
+export function isProjectMemberRole(value: string): value is ProjectMemberRole {
+  return (PROJECT_MEMBER_ROLES as readonly string[]).includes(value);
+}
+
+/** Human labels for the project-role pickers, so the UI stops deriving them ad hoc. */
+export const PROJECT_MEMBER_ROLE_META: Record<ProjectMemberRole, { label: string; description: string }> = {
+  PROJECT_MANAGER: { label: 'Project Manager', description: 'Runs the project day to day' },
+  CONSTRUCTION: { label: 'Construction', description: 'Site delivery and build oversight' },
+  FINANCE: { label: 'Finance', description: 'Budget, draws, and project accounting' },
+  SALES: { label: 'Sales', description: 'Sales, leasing, and leads on this project' },
+  LEGAL: { label: 'Legal', description: 'Contracts, leases, and legal review' },
+  VIEWER: { label: 'Viewer', description: 'Read-only visibility into this project' },
+  TEAM_MEMBER: { label: 'Team Member', description: 'General contributor with no specific title' },
+};
+
 // ---- Permission Categories (for Role Management UI) ----
 
 export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: string[] }[] = [

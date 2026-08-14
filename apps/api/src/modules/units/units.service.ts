@@ -29,6 +29,16 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 
 const STATUS_OVERRIDE_ROLES: UserRole[] = ['SUPER_ADMIN', 'FOUNDER'];
 
+/** "2 leases" · "2 leases and 1 sale" · "2 leases, 1 sale and 1 loan". */
+function phraseList(parts: string[]) {
+  if (parts.length <= 1) return parts.join('');
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+function plural(n: number, noun: string) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
 @Injectable()
 export class UnitsService {
   constructor(
@@ -59,7 +69,9 @@ export class UnitsService {
         sales: { where: { deletedAt: null } },
         // No decrypt needed — monthlyPayment is not one of the encrypted fields.
         loans: { where: { deletedAt: null }, select: { id: true, loanType: true, monthlyPayment: true } },
-        _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } } } },
+        // Blast radius for the delete dialog — every live record that goes dark with the
+        // unit. `loans` was missing, so a unit carrying debt looked free to archive.
+        _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } }, loans: { where: { deletedAt: null } } } },
       },
       orderBy: [
         { building: { name: 'asc' } },
@@ -104,7 +116,9 @@ export class UnitsService {
         },
         // Provenance for combined units — which source units were merged in.
         mergedFrom: { select: { id: true, unitNumber: true } },
-        _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } } } },
+        // Blast radius for the delete dialog — every live record that goes dark with the
+        // unit. `loans` was missing, so a unit carrying debt looked free to archive.
+        _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } }, loans: { where: { deletedAt: null } } } },
       },
     });
     if (!unit) throw new NotFoundException('Unit not found');
@@ -431,16 +445,26 @@ export class UnitsService {
 
     const unit = await this.findById(id);
 
-    const activeLeases = unit._count.leases;
+    // Named for what findById's `_count` actually selects: every non-deleted lease, not
+    // only the ACTIVE ones. It was called `activeLeases`, and the conflict message
+    // inherited that lie — a unit with three expired leases was reported as having
+    // three active ones.
+    const leases = unit._count.leases;
     const sales = unit._count.sales;
+    // Loans attach to a unit too (polymorphic — Project/Building/Unit). They were absent
+    // from the message, so the one category that represents debt was the one the user
+    // never saw. Reported only; the guard below still trips on leases/sales, as before.
+    const loans = unit._count.loans;
 
-    if ((activeLeases > 0 || sales > 0) && !force) {
-      const parts: string[] = [];
-      if (activeLeases > 0) parts.push(`${activeLeases} lease${activeLeases === 1 ? '' : 's'}`);
-      if (sales > 0) parts.push(`${sales} sale${sales === 1 ? '' : 's'}`);
+    if ((leases > 0 || sales > 0) && !force) {
+      const parts = [
+        leases > 0 ? plural(leases, 'lease') : '',
+        sales > 0 ? plural(sales, 'sale') : '',
+        loans > 0 ? plural(loans, 'loan') : '',
+      ].filter(Boolean);
       throw new ConflictException(
-        `Unit '${unit.unitNumber}' has ${parts.join(' and ')} attached. ` +
-        `Pass ?force=true to remove the unit anyway — its lease/sale history is kept, not deleted.`,
+        `Unit '${unit.unitNumber}' has ${phraseList(parts)} attached. ` +
+        `Pass ?force=true to remove the unit anyway — its lease/sale/loan history is kept, not deleted.`,
       );
     }
 

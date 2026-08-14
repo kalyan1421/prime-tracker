@@ -157,7 +157,7 @@ describe('UnitsService.create', () => {
   });
 });
 
-function stubUnitForDelete(overrides: Partial<{ leases: number; sales: number; deletedAt: Date | null }> = {}) {
+function stubUnitForDelete(overrides: Partial<{ leases: number; sales: number; loans: number; deletedAt: Date | null }> = {}) {
   mockPrisma.unit.findUnique.mockResolvedValue({
     id: 'unit-1',
     unitNumber: '101',
@@ -167,7 +167,12 @@ function stubUnitForDelete(overrides: Partial<{ leases: number; sales: number; d
     sales: [],
     loans: [],
     mergedFrom: [],
-    _count: { comments: 0, sales: overrides.sales ?? 0, leases: overrides.leases ?? 0 },
+    _count: {
+      comments: 0,
+      sales: overrides.sales ?? 0,
+      leases: overrides.leases ?? 0,
+      loans: overrides.loans ?? 0,
+    },
   });
 }
 
@@ -255,6 +260,38 @@ describe('UnitsService.delete', () => {
       where: { id: 'unit-1' },
       data: { deletedAt: expect.any(Date) },
     });
+  });
+
+  // Client decision 2026-08-14: the confirmation must show the full blast radius. Loans
+  // attach to a unit too, and were the one category the message never mentioned.
+  it('names loans alongside leases and sales in the conflict message', async () => {
+    stubUnitForDelete({ leases: 2, sales: 1, loans: 3 });
+    await expect(service.delete('unit-1', 'FOUNDER' as any, false)).rejects.toThrow(
+      /Unit '101' has 2 leases, 1 sale and 3 loans attached/,
+    );
+  });
+
+  it('keeps the ?force=true affordance and the history-is-kept reassurance', async () => {
+    stubUnitForDelete({ leases: 1 });
+    await expect(service.delete('unit-1', 'FOUNDER' as any, false)).rejects.toThrow(
+      /has 1 lease attached\. Pass \?force=true .*history is kept, not deleted/s,
+    );
+  });
+
+  // The guard is unchanged — a loan alone has never blocked a unit archive, and this
+  // change only alters what gets REPORTED.
+  it('a loan on its own does not block the archive', async () => {
+    stubUnitForDelete({ loans: 4 });
+    mockPrisma.unit.update.mockResolvedValue({ id: 'unit-1', deletedAt: new Date() });
+    await expect(service.delete('unit-1', 'FOUNDER' as any, false)).resolves.toBeDefined();
+  });
+
+  it('selects only non-deleted loans for the count', async () => {
+    stubUnitForDelete();
+    mockPrisma.unit.update.mockResolvedValue({ id: 'unit-1', deletedAt: new Date() });
+    await service.delete('unit-1', 'FOUNDER' as any, false);
+    const countSelect = mockPrisma.unit.findUnique.mock.calls[0][0].include._count.select;
+    expect(countSelect.loans).toEqual({ where: { deletedAt: null } });
   });
 
   it('force=true bypasses the history guard but still only soft-deletes — history rows are never touched', async () => {

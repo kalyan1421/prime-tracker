@@ -23,7 +23,13 @@ export class BuildingsController {
 
   @Get()
   @RequirePermissions('building:view')
-  @ApiOperation({ summary: 'List buildings by project' })
+  @ApiOperation({
+    summary: 'List buildings by project',
+    description:
+      'Each row carries `blastRadius: { units, leases, sales, loans }` — the live records that ' +
+      'would go dark if the building were archived, counting both direct attachments and everything ' +
+      'under its units. Intended for the delete-confirmation dialog.',
+  })
   findByProject(@Query('projectId') projectId: string) {
     return this.service.findByProject(projectId);
   }
@@ -37,7 +43,7 @@ export class BuildingsController {
 
   @Get(':id')
   @RequirePermissions('building:view')
-  @ApiOperation({ summary: 'Get building by ID with units' })
+  @ApiOperation({ summary: 'Get building by ID with units (includes `blastRadius`)' })
   findById(@Param('id') id: string) {
     return this.service.findById(id);
   }

@@ -6,6 +6,20 @@ import { BuildingType } from '@prisma/client';
 import { ProjectPhaseService } from './project-phase.service';
 import { StorageService } from '../../common/storage/storage.service';
 
+/** Zero-valued blast radius — also the shape every read returns. */
+const EMPTY_RADIUS = () => ({ units: 0, leases: 0, sales: 0, loans: 0 });
+type Radius = ReturnType<typeof EMPTY_RADIUS>;
+
+/** "3 units" · "3 units and 2 leases" · "3 units, 2 leases and 1 loan". */
+function phraseList(parts: string[]) {
+  if (parts.length <= 1) return parts.join('');
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+function plural(n: number, noun: string) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
 @Injectable()
 export class BuildingsService {
   constructor(
@@ -21,6 +35,74 @@ export class BuildingsService {
     return { ...b, coverPhotoUrl };
   }
 
+  /**
+   * Second level of the blast radius: everything hanging off the building's UNITS.
+   *
+   * Sale/Lease/Loan are polymorphic — each row attaches either to a Unit or to the
+   * Building directly (see the back-relations on Building in schema.prisma), so the
+   * full picture is "attached here" + "attached to a unit under here". Prisma's
+   * `_count` only traverses one level, which is why the direct half rides along on the
+   * building query (`_count`) and the nested half is computed here.
+   *
+   * Deliberately ONE query for the whole page of buildings, not one per building:
+   * findByProject is a list endpoint, and a per-row lookup would make archiving a
+   * building cost a query per sibling. Prisma has no cross-relation group-by
+   * (Lease has no buildingId to group on), so this pulls a filtered `_count` per unit
+   * row and reduces in memory — units per building are in the tens, not thousands.
+   *
+   * Only live rows count: a soft-deleted unit is already hidden, and its leases/sales/
+   * loans are history that archiving the building does not touch.
+   */
+  private async nestedCounts(buildingIds: string[]): Promise<Map<string, Radius>> {
+    const byBuilding = new Map<string, Radius>(buildingIds.map((id) => [id, EMPTY_RADIUS()]));
+    if (buildingIds.length === 0) return byBuilding;
+
+    const units = await this.prisma.unit.findMany({
+      where: { buildingId: { in: buildingIds }, deletedAt: null },
+      select: {
+        buildingId: true,
+        _count: {
+          select: {
+            leases: { where: { deletedAt: null } },
+            sales: { where: { deletedAt: null } },
+            loans: { where: { deletedAt: null } },
+          },
+        },
+      },
+    });
+
+    for (const u of units) {
+      const acc = byBuilding.get(u.buildingId);
+      if (!acc) continue;
+      acc.units += 1;
+      acc.leases += u._count.leases;
+      acc.sales += u._count.sales;
+      acc.loans += u._count.loans;
+    }
+    return byBuilding;
+  }
+
+  /**
+   * Attach `blastRadius` — what actually disappears from view if this building is
+   * archived — so the delete dialog can show it BEFORE the user commits, instead of
+   * discovering it from the 409 afterwards. Building-level attachments plus everything
+   * under the building's units, combined into one total per category.
+   */
+  private withBlastRadius<
+    T extends { id: string; _count: { leases: number; sales: number; loans: number } },
+  >(b: T, nested: Map<string, Radius>) {
+    const n = nested.get(b.id) ?? EMPTY_RADIUS();
+    return {
+      ...b,
+      blastRadius: {
+        units: n.units,
+        leases: n.leases + b._count.leases,
+        sales: n.sales + b._count.sales,
+        loans: n.loans + b._count.loans,
+      },
+    };
+  }
+
   async findByProject(projectId: string) {
     if (!projectId) {
       throw new BadRequestException('projectId query parameter is required');
@@ -33,10 +115,25 @@ export class BuildingsService {
 
     const buildings = await this.prisma.building.findMany({
       where: { projectId },
-      include: { _count: { select: { units: true } } },
+      // `units` is deliberately left UNFILTERED: it is the number delete()'s guard trips
+      // on (and the web dialog's force gate reads), and both have always counted every
+      // unit row. The polymorphic children below ARE filtered — a soft-deleted lease is
+      // history, not something archiving the building is about to hide.
+      include: {
+        _count: {
+          select: {
+            units: true,
+            leases: { where: { deletedAt: null } },
+            sales: { where: { deletedAt: null } },
+            loans: { where: { deletedAt: null } },
+          },
+        },
+      },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
-    return Promise.all(buildings.map((b) => this.withCoverUrl(b)));
+    // One extra query for the whole list — see nestedCounts().
+    const nested = await this.nestedCounts(buildings.map((b) => b.id));
+    return Promise.all(buildings.map((b) => this.withCoverUrl(this.withBlastRadius(b, nested))));
   }
 
   async findById(id: string) {
@@ -44,12 +141,20 @@ export class BuildingsService {
       where: { id },
       include: {
         units: true,
-        _count: { select: { units: true } },
+        _count: {
+          select: {
+            units: true,
+            leases: { where: { deletedAt: null } },
+            sales: { where: { deletedAt: null } },
+            loans: { where: { deletedAt: null } },
+          },
+        },
         project: { select: { id: true, name: true, slug: true } },
       },
     });
     if (!building) throw new NotFoundException('Building not found');
-    return this.withCoverUrl(building);
+    const nested = await this.nestedCounts([building.id]);
+    return this.withCoverUrl(this.withBlastRadius(building, nested));
   }
 
   async create(input: {
@@ -75,11 +180,22 @@ export class BuildingsService {
 
     const building = await this.prisma.building.create({
       data: input,
-      include: { _count: { select: { units: true } } },
+      include: {
+        _count: {
+          select: {
+            units: true,
+            leases: { where: { deletedAt: null } },
+            sales: { where: { deletedAt: null } },
+            loans: { where: { deletedAt: null } },
+          },
+        },
+      },
     });
     // Recompute project phase since a new building changes the max
     await this.projectPhase.recompute(input.projectId);
-    return building;
+    // Same shape as the reads so a created row can be spliced straight into the list
+    // cache. No nestedCounts() query needed — a brand-new building has no units yet.
+    return this.withBlastRadius(building, new Map());
   }
 
   async update(id: string, input: {
@@ -96,13 +212,24 @@ export class BuildingsService {
     const updated = await this.prisma.building.update({
       where: { id },
       data: input,
-      include: { _count: { select: { units: true } } },
+      include: {
+        _count: {
+          select: {
+            units: true,
+            leases: { where: { deletedAt: null } },
+            sales: { where: { deletedAt: null } },
+            loans: { where: { deletedAt: null } },
+          },
+        },
+      },
     });
     // If phase changed, project phase may shift up or down
     if (input.phase && input.phase !== existing.phase) {
       await this.projectPhase.recompute(existing.projectId);
     }
-    return updated;
+    // Same shape as the reads, so an updated row can replace a list-cache entry without
+    // the dialog losing its blast radius. One extra query, on a write path only.
+    return this.withBlastRadius(updated, await this.nestedCounts([id]));
   }
 
   async delete(id: string, force = false) {
@@ -110,8 +237,24 @@ export class BuildingsService {
     const unitCount = building._count.units;
 
     if (unitCount > 0 && !force) {
+      // Name the FULL blast radius, not just the unit count. Leases, sales and loans sit
+      // under a building both directly and via its units; someone archiving a building
+      // used to be told only how many units it had and had no way to know how much
+      // live revenue and debt went dark with it. Zero categories are omitted so the
+      // common "3 units, nothing else" case still reads as one short sentence.
+      const blast = building.blastRadius;
+      const parts = [
+        blast.units > 0 ? plural(blast.units, 'unit') : '',
+        blast.leases > 0 ? plural(blast.leases, 'lease') : '',
+        blast.sales > 0 ? plural(blast.sales, 'sale') : '',
+        blast.loans > 0 ? plural(blast.loans, 'loan') : '',
+      ].filter(Boolean);
+      // The guard trips on the raw relation count, which also includes units archived
+      // one-by-one earlier; those contribute nothing live, so the blast radius can be
+      // empty here. Say that rather than emitting "has  attached".
+      const summary = parts.length > 0 ? phraseList(parts) : `${plural(unitCount, 'archived unit')}`;
       throw new ConflictException(
-        `Building '${building.name}' has ${unitCount} unit${unitCount === 1 ? '' : 's'}. ` +
+        `Building '${building.name}' has ${summary} attached. ` +
         `Delete the units first, or pass ?force=true to archive the building and its units ` +
         `instead (their sale/lease/loan history is kept, not deleted).`,
       );

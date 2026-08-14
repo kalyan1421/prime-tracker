@@ -14,7 +14,10 @@ Complete context file. Read this before making any changes.
 It tracks construction projects, buildings, units, financials, sales, leases, loans, milestones, leads,
 campaigns, contracts/vendors, investors, documents, tasks, and team comments — with role-based dashboards.
 
-- Single-tenant data today, but **multi-org is live** (`Organization` model — Prime runs US + India entities)
+- **SINGLE ORGANIZATION** (client-confirmed 2026-08-14). The `Organization` model exists and
+  works, but Prime is one entity — there is no US/India split. Verified against live data:
+  1 org, "Prime Developers". **Do not build org scoping into reports, dashboards or access
+  control.** Earlier docs describing two legal entities are stale, not a requirement.
 - Multi-tenant (`tenantId`) still commented in schema for the future
 - Used by: Founders/Executives, Finance/Accounting/AR-AP, Project Managers, Sales, Marketing, Construction, Legal, Viewers, and (Phase 2) buyer-portal Clients
 
@@ -80,7 +83,7 @@ pnpm run db:studio    # prisma studio GUI
 ## Data Hierarchy
 
 ```
-Organization (US / India entities)
+Organization (single entity — "Prime Developers")
   └── Project
         └── Buildings (1:many)   ← can be type LOT (raw land, acreage, no units)
               └── Units (1:many)
@@ -146,7 +149,8 @@ TaskStatus:    TODO | IN_PROGRESS | DONE | CANCELLED   ·   TaskPriority: LOW | 
 ```
 
 ### Key Models (schema is ~1,575 lines — this is the map, not the territory)
-- **Organization / OrgMembership** — multi-entity (US + India); projects belong to an org
+- **Organization / OrgMembership** — single entity today; projects belong to an org. Membership
+  is a labelling/reporting field only, not an access boundary (client-confirmed).
 - **Project** — core entity; `phase` is computed from building phases; soft-delete (`deletedAt`)
 - **Building** — type LOT supports raw-land/acreage; has own `phase`, `coverPhotoPath`
 - **Unit** — belongs to Building; `primeOwned`, `availableSince` (time-on-market), soft-delete
@@ -200,7 +204,7 @@ All routes prefixed with `/api`. Auth guard on everything.
 |---|---|---|
 | auth | `/api/auth` | Google OAuth, JWT, refresh, MFA (TOTP) |
 | users | `/api/users` | RBAC, role/status management |
-| organizations | `/api/organizations` | Multi-entity (US/India), memberships |
+| organizations | `/api/organizations` | Single entity today; memberships are labels, not access |
 | projects | `/api/projects` | CRUD + `/dashboard` endpoint |
 | project-health | `/api/project-health` | Computed health score |
 | buildings | `/api/buildings` | Full CRUD, `GET ?projectId=`; LOT support |

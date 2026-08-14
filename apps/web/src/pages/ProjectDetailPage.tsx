@@ -356,7 +356,42 @@ const EMPTY_PROJECT = {
   status: 'ACTIVE', phase: 'PRE_DEVELOPMENT', projectType: '', startDate: '', targetEnd: '',
 };
 
+/**
+ * The assignable project-team titles, with their display labels.
+ *
+ * ⚠️ MIRRORS `PROJECT_MEMBER_ROLES` / `PROJECT_MEMBER_ROLE_META` in
+ * `packages/shared/src/types/index.ts`, which is the source of truth and is now ENFORCED by
+ * the API — `addMember` rejects anything outside it. Keep the two in step: a value added
+ * here but not there produces a picker option the server refuses.
+ *
+ * Deliberately duplicated rather than imported. `apps/web` does not depend on
+ * `@prime-tracker/shared`, and the `deploy-web` CI job builds the web app WITHOUT building
+ * the shared package first — so an import here would break the production deploy, not just
+ * the local build. Importing it is the right end state; it needs the workflow fixed first.
+ *
+ * `OWNER` is absent on purpose. The server stamps it on whoever created the project and it
+ * is not assignable — see the read-only branch below.
+ */
+const MEMBER_ROLE_LABELS: Record<string, string> = {
+  PROJECT_MANAGER: 'Project Manager',
+  CONSTRUCTION: 'Construction',
+  FINANCE: 'Finance',
+  SALES: 'Sales',
+  LEGAL: 'Legal',
+  VIEWER: 'Viewer',
+  TEAM_MEMBER: 'Team Member',
+  // Not assignable, but rendered on existing memberships — so it needs a label too.
+  OWNER: 'Owner',
+};
+
 const MEMBER_ROLES = ['PROJECT_MANAGER', 'CONSTRUCTION', 'FINANCE', 'SALES', 'LEGAL', 'VIEWER', 'TEAM_MEMBER'];
+
+/**
+ * Display label for a project role. Falls back to de-underscoring an unknown value rather
+ * than rendering blank — legacy rows may hold titles that predate the fixed list.
+ */
+const memberRoleLabel = (r: string): string =>
+  MEMBER_ROLE_LABELS[r] ?? (r || '').replace(/_/g, ' ');
 
 /**
  * A sensible project role for someone, derived from the role they already hold in the
@@ -531,7 +566,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
                       }}
                     >
                       {MEMBER_ROLES.map((r) => (
-                        <SelectItem key={r} textValue={r.replace(/_/g, ' ')}>{r.replace(/_/g, ' ')}</SelectItem>
+                        <SelectItem key={r} textValue={memberRoleLabel(r)}>{memberRoleLabel(r)}</SelectItem>
                       ))}
                     </Select>
                   ) : (
@@ -542,7 +577,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
                           color={r === 'OWNER' ? 'primary' : 'default'}
                           className="text-[10px]"
                         >
-                          {r.replace(/_/g, ' ')}
+                          {memberRoleLabel(r)}
                         </Chip>
                       ))}
                     </div>
@@ -651,7 +686,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
                             }}
                           >
                             {MEMBER_ROLES.map((r) => (
-                              <SelectItem key={r} textValue={r.replace(/_/g, ' ')}>{r.replace(/_/g, ' ')}</SelectItem>
+                              <SelectItem key={r} textValue={memberRoleLabel(r)}>{memberRoleLabel(r)}</SelectItem>
                             ))}
                           </Select>
                         )}
@@ -2431,7 +2466,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const [editId, setEditId] = useState<string | null>(null);
   const [statusTarget, setStatusTarget] = useState<{ id: string; unitNumber: string; currentStatus: string; newStatus: string; notes: string } | null>(null);
   const [activeLeaseId, setActiveLeaseId] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; unitNumber: string; leaseCount: number; saleCount: number } | null>(null);
+  // loanCount is shown but does NOT gate the force checkbox: the server's guard trips on
+  // leases-or-sales only, so requiring force for a loan-only unit would demand a
+  // confirmation the API never asks for.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; unitNumber: string; leaseCount: number; saleCount: number; loanCount: number } | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
   const [commentUnit, setCommentUnit] = useState<{ id: string; label: string } | null>(null);
   const [filterBuildingId, setFilterBuildingId] = useState<string>('');
@@ -2492,6 +2530,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
       unitNumber: u.unitNumber || '',
       leaseCount: u._count?.leases ?? u.leases?.length ?? 0,
       saleCount: u._count?.sales ?? u.sales?.length ?? 0,
+      loanCount: u._count?.loans ?? u.loans?.length ?? 0,
     });
     setForceDelete(false);
     onDeleteOpen();
@@ -3271,11 +3310,17 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                   {hasAttached ? (
                     <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
                       <p className="font-semibold mb-1">⚠ This unit has attached records</p>
+                      {/* Full blast radius (B3) — loans included, which were invisible here
+                          before even though they are attached to the unit. */}
                       <ul className="list-disc list-inside mb-2">
                         {deleteTarget.leaseCount > 0 && <li>{deleteTarget.leaseCount} lease{deleteTarget.leaseCount === 1 ? '' : 's'}</li>}
                         {deleteTarget.saleCount > 0 && <li>{deleteTarget.saleCount} sale{deleteTarget.saleCount === 1 ? '' : 's'}</li>}
+                        {deleteTarget.loanCount > 0 && <li>{deleteTarget.loanCount} loan{deleteTarget.loanCount === 1 ? '' : 's'}</li>}
                       </ul>
-                      <p>Deleting will permanently remove all attached records. This cannot be undone.</p>
+                      {/* Corrected copy. This read "permanently remove all attached records.
+                          This cannot be undone" — the OPPOSITE of what a unit delete does.
+                          It is a soft delete precisely so the financial history survives. */}
+                      <p>They are archived, not destroyed — the lease, sale and loan history is kept.</p>
                       <label className="flex items-start gap-2 mt-3 cursor-pointer">
                         <input
                           type="checkbox"
@@ -3283,11 +3328,18 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                           onChange={(e) => setForceDelete(e.target.checked)}
                           className="mt-0.5"
                         />
-                        <span>Yes, I understand — delete the unit and all attached records</span>
+                        <span>Yes, archive this unit and everything attached to it</span>
                       </label>
                     </div>
+                  ) : deleteTarget.loanCount > 0 ? (
+                    // Loans alone do not require ?force, but saying "nothing attached" while a
+                    // loan sits on the unit would be a lie of omission.
+                    <p className="text-xs text-gray-500 mt-2">
+                      No leases or sales attached. {deleteTarget.loanCount} loan{deleteTarget.loanCount === 1 ? '' : 's'} will
+                      be archived with it — the history is kept.
+                    </p>
                   ) : (
-                    <p className="text-xs text-gray-500 mt-2">No leases or sales attached. Safe to delete.</p>
+                    <p className="text-xs text-gray-500 mt-2">No leases, sales or loans attached. Safe to archive.</p>
                   )}
                 </>
               );
@@ -4567,7 +4619,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
   // Form state lives in BuildingFormModal now; this tab tracks only WHICH building is
   // being edited.
   const [editId, setEditId] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; unitCount: number } | null>(null);
+  // `unitCount` is the number the SERVER's guard trips on (`_count.units`, unfiltered) and
+  // therefore what decides whether ?force is required. `radius` is the honest picture of
+  // what the user will actually stop seeing — live rows only, including everything hanging
+  // off the units. The two can differ when a unit was archived individually earlier.
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string; name: string; unitCount: number;
+    radius: { units: number; leases: number; sales: number; loans: number };
+  } | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
   const [buildingSearch, setBuildingSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -4610,6 +4669,12 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       id: b.id,
       name: b.name,
       unitCount: b._count?.units ?? b.units?.length ?? 0,
+      radius: {
+        units: b.blastRadius?.units ?? b._count?.units ?? b.units?.length ?? 0,
+        leases: b.blastRadius?.leases ?? 0,
+        sales: b.blastRadius?.sales ?? 0,
+        loans: b.blastRadius?.loans ?? 0,
+      },
     });
     setForceDelete(false);
     onDeleteOpen();
@@ -4861,8 +4926,29 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                 </p>
                 {deleteTarget.unitCount > 0 ? (
                   <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-                    <p className="font-semibold mb-1">⚠ This building has {deleteTarget.unitCount} unit{deleteTarget.unitCount === 1 ? '' : 's'}</p>
-                    <p>Deleting will permanently remove all units, leases, and sales attached to this building. This cannot be undone.</p>
+                    <p className="font-semibold mb-1">⚠ Archiving this building also archives what sits under it</p>
+                    {/* The full blast radius (B3). Showing only the unit count meant nobody
+                        could see how many leases, sales and loans were about to disappear
+                        from view — which is the number that actually matters. */}
+                    <ul className="list-disc list-inside mb-2 space-y-0.5">
+                      <li>{deleteTarget.radius.units} unit{deleteTarget.radius.units === 1 ? '' : 's'}</li>
+                      {deleteTarget.radius.leases > 0 && (
+                        <li>{deleteTarget.radius.leases} lease{deleteTarget.radius.leases === 1 ? '' : 's'}</li>
+                      )}
+                      {deleteTarget.radius.sales > 0 && (
+                        <li>{deleteTarget.radius.sales} sale{deleteTarget.radius.sales === 1 ? '' : 's'}</li>
+                      )}
+                      {deleteTarget.radius.loans > 0 && (
+                        <li>{deleteTarget.radius.loans} loan{deleteTarget.radius.loans === 1 ? '' : 's'}</li>
+                      )}
+                    </ul>
+                    {/* Corrected copy. This used to read "permanently remove … cannot be
+                        undone", which was the OPPOSITE of what happens — building and unit
+                        deletes are soft, and the financial history is deliberately kept. */}
+                    <p>
+                      They are archived, not destroyed — the lease, sale and loan history is kept
+                      and stays available for reporting.
+                    </p>
                     <label className="flex items-start gap-2 mt-3 cursor-pointer">
                       <input
                         type="checkbox"
@@ -4870,11 +4956,11 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                         onChange={(e) => setForceDelete(e.target.checked)}
                         className="mt-0.5"
                       />
-                      <span>Yes, I understand — delete the building and all {deleteTarget.unitCount} unit{deleteTarget.unitCount === 1 ? '' : 's'}</span>
+                      <span>Yes, archive this building and its {deleteTarget.radius.units} unit{deleteTarget.radius.units === 1 ? '' : 's'}</span>
                     </label>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-500 mt-2">This building has no units. Safe to delete.</p>
+                  <p className="text-xs text-gray-500 mt-2">This building has no units. Safe to archive.</p>
                 )}
               </>
             )}

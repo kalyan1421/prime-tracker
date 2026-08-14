@@ -1,7 +1,12 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, ProjectType } from '@prisma/client';
-import { isProjectScopedRole, isMultiRoleProjectScoped } from '@prime-tracker/shared';
+import {
+  isProjectScopedRole,
+  isMultiRoleProjectScoped,
+  isProjectMemberRole,
+  PROJECT_MEMBER_ROLES,
+} from '@prime-tracker/shared';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 
@@ -349,10 +354,22 @@ export class ProjectsService {
    * Upsert a membership. `roles` takes precedence when both are supplied, and `role` is
    * kept equal to roles[0] — the same primary-mirrors-first-entry rule UsersService uses,
    * so anything still reading the scalar keeps working.
+   *
+   * Every title is checked against PROJECT_MEMBER_ROLES here as well as in AddMemberDto.
+   * The duplication is deliberate: the DTO only guards the HTTP route, and a bad value
+   * landing in `roles[]` is silently wrong rather than visibly broken — it persists, then
+   * renders as an unrecognised chip nobody can select again.
    */
   async addMember(projectId: string, userId: string, role?: string, roles?: string[]) {
     await this.findById(projectId);
     const list = roles?.length ? Array.from(new Set(roles)) : [role ?? 'TEAM_MEMBER'];
+    for (const r of list) {
+      if (!isProjectMemberRole(r)) {
+        throw new BadRequestException(
+          `Invalid project member role '${r}'. Allowed roles: ${PROJECT_MEMBER_ROLES.join(', ')}`,
+        );
+      }
+    }
     const primary = list[0];
     return this.prisma.projectMember.upsert({
       where: { projectId_userId: { projectId, userId } },

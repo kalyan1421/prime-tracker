@@ -12,16 +12,7 @@ import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { ListProjectsDto } from './dto/list-projects.dto';
-import { IsOptional, IsString, MaxLength, IsArray, ArrayUnique } from 'class-validator';
-
-class AddMemberDto {
-  @IsString() userId!: string;
-  // `role` is the legacy single-role field, still accepted. `roles` wins when both are
-  // sent; the service keeps role === roles[0]. A person may hold several roles on one
-  // project — Finance AND Legal, for instance.
-  @IsOptional() @IsString() @MaxLength(64) role?: string;
-  @IsOptional() @IsArray() @ArrayUnique() @IsString({ each: true }) roles?: string[];
-}
+import { AddMemberDto } from './dto/add-member.dto';
 
 @ApiTags('Projects')
 @ApiBearerAuth()

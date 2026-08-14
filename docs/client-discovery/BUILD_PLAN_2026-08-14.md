@@ -118,12 +118,27 @@ reaches production. GitHub Actions sets it; a local `test:all` does not.
 
 Small, independent, low-risk. Clears the decisions that are one-file changes.
 
-| Ref | Item | Size | Notes |
+| Ref | Item | Size | Status |
 |---|---|---|---|
-| P3 | Archived/deleted projects must not leak into cross-project Inventory or reports | S | Covered by finding #3. Also audit `reports.service.ts` and the vacancy report for the same missing parent filter. |
-| B3 | Delete-confirmation dialog shows full blast radius | S | Today it reports unit count only. Extend the conflict payload to carry lease / sale / loan counts and surface them in the modal. Applies to both building and unit delete. |
-| P7 | Project-team member roles restricted to a fixed list | S | `ProjectMember.role` is a free-text `String` defaulting to `"TEAM_MEMBER"`, with a parallel `roles String[]`. Typos succeed silently today. Needs an enum or a validated constant list applied to **both** fields. |
-| F1 | All reports scoped to **US Prime only** | M | Every report currently blends both entities with no filter. Scope portfolio / sales / revenue / debt to the US organization. Confirm with the client whether India data should be *hidden* or merely *excluded from totals* — those are different builds. |
+| P3 | Archived/deleted projects must not leak into cross-project Inventory or reports | S | ✅ **Shipped in Phase 0** as finding #3 — plus six further report queries with the same hole, the worst being `getVacancyReport`, which applied its parent filter *only* when a `projectId` was passed, so the default all-projects view listed archived units as stale inventory. |
+| B3 | Delete-confirmation dialog shows full blast radius | S | **To build.** Today it reports unit count only. Extend the conflict payload to carry lease / sale / loan counts and surface them in the modal. Applies to both building and unit delete. |
+| P7 | Project-team member roles restricted to a fixed list | S | **To build.** `ProjectMember.role` is a free-text `String` defaulting to `"TEAM_MEMBER"`, with a parallel `roles String[]`. Typos succeed silently. Needs a validated constant list applied to **both** fields. |
+| ~~F1~~ | ~~Scope all reports to one Organization~~ | — | ❌ **VOID — see below.** |
+
+> **F1 is cancelled. Prime is a SINGLE organization** (client, 2026-08-14). There is no US
+> entity and no India entity. Verified against live data: one org, "Prime Developers", one
+> project.
+>
+> This supersedes the earlier answer in the same round ("scope reports to US Prime only, no
+> other org") — there is no other org to exclude, and reports "blending both entities" was
+> never a real defect. **No org scoping is to be built into reports, dashboards or access
+> control.** The `Organization` / `OrgMembership` models stay as schema for a possible future,
+> but no feature branches on them.
+>
+> `CLAUDE.md` has been corrected — it previously asserted "multi-org is live … Prime runs US +
+> India entities" in four places, which would have misled every future session. Projects Q4 in
+> the question doc is now settled twice over: org membership was already labelling-only, and
+> there is only one org regardless.
 
 ---
 
@@ -395,7 +410,6 @@ re-alerting everyone.
 | **Deposit** | **When the sitting tenant buys, is the deposit refunded or netted off the purchase price?** | From `SALE_ON_TENANTED_UNIT_SPEC.md` blocking Q2, still unanswered. Decides whether `CREDIT_TO_SALE` is the **default** disposition or merely available. Today `DECIDE_LATER` fires silently and leaves real money PENDING against a dead lease on a sold unit, with no owner. | That spec's phase 3 (R3 + R6). |
 | T3 | Editing a past, already-invoiced rent period — *"needs a short call with Finance"* ✅ agreed | The mechanism (R22) is **built**. The call is about **who holds `lease:history:correct`** — no role is granted it explicitly today, so only Founder/Super Admin have it via blanket grants. **It is also a sequencing gate:** the third-party-sale branch touches `capAtTermination` and `voidAfter`, the same code R22 uses, and that spec says land it *after* the Finance walkthrough so the two aren't explained at once. | Permission assignment, **and the timing of Phase 5.2**. |
 | D3 | When does the buyer-visible document flag go live? | The answer given was ambiguous. Field exists in schema, unused in code. Tied to the buyer-portal timing question (P1), which was not answered at all. | Nothing scheduled. |
-| F1 | Should India data be **hidden entirely**, or just **excluded from totals**? | Two different builds. | Phase 1, F1. |
 
 ### Resolved 2026-08-14 — no longer blocking
 
@@ -403,6 +417,8 @@ re-alerting everyone.
   are all recordable per deal; there is no standing policy to implement.
 - ✅ **S4 · third-party sale.** Prime hands the tenancy over entirely. No property-
   management build, no carve-out in the sold-unit guards.
+- ✅ **F1 · organization scoping.** Cancelled outright — Prime is a single organization.
+  No US/India split exists. `CLAUDE.md` corrected in four places.
 
 ---
 
