@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+  ForbiddenException,
+  HttpStatus,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { UserRole, Prisma } from '@prisma/client';
@@ -6,6 +13,71 @@ import * as bcrypt from 'bcrypt';
 
 /** Identity fields writable by self or by an admin. Never authorization fields. */
 type ProfileFields = { name?: string; avatarUrl?: string; phone?: string; jobTitle?: string };
+
+/** One list relation on User that a hard delete would break or quietly rewrite. */
+export type GuardedUserRelation = {
+  /** Field name on the Prisma `User` model, e.g. `uploadedDocuments`. */
+  field: string;
+  /** Human form shown to the admin, e.g. "uploaded documents". */
+  label: string;
+  /** What Postgres would do to the referencing rows: fail, or null the attribution. */
+  action: 'Restrict' | 'SetNull';
+};
+
+/**
+ * Every table that points at a user, minus the ones the schema itself declares disposable.
+ *
+ * Derived from the Prisma DMMF rather than hand-listed. A hand-listed version is what
+ * goes stale — this file would have to be edited every time another module adds a
+ * `recordedById`, and it never is: that is precisely how `remove()` came to blow up on
+ * `historical_record_deletions_requestedById_fkey`, a table added long after it.
+ *
+ * Effective referential action = the explicit `onDelete`, else Prisma's default, which is
+ * `Restrict` for a required relation and `SetNull` for an optional one. Both are guarded:
+ *
+ *  - `Restrict` — the delete fails outright at the database (the reported 23503).
+ *  - `SetNull`  — worse in practice. The delete *succeeds* and silently erases the
+ *                 attribution: who approved the draw, who signed off the photo, who
+ *                 recorded the rent correction. Two tables also carry CHECK constraints
+ *                 shaped `status = 'PENDING' OR "decidedById" IS NOT NULL`, so the SET
+ *                 NULL would trip a check violation on the way out anyway.
+ *  - `Cascade`  — NOT guarded. The schema author already declared those rows to belong to
+ *                 the account and to die with it (sessions, notifications, notification
+ *                 preferences, memberships, the client profile).
+ */
+export const GUARDED_USER_RELATIONS: readonly GuardedUserRelation[] = buildGuardedUserRelations();
+
+function buildGuardedUserRelations(): GuardedUserRelation[] {
+  const datamodel = Prisma.dmmf.datamodel;
+
+  // Relation name -> effective onDelete, read off the side that owns the foreign key.
+  const actionByRelation = new Map<string, string>();
+  for (const model of datamodel.models) {
+    for (const field of model.fields) {
+      if (field.kind !== 'object' || field.type !== 'User') continue;
+      if (!field.relationFromFields?.length) continue; // back-reference side, no FK here
+      const explicit = (field as { relationOnDelete?: string }).relationOnDelete;
+      actionByRelation.set(
+        field.relationName as string,
+        explicit ?? (field.isRequired ? 'Restrict' : 'SetNull'),
+      );
+    }
+  }
+
+  const userModel = datamodel.models.find((m) => m.name === 'User');
+  if (!userModel) return [];
+
+  return userModel.fields
+    .filter((f) => f.kind === 'object' && f.isList)
+    .map((f) => ({ field: f.name, action: actionByRelation.get(f.relationName as string) }))
+    .filter((r): r is { field: string; action: 'Restrict' | 'SetNull' } =>
+      r.action === 'Restrict' || r.action === 'SetNull',
+    )
+    .map((r) => ({
+      ...r,
+      label: r.field.replace(/([A-Z])/g, ' $1').toLowerCase(),
+    }));
+}
 
 @Injectable()
 export class UsersService {
@@ -343,14 +415,100 @@ export class UsersService {
     return { success: true, sessionsRevoked: revoked.count };
   }
 
+  /**
+   * Count the rows that still attribute work to this user, heaviest first.
+   *
+   * One round trip: Prisma's `_count` select takes every guarded relation at once, so
+   * adding a table to the schema costs nothing here.
+   */
+  private async findBlockingReferences(id: string) {
+    const countSelect = Object.fromEntries(GUARDED_USER_RELATIONS.map((r) => [r.field, true]));
+    // The select is built at runtime from the DMMF, so it cannot be statically typed
+    // against Prisma.UserSelect — the shape is correct by construction.
+    const select = { _count: { select: countSelect } } as unknown as Prisma.UserSelect;
+
+    const row = (await this.prisma.user.findUnique({ where: { id }, select })) as
+      | { _count?: Record<string, number> }
+      | null;
+    const counts = row?._count ?? {};
+
+    return GUARDED_USER_RELATIONS.map((r) => ({ ...r, count: counts[r.field] ?? 0 }))
+      .filter((r) => r.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Hard-delete a user — refused whenever they have left a trace.
+   *
+   * A user id is the subject of the audit trail: who uploaded the document, who approved
+   * the draw, who signed off the milestone photo, who requested the record deletion.
+   * Removing the row either fails against a RESTRICT foreign key (an opaque 500 for the
+   * admin, which is the bug this replaces) or succeeds and quietly nulls the actor out of
+   * history. Both outcomes are worse than the alternative the app already has, which is
+   * why Building, Unit, Lease, Sale and Document all moved from hard to soft delete.
+   *
+   * So: deletion stays available for an account that never did anything — a mistyped
+   * invite, a duplicate — and is refused with a specific, countable reason for everyone
+   * else, pointing at deactivation. Deactivation revokes sign-in and hides the user from
+   * every assignee picker (`findAssignable` filters on `isActive`) while the trail keeps
+   * naming a real person.
+   */
   async remove(id: string, actorId: string) {
     if (id === actorId) throw new BadRequestException('Cannot delete your own account');
-    await this.prisma.user.delete({ where: { id } });
+
+    const target = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, name: true, email: true },
+    });
+    if (!target) throw new NotFoundException('User not found');
+
+    const blocking = await this.findBlockingReferences(id);
+    if (blocking.length > 0) {
+      const total = blocking.reduce((sum, b) => sum + b.count, 0);
+      const shown = blocking.slice(0, 5).map((b) => `${b.count} ${b.label}`);
+      const hidden = blocking.length - shown.length;
+      const listed =
+        shown.join(', ') +
+        (hidden > 0 ? `, and ${hidden} more record type${hidden === 1 ? '' : 's'}` : '');
+
+      throw new ConflictException({
+        statusCode: HttpStatus.CONFLICT,
+        error: 'Conflict',
+        message:
+          `${target.name} cannot be deleted: ${total} record${total === 1 ? '' : 's'} across ` +
+          `${blocking.length} type${blocking.length === 1 ? '' : 's'} still credit work to this ` +
+          `user (${listed}). Deleting would either fail or erase that attribution. ` +
+          `Deactivate ${target.name} instead — that revokes their sign-in and removes them ` +
+          `from assignee lists while the history keeps naming them.`,
+        references: blocking.map((b) => ({
+          relation: b.field,
+          label: b.label,
+          count: b.count,
+          onDelete: b.action,
+        })),
+      });
+    }
+
+    try {
+      await this.prisma.user.delete({ where: { id } });
+    } catch (err) {
+      // Backstop for the race between the census above and the delete, and for any
+      // relation the DMMF walk somehow misses. Never let a raw 23503 reach the admin.
+      if ((err as { code?: string })?.code === 'P2003') {
+        throw new ConflictException(
+          `${target.name} cannot be deleted — another record started referencing this user. ` +
+            `Deactivate the account instead to revoke access while keeping the history intact.`,
+        );
+      }
+      throw err;
+    }
+
     await this.audit.log({
       userId: actorId,
       action: 'DELETE',
       entity: 'User',
       entityId: id,
+      oldValues: { email: target.email, name: target.name },
     });
   }
 }
