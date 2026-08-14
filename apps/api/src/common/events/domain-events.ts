@@ -25,7 +25,24 @@ export type DomainEvent =
   | { type: 'sale.statusChanged'; saleId: string; from: string; to: string }
   // Slice 7 — Milestones
   | { type: 'milestone.completed'; milestoneId: string; projectId: string; completedAt: Date }
+  // Fired when a dependent's date has ACTUALLY MOVED — i.e. on approval of a slip
+  // proposal, never on proposal. The exception feed reads this, and it must not show
+  // dates that have not moved yet. See MilestoneDepsService.
   | { type: 'milestone.slipped'; milestoneId: string; oldDueDate: Date; newDueDate: Date; daysSlipped: number }
+  // C3/C4 — a cascade (and any lender draw dates) is waiting for a PM to decide. Nothing
+  // has been written to the dependents at this point; the trigger's own date has.
+  | {
+      type: 'milestone.slipProposed';
+      proposalId: string;
+      milestoneId: string;
+      projectId: string;
+      daysSlipped: number;
+      /** Dependents whose due date would move. Excludes the trigger itself. */
+      affectedCount: number;
+      /** Distinct DrawSchedule rows whose plannedDate would move. */
+      drawCount: number;
+      requestedById: string | null;
+    }
   // Slice 8 — Draws
   | { type: 'drawRequest.submitted'; drawId: string; step: string }
   | { type: 'drawRequest.approved'; drawId: string; approverId: string }

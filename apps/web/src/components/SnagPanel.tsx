@@ -6,7 +6,7 @@
  * and inline add form.
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Button, Chip, Input, Progress, Select, SelectItem,
   Textarea, Tooltip, addToast,
@@ -15,7 +15,7 @@ import {
   FiAlertCircle, FiCheckCircle, FiClock, FiFilter,
   FiPlus, FiUser, FiMapPin,
 } from 'react-icons/fi';
-import { useAddSnag, useResolveSnag, useUpdateSnag, useAssignableUsers } from '../hooks/useApi';
+import { useAddSnag, useResolveSnag, useUpdateSnag, useAssignableUsers, usePresignedUpload } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
 import { FormError } from './FormError';
 
@@ -59,6 +59,13 @@ export function SnagPanel({
   const add     = useAddSnag();
   const resolve = useResolveSnag();
   const update  = useUpdateSnag();
+  const uploadPhoto = usePresignedUpload();
+  // Which snag is mid-resolve, so only its own button shows a spinner rather than all of
+  // them. The ref carries the target across the file-picker round trip, which is not React
+  // state and would otherwise be lost.
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const pendingSnagId = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { data: usersData } = useAssignableUsers();
   const users: any[] = Array.isArray(usersData) ? usersData : [];
 
@@ -107,13 +114,32 @@ export function SnagPanel({
     }
   };
 
-  const handleResolve = async (id: string) => {
+  /**
+   * Resolving now needs an "after" photo as proof of the fix (client decision 2026-08-14),
+   * so the button opens a file picker rather than resolving immediately. The API refuses a
+   * bodyless resolve, so there is no silent path around this.
+   *
+   * Upload first, resolve second: if the upload fails the snag stays open, which is the
+   * right way round — a snag marked fixed with no proof is exactly what the rule exists to
+   * prevent.
+   */
+  const handleResolve = async (id: string, file: File) => {
+    setResolvingId(id);
     try {
-      await resolve.mutateAsync(id);
+      const { storagePath } = await uploadPhoto.mutateAsync({ file, projectId });
+      await resolve.mutateAsync({ snagId: id, afterPhotoPath: storagePath });
       addToast({ title: 'Snag resolved ✓', color: 'success' });
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to resolve'), color: 'danger' });
+    } finally {
+      setResolvingId(null);
     }
+  };
+
+  /** Opens the picker for a given snag, then hands the chosen file to handleResolve. */
+  const pickAndResolve = (id: string) => {
+    pendingSnagId.current = id;
+    fileInputRef.current?.click();
   };
 
   const handleSetWIP = async (id: string) => {
@@ -127,6 +153,26 @@ export function SnagPanel({
   // ── render ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
+      {/* Proof-of-fix picker. One input for the whole list, targeted by pendingSnagId —
+          rendering one per row would put N hidden inputs in the DOM for no gain.
+          `capture` lets a phone go straight to the camera, which is where site staff
+          actually are when they close a snag. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          const id = pendingSnagId.current;
+          // Reset immediately so picking the SAME file again still fires onChange.
+          e.target.value = '';
+          pendingSnagId.current = null;
+          if (file && id) void handleResolve(id, file);
+        }}
+      />
+
       {/* ── progress header ── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -301,12 +347,15 @@ export function SnagPanel({
                   )}
 
                   {snag.status !== 'RESOLVED' && (
-                    <Tooltip content="Mark resolved">
+                    <Tooltip content="Resolve — needs an 'after' photo as proof of the fix">
                       <Button
                         size="sm" isIconOnly variant="light" color="success"
-                        onPress={() => handleResolve(snag.id)}
-                        isLoading={resolve.isPending}
-                        aria-label="Mark resolved"
+                        onPress={() => pickAndResolve(snag.id)}
+                        // Only THIS snag's button spins. Using the shared mutation's
+                        // isPending would show every row as busy at once.
+                        isLoading={resolvingId === snag.id}
+                        isDisabled={!!resolvingId && resolvingId !== snag.id}
+                        aria-label="Resolve snag with proof photo"
                       >
                         <FiCheckCircle size={13} />
                       </Button>

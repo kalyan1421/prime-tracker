@@ -125,7 +125,14 @@ export class ProjectsService {
           },
           buildings: { where: { deletedAt: null }, include: { _count: { select: { units: { where: { deletedAt: null } } } } } },
           budgetLines: { where: { deletedAt: null }, select: { baselineAmt: true, revisedAmt: true } },
-          actuals: { select: { amount: true } },
+          // `interiorProjectId` rides along so the rows can be partitioned in JS below.
+          // InteriorService.addInvoice mirrors every sub-contractor invoice into an Actual
+          // tagged with it, and the TI budget is isolated — no BudgetLine stands behind it.
+          // Summing them into `actualsTotal` drove the project card's budget-health bar
+          // past 100% on any project with a fit-out. Partitioning here rather than adding
+          // a query-side filter keeps this to one round trip and still yields the TI figure
+          // the card needs; a `where` would have required a second include or a second query.
+          actuals: { select: { amount: true, interiorProjectId: true } },
         },
         orderBy,
         skip,
@@ -157,9 +164,23 @@ export class ProjectsService {
       const budgetTotal = p.budgetLines.reduce(
         (sum, b) => sum + Number(b.revisedAmt ?? b.baselineAmt ?? 0), 0,
       );
-      const actualsTotal = p.actuals.reduce((sum, a) => sum + Number(a.amount ?? 0), 0);
+      const actualsTotal = p.actuals
+        .filter((a) => a.interiorProjectId === null)
+        .reduce((sum, a) => sum + Number(a.amount ?? 0), 0);
+      const interiorActualsTotal = p.actuals
+        .filter((a) => a.interiorProjectId !== null)
+        .reduce((sum, a) => sum + Number(a.amount ?? 0), 0);
       const { buildings, budgetLines, actuals, ...rest } = p;
-      return { ...rest, unitCount, soldCount, openLeadCount: p._count.leads, budgetTotal, actualsTotal };
+      return {
+        ...rest,
+        unitCount,
+        soldCount,
+        openLeadCount: p._count.leads,
+        budgetTotal,
+        actualsTotal,
+        /** Isolated fit-out spend — never part of actualsTotal, which pairs with budgetTotal. */
+        interiorActualsTotal,
+      };
     });
 
     if (paginated) {
@@ -400,6 +421,13 @@ export class ProjectsService {
       where: { status: 'ACTIVE', deletedAt: null, ...scopeWhere },
       include: {
         budgetLines: true,
+        // Partitioned in JS below, not filtered here. InteriorService.addInvoice mirrors
+        // every sub-contractor invoice into an Actual tagged with interiorProjectId, and
+        // the TI budget is deliberately isolated — it has no BudgetLine. Counting those
+        // into totalActuals inflated spend and made every project with a fit-out read as
+        // over budget against a budget that never contained TI (and fired a spurious
+        // BUDGET_OVERRUN alert). This is the general portfolio landing view, so TI comes
+        // back as its own `totalInteriorActuals` line rather than vanishing.
         actuals: true,
         commitments: true,
         buildings: { include: { units: true } },
@@ -426,6 +454,7 @@ export class ProjectsService {
 
     let totalBudget = 0;
     let totalActuals = 0;
+    let totalInteriorActuals = 0;
     let totalCommitted = 0;
     let totalMonthlyLeaseIncome = 0;
     let totalMonthlyMortgage = 0;
@@ -449,7 +478,12 @@ export class ProjectsService {
         (sum, b) => sum + Number(b.revisedAmt ?? b.baselineAmt),
         0,
       );
-      const actualSum = p.actuals.reduce((sum, a) => sum + Number(a.amount), 0);
+      const actualSum = p.actuals
+        .filter((a) => a.interiorProjectId === null)
+        .reduce((sum, a) => sum + Number(a.amount), 0);
+      const interiorSum = p.actuals
+        .filter((a) => a.interiorProjectId !== null)
+        .reduce((sum, a) => sum + Number(a.amount), 0);
       const commitSum = p.commitments.reduce(
         (sum, c) => sum + Number(c.contractAmt),
         0,
@@ -457,6 +491,7 @@ export class ProjectsService {
 
       totalBudget += budgetSum;
       totalActuals += actualSum;
+      totalInteriorActuals += interiorSum;
       totalCommitted += commitSum;
 
       // Monthly mortgage payments
@@ -471,7 +506,9 @@ export class ProjectsService {
         }
       }
 
-      // Budget overrun alert
+      // Budget overrun alert — construction spend vs the construction budget on both
+      // sides. TI has no BudgetLine, so an alert fired by fit-out invoices would point
+      // at an overrun the budget cannot express.
       if (actualSum > budgetSum * 0.9 && budgetSum > 0) {
         alerts.push({
           id: `alert-budget-${p.id}`,
@@ -566,6 +603,8 @@ export class ProjectsService {
       ? {
           totalBudget,
           totalActuals,
+          /** Isolated fit-out spend — a separate line, never part of totalActuals/budgetVariance. */
+          totalInteriorActuals,
           totalCommitted,
           budgetVariance: totalBudget - totalActuals,
           totalMonthlyLeaseIncome,

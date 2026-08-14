@@ -1066,6 +1066,24 @@ export function usePortfolioReport() {
   });
 }
 
+/**
+ * Interior / fit-out (TI) financial summary.
+ *
+ * Scoped SERVER-side by projectId, unlike the other report hooks which fetch everything
+ * and filter by project NAME in the tab. The interior aggregate is genuinely per-project
+ * (commitment is derived per fit-out contract), so filtering it client-side by name would
+ * mean re-deriving totals the server already computed correctly.
+ */
+export function useInteriorReport(projectId?: string) {
+  const can = useCan('financial:view');
+  return useQuery({
+    queryKey: ['report-interior', projectId ?? 'all'],
+    queryFn: () =>
+      api.get('/reports/interior', { params: projectId ? { projectId } : {} }).then((r) => r.data),
+    enabled: can,
+  });
+}
+
 export function useSalesReport() {
   const can = useCan('sales:view');
   return useQuery({
@@ -2541,10 +2559,16 @@ export function useAddSnag() {
   });
 }
 
+/**
+ * Resolving a snag now REQUIRES an "after" photo as proof of the fix (client decision
+ * 2026-08-14). The API refuses a bodyless resolve, so this call carries the storage path
+ * returned by usePresignedUpload.
+ */
 export function useResolveSnag() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (snagId: string) => api.post(`/interior/snags/${snagId}/resolve`).then((r) => r.data),
+    mutationFn: ({ snagId, afterPhotoPath }: { snagId: string; afterPhotoPath: string }) =>
+      api.post(`/interior/snags/${snagId}/resolve`, { afterPhotoPath }).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
   });
 }

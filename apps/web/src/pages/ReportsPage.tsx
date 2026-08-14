@@ -5,7 +5,7 @@ import { FiDownload } from 'react-icons/fi';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-import { usePortfolioReport, useSalesReport, useRevenueReport, useDebtReport, useProjects } from '../hooks/useApi';
+import { usePortfolioReport, useSalesReport, useRevenueReport, useDebtReport, useProjects, useInteriorReport } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
@@ -409,7 +409,148 @@ const REPORT_TAB_PERMISSIONS: Record<string, string> = {
   sales:     'sales:view',       // GET /reports/sales-summary
   revenue:   'lease:view',       // GET /reports/revenue
   debt:      'loan:view',        // GET /reports/debt
+  interior:  'financial:view',   // GET /reports/interior
 };
+
+// ---- Interior / Fit-Out (TI) Tab ----
+
+/**
+ * The TI budget is deliberately isolated from the construction budget — it has no
+ * BudgetLine behind it — so until this existed it appeared in NO report at all and
+ * Finance had no way to review fit-out spend against commitment.
+ *
+ * Scoped server-side by projectId rather than filtered by name like the other tabs:
+ * commitment is derived per fit-out contract (rate x area, or a flat contract value, or
+ * a BOQ estimate), so re-deriving totals client-side would risk disagreeing with the API.
+ */
+function InteriorTab({ projectId }: { projectId?: string }) {
+  const { data, isLoading, error } = useInteriorReport(projectId);
+  if (isLoading) return <LoadingState message="Loading fit-out report..." />;
+  if (error) return <ErrorState />;
+  if (!data) return null;
+  const d = data as any;
+  const k = d.kpis ?? {};
+  const rows: any[] = (d.projects ?? []).filter((p: any) => p.hasInterior);
+
+  return (
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Committed" value={fmt(k.committed ?? 0)} helpText={`${k.interiorCount ?? 0} fit-out${k.interiorCount === 1 ? '' : 's'}`} colorScheme="brand" variant="construction" />
+        <StatCard label="Invoiced" value={fmt(k.invoiced ?? 0)} helpText={`${k.pctInvoiced ?? 0}% of committed`} colorScheme="purple" />
+        <StatCard label="Remaining" value={fmt(k.remaining ?? 0)} helpText={`Unpaid: ${fmt(k.unpaid ?? 0)}`} colorScheme="green" />
+        {/* Overrun is its own tile rather than a negative "remaining": invoiced beyond
+            commitment is the number Finance actually needs to see, and burying it as a
+            sign flip on another figure is how it gets missed. */}
+        <StatCard
+          label="Overrun"
+          value={fmt(k.overrun ?? 0)}
+          helpText={(k.overrun ?? 0) > 0 ? 'Invoiced beyond commitment' : 'Within commitment'}
+          colorScheme={(k.overrun ?? 0) > 0 ? 'red' : 'green'}
+        />
+      </div>
+
+      {(k.missingCommitmentCount ?? 0) > 0 && (
+        // A fit-out with no derivable commitment is not reviewable at all — it silently
+        // contributes 0 to "committed" while its invoices still count, which reads as
+        // overrun. Say so rather than letting the totals imply a number that isn't there.
+        <div className="mb-6 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-800">
+          {k.missingCommitmentCount} fit-out{k.missingCommitmentCount === 1 ? ' has' : 's have'} no
+          contract value, rate or scope items recorded, so nothing can be reviewed against.
+          Their invoices still count toward spend.
+        </div>
+      )}
+
+      {(d.chartData ?? []).length > 0 && (
+        <Card shadow="sm" className="mb-6">
+          <CardHeader className="pb-0">
+            <p className="font-semibold text-sm text-gray-600">Committed vs Invoiced by Project</p>
+          </CardHeader>
+          <CardBody>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={d.chartData}>
+                <XAxis dataKey="name" fontSize={11} />
+                <YAxis tickFormatter={(v: number) => `$${(v / 1e6).toFixed(1)}M`} />
+                <Tooltip formatter={(v: number) => fmt(v)} />
+                <Legend />
+                <Bar dataKey="Committed" fill="#3182CE" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Invoiced" fill="#805AD5" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Remaining" fill="#38A169" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardBody>
+        </Card>
+      )}
+
+      <Card shadow="sm" className="mb-6">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-600">Fit-Out by Project</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          {rows.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4">No fit-out projects recorded.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 border-b">
+                    <th className="py-2 px-2">Project</th>
+                    <th className="py-2 px-2 text-right">Fit-outs</th>
+                    <th className="py-2 px-2 text-right">Committed</th>
+                    <th className="py-2 px-2 text-right">Invoiced</th>
+                    <th className="py-2 px-2 text-right">Unpaid</th>
+                    <th className="py-2 px-2 text-right">Remaining</th>
+                    <th className="py-2 px-2 text-right">Overrun</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((p) => (
+                    <tr key={p.projectId} className="border-b last:border-0">
+                      <td className="py-2 px-2 font-medium text-gray-700">{p.projectName}</td>
+                      <td className="py-2 px-2 text-right">{p.interiorCount}</td>
+                      <td className="py-2 px-2 text-right">{fmt(p.committed)}</td>
+                      <td className="py-2 px-2 text-right">{fmt(p.invoiced)}</td>
+                      <td className="py-2 px-2 text-right">{fmt(p.unpaid)}</td>
+                      <td className="py-2 px-2 text-right">{fmt(p.remaining)}</td>
+                      <td className={`py-2 px-2 text-right ${p.overrun > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+                        {p.overrun > 0 ? fmt(p.overrun) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Buyer side, kept visually separate from the cost side above. These are what the
+          BUYER owes for their fit-out (a SalePayment installment), not what Prime owes its
+          sub-contractors — mixing the two into one total would be meaningless. */}
+      <Card shadow="sm">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-600">TI Billed to Buyers</p>
+          <span className="ml-2 text-[11px] text-gray-400">Separate from sub-contractor cost above</span>
+        </CardHeader>
+        <CardBody className="pt-0">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <p className="text-xs text-gray-500">Billed</p>
+              <p className="text-lg font-semibold text-gray-800">{fmt(k.tiBilledToBuyers ?? 0)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Collected</p>
+              <p className="text-lg font-semibold text-green-600">{fmt(k.tiCollectedFromBuyers ?? 0)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Outstanding</p>
+              <p className="text-lg font-semibold text-amber-600">{fmt(k.tiOutstandingFromBuyers ?? 0)}</p>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
 
 // ---- Main Reports Page ----
 export default function ReportsPage() {
@@ -433,6 +574,8 @@ export default function ReportsPage() {
     if (key === 'sales') return <SalesTab filterProject={filterProject} />;
     if (key === 'revenue') return <RevenueTab filterProject={filterProject} />;
     if (key === 'debt') return <DebtTab filterProject={filterProject} />;
+    // Scoped by ID, not name — the interior aggregate is computed per project server-side.
+    if (key === 'interior') return <InteriorTab projectId={projectId || undefined} />;
     return null;
   };
 

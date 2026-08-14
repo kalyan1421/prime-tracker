@@ -1,8 +1,10 @@
-import type { InteriorPhase } from '@prisma/client';
+import type { InteriorPhase, SnagStatus } from '@prisma/client';
 import {
   INTERIOR_PHASE_ORDER,
+  OPEN_SNAG_STATUSES,
   canTransition,
   getPhaseGate,
+  isSnagOpen,
   isTerminalPhase,
   nextPhase,
   phaseIndex,
@@ -107,6 +109,30 @@ describe('interior-state-machine', () => {
       expect(getPhaseGate('DESIGN').requiredDocCategory).toBeUndefined();
       expect(getPhaseGate('PROCUREMENT').requiredDocCategory).toBeUndefined();
       expect(getPhaseGate('SNAGGING').requiredDocCategory).toBeUndefined();
+    });
+  });
+
+  describe('snag gate (requiresSnagsClear)', () => {
+    it('requires a clear punch list to enter HANDOVER', () => {
+      expect(getPhaseGate('HANDOVER').requiresSnagsClear).toBe(true);
+    });
+
+    it('gates no other phase on snags — snags are raised DURING SNAGGING', () => {
+      for (const p of INTERIOR_PHASE_ORDER.filter((x) => x !== 'HANDOVER')) {
+        expect(getPhaseGate(p).requiresSnagsClear).toBeFalsy();
+      }
+    });
+  });
+
+  describe('what counts as an OPEN snag', () => {
+    it('is OPEN and IN_PROGRESS — everything except RESOLVED', () => {
+      expect(OPEN_SNAG_STATUSES).toEqual(['OPEN', 'IN_PROGRESS']);
+    });
+
+    it('isSnagOpen agrees, and RESOLVED is the only closed status', () => {
+      const all: SnagStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED'];
+      expect(all.filter(isSnagOpen)).toEqual(['OPEN', 'IN_PROGRESS']);
+      expect(isSnagOpen('RESOLVED')).toBe(false);
     });
   });
 

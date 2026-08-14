@@ -10,6 +10,7 @@ const mockPrisma: any = {
   },
   building: { findUnique: jest.fn() },
   document: { findFirst: jest.fn() },
+  snagItem: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
   actual: { create: jest.fn() },
   interiorInvoice: { create: jest.fn(), findFirst: jest.fn() },
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
@@ -33,8 +34,15 @@ function stubProject(overrides: Record<string, any> = {}) {
     contractType: 'PER_SQFT',
     ratePerSqft: null,
     area: null,
+    // findById includes snags; the handover gate reads them off the loaded project.
+    snags: [],
     ...overrides,
   });
+}
+
+/** A snag as findById loads it — only id + status matter to the handover gate. */
+function snag(status: string, id = `s-${status}`) {
+  return { id, status };
 }
 
 describe('InteriorService', () => {
@@ -221,6 +229,298 @@ describe('InteriorService', () => {
         }),
       );
       expect(mockBus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'interior.handedOver' }));
+    });
+  });
+
+  // ─────── C5: an "after" photo is required to resolve a snag ───────
+
+  describe('resolveSnag — proof of fix required', () => {
+    it('refuses to resolve without an after photo', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'OPEN', photoPath: 'before.jpg', afterPhotoPath: null,
+      });
+      await expect(service.resolveSnag('s1')).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.resolveSnag('s1', { afterPhotoPath: '  ' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(mockPrisma.snagItem.update).not.toHaveBeenCalled();
+    });
+
+    it('resolves when an after photo is supplied', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'OPEN', photoPath: 'before.jpg', afterPhotoPath: null,
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await service.resolveSnag('s1', { afterPhotoPath: 'after.jpg' });
+      expect(mockPrisma.snagItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 's1' },
+          data: expect.objectContaining({ status: 'RESOLVED', afterPhotoPath: 'after.jpg' }),
+        }),
+      );
+    });
+
+    it('leaves the BEFORE photo intact — the pair is the evidence', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'OPEN', photoPath: 'before.jpg', afterPhotoPath: null,
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await service.resolveSnag('s1', { afterPhotoPath: 'after.jpg' });
+      const { data } = mockPrisma.snagItem.update.mock.calls[0][0];
+      expect(data).not.toHaveProperty('photoPath');
+    });
+
+    it('accepts an after photo already on the record (idempotent re-resolve)', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'RESOLVED', photoPath: 'before.jpg', afterPhotoPath: 'after.jpg',
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await expect(service.resolveSnag('s1')).resolves.toEqual(
+        expect.objectContaining({ afterPhotoPath: 'after.jpg' }),
+      );
+    });
+
+    it('throws NotFound for an unknown snag', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue(null);
+      await expect(service.resolveSnag('nope', { afterPhotoPath: 'a.jpg' })).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('updateSnag — the same proof gate, and the reopen decision', () => {
+    it('refuses status=RESOLVED without an after photo (no back door around resolveSnag)', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'OPEN', photoPath: 'before.jpg', afterPhotoPath: null,
+      });
+      await expect(service.updateSnag('s1', { status: 'RESOLVED' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(mockPrisma.snagItem.update).not.toHaveBeenCalled();
+    });
+
+    it('allows status=RESOLVED when the after photo comes with it', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'IN_PROGRESS', photoPath: 'before.jpg', afterPhotoPath: null,
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await service.updateSnag('s1', { status: 'RESOLVED', afterPhotoPath: 'after.jpg' });
+      expect(mockPrisma.snagItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'RESOLVED', afterPhotoPath: 'after.jpg' }),
+        }),
+      );
+    });
+
+    // Decision: reopening RETIRES the proof-of-fix photo. A photo captioned "proof of fix"
+    // on an item that demonstrably is not fixed is a false record, and keeping it would let
+    // the next resolve satisfy the gate with a stale image instead of new work. The before
+    // shot is never touched, and only the pointer is cleared — the object still exists.
+    it('clears the after photo (and resolvedAt) when a resolved snag is reopened', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'RESOLVED', photoPath: 'before.jpg', afterPhotoPath: 'after.jpg',
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await service.updateSnag('s1', { status: 'OPEN' });
+      expect(mockPrisma.snagItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'OPEN', afterPhotoPath: null, resolvedAt: null }),
+        }),
+      );
+      const { data } = mockPrisma.snagItem.update.mock.calls[0][0];
+      expect(data).not.toHaveProperty('photoPath'); // the "before" shot survives a reopen too
+    });
+
+    it('also clears it when reopened to IN_PROGRESS, not just OPEN', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'RESOLVED', photoPath: 'before.jpg', afterPhotoPath: 'after.jpg',
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await service.updateSnag('s1', { status: 'IN_PROGRESS' });
+      expect(mockPrisma.snagItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ afterPhotoPath: null, resolvedAt: null }),
+        }),
+      );
+    });
+
+    it('so a re-fix needs its OWN proof — re-resolving after a reopen is refused', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'OPEN', photoPath: 'before.jpg', afterPhotoPath: null, // cleared by reopen
+      });
+      await expect(service.resolveSnag('s1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('does not touch status/photos on a plain field edit', async () => {
+      mockPrisma.snagItem.findUnique.mockResolvedValue({
+        id: 's1', status: 'RESOLVED', photoPath: 'before.jpg', afterPhotoPath: 'after.jpg',
+      });
+      mockPrisma.snagItem.update.mockImplementation((args: any) => Promise.resolve(args.data));
+      await service.updateSnag('s1', { room: 'Kitchen' });
+      const { data } = mockPrisma.snagItem.update.mock.calls[0][0];
+      expect(data).toEqual({ room: 'Kitchen' });
+    });
+  });
+
+  // ─────── C1: open snags block handover ───────
+
+  describe('advancePhase — open snags block HANDOVER', () => {
+    /** SNAGGING → HANDOVER with the certificate on file; only snags are in question. */
+    function stubReadyForHandover(snags: Array<{ id: string; status: string }>) {
+      stubProject({ phase: 'SNAGGING', buildingId: 'b1', unitId: 'u1', snags });
+      mockPrisma.document.findFirst.mockResolvedValue({ id: 'cert1' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1', phase: 'HANDOVER' });
+    }
+
+    it('blocks handover while a snag is OPEN', async () => {
+      stubReadyForHandover([snag('OPEN')]);
+      await expect(service.advancePhase('ip1', 'HANDOVER', 'u')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(mockPrisma.interiorProject.update).not.toHaveBeenCalled();
+    });
+
+    it('counts IN_PROGRESS as still open — work started is not work finished', async () => {
+      stubReadyForHandover([snag('IN_PROGRESS')]);
+      await expect(service.advancePhase('ip1', 'HANDOVER', 'u')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('names the open count and the way out in the refusal', async () => {
+      stubReadyForHandover([snag('OPEN', 's1'), snag('IN_PROGRESS', 's2'), snag('RESOLVED', 's3')]);
+      await expect(service.advancePhase('ip1', 'HANDOVER', 'u')).rejects.toThrow(
+        /2 punch-list items still open/,
+      );
+      await expect(service.advancePhase('ip1', 'HANDOVER', 'u')).rejects.toThrow(/forceReason/);
+    });
+
+    it('uses the singular for exactly one open item', async () => {
+      stubReadyForHandover([snag('OPEN')]);
+      await expect(service.advancePhase('ip1', 'HANDOVER', 'u')).rejects.toThrow(
+        /1 punch-list item still open/,
+      );
+    });
+
+    it('allows handover once every snag is RESOLVED', async () => {
+      stubReadyForHandover([snag('RESOLVED', 's1'), snag('RESOLVED', 's2')]);
+      await service.advancePhase('ip1', 'HANDOVER', 'u');
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ phase: 'HANDOVER' }) }),
+      );
+    });
+
+    it('allows handover on a project with no snags at all', async () => {
+      stubReadyForHandover([]);
+      await service.advancePhase('ip1', 'HANDOVER', 'u');
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalled();
+      expect(mockBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'interior.handedOver' }),
+      );
+    });
+
+    it('does not gate any phase other than HANDOVER on snags', async () => {
+      stubProject({ phase: 'EXECUTION', buildingId: 'b1', snags: [snag('OPEN')] });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1', phase: 'SNAGGING' });
+      await service.advancePhase('ip1', 'SNAGGING', 'u');
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('advancePhase — the forced-handover escape hatch', () => {
+    function stubReadyForHandover(snags: Array<{ id: string; status: string }>) {
+      stubProject({ phase: 'SNAGGING', buildingId: 'b1', unitId: 'u1', snags });
+      mockPrisma.document.findFirst.mockResolvedValue({ id: 'cert1' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1', phase: 'HANDOVER' });
+    }
+
+    it('rejects force without a reason (the reason IS the control)', async () => {
+      stubReadyForHandover([snag('OPEN')]);
+      await expect(
+        service.advancePhase('ip1', 'HANDOVER', 'u', { force: true }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.advancePhase('ip1', 'HANDOVER', 'u', { force: true, forceReason: '   ' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.interiorProject.update).not.toHaveBeenCalled();
+    });
+
+    it('hands over with force + reason, and records the reason on the project', async () => {
+      stubReadyForHandover([snag('OPEN', 's1'), snag('OPEN', 's2')]);
+      await service.advancePhase('ip1', 'HANDOVER', 'u', {
+        force: true,
+        forceReason: 'Cosmetic scuff; contractor demobilised, buyer accepted in writing',
+      });
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: 'HANDOVER',
+            status: 'COMPLETED',
+            handoverNotes:
+              'Handover forced with 2 open snags: Cosmetic scuff; contractor demobilised, buyer accepted in writing',
+          }),
+        }),
+      );
+      expect(mockBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'interior.handedOver' }),
+      );
+    });
+
+    it('keeps the sign-off notes, with the forced stamp leading so it cannot be buried', async () => {
+      stubReadyForHandover([snag('OPEN')]);
+      await service.advancePhase('ip1', 'HANDOVER', 'u', {
+        force: true,
+        forceReason: 'Door handle on order',
+        handoverSignedBy: 'A. Buyer',
+        handoverNotes: 'Keys handed over on site',
+      });
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            handoverSignedBy: 'A. Buyer',
+            handoverNotes:
+              'Handover forced with 1 open snag: Door handle on order\nKeys handed over on site',
+          }),
+        }),
+      );
+    });
+
+    it('does not stamp anything when nothing was actually forced', async () => {
+      stubReadyForHandover([snag('RESOLVED')]);
+      await service.advancePhase('ip1', 'HANDOVER', 'u', {
+        force: true,
+        forceReason: 'unused',
+        handoverNotes: 'Clean handover',
+      });
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ handoverNotes: 'Clean handover' }) }),
+      );
+    });
+
+    it('cannot force past the HANDOVER_CERTIFICATE document gate (regression)', async () => {
+      stubProject({ phase: 'SNAGGING', buildingId: 'b1', snags: [] });
+      mockPrisma.document.findFirst.mockResolvedValue(null);
+      await expect(
+        service.advancePhase('ip1', 'HANDOVER', 'u', { force: true, forceReason: 'in a hurry' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(mockPrisma.interiorProject.update).not.toHaveBeenCalled();
+    });
+
+    it('cannot force past the CITY_APPROVAL document gate either (regression)', async () => {
+      stubProject({ phase: 'PROCUREMENT', buildingId: 'b1', snags: [] });
+      mockPrisma.building.findUnique.mockResolvedValue({ phase: 'STABILIZED' });
+      mockPrisma.document.findFirst.mockResolvedValue(null);
+      await expect(
+        service.advancePhase('ip1', 'EXECUTION', 'u', { force: true, forceReason: 'in a hurry' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('cannot force past the shell-complete gate either (regression)', async () => {
+      stubProject({ phase: 'CITY_APPROVAL', buildingId: 'b1', snags: [] });
+      mockPrisma.building.findUnique.mockResolvedValue({ phase: 'CONSTRUCTION' });
+      await expect(
+        service.advancePhase('ip1', 'PROCUREMENT', 'u', { force: true, forceReason: 'in a hurry' }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
   });
 

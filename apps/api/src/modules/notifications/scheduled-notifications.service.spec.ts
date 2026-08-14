@@ -601,6 +601,11 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
       // silence the alert that says a permit has actually expired.
       'DOCUMENT_EXPIRING',
       'DOCUMENT_EXPIRED',
+      // C3/C4: a milestone slipped and the cascade onto its dependents — plus any lender
+      // draw date — is waiting for a PM to approve or reject. One type, for the pending
+      // half only: the decision is made BY the recipient, so telling them about it would
+      // be telling them what they just did.
+      'MILESTONE_SLIP_PENDING_REVIEW',
     ] as const) {
       expect(Object.values(NotificationType)).toContain(type);
       expect(NOTIFICATION_TIERS).toHaveProperty(type);
@@ -608,7 +613,7 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     // Deliberately an exact count: it is what catches an enum value added to the DB in
     // a migration but never given a tier, which would make it unmutable in
     // getPreferences(). Bump it WITH the list above, never on its own.
-    expect(Object.values(NotificationType)).toHaveLength(35);
+    expect(Object.values(NotificationType)).toHaveLength(36);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {

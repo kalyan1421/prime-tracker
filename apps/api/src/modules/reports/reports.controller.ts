@@ -40,6 +40,18 @@ export class ReportsController {
   @ApiOperation({ summary: 'Unit sales value breakdown by project and building' })
   getUnitSales() { return this.service.getUnitSalesReport(); }
 
+  // `financial:view` matches /reports/portfolio — this is the same class of money data
+  // (commitment vs spend), just the isolated fit-out side of it. `interior:view` is the
+  // operational (phase/snag) permission and is deliberately NOT what gates this.
+  @Get('interior')
+  @RequirePermissions('financial:view')
+  @ApiOperation({
+    summary: 'Interior / TI fit-out summary — committed vs invoiced vs remaining, per project',
+  })
+  getInterior(@Query('projectId') projectId?: string) {
+    return this.service.getInteriorSummary({ projectId });
+  }
+
   @Get('vacancy')
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Vacancy report — available units ranked by time-on-market' })

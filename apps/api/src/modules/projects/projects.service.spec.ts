@@ -63,7 +63,7 @@ const mockEncryption = {
           id: '1', name: 'Shops at Panther Creek', status: 'ACTIVE', phase: 'CONSTRUCTION',
           buildings: [{ id: 'b1', _count: { units: 4 } }],
           budgetLines: [{ baselineAmt: 1000, revisedAmt: 1200 }],
-          actuals: [{ amount: 500 }],
+          actuals: [{ amount: 500, interiorProjectId: null }],
           _count: { leads: 3 },
         },
         {
@@ -82,9 +82,46 @@ const mockEncryption = {
       // computed fields surface on each row
       expect((result as any[])[0]).toMatchObject({
         unitCount: 4, soldCount: 2, openLeadCount: 3, budgetTotal: 1200, actualsTotal: 500,
+        interiorActualsTotal: 0,
       });
       // A project with no buildings gets zero, not undefined — the card renders it raw.
       expect((result as any[])[1]).toMatchObject({ unitCount: 0, soldCount: 0, openLeadCount: 0 });
+    });
+
+    // The project card draws a budget-health bar from budgetTotal vs actualsTotal. TI
+    // invoices are Actual rows with an interiorProjectId and no BudgetLine behind them,
+    // so counting them there pushed a perfectly on-budget project past 100%.
+    it('keeps interior/TI actuals out of actualsTotal and reports them separately', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        {
+          id: '1', name: 'Shops at Panther Creek', status: 'ACTIVE', phase: 'CONSTRUCTION',
+          buildings: [],
+          budgetLines: [{ baselineAmt: 1000, revisedAmt: 1200 }],
+          actuals: [
+            { amount: 500, interiorProjectId: null },
+            { amount: 800, interiorProjectId: 'ip-1' }, // fit-out — outside the budget
+          ],
+          _count: { leads: 0 },
+        },
+      ]);
+
+      const [row] = (await service.findAll({})) as any[];
+
+      expect(row.actualsTotal).toBe(500);
+      expect(row.interiorActualsTotal).toBe(800);
+      // 500 of 1200 — the bar stays under 100%. Unfiltered this was 1300/1200 = over budget.
+      expect(row.actualsTotal).toBeLessThan(row.budgetTotal);
+      // Raw actual rows are still stripped from the payload.
+      expect(row.actuals).toBeUndefined();
+    });
+
+    it('selects interiorProjectId so the rows can be partitioned', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([]);
+
+      await service.findAll({});
+
+      const call = mockPrisma.project.findMany.mock.calls[0][0];
+      expect(call.include.actuals.select).toEqual({ amount: true, interiorProjectId: true });
     });
 
     it('skips the sold-units query entirely when no project has a building', async () => {
@@ -278,7 +315,12 @@ const mockEncryption = {
         {
           id: '1', name: 'Project A', status: 'ACTIVE', phase: 'CONSTRUCTION',
           budgetLines: [{ revisedAmt: 40000000, baselineAmt: 40000000 }],
-          actuals: [{ amount: 12000000 }],
+          // Both projects carry a fit-out invoice. It is an Actual row like any other,
+          // but no BudgetLine stands behind it, so it must not reach totalActuals.
+          actuals: [
+            { amount: 12000000, interiorProjectId: null },
+            { amount: 4500000, interiorProjectId: 'ip-a' },
+          ],
           commitments: [],
           buildings: [{ units: [{ status: 'LEASED' }, { status: 'AVAILABLE' }] }],
           loans: [],
@@ -287,7 +329,10 @@ const mockEncryption = {
         {
           id: '2', name: 'Project B', status: 'ACTIVE', phase: 'PERMITTING',
           budgetLines: [{ revisedAmt: 20880000, baselineAmt: 20880000 }],
-          actuals: [{ amount: 7320000 }],
+          actuals: [
+            { amount: 7320000, interiorProjectId: null },
+            { amount: 1000000, interiorProjectId: 'ip-b' },
+          ],
           commitments: [], buildings: [], loans: [], milestones: [],
         },
       ];
@@ -298,8 +343,54 @@ const mockEncryption = {
 
       expect(result.totalProjects).toBe(2);
       expect(result.totalBudget).toBe(60880000);
+      // Construction only. 5,500,000 of TI sits in the fixture and stays out of this.
       expect(result.totalActuals).toBe(19320000);
+      expect(result.totalInteriorActuals).toBe(5500000);
+      // Variance is budget vs construction spend — TI would have eaten 5.5M of headroom.
+      expect(result.budgetVariance).toBe(41560000);
       expect(result.projectsByPhase).toHaveProperty('CONSTRUCTION');
+    });
+
+    // The user-visible bug: a project inside its construction budget was flagged
+    // BUDGET_OVERRUN purely because its fit-out invoices were counted against a budget
+    // that never contained them.
+    it('does not flag a project over budget on the strength of its fit-out spend', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        {
+          id: '3', name: 'Project C', status: 'ACTIVE', phase: 'CONSTRUCTION',
+          budgetLines: [{ revisedAmt: 1000000, baselineAmt: 1000000 }],
+          actuals: [
+            { amount: 500000, interiorProjectId: null },  // 50% of budget — healthy
+            { amount: 800000, interiorProjectId: 'ip-c' }, // fit-out; unfiltered → 130%
+          ],
+          commitments: [], buildings: [], loans: [], milestones: [],
+        },
+      ]);
+
+      const result = await service.getDashboardSummary();
+
+      expect(result.totalActuals).toBe(500000);
+      expect(result.totalInteriorActuals).toBe(800000);
+      expect(result.budgetVariance).toBe(500000);
+      expect(result.alerts.filter((a) => a.type === 'BUDGET_OVERRUN')).toHaveLength(0);
+    });
+
+    it('hides the interior figure from a viewer without budget:view', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        {
+          id: '4', name: 'Project D', status: 'ACTIVE', phase: 'CONSTRUCTION',
+          budgetLines: [{ revisedAmt: 1000000, baselineAmt: 1000000 }],
+          actuals: [{ amount: 900000, interiorProjectId: 'ip-d' }],
+          commitments: [], buildings: [], loans: [], milestones: [],
+        },
+      ]);
+
+      const result = await service.getDashboardSummary({
+        userId: 'u-1', role: 'VIEWER', canViewFinancials: false,
+      } as any);
+
+      expect(result).not.toHaveProperty('totalInteriorActuals');
+      expect(result).not.toHaveProperty('totalActuals');
     });
   });
 });

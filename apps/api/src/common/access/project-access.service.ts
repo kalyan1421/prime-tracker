@@ -38,6 +38,9 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
       ?.building?.projectId,
   milestone: async (p, id) =>
     (await p.milestone.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  milestoneSlipProposal: async (p, id) =>
+    (await p.milestoneSlipProposal.findUnique({ where: { id }, select: { projectId: true } }))
+      ?.projectId,
   sale: async (p, id) =>
     (await p.sale.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   lead: async (p, id) =>
@@ -157,6 +160,12 @@ const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
   LeasesController: {
     paymentId: 'leaseObligationPayment',
     invoiceId: 'leaseRentInvoice',
+  },
+  // ":proposalId" is a slip cascade only here. Scoped rather than global because any
+  // future approval queue would reuse the name, and a global entry would then resolve
+  // those ids to nothing — i.e. to no membership check at all.
+  MilestonesController: {
+    proposalId: 'milestoneSlipProposal',
   },
 };
 

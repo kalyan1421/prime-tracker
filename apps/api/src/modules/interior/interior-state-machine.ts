@@ -1,4 +1,4 @@
-import type { DocCategory, InteriorPhase } from '@prisma/client';
+import type { DocCategory, InteriorPhase, SnagStatus } from '@prisma/client';
 
 /**
  * Interior / Fit-Out lifecycle as a single source of truth.
@@ -12,6 +12,11 @@ import type { DocCategory, InteriorPhase } from '@prisma/client';
  * Document gates (INTERIOR_MODULE_DESIGN §0.3):
  *   - entering EXECUTION requires a CITY_APPROVAL document on the interior project.
  *   - entering HANDOVER requires a HANDOVER_CERTIFICATE document.
+ *
+ * Snag gate (client decision 2026-08-14, "handover blocked while any punch-list item
+ * is still open"):
+ *   - entering HANDOVER requires every snag closed. Unlike the document gates this one
+ *     is overridable with a recorded reason — see InteriorService.advancePhase.
  *
  * Transitions are linear and forward-only by one step. Cancellation/hold are status
  * changes (InteriorStatus), not phase moves, and are handled by the service.
@@ -31,14 +36,35 @@ export interface PhaseGate {
   requiresShellComplete: boolean;
   /** Document category that must be on file before entering this phase (if any). */
   requiredDocCategory?: DocCategory;
+  /**
+   * Target phase requires every punch-list (snag) item to be closed.
+   * Overridable by an explicit force + recorded reason (the document gates are not).
+   */
+  requiresSnagsClear?: boolean;
 }
 
 /** Gate requirements keyed by the phase being entered. */
 const PHASE_GATES: Partial<Record<InteriorPhase, PhaseGate>> = {
   PROCUREMENT: { requiresShellComplete: true },
   EXECUTION: { requiresShellComplete: true, requiredDocCategory: 'CITY_APPROVAL' },
-  HANDOVER: { requiresShellComplete: false, requiredDocCategory: 'HANDOVER_CERTIFICATE' },
+  HANDOVER: {
+    requiresShellComplete: false,
+    requiredDocCategory: 'HANDOVER_CERTIFICATE',
+    requiresSnagsClear: true,
+  },
 };
+
+/**
+ * Snag statuses that count as STILL OPEN for the handover gate — i.e. everything
+ * except RESOLVED. IN_PROGRESS is deliberately included: work started is not work
+ * finished, and a snag someone is mid-way through fixing is precisely the kind of
+ * defect the client wants caught before the unit changes hands.
+ */
+export const OPEN_SNAG_STATUSES: SnagStatus[] = ['OPEN', 'IN_PROGRESS'];
+
+export function isSnagOpen(status: SnagStatus): boolean {
+  return OPEN_SNAG_STATUSES.includes(status);
+}
 
 export function phaseIndex(phase: InteriorPhase): number {
   return INTERIOR_PHASE_ORDER.indexOf(phase);

@@ -10,10 +10,19 @@ import type {
   InteriorPhase,
   InteriorStatus,
   Prisma,
+  SnagStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
-import { canTransition, getPhaseGate } from './interior-state-machine';
+import { canTransition, getPhaseGate, isSnagOpen } from './interior-state-machine';
+
+/**
+ * A snag is only closed once someone has photographed the fix. The "before" shot
+ * (`photoPath`) proves the defect; this proves the remedy. Without it "RESOLVED" is
+ * just an assertion, which is the exact thing the client asked us to stop accepting.
+ */
+const AFTER_PHOTO_REQUIRED =
+  'An "after" photo is required to resolve a snag — upload the proof-of-fix image and pass afterPhotoPath.';
 
 /**
  * Building phases that mean the shell is complete enough for fit-out execution.
@@ -338,12 +347,30 @@ export class InteriorService {
    *   1. Linear phase order (interior-state-machine.canTransition).
    *   2. Soft parallel gate — PROCUREMENT/EXECUTION require shell complete.
    *   3. Document gates — CITY_APPROVAL doc before EXECUTION; HANDOVER_CERTIFICATE before HANDOVER.
+   *   4. Snag gate — no open punch-list item may survive into HANDOVER.
+   *
+   * The snag gate is the only OVERRIDABLE gate here. A hard block would eventually trap a
+   * real, agreed handover behind one cosmetic snag whose contractor has left site — so it
+   * follows this codebase's established shape for exactly that situation (Building/Unit
+   * `force` delete, LeaseObligation.waive, SaleCancellation): allow the override, demand a
+   * reason, record it. The reason is stamped onto `handoverNotes`, where it sits beside the
+   * sign-off it qualifies, and the request body (force + reason + actor) lands in the
+   * immutable AuditEvent log via AuditInterceptor on the POST.
+   *
+   * The document gates stay non-overridable: a missing HANDOVER_CERTIFICATE is a missing
+   * legal artifact, not a judgement call about acceptable residual defects.
    */
   async advancePhase(
     id: string,
     target: InteriorPhase,
     _userId: string,
-    signoff?: { handoverSignedBy?: string; handoverNotes?: string },
+    signoff?: {
+      handoverSignedBy?: string;
+      handoverNotes?: string;
+      /** Hand over anyway despite open snags. Requires `forceReason`. */
+      force?: boolean;
+      forceReason?: string;
+    },
   ) {
     const project = await this.findById(id);
 
@@ -367,7 +394,37 @@ export class InteriorService {
       );
     }
 
+    // Snag gate — checked last, and off the snags already loaded by findById (no extra query).
+    let forcedNote: string | null = null;
+    if (gate.requiresSnagsClear) {
+      const openCount = (project.snags ?? []).filter((s) => isSnagOpen(s.status)).length;
+      if (openCount > 0) {
+        const s = openCount === 1 ? '' : 's';
+        if (!signoff?.force) {
+          throw new ConflictException(
+            `Cannot enter ${target}: ${openCount} punch-list item${s} still open. ` +
+              `Resolve ${openCount === 1 ? 'it' : 'them'} — each resolution needs an "after" photo as ` +
+              `proof of the fix — or hand over anyway with force: true and a forceReason, which is ` +
+              `recorded on the project.`,
+          );
+        }
+        if (!signoff.forceReason?.trim()) {
+          throw new BadRequestException(
+            `A reason is required to hand over with ${openCount} open punch-list item${s}`,
+          );
+        }
+        forcedNote = `Handover forced with ${openCount} open snag${s}: ${signoff.forceReason.trim()}`;
+      }
+    }
+
     const enteringHandover = target === 'HANDOVER';
+    const signoffNotes = signoff?.handoverNotes?.trim() || null;
+    // The forced-handover stamp leads, so it cannot be buried under free-text notes.
+    const handoverNotes = forcedNote
+      ? signoffNotes
+        ? `${forcedNote}\n${signoffNotes}`
+        : forcedNote
+      : signoffNotes;
     const updated = await this.prisma.interiorProject.update({
       where: { id },
       data: {
@@ -375,7 +432,7 @@ export class InteriorService {
         status: enteringHandover ? 'COMPLETED' : 'IN_PROGRESS',
         handoverAt: enteringHandover ? new Date() : undefined,
         handoverSignedBy: enteringHandover ? signoff?.handoverSignedBy?.trim() || null : undefined,
-        handoverNotes: enteringHandover ? signoff?.handoverNotes?.trim() || null : undefined,
+        handoverNotes: enteringHandover ? handoverNotes : undefined,
       },
     });
 
@@ -513,33 +570,62 @@ export class InteriorService {
     });
   }
 
-  async resolveSnag(snagId: string) {
+  /**
+   * Close a snag. Requires an "after" photo (client, 2026-08-14) — either supplied on this
+   * call or already on the record. `photoPath` (the before/defect shot) is never touched:
+   * the pair is the evidence, and half of it is worth much less than both.
+   */
+  async resolveSnag(snagId: string, input?: { afterPhotoPath?: string }) {
     const snag = await this.prisma.snagItem.findUnique({ where: { id: snagId } });
     if (!snag) throw new NotFoundException('Snag not found');
+    const afterPhotoPath = input?.afterPhotoPath?.trim() || snag.afterPhotoPath;
+    if (!afterPhotoPath) throw new BadRequestException(AFTER_PHOTO_REQUIRED);
     return this.prisma.snagItem.update({
       where: { id: snagId },
-      data: { status: 'RESOLVED', resolvedAt: new Date() },
+      data: { status: 'RESOLVED', resolvedAt: new Date(), afterPhotoPath },
     });
   }
 
   async updateSnag(
     snagId: string,
-    input: { status?: string; description?: string; room?: string; assigneeId?: string },
+    input: {
+      status?: string;
+      description?: string;
+      room?: string;
+      assigneeId?: string;
+      afterPhotoPath?: string;
+    },
   ) {
     const snag = await this.prisma.snagItem.findUnique({ where: { id: snagId } });
     if (!snag) throw new NotFoundException('Snag not found');
-    return this.prisma.snagItem.update({
-      where: { id: snagId },
-      data: {
-        ...(input.status !== undefined && {
-          status: input.status as any,
-          resolvedAt: input.status === 'RESOLVED' ? new Date() : (input.status === 'OPEN' ? null : undefined),
-        }),
-        ...(input.description !== undefined && { description: input.description }),
-        ...(input.room !== undefined && { room: input.room || null }),
-        ...(input.assigneeId !== undefined && { assigneeId: input.assigneeId || null }),
-      },
-    });
+
+    const data: Prisma.SnagItemUncheckedUpdateInput = {};
+    if (input.description !== undefined) data.description = input.description;
+    if (input.room !== undefined) data.room = input.room || null;
+    if (input.assigneeId !== undefined) data.assigneeId = input.assigneeId || null;
+    if (input.afterPhotoPath !== undefined) data.afterPhotoPath = input.afterPhotoPath || null;
+
+    if (input.status !== undefined) {
+      const status = input.status as SnagStatus;
+      data.status = status;
+      if (status === 'RESOLVED') {
+        // Same proof requirement as resolveSnag — otherwise this route is the way around it.
+        const proof = input.afterPhotoPath?.trim() || snag.afterPhotoPath;
+        if (!proof) throw new BadRequestException(AFTER_PHOTO_REQUIRED);
+        data.afterPhotoPath = proof;
+        data.resolvedAt = new Date();
+      } else {
+        // Reopened (RESOLVED → OPEN/IN_PROGRESS): the fix did not hold, so its proof is
+        // retired with it. Keeping it would leave a photo captioned "proof of fix" on an
+        // item that is not fixed, AND would let the next resolve satisfy the gate with a
+        // stale image instead of new work. The before shot survives, as always; only the
+        // pointer is cleared, so the stored object is still there if anyone needs it.
+        data.resolvedAt = null;
+        data.afterPhotoPath = null;
+      }
+    }
+
+    return this.prisma.snagItem.update({ where: { id: snagId }, data });
   }
 
   // ─────── Internal helpers ───────

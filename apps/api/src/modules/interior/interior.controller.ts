@@ -126,15 +126,29 @@ export class InteriorController {
 
   @Post(':id/advance')
   @RequirePermissions('interior:edit')
-  @ApiOperation({ summary: 'Advance to the next phase (enforces shell + document gates)' })
+  @ApiOperation({
+    summary: 'Advance to the next phase (enforces shell, document and open-snag gates)',
+    description:
+      'HANDOVER is blocked while any punch-list item is OPEN or IN_PROGRESS. To hand over ' +
+      'anyway send force: true with a forceReason — the reason is stamped onto handoverNotes ' +
+      'and the request is captured in the audit log.',
+  })
   advance(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { target: InteriorPhase; handoverSignedBy?: string; handoverNotes?: string },
+    @Body() body: {
+      target: InteriorPhase;
+      handoverSignedBy?: string;
+      handoverNotes?: string;
+      force?: boolean;
+      forceReason?: string;
+    },
   ) {
     return this.service.advancePhase(id, body.target, userId, {
       handoverSignedBy: body.handoverSignedBy,
       handoverNotes: body.handoverNotes,
+      force: body.force,
+      forceReason: body.forceReason,
     });
   }
 
@@ -197,16 +211,33 @@ export class InteriorController {
 
   @Post('snags/:snagId/resolve')
   @RequirePermissions('interior:edit')
-  resolveSnag(@Param('snagId') snagId: string) {
-    return this.service.resolveSnag(snagId);
+  @ApiOperation({
+    summary: 'Resolve a snag — requires an "after" photo as proof of the fix',
+    description:
+      'afterPhotoPath is the storage key of the proof-of-fix image. The original photoPath ' +
+      '(the "before" / defect shot) is left untouched.',
+  })
+  resolveSnag(@Param('snagId') snagId: string, @Body() body?: { afterPhotoPath?: string }) {
+    return this.service.resolveSnag(snagId, body);
   }
 
   @Patch('snags/:snagId')
   @RequirePermissions('interior:edit')
-  @ApiOperation({ summary: 'Update snag status, description, room, or assignee' })
+  @ApiOperation({
+    summary: 'Update snag status, description, room, assignee, or proof-of-fix photo',
+    description:
+      'Setting status=RESOLVED requires an afterPhotoPath (here or already on the record). ' +
+      'Reopening a resolved snag clears its proof-of-fix photo — the re-fix needs its own.',
+  })
   updateSnag(
     @Param('snagId') snagId: string,
-    @Body() body: { status?: string; description?: string; room?: string; assigneeId?: string },
+    @Body() body: {
+      status?: string;
+      description?: string;
+      room?: string;
+      assigneeId?: string;
+      afterPhotoPath?: string;
+    },
   ) {
     return this.service.updateSnag(snagId, body);
   }

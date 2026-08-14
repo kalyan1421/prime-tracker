@@ -61,6 +61,12 @@ export const NOTIFICATION_TIERS = {
   // D2 — the permit/NOC has actually LAPSED and is still on file. Operating on a lapsed
   // permit is a stop-work risk and a compliance exposure, so it emails.
   DOCUMENT_EXPIRED: 'ACTION',
+  // C3/C4 — a slip cascade is waiting for a decision. ACTION for the same reason
+  // HISTORY_DELETION_REQUESTED is: it BLOCKS something. Until a PM approves or rejects,
+  // the dependent milestones sit on dates everyone knows are wrong, and any lender draw
+  // date in the cascade has not moved either. A digest entry read three days later is
+  // three days of a schedule nobody can trust.
+  MILESTONE_SLIP_PENDING_REVIEW: 'ACTION',
 
   // ---- FYI: awareness only ----
   LEASE_EXPIRING_30: 'FYI',
@@ -161,6 +167,10 @@ export const RECURRING_TYPES = {
   // a new request, not the same condition persisting.
   HISTORY_DELETION_REQUESTED: false,
   HISTORY_DELETION_DECIDED: false,
+  // Discrete, and no cron re-raises it. A second slip on the same milestone SUPERSEDES the
+  // pending proposal and is a genuinely different cascade over different dates — it must
+  // reach the reviewer, so it must not be deduplicated against the one it replaced.
+  MILESTONE_SLIP_PENDING_REVIEW: false,
   DRAW_REQUEST_SUBMITTED: false,
   DRAW_REQUEST_APPROVED: false,
   DRAW_REQUEST_FUNDED: false,
@@ -551,6 +561,55 @@ export class NotificationsService {
       title: `Milestone Overdue: ${milestone.title}`,
       body: `The milestone "${milestone.title}" in project ${milestone.project.name} is now overdue.`,
       link,
+    });
+  }
+
+  /**
+   * C3/C4 — a slip cascade is waiting for a decision.
+   *
+   * `roles: ['PROJECT_MANAGER']` is the whole routing rule: resolveRecipients() adds
+   * SUPER_ADMIN / FOUNDER / EXECUTIVE unconditionally as portfolio owners, so this is
+   * exactly "the PM and admins" the client asked for, with the PM half filtered to the
+   * people actually staffed on that project. `roles: []` (the LEASE_HOLDOVER trick) would
+   * have reached leadership ONLY and dropped the one person who has to decide.
+   *
+   * The draw count is in the body on purpose. A lender-facing date moving is a different
+   * category of decision from an internal one, and the reviewer must not have to open the
+   * proposal to find out that this cascade contains one.
+   */
+  async notifyMilestoneSlipPendingReview(p: {
+    proposalId: string;
+    projectId: string;
+    projectName: string | null;
+    milestoneTitle: string;
+    daysSlipped: number;
+    /** Dependent milestones whose dates would move. Excludes the trigger. */
+    affectedCount: number;
+    /** Draw schedules whose plannedDate would move. */
+    drawCount: number;
+    requestedByName: string | null;
+  }) {
+    const who = p.requestedByName ?? 'Someone';
+    const cascade =
+      p.affectedCount === 0
+        ? 'No dependent milestones are affected'
+        : `${p.affectedCount} dependent milestone${p.affectedCount === 1 ? '' : 's'} would move `
+          + `by the same ${p.daysSlipped} day${p.daysSlipped === 1 ? '' : 's'}`;
+    const draws =
+      p.drawCount > 0
+        ? ` This cascade also moves ${p.drawCount} LENDER DRAW date${p.drawCount === 1 ? '' : 's'}.`
+        : '';
+
+    await this.sendToRoles({
+      roles: ['PROJECT_MANAGER'],
+      projectId: p.projectId,
+      type: NotificationType.MILESTONE_SLIP_PENDING_REVIEW,
+      title: `Schedule slip needs review — ${p.milestoneTitle}`,
+      body:
+        `${who} moved "${p.milestoneTitle}"${p.projectName ? ` in ${p.projectName}` : ''} out by `
+        + `${p.daysSlipped} day${p.daysSlipped === 1 ? '' : 's'}. ${cascade}.${draws}`
+        + ' Nothing downstream has changed yet — approve or reject the cascade.',
+      link: `/projects/${p.projectId}/milestones`,
     });
   }
 

@@ -3,6 +3,20 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 
+/** Fixed display order for the fit-out phase breakdown (mirrors the InteriorPhase enum). */
+const INTERIOR_PHASES = [
+  'DESIGN',
+  'CLIENT_APPROVAL',
+  'CITY_APPROVAL',
+  'PROCUREMENT',
+  'EXECUTION',
+  'SNAGGING',
+  'HANDOVER',
+] as const;
+
+/** Where an interior project's committed value came from — so Finance can judge the number. */
+type CommitmentBasis = 'PER_SQFT' | 'CONTRACT_VALUE' | 'SCOPE_ITEMS' | 'NONE';
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -12,6 +26,21 @@ export class ReportsService {
   ) {}
 
   // ---- Executive Summary (Founders) ----
+  //
+  // Interior/TI spend is recorded as an `Actual` tagged with `interiorProjectId` (see
+  // InteriorService.addInvoice). Every other financial surface — actuals.service,
+  // budgets.service, kpi.service, variance-alert.cron — filters those rows out with
+  // `interiorProjectId: null`, because the TI budget is isolated inside the interior
+  // module and is NOT represented by any BudgetLine. This report did not filter, so
+  // TI invoices were counted as construction actuals: `totalActuals` was inflated and
+  // every project with a fit-out read as over budget against a budget that never
+  // contained TI in the first place.
+  //
+  // Actuals are now partitioned: `actuals` is construction-only (matching the rest of
+  // the app) and TI is surfaced as its own `interiorActuals` figure, never folded in.
+  // The ROI denominator stays construction + TI, so the headline ROI is unchanged.
+  // The full fit-out picture (commitment, invoiced, remaining) lives in
+  // getInteriorSummary() below.
   async getPortfolioSummary() {
     const projects = await this.prisma.project.findMany({
       where: { status: { not: 'CANCELLED' }, deletedAt: null },
@@ -34,13 +63,19 @@ export class ReportsService {
 
     let totalInvestment = 0;
     let totalActuals = 0;
+    let totalInteriorActuals = 0;
     let totalCommitted = 0;
     let closedSalesRevenue = 0;
     let annualRentRevenue = 0;
 
     const projectRows = projects.map((p) => {
       const budget = p.budgetLines.reduce((s, b) => s + Number(b.revisedAmt ?? b.baselineAmt), 0);
-      const actuals = p.actuals.reduce((s, a) => s + Number(a.amount), 0);
+      const actuals = p.actuals
+        .filter((a) => a.interiorProjectId === null)
+        .reduce((s, a) => s + Number(a.amount), 0);
+      const interiorActuals = p.actuals
+        .filter((a) => a.interiorProjectId !== null)
+        .reduce((s, a) => s + Number(a.amount), 0);
       const committed = p.commitments.reduce((s, c) => s + Number(c.contractAmt), 0);
       const closedSales = p.sales.filter((s) => s.status === 'CLOSED');
       const salesRev = closedSales.reduce((s, sale) => s + Number(sale.salePrice ?? 0), 0);
@@ -56,6 +91,7 @@ export class ReportsService {
 
       totalInvestment += budget;
       totalActuals += actuals;
+      totalInteriorActuals += interiorActuals;
       totalCommitted += committed;
       closedSalesRevenue += salesRev;
       annualRentRevenue += monthlyRent * 12;
@@ -67,6 +103,8 @@ export class ReportsService {
         phase: p.phase,
         budget,
         actuals,
+        /** Isolated TI spend — shown alongside, never added into `actuals` or `variance`. */
+        interiorActuals,
         variance: budget - actuals,
         totalUnits,
         soldUnits,
@@ -77,7 +115,10 @@ export class ReportsService {
     });
 
     const totalRevenue = closedSalesRevenue + annualRentRevenue;
-    const overallROI = totalActuals > 0 ? ((totalRevenue - totalActuals) / totalActuals) * 100 : 0;
+    // ROI is measured against ALL money spent, construction + fit-out, so the headline
+    // figure is identical to before the TI split above.
+    const totalSpend = totalActuals + totalInteriorActuals;
+    const overallROI = totalSpend > 0 ? ((totalRevenue - totalSpend) / totalSpend) * 100 : 0;
 
     const chartData = projectRows.map((r) => ({
       name: r.projectName,
@@ -89,6 +130,8 @@ export class ReportsService {
       kpis: {
         totalInvestment,
         totalActuals,
+        /** Isolated TI spend across the portfolio — a separate line, not part of totalActuals. */
+        totalInteriorActuals,
         totalCommitted,
         closedSalesRevenue,
         annualRentRevenue,
@@ -550,6 +593,285 @@ export class ReportsService {
     return {
       totals,
       rows,
+    };
+  }
+
+  // ---- Interior / Tenant-Improvement (TI) Summary (Finance) ----
+  //
+  // Client ask 2026-08-14: "check everything project wise" — the isolated TI budget was
+  // reviewable nowhere. This is that review surface: per project, what is COMMITTED to
+  // fit-out, what sub-contractors have INVOICED against it, what is still to come, and
+  // where each fit-out sits in its phase.
+  //
+  // TI stays isolated on purpose. Nothing here is added into the main budget/actuals
+  // totals — getPortfolioSummary reports construction and TI as two separate figures.
+  //
+  // Archived-project exclusion: an InteriorProject has no projectId. It anchors to a
+  // unit or a building (service-enforced "exactly one of"), and archiving a project sets
+  // deletedAt on the Project row ONLY — it does not cascade to buildings, units, sales
+  // or interiors. So the whole chain has to be filtered explicitly, the same way
+  // getVacancyReport/getRevenueSummary were fixed.
+  async getInteriorSummary(params: { projectId?: string } = {}) {
+    const liveProject = {
+      deletedAt: null,
+      status: { not: 'CANCELLED' as const },
+      ...(params.projectId ? { id: params.projectId } : {}),
+    };
+
+    const [projects, interiors] = await Promise.all([
+      this.prisma.project.findMany({
+        where: liveProject,
+        select: { id: true, name: true, status: true, phase: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.interiorProject.findMany({
+        where: {
+          deletedAt: null,
+          // One live branch per anchor. Soft-deleted units/buildings and archived
+          // projects drop the interior out entirely.
+          OR: [
+            { unit: { deletedAt: null, building: { deletedAt: null, project: liveProject } } },
+            { building: { deletedAt: null, project: liveProject } },
+          ],
+        },
+        include: {
+          unit: {
+            select: {
+              id: true,
+              unitNumber: true,
+              building: { select: { id: true, name: true, projectId: true } },
+            },
+          },
+          building: { select: { id: true, name: true, projectId: true } },
+          pm: { select: { id: true, name: true } },
+          invoices: { select: { amount: true, paidAt: true, status: true } },
+          scopeItems: { select: { total: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    const projectIds = new Set(projects.map((p) => p.id));
+
+    // Buyer-side TI installments. A soft-deleted sale (or one under an archived project)
+    // must not contribute, so the sale chain is filtered too. CANCELLED installments are
+    // void — the sale died, the money was never owed.
+    const interiorIds = interiors.map((i) => i.id);
+    const tiPayments = interiorIds.length
+      ? await this.prisma.salePayment.findMany({
+          where: {
+            interiorProjectId: { in: interiorIds },
+            status: { not: 'CANCELLED' },
+            sale: { deletedAt: null, project: liveProject },
+          },
+          select: { interiorProjectId: true, amount: true, paidAmount: true, status: true },
+        })
+      : [];
+
+    const tiByInterior = new Map<string, { billed: number; collected: number; status: string }>();
+    for (const p of tiPayments) {
+      if (!p.interiorProjectId) continue;
+      const existing = tiByInterior.get(p.interiorProjectId) ?? { billed: 0, collected: 0, status: p.status };
+      existing.billed += Number(p.amount);
+      existing.collected += Number(p.paidAmount);
+      tiByInterior.set(p.interiorProjectId, existing);
+    }
+
+    const rowsByProject = new Map<string, any[]>();
+
+    for (const ip of interiors) {
+      const projectId = ip.building?.projectId ?? ip.unit?.building?.projectId;
+      // Defensive: an interior whose anchor resolves outside the requested scope.
+      if (!projectId || !projectIds.has(projectId)) continue;
+
+      const { committed, basis } = this.deriveInteriorCommitment(ip);
+
+      const invoiced = ip.invoices.reduce((s, inv) => s + Number(inv.amount), 0);
+      const paid = ip.invoices
+        .filter((inv) => inv.paidAt !== null || inv.status === 'PAID')
+        .reduce((s, inv) => s + Number(inv.amount), 0);
+
+      // remaining / overrun are both non-negative so they roll up cleanly:
+      // committed - invoiced === remaining - overrun.
+      const remaining = Math.max(0, committed - invoiced);
+      const overrun = Math.max(0, invoiced - committed);
+
+      const ti = tiByInterior.get(ip.id);
+
+      const row = {
+        interiorProjectId: ip.id,
+        name: ip.name,
+        status: ip.status,
+        phase: ip.phase,
+        contractType: ip.contractType,
+        ratePerSqft: ip.ratePerSqft === null ? null : Number(ip.ratePerSqft),
+        area: ip.area === null ? null : Number(ip.area),
+        contractValue: ip.contractValue === null ? null : Number(ip.contractValue),
+        /** Internal cost-to-build commitment. Zero once CANCELLED — nothing is owed. */
+        committed,
+        /** Which input produced `committed`; 'NONE' means Finance has nothing to review. */
+        commitmentBasis: basis,
+        invoiceCount: ip.invoices.length,
+        invoiced,
+        paid,
+        unpaid: invoiced - paid,
+        remaining,
+        overrun,
+        unitId: ip.unit?.id ?? null,
+        unitNumber: ip.unit?.unitNumber ?? null,
+        buildingId: ip.building?.id ?? ip.unit?.building.id ?? null,
+        buildingName: ip.building?.name ?? ip.unit?.building.name ?? null,
+        pmId: ip.pm?.id ?? null,
+        pmName: ip.pm?.name ?? null,
+        saleId: ip.saleId,
+        /** The buyer-facing TI installment on the Sale — the client price, not the cost. */
+        tiBilledToBuyer: ti?.billed ?? 0,
+        tiCollectedFromBuyer: ti?.collected ?? 0,
+        startDate: ip.startDate,
+        targetEnd: ip.targetEnd,
+        handoverAt: ip.handoverAt,
+      };
+
+      const list = rowsByProject.get(projectId);
+      if (list) list.push(row);
+      else rowsByProject.set(projectId, [row]);
+    }
+
+    // Every in-scope project gets a row — a project with no fit-out returns a zeroed row
+    // with hasInterior=false rather than being dropped, so Finance can see the gaps.
+    const projectRows = projects.map((p) => {
+      const rows = rowsByProject.get(p.id) ?? [];
+      const agg = this.aggregateInteriorRows(rows);
+      return {
+        projectId: p.id,
+        projectName: p.name,
+        status: p.status,
+        phase: p.phase,
+        hasInterior: rows.length > 0,
+        ...agg,
+        interiors: rows,
+      };
+    });
+
+    const allRows = projectRows.flatMap((p) => p.interiors);
+    const totals = this.aggregateInteriorRows(allRows);
+
+    const byPhase = INTERIOR_PHASES.map((phase) => {
+      const inPhase = allRows.filter((r) => r.phase === phase);
+      return {
+        phase,
+        count: inPhase.length,
+        committed: inPhase.reduce((s, r) => s + r.committed, 0),
+        invoiced: inPhase.reduce((s, r) => s + r.invoiced, 0),
+        remaining: inPhase.reduce((s, r) => s + r.remaining, 0),
+      };
+    });
+
+    const chartData = projectRows
+      .filter((p) => p.hasInterior)
+      .map((p) => ({
+        name: p.projectName.length > 14 ? p.projectName.slice(0, 14) + '…' : p.projectName,
+        Committed: p.committed,
+        Invoiced: p.invoiced,
+        Remaining: p.remaining,
+      }));
+
+    return {
+      scope: { projectId: params.projectId ?? null },
+      kpis: totals,
+      byPhase,
+      projects: projectRows,
+      chartData,
+    };
+  }
+
+  /**
+   * Fit-out commitment, derived per contract type rather than trusting one column.
+   *
+   * `contractValue` is only auto-populated for PER_SQFT at create time, an explicit
+   * value can override it on update, and COST_PLUS engagements often have neither —
+   * so PER_SQFT recomputes rate x area, everything else falls back to the flat
+   * contractValue, and a BOQ sum is the last resort.
+   *
+   * A CANCELLED fit-out commits nothing; whatever was already invoiced against it
+   * surfaces as `overrun` and `cancelledSpend`, not as a live commitment.
+   */
+  private deriveInteriorCommitment(ip: {
+    status: string;
+    contractType: string;
+    ratePerSqft: unknown;
+    area: unknown;
+    contractValue: unknown;
+    scopeItems: Array<{ total: unknown }>;
+  }): { committed: number; basis: CommitmentBasis } {
+    if (ip.status === 'CANCELLED') return { committed: 0, basis: 'NONE' };
+
+    const rate = ip.ratePerSqft === null || ip.ratePerSqft === undefined ? null : Number(ip.ratePerSqft);
+    const area = ip.area === null || ip.area === undefined ? null : Number(ip.area);
+    if (ip.contractType === 'PER_SQFT' && rate !== null && area !== null) {
+      return { committed: rate * area, basis: 'PER_SQFT' };
+    }
+
+    const flat = ip.contractValue === null || ip.contractValue === undefined ? null : Number(ip.contractValue);
+    if (flat !== null) return { committed: flat, basis: 'CONTRACT_VALUE' };
+
+    const scopeLines = ip.scopeItems.filter((s) => s.total !== null && s.total !== undefined);
+    if (scopeLines.length) {
+      return { committed: scopeLines.reduce((s, l) => s + Number(l.total), 0), basis: 'SCOPE_ITEMS' };
+    }
+
+    return { committed: 0, basis: 'NONE' };
+  }
+
+  /** Roll a set of interior rows up into the shape used for both a project and the portfolio. */
+  private aggregateInteriorRows(
+    rows: Array<{
+      status: string;
+      phase: string;
+      committed: number;
+      invoiced: number;
+      paid: number;
+      remaining: number;
+      overrun: number;
+      commitmentBasis: CommitmentBasis;
+      tiBilledToBuyer: number;
+      tiCollectedFromBuyer: number;
+    }>,
+  ) {
+    const sum = (pick: (r: (typeof rows)[number]) => number) => rows.reduce((s, r) => s + pick(r), 0);
+
+    const committed = sum((r) => r.committed);
+    const invoiced = sum((r) => r.invoiced);
+    const paid = sum((r) => r.paid);
+    const tiBilledToBuyers = sum((r) => r.tiBilledToBuyer);
+    const tiCollectedFromBuyers = sum((r) => r.tiCollectedFromBuyer);
+
+    const byPhase = Object.fromEntries(
+      INTERIOR_PHASES.map((phase) => [phase, rows.filter((r) => r.phase === phase).length]),
+    ) as Record<(typeof INTERIOR_PHASES)[number], number>;
+
+    return {
+      interiorCount: rows.length,
+      activeCount: rows.filter((r) => r.status === 'IN_PROGRESS').length,
+      notStartedCount: rows.filter((r) => r.status === 'NOT_STARTED').length,
+      onHoldCount: rows.filter((r) => r.status === 'ON_HOLD').length,
+      completedCount: rows.filter((r) => r.status === 'COMPLETED').length,
+      cancelledCount: rows.filter((r) => r.status === 'CANCELLED').length,
+      committed,
+      invoiced,
+      paid,
+      unpaid: invoiced - paid,
+      remaining: sum((r) => r.remaining),
+      overrun: sum((r) => r.overrun),
+      /** Sub-contractor spend booked against fit-outs that were later cancelled. */
+      cancelledSpend: rows.filter((r) => r.status === 'CANCELLED').reduce((s, r) => s + r.invoiced, 0),
+      pctInvoiced: committed > 0 ? Math.round((invoiced / committed) * 1000) / 10 : 0,
+      /** Fit-outs with no reviewable commitment at all — Finance has to chase these. */
+      missingCommitmentCount: rows.filter((r) => r.commitmentBasis === 'NONE' && r.status !== 'CANCELLED').length,
+      tiBilledToBuyers,
+      tiCollectedFromBuyers,
+      tiOutstandingFromBuyers: tiBilledToBuyers - tiCollectedFromBuyers,
+      byPhase,
     };
   }
 

@@ -58,6 +58,11 @@ model User {
   projectMemberships           ProjectMember[]
   // New relations from Slices 1, 5, 7, 8
   milestonePhotos              MilestonePhoto[]            @relation("MilestonePhotoUploader")
+  // C6 — the sign-off half of milestone photo evidence. Deliberately a SECOND relation:
+  // the person who shot the photo and the person who vouches for it are different people,
+  // and collapsing them into one column is exactly what makes a sign-off meaningless.
+  milestonePhotoReviews        MilestonePhoto[]            @relation("MilestonePhotoReviewer")
+  milestoneSignoffOverrides    Milestone[]                 @relation("MilestoneSignoffOverrider")
   budgetRevisionsCreated       BudgetRevision[]            @relation("BudgetRevCreator")
   budgetRevisionsApproved      BudgetRevision[]            @relation("BudgetRevApprover")
   drawApprovals                DrawApproval[]              @relation("DrawApprovalActor")
@@ -87,6 +92,11 @@ model User {
   taskAssignments              TaskAssignment[]            @relation("TaskAssignmentUser")
   // Unit occupancy log
   unitStatusEvents             UnitStatusEvent[]           @relation("UnitStatusEventRecorder")
+  // C3 — the PM review gate on a milestone slip cascade
+  slipProposalsRequested       MilestoneSlipProposal[]     @relation("SlipProposalRequester")
+  slipProposalsDecided         MilestoneSlipProposal[]     @relation("SlipProposalDecider")
+  // S3 — unit swap mid-contract
+  saleUnitTransfersRecorded    SaleUnitTransfer[]          @relation("SaleUnitTransferRecorder")
 
   @@map("users")
 }
@@ -211,6 +221,7 @@ model Project {
   clients          Client[]
   campaignProjects CampaignProject[]
   dailyLogs        DailyLog[]
+  slipProposals    MilestoneSlipProposal[]
 
   @@index([orgId])
   @@index([status, phase])
@@ -362,6 +373,10 @@ model Unit {
   leads            Lead[]
   interiorProjects InteriorProject[]
   interestedLeads  LeadUnitInterest[]
+  // S3 — unit swap mid-contract. Both sides, so a unit's page can show "a buyer moved
+  // off this unit" and "this unit was taken over by an existing sale" alike.
+  saleTransfersOut SaleUnitTransfer[] @relation("SaleUnitTransferFrom")
+  saleTransfersIn  SaleUnitTransfer[] @relation("SaleUnitTransferTo")
 
   // Uniqueness of (buildingId, unitNumber) is enforced by a partial unique index
   // (WHERE "deletedAt" IS NULL) added in migration 20260703000000_units_partial_unique_active —
@@ -496,6 +511,13 @@ model Milestone {
   dueDate              DateTime
   completedAt          DateTime?
   status               String           @default("NOT_STARTED")
+  // C6 — completion forced past the photo sign-off gate. Sits next to completedAt on
+  // purpose: anyone reading "this phase is complete" reads the caveat in the same breath,
+  // instead of it being buried in an audit table nobody opens.
+  signoffOverrideById  String?
+  signoffOverrideBy    User?            @relation("MilestoneSignoffOverrider", fields: [signoffOverrideById], references: [id], onDelete: SetNull)
+  signoffOverrideAt    DateTime?
+  signoffOverrideReason String?
   ownerId              String?
   owner                User?            @relation("MilestoneOwner", fields: [ownerId], references: [id])
   sortOrder            Int              @default(0)
@@ -511,6 +533,10 @@ model Milestone {
   // Interior / Fit-Out + Sale Payments
   salePayments         SalePayment[]
   snags                SnagItem[]
+  // C3 — slip review gate. `slipProposals` are the ones THIS milestone's own date move
+  // triggered; `slipProposalItems` are every proposal that would move THIS milestone.
+  slipProposals        MilestoneSlipProposal[]     @relation("SlipProposalTrigger")
+  slipProposalItems    MilestoneSlipProposalItem[]
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
@@ -521,6 +547,10 @@ model Milestone {
 }
 
 // Photo evidence for a milestone — attached by PM on-site, surfaced to lender via draw package.
+//
+// C6 (client decision 2026-08-14): "milestone photos require a sign-off before that phase
+// counts as complete". Uploading is evidence; the review is the judgement. A reviewer can
+// approve OR reject — a one-way "approve" button would only be a slower upload.
 model MilestonePhoto {
   id           String    @id @default(cuid())
   milestoneId  String
@@ -530,9 +560,131 @@ model MilestonePhoto {
   uploadedById String
   uploadedBy   User      @relation("MilestonePhotoUploader", fields: [uploadedById], references: [id])
   uploadedAt   DateTime  @default(now())
+  // ---- Sign-off (C6) ----
+  reviewStatus MilestonePhotoReviewStatus @default(PENDING)
+  reviewedById String?
+  reviewedBy   User?     @relation("MilestonePhotoReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  // Mandatory on REJECTED (DB CHECK + service): a rejection the uploader cannot read is
+  // an instruction to re-shoot with no idea what was wrong.
+  reviewNote   String?
 
   @@index([milestoneId])
+  // The completion gate's only question: "any photo on this milestone not APPROVED?"
+  @@index([milestoneId, reviewStatus])
   @@map("milestone_photos")
+}
+
+enum MilestonePhotoReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ============================================================================
+// C3 / C4 — the PM review gate on a slip cascade.
+//
+// Client decision 2026-08-14: "PM review the cascade first — when a milestone's due date
+// slips, should every dependent milestone's date shift automatically[?] send notification
+// to PM and admins also" and "yes — draw date move along with it[,] slipped milestone is
+// linked to a lender's draw schedule".
+//
+// Before this, MilestoneDepsService.propagateSlippage() wrote every dependent's new date
+// transitively, immediately, with nobody told and nobody asked. Moving one date silently
+// rewrote a whole phase of the schedule — and, once C4 is in, would have moved a date the
+// LENDER holds.
+//
+// Modelled on HistoricalRecordDeletion, the established request/approve shape in this
+// codebase: who proposed it, when, what was decided, by whom, and the DB CHECK that a
+// decided row must name a decider.
+//
+// The trigger milestone's OWN due date is written immediately and is not up for review —
+// that was the PM's direct edit. What is held is (a) the cascade onto its dependents and
+// (b) any linked DrawSchedule.plannedDate, including the trigger's own.
+// ============================================================================
+
+model MilestoneSlipProposal {
+  id             String    @id @default(cuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// The milestone whose due date actually moved.
+  milestoneId    String
+  milestone      Milestone @relation("SlipProposalTrigger", fields: [milestoneId], references: [id], onDelete: Cascade)
+  /// The trigger's own move, recorded so the reviewer sees the cause, not just the effect.
+  oldDueDate     DateTime
+  newDueDate     DateTime
+  /// Whole days. Every shift in `items` is exactly this delta — a cascade is a translation
+  /// of the sub-tree, not a re-plan.
+  daysSlipped    Int
+  /// PENDING | APPROVED | REJECTED | SUPERSEDED | STALE
+  ///
+  /// SUPERSEDED — the same milestone slipped again while this was pending. Two applyable
+  ///              proposals over one sub-tree would double-shift it.
+  /// STALE      — approval found the schedule had moved under the proposal. Terminal on
+  ///              purpose: see MilestoneDepsService.decideProposal.
+  status         String    @default("PENDING")
+  /// Nullable: the gate matters more than the attribution. A date moved by an import or a
+  /// future automated path must still raise a reviewable proposal rather than silently
+  /// applying, or failing to record itself at all.
+  requestedById  String?
+  requestedBy    User?     @relation("SlipProposalRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedAt    DateTime  @default(now())
+  /// Null for SUPERSEDED / STALE — those are closed by the system, not by a person. The
+  /// CHECK constraint requires a decider only for APPROVED / REJECTED.
+  decidedById    String?
+  decidedBy      User?     @relation("SlipProposalDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  /// Set for EVERY terminal status, human or system: when it closed is always knowable.
+  /// For APPROVED this is also the moment the dates were written — approval applies.
+  decidedAt      DateTime?
+  decisionNote   String?
+  /// The proposal that replaced this one (SUPERSEDED / STALE only).
+  supersededById String?                @unique
+  supersededBy   MilestoneSlipProposal? @relation("SlipProposalSupersession", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes     MilestoneSlipProposal? @relation("SlipProposalSupersession")
+
+  items     MilestoneSlipProposalItem[]
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+
+  // Serves "is there already one pending for this milestone?" — the supersession lookup.
+  @@index([milestoneId, status])
+  // Serves the PM's review queue.
+  @@index([projectId, status, requestedAt])
+  @@map("milestone_slip_proposals")
+}
+
+model MilestoneSlipProposalItem {
+  id          String                @id @default(cuid())
+  proposalId  String
+  proposal    MilestoneSlipProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  milestoneId String
+  milestone   Milestone             @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  /// True for the milestone that was edited. Its due date is already written, so
+  /// currentDueDate == proposedDueDate; it appears here only because its linked draw
+  /// schedule still has to move, and because the reviewer needs the cause in the list.
+  isTrigger   Boolean               @default(false)
+  /// Hops from the trigger — 0 for the trigger, 1 for its direct dependents, and so on.
+  /// Purely presentational: it lets the UI show the cascade as a tree.
+  depth       Int                   @default(0)
+
+  /// The dates AS OBSERVED WHEN THE PROPOSAL WAS COMPUTED. This is the staleness baseline:
+  /// approval re-reads the live rows and refuses if either has moved since. Without it,
+  /// approving a week-old proposal would silently overwrite whatever happened in between.
+  currentDueDate  DateTime
+  proposedDueDate DateTime
+
+  /// C4 — the lender's date. Null when this milestone funds no draw.
+  drawScheduleId   String?
+  drawSchedule     DrawSchedule? @relation(fields: [drawScheduleId], references: [id], onDelete: SetNull)
+  currentDrawDate  DateTime?
+  proposedDrawDate DateTime?
+
+  // One row per milestone per proposal. A diamond in the dependency graph reaches the
+  // same milestone twice; shifting it twice would double the delta.
+  @@unique([proposalId, milestoneId])
+  @@index([milestoneId])
+  @@index([drawScheduleId])
+  @@map("milestone_slip_proposal_items")
 }
 
 // ---- Financial: Budget, Commitments, Actuals, Forecast ----
@@ -836,6 +988,9 @@ model DrawSchedule {
   updatedAt     DateTime @updatedAt
 
   linkedMilestones Milestone[]
+  // C4 — proposed shifts of plannedDate awaiting PM approval. A lender-facing date is
+  // never moved outside an approved proposal.
+  slipProposalItems MilestoneSlipProposalItem[]
 
   @@unique([loanId, drawNumber])
   @@index([loanId])
@@ -894,6 +1049,8 @@ model Sale {
   interiorProjects InteriorProject[]
   // What became of the money already collected when this sale was cancelled (S1).
   cancellation     SaleCancellation?
+  // Every unit this sale has moved between (S3), oldest first.
+  unitTransfers    SaleUnitTransfer[]
 
   @@index([projectId])
   @@index([unitId])
@@ -958,6 +1115,52 @@ model SaleCancellation {
   @@index([disposition])
   @@index([cancelledAt])
   @@map("sale_cancellations")
+}
+
+/// S3 — a buyer switching units mid-contract, after the LOI or the contract is signed.
+///
+/// Immutable transition row, same shape as LeaseTenantAssignment: the Sale only ever
+/// holds the CURRENT unit and the CURRENT price, so without a copy here the fact that
+/// the deal started somewhere else is gone. Rewriting `sale.unitId` in place was
+/// rejected — it strands the old unit in UNDER_CONTRACT, silently restates every
+/// percentOfPrice installment, and launders a discount approval granted against a
+/// different asset at a different price.
+model SaleUnitTransfer {
+  id                String   @id @default(cuid())
+  saleId            String
+  sale              Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  fromUnitId        String
+  fromUnit          Unit     @relation("SaleUnitTransferFrom", fields: [fromUnitId], references: [id])
+  toUnitId          String
+  toUnit            Unit     @relation("SaleUnitTransferTo", fields: [toUnitId], references: [id])
+  /// When the switch takes effect in the real world — not when it was typed in. Both
+  /// occupancy events are dated to this.
+  effectiveDate     DateTime
+  /// The agreed price on either side of the switch. Snapshotted because the sale row
+  /// carries only the current one, and every installment rebase below is derived from
+  /// the difference between these two figures.
+  priceBefore       Decimal? @db.Decimal(14, 2)
+  priceAfter        Decimal? @db.Decimal(14, 2)
+  /// The discount off each unit's asking price, as a %. Recorded so the carry-or-clear
+  /// decision below is auditable without re-deriving it from asking prices that may
+  /// have moved since. Null when a unit carries no asking price.
+  discountPctBefore Decimal? @db.Decimal(6, 2)
+  discountPctAfter  Decimal? @db.Decimal(6, 2)
+  /// True when this transfer left the sale needing a Founder discount approval it does
+  /// not have. A Founder approving 12% off an $800k unit has not approved 12% off a
+  /// $1.1M one — the absolute concession is larger — so an INCREASED discount % clears
+  /// the approval and re-gates (client-confirmed 2026-08-14).
+  approvalReRequired Boolean @default(false)
+  reason            String?
+  note              String?
+  recordedById      String?
+  recordedBy        User?    @relation("SaleUnitTransferRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  recordedAt        DateTime @default(now())
+
+  @@index([saleId, effectiveDate])
+  @@index([fromUnitId])
+  @@index([toUnitId])
+  @@map("sale_unit_transfers")
 }
 
 // ---- Leases ----
@@ -1771,6 +1974,11 @@ enum NotificationType {
   /// D2 — the date has PASSED and the document is still on file. A separate type, not the
   /// same one escalating, so that muting the early warnings can never mute the lapse.
   DOCUMENT_EXPIRED
+  /// C3/C4 — a milestone slipped and the cascade onto its dependents (plus any lender
+  /// draw dates) is waiting for a PM to approve or reject. Routed to the project's PM
+  /// plus leadership; ACTION-tier because the schedule is frozen mid-move until somebody
+  /// decides.
+  MILESTONE_SLIP_PENDING_REVIEW
 }
 
 model Notification {
@@ -2566,7 +2774,13 @@ model SnagItem {
   assigneeId        String?
   assignee          User?            @relation("SnagAssignee", fields: [assigneeId], references: [id])
   status            SnagStatus       @default(OPEN)
-  photoPath         String? // Supabase storage key
+  photoPath         String? // Supabase storage key — the "before" / defect shot
+  /// Proof-of-fix ("after") photo — REQUIRED to resolve a snag (client, 2026-08-14).
+  /// Deliberately a separate column from `photoPath`: overwriting the defect shot would
+  /// destroy the before/after comparison that makes the punch-list record worth keeping.
+  /// Cleared when a snag is reopened, so a re-fix cannot be signed off on the proof of a
+  /// fix that demonstrably did not hold (the storage object itself is not deleted).
+  afterPhotoPath    String?
   dueDate           DateTime?
   resolvedAt        DateTime?
   createdAt         DateTime         @default(now())
@@ -2597,6 +2811,14 @@ model SalePayment {
   paidAmount        Decimal            @default(0) @db.Decimal(14, 2)
   paidAt            DateTime?
   status            SalePaymentStatus  @default(SCHEDULED)
+  /// Set when a unit swap (S3) rebased the schedule and THIS installment already had
+  /// money against it, so its amount could not be restated. The buyer is now over- or
+  /// under-collected against the new price and a human has to decide what to do about
+  /// it. Same pattern, and the same reasoning, as LeaseRentInvoice.needsReview (R22):
+  /// paidAmount is a record of what a buyer actually handed over, and silently moving
+  /// the figure it was paid against destroys the discrepancy Finance needs to see.
+  needsReview       Boolean            @default(false)
+  reviewReason      String?
   interiorProjectId String? // set when this installment is the TI / interior charge
   notes             String?
   createdAt         DateTime           @default(now())

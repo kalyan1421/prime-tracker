@@ -59,6 +59,12 @@ export class DashboardService {
       where: { status: { not: 'CANCELLED' }, deletedAt: null },
       include: {
         budgetLines: { where: { deletedAt: null } },
+        // Actuals are partitioned below, not filtered here. Interior sub-contractor
+        // invoices are mirrored into Actual with an interiorProjectId, and the TI budget
+        // is isolated with no BudgetLine behind it — folding them into `totalActuals`
+        // inflated spend and showed every project with a fit-out as over budget against
+        // a budget that never contained TI. Founders own the whole spend, though, so TI
+        // is reported as its own `totalInteriorActuals` line rather than dropped.
         actuals: true,
         commitments: true,
         sales: { where: { deletedAt: null } },
@@ -78,6 +84,7 @@ export class DashboardService {
 
     let totalBudget = 0;
     let totalActuals = 0;
+    let totalInteriorActuals = 0;
     let totalCommitted = 0;
     let totalMonthlyLeaseIncome = 0;
     let totalMonthlyMortgage = 0;
@@ -93,11 +100,17 @@ export class DashboardService {
 
     for (const p of projects) {
       const budget = p.budgetLines.reduce((s, b) => s + Number(b.revisedAmt ?? b.baselineAmt), 0);
-      const actuals = p.actuals.reduce((s, a) => s + Number(a.amount), 0);
+      const actuals = p.actuals
+        .filter((a) => a.interiorProjectId === null)
+        .reduce((s, a) => s + Number(a.amount), 0);
+      const interiorActuals = p.actuals
+        .filter((a) => a.interiorProjectId !== null)
+        .reduce((s, a) => s + Number(a.amount), 0);
       const committed = p.commitments.reduce((s, c) => s + Number(c.contractAmt), 0);
 
       totalBudget += budget;
       totalActuals += actuals;
+      totalInteriorActuals += interiorActuals;
       totalCommitted += committed;
 
       projectsByPhase[p.phase] = (projectsByPhase[p.phase] || 0) + 1;
@@ -139,7 +152,9 @@ export class DashboardService {
         }
       }
 
-      // Budget alerts
+      // Budget alerts — construction spend against the construction budget. TI is
+      // deliberately absent from both sides; an over-budget alert fired by fit-out
+      // invoices points at a BudgetLine that does not exist.
       if (budget > 0) {
         const spentPct = actuals / budget;
         if (spentPct > 1.0) {
@@ -212,6 +227,8 @@ export class DashboardService {
       activeProjects: projects.filter((p) => p.status === 'ACTIVE').length,
       totalBudget,
       totalActuals,
+      /** Isolated fit-out spend — a separate line, never part of totalActuals/budgetVariance. */
+      totalInteriorActuals,
       totalCommitted,
       budgetVariance,
       totalMonthlyLeaseIncome,
@@ -258,7 +275,19 @@ export class DashboardService {
       where: { status: 'ACTIVE', deletedAt: null, ...(await this.memberScope(role, userId)) },
       include: {
         budgetLines: { where: { deletedAt: null } },
-        actuals: true,
+        // Construction actuals ONLY — interior sub-contractor invoices are mirrored into
+        // Actual with an interiorProjectId, and the TI budget is isolated with no
+        // BudgetLine behind it. Including them inflated spend and showed every project
+        // with a fit-out as over budget. Matches actuals/budgets/kpi, which already filter.
+        //
+        // Unlike the Founder and Finance dashboards, TI is filtered away here rather than
+        // reported alongside: every financial figure on this surface is shell-specific
+        // (budget consumption against BudgetLines, draw availability against the
+        // construction loan) and fit-out has neither a BudgetLine nor a draw. Its primary
+        // audience (CONSTRUCTION) sees no financials at all, and the interior module
+        // carries its own commitment/invoiced/remaining view. A TI number here would be
+        // one nobody on this screen can act on. Full picture: ReportsService.getInteriorSummary().
+        actuals: { where: { interiorProjectId: null } },
         milestones: true,
         loans: { where: { deletedAt: null }, include: { drawRequests: true } },
       },
@@ -522,6 +551,11 @@ export class DashboardService {
       where: { status: { not: 'CANCELLED' }, deletedAt: null },
       include: {
         budgetLines: { where: { deletedAt: null } },
+        // Partitioned below rather than filtered here. TI invoices are mirrored into
+        // Actual with an interiorProjectId against a budget that has no BudgetLine, so
+        // they must stay out of `actuals`/`variance`/`budgetSpentPct` — but Finance is
+        // exactly the audience that has to see fit-out spend, so it comes back as its own
+        // `interiorActuals` / `totalInteriorActuals` figure instead of being dropped.
         actuals: true,
         loans: { where: { deletedAt: null }, include: { drawRequests: true } },
         commitments: true,
@@ -530,6 +564,7 @@ export class DashboardService {
 
     let totalBudget = 0;
     let totalActuals = 0;
+    let totalInteriorActuals = 0;
     let totalLoanPrincipal = 0;
     let totalMonthlyPayment = 0;
     let totalPendingDraws = 0;
@@ -540,19 +575,26 @@ export class DashboardService {
 
     const projectSummaries = projects.map((p) => {
       const budget = p.budgetLines.reduce((s, b) => s + Number(b.revisedAmt ?? b.baselineAmt), 0);
-      const actuals = p.actuals.reduce((s, a) => s + Number(a.amount), 0);
+      const constructionActuals = p.actuals.filter((a) => a.interiorProjectId === null);
+      const actuals = constructionActuals.reduce((s, a) => s + Number(a.amount), 0);
+      const interiorActuals = p.actuals
+        .filter((a) => a.interiorProjectId !== null)
+        .reduce((s, a) => s + Number(a.amount), 0);
       const variance = budget - actuals;
       const variancePct = budget > 0 ? (variance / budget) * 100 : 0;
       const committed = p.commitments.reduce((s, c) => s + Number(c.contractAmt), 0);
 
       totalBudget += budget;
       totalActuals += actuals;
+      totalInteriorActuals += interiorActuals;
 
       for (const bl of p.budgetLines) {
         const cat = bl.category;
         budgetByCategory[cat] = (budgetByCategory[cat] || 0) + Number(bl.revisedAmt ?? bl.baselineAmt);
       }
-      for (const a of p.actuals) {
+      // Construction rows only: budgetCategoryChart puts these bars next to budget bars,
+      // and no BudgetLine category has TI behind it.
+      for (const a of constructionActuals) {
         const cat = a.category;
         actualsByCategory[cat] = (actualsByCategory[cat] || 0) + Number(a.amount);
       }
@@ -600,6 +642,8 @@ export class DashboardService {
         phase: p.phase,
         budget,
         actuals,
+        /** Isolated fit-out spend — shown alongside, never added into actuals/variance. */
+        interiorActuals,
         variance,
         variancePct,
         committed,
@@ -628,6 +672,8 @@ export class DashboardService {
     return {
       totalBudget,
       totalActuals,
+      /** Isolated fit-out spend across the portfolio — a separate line, not part of totalActuals. */
+      totalInteriorActuals,
       budgetVariance,
       budgetUtilPct,
       totalLoanPrincipal,
