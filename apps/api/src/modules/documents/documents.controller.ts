@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Delete, Param, Body, Query, Res,
-  UseGuards, UseInterceptors, Request, UploadedFile,
+  UseGuards, UseInterceptors, Request, UploadedFile, BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -56,6 +56,41 @@ export class DocumentsController {
     if (unitId) return this.service.findByUnit(unitId);
     if (buildingId) return this.service.findByBuilding(buildingId);
     return this.service.findByProject(projectId);
+  }
+
+  /**
+   * POST /api/documents/upload-file
+   *
+   * Upload a file THROUGH the API and get back its storage path. No Document row is
+   * created — this is for the callers that store a path on their own table (a task
+   * update's photo, a building's cover image, a milestone photo).
+   *
+   * Why this exists alongside `presigned-upload`: a presigned PUT goes browser → S3
+   * directly, which is a CROSS-ORIGIN request and therefore needs a CORS rule on the
+   * bucket. Without one the browser blocks it at preflight and every upload fails with
+   * an opaque "Failed to fetch" — which is exactly what was happening. This route is
+   * same-origin, so it works whatever the bucket is configured to allow.
+   *
+   * The presigned route is kept for genuinely large files, where streaming through the
+   * API is worth avoiding; it becomes useful again once the bucket has a CORS rule.
+   */
+  @Post('upload-file')
+  @RequirePermissions('document:upload')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload a file and return its storage path (no Document row)' })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } }))
+  async uploadFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { projectId?: string; projectName?: string; category?: string },
+  ) {
+    if (!file) throw new BadRequestException('No file was received');
+    const { storagePath, publicUrl } = await this.storage.upload(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      { projectId: body.projectId, projectName: body.projectName, category: body.category },
+    );
+    return { storagePath, publicUrl, filename: file.originalname };
   }
 
   @Post()

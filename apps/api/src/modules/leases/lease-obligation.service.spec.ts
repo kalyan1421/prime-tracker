@@ -197,11 +197,13 @@ describe('LeaseObligationService', () => {
       expect(Number(data.paidAmount)).toBe(4999.99);
     });
 
-    it('ALLOWS overpayment: status SETTLED, mirror holds the real money received', async () => {
-      // Documented policy: deposits do get over-paid in the field; blocking the entry
-      // would strand money the user has actually received.
+    it('ALLOWS a CONFIRMED overpayment: status SETTLED, mirror holds the real money received', async () => {
+      // Deposits do get over-paid in the field, and blocking the entry outright would
+      // strand money the user has actually received. Since 2026-08-12 the caller has to
+      // say so explicitly — a $100 TI allowance was accepting a $4,500 payment in
+      // silence — but a confirmed overpayment still records exactly as before.
       seed('5000', ['4800'], 'PARTIAL');
-      await service.recordPayment('ob1', { amount: 500 });
+      await service.recordPayment('ob1', { amount: 500, allowOverpayment: true });
       const data = lastMirrorWrite();
       expect(data.status).toBe('SETTLED');
       expect(Number(data.paidAmount)).toBe(5300);
@@ -350,7 +352,9 @@ describe('LeaseObligationService', () => {
       seedObligation('TI_ALLOWANCE', '30000', ['29000']);
       leaseOnUnit('p1');
 
-      await service.recordPayment('ob1', { amount: 1500 });
+      // Over-disbursement must be confirmed at the call site; the refund signal it
+      // produces downstream is unchanged.
+      await service.recordPayment('ob1', { amount: 1500, allowOverpayment: true });
 
       expect(tiEvents()[0]).toEqual(expect.objectContaining({ amount: 1500, pending: -500 }));
     });
@@ -657,5 +661,54 @@ describe('LeaseObligationService', () => {
         }),
       );
     });
+  });
+});
+
+// Reported from the UI: a $100 TI allowance showing "$4,500 paid — Overpaid — $4,400
+// refund due". `paidAmount` mirrors the payment rows, so a mis-keyed amount used to be
+// accepted in silence and simply flipped the panel to a refund. Nothing distinguished a
+// typo from a real credit.
+describe('LeaseObligationService.recordPayment — overpayment guard', () => {
+  let service: LeaseObligationService;
+
+  const obligation = {
+    id: 'ob1', leaseId: 'l1', kind: 'TI_ALLOWANCE', direction: 'TO_TENANT',
+    totalAmount: new Prisma.Decimal(100), paidAmount: new Prisma.Decimal(60),
+    status: 'PARTIAL',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.leaseObligation.findUnique.mockResolvedValue(obligation);
+    mockPrisma.leaseObligationPayment.create.mockImplementation((a: any) => Promise.resolve(a.data));
+    mockPrisma.leaseObligationPayment.findMany.mockResolvedValue([]);
+    mockPrisma.leaseObligation.update.mockResolvedValue({ ...obligation, paidAmount: new Prisma.Decimal(60) });
+  });
+
+  it('refuses a payment that exceeds the agreed total', async () => {
+    await expect(service.recordPayment('ob1', { amount: 4500 })).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.leaseObligationPayment.create).not.toHaveBeenCalled();
+  });
+
+  it('names the overshoot so the number can be checked against the paperwork', async () => {
+    await expect(service.recordPayment('ob1', { amount: 4500 })).rejects.toThrow(/4460\.00 more than is owed/);
+  });
+
+  it('allows a payment that exactly settles the obligation', async () => {
+    await expect(service.recordPayment('ob1', { amount: 40 })).resolves.toBeDefined();
+  });
+
+  it('allows a payment that leaves a balance outstanding', async () => {
+    await expect(service.recordPayment('ob1', { amount: 10 })).resolves.toBeDefined();
+  });
+
+  it('records an overpayment when it is explicitly confirmed', async () => {
+    // Genuine overpayments happen — a deposit topped up mid-term, a tenant rounding up.
+    // The guard makes them deliberate, it does not make them impossible.
+    await expect(
+      service.recordPayment('ob1', { amount: 4500, allowOverpayment: true }),
+    ).resolves.toBeDefined();
+    expect(mockPrisma.leaseObligationPayment.create).toHaveBeenCalled();
   });
 });

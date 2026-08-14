@@ -103,7 +103,7 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
 
   return (
     <Card className="mb-5 sm:mb-6 border border-gray-200 shadow-none rounded-2xl">
-      <CardHeader className="flex items-center justify-between px-5 pt-4 pb-2">
+      <CardHeader className="flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-2">
         <div className="flex items-center gap-2.5">
           <FiDollarSign className="w-4 h-4 text-emerald-600" />
           <h2 className="font-semibold text-sm text-gray-800">Sale Details</h2>

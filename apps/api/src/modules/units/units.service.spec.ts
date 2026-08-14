@@ -3,7 +3,7 @@ import { UserRole } from '@prisma/client';
 import { UnitsService } from './units.service';
 
 const mockPrisma: any = {
-  unit: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
+  unit: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   building: { findUnique: jest.fn() },
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
 };
@@ -21,16 +21,25 @@ const mockEncryption = {
   decryptFields: (o: any) => o,
 };
 
+// combine()/create() stamp opening/closing occupancy events via this service — a spy
+// is enough here since these suites assert the unit-level effects, not the log itself.
+const mockStatusEvents = { record: jest.fn(), recordIfChanged: jest.fn() };
+
 function makeService() {
   // ProjectAccessService stub: no scoping in unit tests (undefined = unrestricted).
-  return new UnitsService(mockPrisma as any, { listProjectScope: async () => undefined } as any, mockEncryption as any);
+  return new UnitsService(
+    mockPrisma as any,
+    { listProjectScope: async () => undefined } as any,
+    mockEncryption as any,
+    mockStatusEvents as any,
+  );
 }
 
 const PM: UserRole = 'PROJECT_MANAGER';
 
 const srcUnits = [
-  { id: 'u1', buildingId: 'b1', unitType: 'RETAIL', unitNumber: '101', sqft: 1000, floorArea: null, mezzanineArea: null, primeOwned: true, _count: { sales: 0, leases: 0 } },
-  { id: 'u2', buildingId: 'b1', unitType: 'RETAIL', unitNumber: '102', sqft: 500, floorArea: null, mezzanineArea: null, primeOwned: true, _count: { sales: 0, leases: 0 } },
+  { id: 'u1', buildingId: 'b1', unitType: 'RETAIL', unitNumber: '101', sqft: 1000, floorArea: null, mezzanineArea: null, primeOwned: true, status: 'AVAILABLE', _count: { sales: 0, leases: 0, interiorProjects: 0 } },
+  { id: 'u2', buildingId: 'b1', unitType: 'RETAIL', unitNumber: '102', sqft: 500, floorArea: null, mezzanineArea: null, primeOwned: true, status: 'AVAILABLE', _count: { sales: 0, leases: 0, interiorProjects: 0 } },
 ];
 
 describe('UnitsService.combine', () => {
@@ -76,7 +85,7 @@ describe('UnitsService.combine', () => {
   it('refuses to combine units that have attached sales or active leases', async () => {
     mockPrisma.unit.findMany.mockResolvedValue([
       srcUnits[0],
-      { ...srcUnits[1], _count: { sales: 1, leases: 0 } },
+      { ...srcUnits[1], _count: { sales: 1, leases: 0, interiorProjects: 0 } },
     ]);
     await expect(
       service.combine({ buildingId: 'b1', sourceUnitIds: ['u1', 'u2'], unitNumber: '101+102' }, PM),
@@ -112,6 +121,8 @@ describe('UnitsService.combine', () => {
         data: expect.objectContaining({ mergedIntoId: 'c1', deletedAt: expect.any(Date) }),
       }),
     );
+    // Opening event on the combined unit + a closing event per archived source.
+    expect(mockStatusEvents.record).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -143,5 +154,117 @@ describe('UnitsService.create', () => {
     expect(mockPrisma.unit.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { buildingId: 'b1', unitNumber: '504', deletedAt: null } }),
     );
+  });
+});
+
+function stubUnitForDelete(overrides: Partial<{ leases: number; sales: number; deletedAt: Date | null }> = {}) {
+  mockPrisma.unit.findUnique.mockResolvedValue({
+    id: 'unit-1',
+    unitNumber: '101',
+    deletedAt: overrides.deletedAt ?? null,
+    building: { id: 'b1', name: 'Building A', deletedAt: null, project: { id: 'p1', name: 'P', status: 'ACTIVE', deletedAt: null } },
+    leases: [],
+    sales: [],
+    loans: [],
+    mergedFrom: [],
+    _count: { comments: 0, sales: overrides.sales ?? 0, leases: overrides.leases ?? 0 },
+  });
+}
+
+describe('UnitsService.findInventory', () => {
+  let service: UnitsService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.unit.findMany.mockResolvedValue([]);
+  });
+
+  const whereOf = () => mockPrisma.unit.findMany.mock.calls[0][0].where;
+
+  // Archiving a project soft-deletes the PROJECT only — never its buildings or units.
+  // findById rejects a unit whose parent chain is deleted; findInventory did not, so the
+  // cross-project list handed back 40 units from an archived project and every one of
+  // them 404'd on click.
+  it('excludes units whose building or project is soft-deleted', async () => {
+    await service.findInventory({});
+
+    expect(whereOf()).toMatchObject({
+      deletedAt: null,
+      building: { deletedAt: null, project: { deletedAt: null } },
+    });
+  });
+
+  it('keeps the parent-chain filter when filtering to one project', async () => {
+    await service.findInventory({ projectId: 'p1' });
+
+    // projectId MERGED in, not assigned over — the branch used to replace the whole
+    // `building` clause and would have dropped the deletedAt filters on the floor.
+    expect(whereOf().building).toEqual({
+      deletedAt: null,
+      project: { deletedAt: null },
+      projectId: 'p1',
+    });
+  });
+
+  it('keeps the parent-chain filter alongside viewer project scoping', async () => {
+    const scoped = new UnitsService(
+      mockPrisma as any,
+      { listProjectScope: async () => ['p1', 'p2'] } as any,
+      mockEncryption as any,
+      mockStatusEvents as any,
+    );
+
+    await scoped.findInventory({ viewer: { userId: 'u1', role: 'SALES' } });
+
+    // The other branch that assigned over `building` — scoping and the chain filter
+    // must both survive, or a restricted user either sees everything or sees nothing.
+    expect(whereOf().building).toEqual({
+      deletedAt: null,
+      project: { deletedAt: null },
+      projectId: { in: ['p1', 'p2'] },
+    });
+  });
+});
+
+describe('UnitsService.delete', () => {
+  let service: UnitsService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+  });
+
+  it('SALES role is forbidden from deleting a unit', async () => {
+    await expect(service.delete('unit-1', 'SALES' as any, false)).rejects.toThrow(ForbiddenException);
+    expect(mockPrisma.unit.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('blocks deletion without force when leases/sales are attached', async () => {
+    stubUnitForDelete({ leases: 1, sales: 2 });
+    await expect(service.delete('unit-1', 'FOUNDER' as any, false)).rejects.toThrow(ConflictException);
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+  });
+
+  it('soft-deletes (never hard-deletes) a unit with no history, even without force', async () => {
+    stubUnitForDelete();
+    mockPrisma.unit.update.mockResolvedValue({ id: 'unit-1', deletedAt: new Date() });
+    await service.delete('unit-1', 'FOUNDER' as any, false);
+    expect(mockPrisma.unit.delete).toBeUndefined(); // never even wired up — hard delete must not exist on this path
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith({
+      where: { id: 'unit-1' },
+      data: { deletedAt: expect.any(Date) },
+    });
+  });
+
+  it('force=true bypasses the history guard but still only soft-deletes — history rows are never touched', async () => {
+    stubUnitForDelete({ leases: 1, sales: 2 });
+    mockPrisma.unit.update.mockResolvedValue({ id: 'unit-1', deletedAt: new Date() });
+    const result = await service.delete('unit-1', 'FOUNDER' as any, true);
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith({
+      where: { id: 'unit-1' },
+      data: { deletedAt: expect.any(Date) },
+    });
+    expect(result.deletedAt).toBeInstanceOf(Date);
   });
 });

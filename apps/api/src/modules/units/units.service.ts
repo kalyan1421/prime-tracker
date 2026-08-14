@@ -5,6 +5,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
+import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 import { UserRole, UnitStatus } from '@prisma/client';
 
 // ---- Status state machine ----
@@ -16,7 +17,11 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   // LEASE_PENDING: signed lease, tenant not yet moved in. Can flip to LEASED (move-in)
   // or back to AVAILABLE (deal collapsed during fit-out).
   LEASE_PENDING:       ['LEASED', 'AVAILABLE'],
-  LEASED:              ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT'],
+  // LEASE_PENDING from LEASED: the successor lease is signed while the sitting tenant
+  // is still in occupation. Normal at renewal and turnover, and until this was added
+  // there was no legal way to represent it — the unit had to pretend to be vacant or
+  // pretend nothing was signed.
+  LEASED:              ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT', 'LEASE_PENDING'],
   OCCUPIED:            ['AVAILABLE', 'LEASED'],
   SOLD:                ['AVAILABLE'],  // rare correction path
   UNDER_CONSTRUCTION:  ['AVAILABLE'],
@@ -30,6 +35,7 @@ export class UnitsService {
     private prisma: PrismaService,
     private access: ProjectAccessService,
     private encryption: EncryptionService,
+    private statusEvents: UnitStatusEventService,
   ) {}
 
   // ---- Reads ----
@@ -66,7 +72,14 @@ export class UnitsService {
     const unit = await this.prisma.unit.findUnique({
       where: { id },
       include: {
-        building: { select: { id: true, name: true, project: { select: { id: true, name: true, status: true } } } },
+        // deletedAt on both parents so a unit under a deleted project/building can be
+        // recognised as unreachable — see the check below findUnique.
+        building: {
+          select: {
+            id: true, name: true, deletedAt: true,
+            project: { select: { id: true, name: true, status: true, deletedAt: true } },
+          },
+        },
         // Full history — every lease/sale the unit has ever had, oldest to newest,
         // so the Unit Detail "History" timeline can render the complete story
         // (past tenants, past sale attempts) even after the unit moves on
@@ -95,6 +108,14 @@ export class UnitsService {
       },
     });
     if (!unit) throw new NotFoundException('Unit not found');
+    // A unit is only reachable if its whole chain is. `unit.deletedAt` alone is not
+    // enough: deleting a project soft-deletes the project, NOT its units, so every unit
+    // under it stayed openable by direct URL and rendered as though it were live —
+    // which is how a unit in a deleted project came to be reported as a live data bug.
+    // Same reason the consistency scan had to filter on the parents.
+    if (unit.deletedAt || unit.building?.deletedAt || unit.building?.project?.deletedAt) {
+      throw new NotFoundException('Unit not found');
+    }
     return { ...unit, loans: this.encryption.decryptLoans(unit.loans) };
   }
 
@@ -189,6 +210,32 @@ export class UnitsService {
         where: { id: { in: input.sourceUnitIds } },
         data: { deletedAt: new Date(), mergedIntoId: combined.id },
       });
+
+      // The combined unit gets an opening event; each archived source gets a closing
+      // one. Sources are soft-deleted precisely so their history survives, so the
+      // merge itself has to be part of that history or the trail stops mid-sentence.
+      await this.statusEvents.record(
+        {
+          unitId: combined.id,
+          fromStatus: null,
+          toStatus: 'AVAILABLE',
+          source: 'UNIT_COMBINED',
+          reason: `Combined from ${sources.map((u) => u.unitNumber).join(', ')}`,
+        },
+        tx,
+      );
+      for (const src of sources) {
+        await this.statusEvents.record(
+          {
+            unitId: src.id,
+            fromStatus: src.status,
+            toStatus: src.status,
+            source: 'UNIT_COMBINED',
+            reason: `Merged into combined unit '${number}' and archived`,
+          },
+          tx,
+        );
+      }
       return combined;
     });
   }
@@ -239,20 +286,29 @@ export class UnitsService {
     // If created as AVAILABLE (default), start the time-on-market clock now
     const status = input.status ?? 'AVAILABLE';
     try {
-      return await this.prisma.unit.create({
-        data: {
-          buildingId: input.buildingId,
-          unitNumber,
-          unitType: input.unitType as any,
-          status,
-          availableSince: status === 'AVAILABLE' ? new Date() : null,
-          sqft: input.sqft,
-          askingRent: input.askingRent,
-          askingPrice: input.askingPrice,
-          primeOwned: input.primeOwned ?? false,
-          notes: input.notes,
-        },
-        include: { building: { select: { id: true, name: true } } },
+      // Unit + its first occupancy event in one transaction. A unit that exists with
+      // no opening event is a hole in its own history that nothing can reconstruct.
+      return await this.prisma.$transaction(async (tx) => {
+        const unit = await tx.unit.create({
+          data: {
+            buildingId: input.buildingId,
+            unitNumber,
+            unitType: input.unitType as any,
+            status,
+            availableSince: status === 'AVAILABLE' ? new Date() : null,
+            sqft: input.sqft,
+            askingRent: input.askingRent,
+            askingPrice: input.askingPrice,
+            primeOwned: input.primeOwned ?? false,
+            notes: input.notes,
+          },
+          include: { building: { select: { id: true, name: true } } },
+        });
+        await this.statusEvents.record(
+          { unitId: unit.id, fromStatus: null, toStatus: status, source: 'UNIT_CREATED' },
+          tx,
+        );
+        return unit;
       });
     } catch (e: any) {
       // Concurrent double-submit: the unique index is the source of truth, so a racing
@@ -277,6 +333,8 @@ export class UnitsService {
       notes?: string;
     },
     userRole: UserRole,
+    /** Stamped onto the occupancy event so a status change has an author. */
+    userId?: string,
   ) {
     const unit = await this.findById(id);
 
@@ -318,8 +376,14 @@ export class UnitsService {
     //   When a unit flips TO   AVAILABLE → set availableSince = now
     //   When a unit flips FROM AVAILABLE → clear availableSince
     // The Founder/Sales pages can then sort/highlight units by how long they've sat.
+    //
+    // Retained as a denormalised convenience (the stale-unit cron, the exceptions feed
+    // and the Vacancy Report all read it) but it is NO LONGER the source of truth —
+    // unit_status_events is. It is destructive by construction: the flip away from
+    // AVAILABLE erases how long the unit sat.
     const data: Record<string, unknown> = { ...input };
-    if (input.status && input.status !== unit.status) {
+    const statusChanged = !!input.status && input.status !== unit.status;
+    if (statusChanged) {
       if (input.status === 'AVAILABLE' && unit.status !== 'AVAILABLE') {
         data.availableSince = new Date();
       } else if (input.status !== 'AVAILABLE' && unit.status === 'AVAILABLE') {
@@ -327,15 +391,37 @@ export class UnitsService {
       }
     }
 
-    return this.prisma.unit.update({
-      where: { id },
-      data: data as any,
-      include: { building: { select: { id: true, name: true } } },
+    // No status move → no transaction needed, nothing to log.
+    if (!statusChanged) {
+      return this.prisma.unit.update({
+        where: { id },
+        data: data as any,
+        include: { building: { select: { id: true, name: true } } },
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.unit.update({
+        where: { id },
+        data: data as any,
+        include: { building: { select: { id: true, name: true } } },
+      });
+      await this.statusEvents.record(
+        {
+          unitId: id,
+          fromStatus: unit.status,
+          toStatus: input.status!,
+          source: 'MANUAL',
+          recordedById: userId,
+        },
+        tx,
+      );
+      return updated;
     });
   }
 
-  async updateStatus(id: string, status: UnitStatus, userRole: UserRole) {
-    return this.update(id, { status }, userRole);
+  async updateStatus(id: string, status: UnitStatus, userRole: UserRole, userId?: string) {
+    return this.update(id, { status }, userRole, userId);
   }
 
   async delete(id: string, userRole: UserRole, force = false) {
@@ -354,11 +440,17 @@ export class UnitsService {
       if (sales > 0) parts.push(`${sales} sale${sales === 1 ? '' : 's'}`);
       throw new ConflictException(
         `Unit '${unit.unitNumber}' has ${parts.join(' and ')} attached. ` +
-        `Pass ?force=true to delete the unit and all attached records.`,
+        `Pass ?force=true to remove the unit anyway — its lease/sale history is kept, not deleted.`,
       );
     }
 
-    return this.prisma.unit.delete({ where: { id } });
+    // Soft-delete — preserves the row (and any lease/sale/loan history still attached
+    // to it) instead of destroying it. A hard `prisma.unit.delete()` here used to
+    // cascade-delete every Sale/Lease/Loan row pointing at this unit (all declared
+    // `onDelete: Cascade`), permanently erasing financial history. `force` only
+    // bypasses the "has history" guard above now; it no longer changes *how* the
+    // delete happens.
+    return this.prisma.unit.update({ where: { id }, data: { deletedAt: new Date() } });
   }
 
   // ---- Cross-Project Inventory ----
@@ -373,12 +465,24 @@ export class UnitsService {
     const where: any = { deletedAt: null };
     if (filters.status) where.status = filters.status;
     if (filters.unitType) where.unitType = filters.unitType;
-    if (filters.projectId) where.building = { projectId: filters.projectId };
+
+    // The unit's own `deletedAt` is not enough — archiving a project soft-deletes the
+    // PROJECT only, never its buildings or units (see ProjectsService.remove and the
+    // matching check in findById). Without the parent chain here, every unit under an
+    // archived project stayed in the cross-project inventory list while findById
+    // rejected those exact rows: the list offered 40 units and each one 404'd.
+    //
+    // Built as one object rather than assigned per branch, because the project scoping
+    // below used to OVERWRITE `where.building` — merging is the only way both the scope
+    // and the parent-chain filter survive.
+    const building: any = { deletedAt: null, project: { deletedAt: null } };
+    if (filters.projectId) building.projectId = filters.projectId;
     else {
       // Units reach a project via their building — scope on building.projectId.
       const scopeIds = await this.access.listProjectScope(filters.viewer, filters.projectId);
-      if (scopeIds) where.building = { projectId: { in: scopeIds } };
+      if (scopeIds) building.projectId = { in: scopeIds };
     }
+    where.building = building;
     if (filters.search) {
       where.OR = [
         { unitNumber: { contains: filters.search, mode: 'insensitive' } },

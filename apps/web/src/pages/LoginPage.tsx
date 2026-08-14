@@ -3,6 +3,7 @@ import { Button, Input } from '@heroui/react';
 import { FiLock, FiMail, FiEye, FiEyeOff } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import { DevQuickLogin } from '../components/DevQuickLogin';
 import api from '../lib/api';
 
 export default function LoginPage() {
@@ -87,6 +88,13 @@ export default function LoginPage() {
             </Button>
           </form>
 
+          {/* Dev Quick Login — local development only.
+              `import.meta.env.DEV` is replaced with the literal `false` by Vite at
+              build time, so this branch becomes dead code and the DevQuickLogin
+              import is tree-shaken out. A production bundle does not contain it.
+              See docs/DEV_LOGIN.md for how that is verified, and for the two other
+              gates (API DEMO_MODE opt-in, and the production boot guard). */}
+          {import.meta.env.DEV && <DevQuickLogin />}
         </div>
       </div>
     </div>

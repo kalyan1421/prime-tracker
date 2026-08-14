@@ -53,6 +53,7 @@ import {
   useGenerateRentInvoices,
   useRecordRentPayment,
   useClearRentPayment,
+  useClearInvoiceReview,
   useWaiveRentInvoice,
 } from '../hooks/useApi';
 import { errMsg, fmt, fmtDate } from '../utils/fmt';
@@ -79,6 +80,9 @@ interface RentInvoice {
   method?: string | null;
   reference?: string | null;
   notes?: string | null;
+  /** R22 — billed from a rent period that was corrected AFTER this invoice existed. */
+  needsReview?: boolean;
+  reviewReason?: string | null;
   recordedBy?: { id: string; name?: string | null; email?: string | null } | null;
 }
 
@@ -88,6 +92,9 @@ interface RentSummary {
   collected?: Money;
   outstanding?: Money;
   overdueCount?: number;
+  /** Months billed from a period that was later corrected. Not a subset of overdue —
+      a flagged month may be fully paid. */
+  flaggedCount?: number;
 }
 
 // ─── money helpers ───────────────────────────────────────────────────────────
@@ -194,6 +201,15 @@ function yearOf(iso: string): string {
 
 type FilterKey = 'ALL' | 'OVERDUE' | 'OPEN' | 'PAID' | 'ABATED';
 
+/**
+ * How many months the ledger shows before asking.
+ *
+ * Six is a half-year: enough to see the current run of payments and the shape of recent
+ * behaviour, short enough that the summary tiles and the months needing action stay on
+ * one screen. Anything older is history, and history is what the toggle is for.
+ */
+const COLLAPSED_MONTHS = 6;
+
 const FILTERS: Array<{ key: FilterKey; label: string; test: (i: RentInvoice) => boolean }> = [
   { key: 'ALL', label: 'All months', test: () => true },
   { key: 'OVERDUE', label: 'Overdue', test: isOverdue },
@@ -226,6 +242,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
   const generate = useGenerateRentInvoices();
   const recordPayment = useRecordRentPayment();
   const clearPayment = useClearRentPayment();
+  const clearReview = useClearInvoiceReview();
   const waiveInvoice = useWaiveRentInvoice();
 
   // Both ids travel with every write — the unit's cross-lease payment timeline
@@ -238,6 +255,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
 
   const [target, setTarget] = useState<RentInvoice | null>(null);
   const [filter, setFilter] = useState<FilterKey>('ALL');
+  const [showAll, setShowAll] = useState(false);
 
   const [payForm, setPayForm] = useState<Record<string, string>>(EMPTY_PAYMENT);
   const [through, setThrough] = useState('');
@@ -285,10 +303,33 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
     return invoices.filter(f.test);
   }, [invoices, filter]);
 
+  /**
+   * Progressive disclosure. A three-year lease is 36 rows, and 30 of them are settled
+   * months nobody will ever look at again — they push the months that DO need action off
+   * the screen.
+   *
+   * The collapsed set is the most RECENT months, not the first: rent is chased forward,
+   * and the current month is the one being worked. Anything needing attention that falls
+   * outside the window is counted on the toggle rather than silently hidden — a ledger
+   * that conceals an overdue month is worse than a long one.
+   */
+  const shown = useMemo(() => {
+    if (showAll || visible.length <= COLLAPSED_MONTHS) {
+      return { rows: visible, hidden: 0, hiddenNeedingAttention: 0 };
+    }
+    const cut = visible.length - COLLAPSED_MONTHS;
+    const hiddenRows = visible.slice(0, cut);
+    return {
+      rows: visible.slice(cut),
+      hidden: cut,
+      hiddenNeedingAttention: hiddenRows.filter((i) => isOverdue(i) || i.needsReview).length,
+    };
+  }, [visible, showAll]);
+
   /** Grouped by calendar year — a multi-year lease is otherwise a wall of rows. */
   const byYear = useMemo(() => {
     const groups: Array<{ year: string; rows: RentInvoice[]; billed: number; collected: number }> = [];
-    for (const inv of visible) {
+    for (const inv of shown.rows) {
       const y = yearOf(inv.periodMonth);
       let g = groups.find((x) => x.year === y);
       if (!g) {
@@ -300,7 +341,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
       g.collected += num(inv.amountPaid);
     }
     return groups;
-  }, [visible]);
+  }, [shown]);
 
   const collectedPct = totals.billed > 0
     ? Math.min(100, (totals.collected / totals.billed) * 100)
@@ -405,6 +446,21 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
     }
   };
 
+  /**
+   * R22 — acknowledge a flagged month.
+   *
+   * No confirm(): this changes no money, it only records that somebody looked. Guarding
+   * a harmless act behind a dialog trains people to click through the ones that matter.
+   */
+  const runClearReview = async (inv: RentInvoice) => {
+    try {
+      await clearReview.mutateAsync(inv.id);
+      addToast({ title: `${monthLabel(inv.periodMonth)} marked reviewed`, color: 'success' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to mark it reviewed'), color: 'danger' });
+    }
+  };
+
   const openWaive = (inv: RentInvoice) => {
     setTarget(inv);
     setWaiveReason('');
@@ -435,6 +491,21 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
 
   // ── states ─────────────────────────────────────────────────────────────────
 
+  /**
+   * The last month on the ledger, as "August 2026".
+   *
+   * Deliberately the MAX billed month rather than a count: "18 months" does not tell you
+   * whether the ledger is current, and being current is the only question anyone asks of
+   * it before pressing Generate.
+   */
+  const billedThrough = useMemo(() => {
+    const months = invoices.map((i: any) => i.periodMonth).filter(Boolean).sort();
+    if (months.length === 0) return null;
+    return new Date(months[months.length - 1]).toLocaleDateString(undefined, {
+      month: 'long', year: 'numeric',
+    });
+  }, [invoices]);
+
   if (isLoading) return <LoadingState message="Loading rent ledger…" />;
   if (error) return <ErrorState message={errMsg(error, 'Failed to load the rent ledger')} />;
 
@@ -454,12 +525,20 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900">Rent Collection</p>
           <p className="text-xs text-gray-400">
             One row per month, generated from the rent schedule — months are never added by hand
           </p>
+          {/* What the ledger actually covers. Nothing said this before, so there was no
+              way to tell whether "Generate ledger" had done anything, or how far a
+              partly-generated ledger reached. */}
+          {billedThrough && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              Billed through <span className="font-medium text-gray-700">{billedThrough}</span>
+            </p>
+          )}
         </div>
         {canCollect && generateButton}
       </div>
@@ -513,7 +592,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
                 <button
                   key={f.key}
                   type="button"
-                  onClick={() => setFilter(f.key)}
+                  onClick={() => { setFilter(f.key); setShowAll(false); }}
                   className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                     active
                       ? 'border-gray-900 bg-gray-900 text-white'
@@ -550,11 +629,38 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
                       onRecord={() => openPayment(inv)}
                       onClear={() => runClear(inv)}
                       onWaive={() => openWaive(inv)}
-                      busy={clearPayment.isPending}
+                      onReviewed={() => runClearReview(inv)}
+                      busy={clearPayment.isPending || clearReview.isPending}
                     />
                   ))}
                 </div>
               ))}
+
+              {(shown.hidden > 0 || showAll) && (
+                <button
+                  type="button"
+                  onClick={() => setShowAll((v) => !v)}
+                  className="group flex w-full items-center gap-3 rounded-lg border border-dashed border-gray-200 px-3 py-2 text-left transition-colors hover:border-gray-300 hover:bg-gray-50"
+                >
+                  <span className="text-xs font-medium text-gray-600 group-hover:text-gray-900">
+                    {showAll
+                      ? `Show recent ${COLLAPSED_MONTHS} months`
+                      : `Show all ${visible.length} months`}
+                  </span>
+                  {/* A hidden month somebody is chasing is the one thing collapsing must
+                      never bury, so it is named on the control that would hide it. */}
+                  {!showAll && shown.hiddenNeedingAttention > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                      <FiAlertTriangle size={9} />
+                      {shown.hiddenNeedingAttention} earlier need
+                      {shown.hiddenNeedingAttention === 1 ? 's' : ''} attention
+                    </span>
+                  )}
+                  <span className="ml-auto text-[11px] text-gray-400">
+                    {showAll ? 'Collapse' : `${shown.hidden} earlier hidden`}
+                  </span>
+                </button>
+              )}
             </div>
           )}
         </>
@@ -761,10 +867,12 @@ interface InvoiceRowProps {
   onRecord: () => void;
   onClear: () => void;
   onWaive: () => void;
+  /** R22 — acknowledge that somebody looked at the discrepancy. Changes no money. */
+  onReviewed: () => void;
   busy: boolean;
 }
 
-function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, busy }: InvoiceRowProps) {
+function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, onReviewed, busy }: InvoiceRowProps) {
   const m = meta(inv.status);
   const due = num(inv.amountDue);
   const paid = num(inv.amountPaid);
@@ -772,15 +880,52 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, busy
   const overdue = isOverdue(inv);
   const free = isFreeMonth(inv);
   const waived = inv.status === 'WAIVED';
+  /** Paid in full, nothing flagged — the row is history, and only corrections remain. */
+  const settled = !free && !waived && paid > 0 && open <= 0 && !inv.needsReview;
 
   // Overdue overrides the status accent entirely — a month being chased must not
   // read as just another grey DUE row.
   const shell = overdue
     ? 'border-red-200 border-l-red-500 bg-red-50/60'
-    : `border-gray-200 ${m.accent} bg-white`;
+    : inv.needsReview
+      ? 'border-amber-200 border-l-amber-400 bg-amber-50/40'
+      : `border-gray-200 ${m.accent} bg-white`;
+
+  /**
+   * The two corrective controls for a settled month, rendered INSIDE the amount column.
+   *
+   * As a full-width row of their own they added ~28px of height and a band of dead space
+   * to the left of them on every settled month — thirty-odd times over on a long ledger.
+   * Beside the figure they correct, they cost nothing.
+   */
+  const settledActions = canCollect && settled ? (
+    <div className="mt-1 flex items-center justify-end gap-0.5">
+      <Button
+        size="sm"
+        variant="light"
+        className="h-6 min-w-0 px-1.5 text-[11px] text-gray-400 data-[hover=true]:text-gray-900"
+        onPress={onRecord}
+      >
+        Correct
+      </Button>
+      <Tooltip content="Clear the recorded payment" size="sm">
+        <Button
+          size="sm"
+          variant="light"
+          isIconOnly
+          className="h-6 w-6 min-w-0 text-gray-300 data-[hover=true]:text-danger"
+          isDisabled={busy}
+          onPress={onClear}
+          aria-label={`Clear the payment recorded for ${monthLabel(inv.periodMonth)}`}
+        >
+          <FiCornerUpLeft size={11} />
+        </Button>
+      </Tooltip>
+    </div>
+  ) : null;
 
   return (
-    <div className={`rounded-xl border border-l-4 p-3.5 ${shell}`}>
+    <div className={`rounded-xl border border-l-4 px-3.5 py-3 ${shell}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -792,6 +937,13 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, busy
             {overdue && (
               <span className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
                 <FiAlertTriangle size={9} /> OVERDUE
+              </span>
+            )}
+            {/* Amber, not red: this month is not being chased, it is being questioned.
+                Reading as overdue would send somebody after a tenant who may owe nothing. */}
+            {inv.needsReview && (
+              <span className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                <FiAlertTriangle size={9} /> CHECK AMOUNT
               </span>
             )}
             {/* A prorated charge has to be defensible to a tenant on sight. */}
@@ -823,6 +975,27 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, busy
             </p>
           )}
 
+          {inv.needsReview && (
+            <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-900">
+              <p>{inv.reviewReason ?? 'The rent period this was billed from has since been corrected.'}</p>
+              <p className="mt-1 text-amber-800/80">
+                Nothing has been changed here — an invoice records what was actually billed.
+                Re-issue, credit or leave it, then mark it reviewed.
+              </p>
+              {canCollect && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  className="mt-1.5 h-6 text-[10px]"
+                  isDisabled={busy}
+                  onPress={onReviewed}
+                >
+                  Mark reviewed
+                </Button>
+              )}
+            </div>
+          )}
+
           {inv.notes && (
             <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-gray-50 p-2 text-[11px] leading-relaxed text-gray-600">
               {inv.notes}
@@ -850,11 +1023,12 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, busy
               {fmt(due)} outstanding
             </p>
           )}
+          {settledActions}
         </div>
       </div>
 
-      {canCollect && (
-        <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+      {canCollect && !settled && (
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-1">
           {/* Free months take no payment and no waiver — the API refuses both, and
               offering either would imply something is owed. */}
           {free && !waived && (

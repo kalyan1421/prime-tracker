@@ -17,6 +17,8 @@ import { NotificationsService } from './notifications.service';
  *   lease.terminated       -> Finance / Sales (ACTION)
  *   lease.rentChanged      -> Finance / Accounting / AR_AP (FYI)
  *   lease.tiDisbursed      -> Finance / Accounting (FYI)
+ *   history.deletionRequested -> Leadership by role (ACTION)
+ *   history.deletionDecided   -> the requester, by name (ACTION)
  *
  * Leadership (Super Admin / Founder / Executive) is added by the recipient resolver,
  * not listed here. The cron-driven triggers (free rent ending, deposit outstanding,
@@ -43,6 +45,8 @@ export class LeaseEventHandlers implements OnModuleInit {
     this.bus.on('lease.terminated', (e) => this.onLeaseTerminated(e));
     this.bus.on('lease.rentChanged', (e) => this.onRentChanged(e));
     this.bus.on('lease.tiDisbursed', (e) => this.onTiDisbursed(e));
+    this.bus.on('history.deletionRequested', (e) => this.onHistoryDeletionRequested(e));
+    this.bus.on('history.deletionDecided', (e) => this.onHistoryDeletionDecided(e));
   }
 
   /** Project name is for the message body only — never let a missing name block the send. */
@@ -171,5 +175,64 @@ export class LeaseEventHandlers implements OnModuleInit {
       totalPaid: Number(obligation.paidAmount),
       totalAgreed: Number(obligation.totalAmount),
     });
+  }
+
+  /**
+   * R27. Routed by ROLE, deliberately not by project membership — a Founder who is not
+   * staffed on the project is still the right person to decide whether history is erased.
+   */
+  private async onHistoryDeletionRequested(e: {
+    requestId: string;
+    leaseId: string;
+    projectId: string | null;
+    tenantName: string;
+    reason: string;
+    requestedById: string;
+  }) {
+    const [ctx, requester] = await Promise.all([
+      this.leaseContext(e.leaseId),
+      this.prisma.user.findUnique({ where: { id: e.requestedById }, select: { name: true } }),
+    ]);
+    await this.notifications.notifyHistoryDeletionRequested({
+      requestId: e.requestId,
+      leaseId: e.leaseId,
+      projectId: e.projectId,
+      tenantName: ctx?.tenantName ?? e.tenantName,
+      unitLabel: ctx?.unitLabel ?? null,
+      reason: e.reason,
+      requestedByName: requester?.name ?? null,
+      link: await this.unitLink(e.leaseId),
+    });
+  }
+
+  private async onHistoryDeletionDecided(e: {
+    leaseId: string;
+    tenantName: string;
+    approved: boolean;
+    note?: string;
+    requestedById: string;
+  }) {
+    await this.notifications.notifyHistoryDeletionDecided({
+      requestedById: e.requestedById,
+      tenantName: e.tenantName,
+      approved: e.approved,
+      note: e.note ?? null,
+      link: await this.unitLink(e.leaseId),
+    });
+  }
+
+  /**
+   * Deep-link to the unit the record hangs off. Returns null rather than a half-built URL
+   * when the lease is building-level or already gone — a notification with a dead link is
+   * worse than one with none.
+   */
+  private async unitLink(leaseId: string) {
+    const lease = await this.prisma.lease.findUnique({
+      where: { id: leaseId },
+      select: { unit: { select: { id: true, building: { select: { projectId: true } } } } },
+    });
+    const unit = lease?.unit;
+    if (!unit?.building?.projectId) return null;
+    return `/projects/${unit.building.projectId}/units/${unit.id}`;
   }
 }

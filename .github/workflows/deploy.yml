@@ -11,9 +11,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Always runs (push + PR). Catches build/type/schema breakage. ───────────
+  # ── Always runs (push + PR). Catches build/type/schema/behaviour breakage. ──
+  #
+  # A real Postgres runs alongside, for two reasons: `prisma migrate deploy` proves the
+  # hand-written migrations actually apply in order on an empty database, and the
+  # integration suite asserts the DB-level constraints (GiST exclusion, CHECKs, FK
+  # actions) that no amount of mocked Prisma can reach.
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        # Without the healthcheck the first migrate races the server's startup.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
       DIRECT_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
@@ -28,6 +47,33 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Validate Prisma schema
         run: pnpm --filter @prime-tracker/api exec prisma validate
+
+      # Before the build: `prebuild` runs `prisma generate`, and the unit suite imports
+      # the generated client for its enums.
+      - name: Build shared package
+        run: pnpm --filter @prime-tracker/shared run build
+      - name: Generate Prisma client
+        run: pnpm --filter @prime-tracker/api exec prisma generate
+
+      - name: Apply migrations
+        run: pnpm --filter @prime-tracker/api exec prisma migrate deploy
+
+      # 1400+ cases, no database, seconds to run. This is the suite that has to stay green.
+      - name: API unit tests
+        run: pnpm --filter @prime-tracker/api run test
+
+      # GitHub Actions sets CI=true, which the integration suite reads: with CI set it
+      # ASSERTS the database was reachable instead of skipping quietly. A suite that
+      # skips itself and reports green is worse than no suite.
+      - name: API integration tests (real Postgres)
+        run: pnpm --filter @prime-tracker/api run test:integration
+
+      # Component + derivation tests (vitest/jsdom). Playwright E2E is NOT here: it needs
+      # both servers and a seeded database, so it belongs in its own job rather than
+      # making every PR wait on a browser download.
+      - name: Web component tests
+        run: pnpm --filter @prime-tracker/web run test
+
       - name: Build API
         run: pnpm --filter @prime-tracker/api run build
       - name: Build web

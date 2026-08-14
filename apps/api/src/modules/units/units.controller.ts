@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { UnitsService } from './units.service';
+import { UnitHistoryService } from './unit-history.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -20,7 +21,10 @@ import { UserRole } from '@prisma/client';
 @UseInterceptors(AuditInterceptor)
 @Controller('units')
 export class UnitsController {
-  constructor(private service: UnitsService) {}
+  constructor(
+    private service: UnitsService,
+    private history: UnitHistoryService,
+  ) {}
 
   @Get('lease-income')
   @RequirePermissions('unit:view')
@@ -62,6 +66,21 @@ export class UnitsController {
     return this.service.findById(id);
   }
 
+  // Registered after `@Get(':id')` is fine — Nest matches the more specific literal
+  // segment first regardless of declaration order for non-conflicting suffixes.
+  @Get(':id/history')
+  @RequirePermissions('unit:view')
+  @ApiOperation({
+    summary: "The unit's occupancy history — tenancies, sales, and vacancy windows",
+    description:
+      'Vacancy is computed from the unit_status_events log rather than inferred from ' +
+      'gaps between leases, so the vacancy before the first lease and the one ' +
+      'currently open both appear.',
+  })
+  getHistory(@Param('id') id: string) {
+    return this.history.getHistory(id);
+  }
+
   @Post()
   @RequirePermissions('unit:edit')
   @ApiOperation({ summary: 'Create unit' })
@@ -86,8 +105,9 @@ export class UnitsController {
     @Param('id') id: string,
     @Body() body: UpdateUnitDto,
     @CurrentUser('role') userRole: UserRole,
+    @CurrentUser('sub') userId?: string,
   ) {
-    return this.service.update(id, body, userRole);
+    return this.service.update(id, body, userRole, userId);
   }
 
   @Patch(':id/status')
@@ -97,13 +117,14 @@ export class UnitsController {
     @Param('id') id: string,
     @Body() body: UpdateUnitStatusDto,
     @CurrentUser('role') userRole: UserRole,
+    @CurrentUser('sub') userId?: string,
   ) {
-    return this.service.updateStatus(id, body.status, userRole);
+    return this.service.updateStatus(id, body.status, userRole, userId);
   }
 
   @Delete(':id')
   @RequirePermissions('unit:edit')
-  @ApiOperation({ summary: 'Delete unit (blocked if leases/sales exist unless force=true)' })
+  @ApiOperation({ summary: 'Archive (soft-delete) a unit — blocked if leases/sales exist unless force=true' })
   @ApiQuery({ name: 'force', required: false, type: Boolean })
   delete(
     @Param('id') id: string,

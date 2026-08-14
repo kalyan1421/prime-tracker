@@ -71,9 +71,15 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'TERMINATED',     label: 'Terminated',     color: 'danger'    },
     { value: 'OWNER_OCCUPIED', label: 'Owner Occupied', color: 'secondary' },
   ],
+  // The client's construction board labels IN_PROGRESS "Working on it" and leaves a
+  // blank cell for stuck work. Labels are theirs to change here without a deploy; the
+  // stored SLUGS stay canonical so reports and filters do not have to know the wording.
+  // BLOCKED added 2026-08-13 — a blank status cell is a stuck item, and without a value
+  // for it people either leave the field empty or overload CANCELLED.
   task_status: [
     { value: 'TODO',        label: 'To Do',      color: 'default' },
     { value: 'IN_PROGRESS', label: 'In Progress',color: 'primary' },
+    { value: 'BLOCKED',     label: 'Blocked',    color: 'danger'  },
     { value: 'DONE',        label: 'Done',       color: 'success' },
     { value: 'CANCELLED',   label: 'Cancelled',  color: 'danger'  },
   ],

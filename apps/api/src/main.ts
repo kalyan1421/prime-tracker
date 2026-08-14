@@ -18,6 +18,32 @@ async function bootstrap() {
 
   // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev.
   const isProd = process.env.NODE_ENV === 'production';
+
+  // ---- Refuse to run an auth bypass in production ----
+  //
+  // DEMO_MODE makes JwtAuthGuard accept `Bearer demo-<ROLE>` with no credential of any
+  // kind (see common/guards/jwt-auth.guard.ts). That is exactly what makes local
+  // development and the Dev Quick Login pleasant, and exactly what must never reach a
+  // real deployment: anyone who guessed the header would be SUPER_ADMIN.
+  //
+  // A crash is deliberate. The alternative — logging a warning and carrying on, or
+  // relying on someone remembering to unset the variable before deploying — fails
+  // open, and the whole point is that this one has to fail closed. If the AWS box
+  // ever boots with DEMO_MODE=true it will not serve traffic, and the reason will be
+  // the first thing in the logs.
+  if (isProd && process.env.DEMO_MODE === 'true') {
+    // eslint-disable-next-line no-console
+    console.error(
+      '\n=========================================================================\n' +
+      'FATAL: DEMO_MODE=true with NODE_ENV=production.\n\n' +
+      'DEMO_MODE disables authentication — any request sending\n' +
+      '  Authorization: Bearer demo-SUPER_ADMIN\n' +
+      'would be granted full administrative access without a password.\n\n' +
+      'Remove DEMO_MODE from the production environment and restart.\n' +
+      '=========================================================================\n',
+    );
+    process.exit(1);
+  }
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: isProd ? new JsonLogger() : ['error', 'warn', 'log', 'debug'],
   });

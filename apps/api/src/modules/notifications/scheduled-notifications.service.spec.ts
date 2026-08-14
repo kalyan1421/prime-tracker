@@ -13,6 +13,7 @@ const mockPrisma = {
   leaseRentPeriod: { findMany: jest.fn() },
   leaseObligation: { findMany: jest.fn() },
   leaseRentInvoice: { findMany: jest.fn() },
+  lease: { findMany: jest.fn() },
 };
 const mockNotifications = {
   notifyPaymentOverdue: jest.fn(),
@@ -20,6 +21,7 @@ const mockNotifications = {
   notifyFreeRentEnding: jest.fn(),
   notifyDepositOutstanding: jest.fn(),
   notifyRentOverdue: jest.fn(),
+  notifyLeaseHoldover: jest.fn(),
 };
 // runDailyChecks generates the rent ledger before reading it; the per-check tests
 // below call the checks directly, so a no-op stub is enough.
@@ -582,11 +584,23 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
       'TI_DISBURSED',
       'RENT_OVERDUE',
       'COMMENT_MENTION',
+      // Phase 2 (construction board): assigning work notified nobody before this.
+      'TASK_ASSIGNED',
+      // Phase B: a tenant occupying past their term. RECURRING, leadership-routed.
+      'LEASE_HOLDOVER',
+      // R27: the Founder gate on erasing a backfilled tenancy. Both halves — a request
+      // nobody is told about is a request nobody decides, and a decision nobody hears is
+      // the same as no answer.
+      'HISTORY_DELETION_REQUESTED',
+      'HISTORY_DELETION_DECIDED',
     ] as const) {
       expect(Object.values(NotificationType)).toContain(type);
       expect(NOTIFICATION_TIERS).toHaveProperty(type);
     }
-    expect(Object.values(NotificationType)).toHaveLength(29);
+    // Deliberately an exact count: it is what catches an enum value added to the DB in
+    // a migration but never given a tier, which would make it unmutable in
+    // getPreferences(). Bump it WITH the list above, never on its own.
+    expect(Object.values(NotificationType)).toHaveLength(33);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {
@@ -838,5 +852,129 @@ describe('NotificationsService — re-notification suppression', () => {
     for (const type of Object.values(NotificationType)) {
       expect(RECURRING_TYPES).toHaveProperty(type);
     }
+  });
+});
+
+// ============================================================================
+// Holdover — the alert has to describe the billing that is actually happening
+// ============================================================================
+//
+// LeaseRentInvoiceService.holdoverExtension returns null when `holdoverRatePct` is null,
+// and null is the DOCUMENTED DEFAULT — so on most holdovers no rent is generated at all.
+// The alert nevertheless asserted "Rent is being billed at the holdover rate" in every
+// case, telling leadership the money was being collected on exactly the leases where it
+// silently was not. checkHoldovers matches on the term being past, not on the rate, so
+// it fires for both cases and the copy is what has to tell them apart.
+
+describe('NotificationsService.notifyLeaseHoldover', () => {
+  let service: NotificationsService;
+
+  const HOLDOVER = {
+    id: 'l1',
+    tenantName: 'Acme Retail',
+    leaseEnd: new Date('2026-01-31T00:00:00Z'),
+    daysOver: 45,
+    projectId: 'pr1',
+    projectName: 'Rio Ranch',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const prisma: any = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      projectMember: { findMany: jest.fn().mockResolvedValue([]) },
+      notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
+      notification: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const config = { get: jest.fn((_k: string, d?: string) => d) };
+    service = new NotificationsService(prisma, config as any, undefined as any);
+  });
+
+  function bodyFor(holdoverRatePct: number | null | undefined) {
+    const spy = jest.spyOn(service, 'sendToRoles').mockResolvedValue(undefined);
+    return service
+      .notifyLeaseHoldover({ ...HOLDOVER, holdoverRatePct })
+      .then(() => ({ spy, args: spy.mock.calls[0][0], body: spy.mock.calls[0][0].body }));
+  }
+
+  it('names the rate actually being billed when the lease carries one', async () => {
+    const { body } = await bodyFor(150);
+
+    expect(body).toContain('Rent is being billed at 150% of the last contracted rent.');
+    expect(body).toContain('End the tenancy or extend the lease.');
+    expect(body).not.toMatch(/NO rent/);
+  });
+
+  it('says plainly that NO rent is billed, and why, when no rate is set', async () => {
+    const { body } = await bodyFor(null);
+
+    expect(body).toContain('NO rent is being billed for these months');
+    expect(body).toContain('holdover rate');
+    // The false claim this replaced.
+    expect(body).not.toMatch(/billed at \d/);
+    // The end/extend guidance survives on both branches — it is the actual ask.
+    expect(body).toContain('End the tenancy or extend the lease.');
+  });
+
+  it('treats an omitted rate as not-billed rather than assuming billing', async () => {
+    const { body } = await bodyFor(undefined);
+    expect(body).toContain('NO rent is being billed for these months');
+  });
+
+  it('leaves the RECURRING dedupe key, type and routing untouched on both branches', async () => {
+    for (const rate of [150, null] as const) {
+      jest.restoreAllMocks();
+      const { args } = await bodyFor(rate);
+      expect(args).toMatchObject({
+        roles: [],
+        projectId: 'pr1',
+        type: NotificationType.LEASE_HOLDOVER,
+        dedupeKey: 'holdover:l1',
+        link: '/projects/pr1/revenue',
+      });
+    }
+  });
+});
+
+describe('ScheduledNotificationsService.checkHoldovers', () => {
+  let service: ScheduledNotificationsService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ScheduledNotificationsService(
+      mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any,
+    );
+  });
+
+  it('reads holdoverRatePct and threads it through — priced and unpriced alike', async () => {
+    mockPrisma.lease.findMany.mockResolvedValue([
+      {
+        id: 'l1', tenantName: 'Acme Retail', leaseEnd: daysFromNow(-60), holdoverRatePct: 150,
+        unit: { building: { project: { id: 'pr1', name: 'Rio Ranch' } } }, building: null,
+      },
+      {
+        id: 'l2', tenantName: 'Beta Foods', leaseEnd: daysFromNow(-20), holdoverRatePct: null,
+        unit: null, building: { project: { id: 'pr2', name: 'Leander P1' } },
+      },
+    ]);
+
+    await (service as any).checkHoldovers();
+
+    const query = mockPrisma.lease.findMany.mock.calls[0][0];
+    expect(query.select.holdoverRatePct).toBe(true);
+    // The rate must NOT narrow the query — a holdover nobody priced is the one most
+    // worth surfacing, and it is why both branches of the copy have to exist.
+    expect(query.where.holdoverRatePct).toBeUndefined();
+
+    expect(mockNotifications.notifyLeaseHoldover).toHaveBeenCalledTimes(2);
+    expect(mockNotifications.notifyLeaseHoldover).toHaveBeenNthCalledWith(
+      1, expect.objectContaining({ id: 'l1', projectId: 'pr1', holdoverRatePct: 150 }),
+    );
+    expect(mockNotifications.notifyLeaseHoldover).toHaveBeenNthCalledWith(
+      2, expect.objectContaining({ id: 'l2', projectId: 'pr2', holdoverRatePct: null }),
+    );
   });
 });

@@ -11,9 +11,11 @@ import { PrismaService } from '../../prisma/prisma.service';
  *
  * Client-confirmed rules (2026-07-29):
  *  1. Escalation COMPOUNDS off the previous period's baseRent, not the original.
- *  2. Escalation touches baseRent ONLY. nnnAmount carries forward untouched and is
- *     re-negotiated by hand — never auto-escalated.
- *  3. Invariant on every row: monthlyRent === baseRent + nnnAmount.
+ *  2. Escalation touches baseRent, which is the whole of the rent. NNN is NOT part of
+ *     this timeline: the client confirmed on 2026-08-12 that Prime charges it once at
+ *     lease signing, so it lives on LeaseObligation (kind NNN) alongside the security
+ *     deposit. It used to be a column here, folded into monthlyRent and billed monthly.
+ *  3. Invariant on every row: monthlyRent === baseRent.
  *  4. Free-rent months sit INSIDE the term. leaseEnd is never extended and the
  *     escalation clock runs from leaseStart, not from the first paying month.
  *  5. Past periods are immutable. Regeneration rewrites only periods that START in
@@ -33,8 +35,8 @@ import { PrismaService } from '../../prisma/prisma.service';
  * end (compounding full precision internally) would make the displayed schedule
  * disagree with the sum of what was actually billed, by a cent or two per year.
  *
- * nnnAmount is rounded once on input; monthlyRent is an exact sum of two already
- * rounded 2dp values, so it never needs rounding of its own.
+ * monthlyRent mirrors the already-rounded baseRent, so it never needs rounding of
+ * its own.
  *
  * ---------------------------------------------------------------------------
  * DATE CONVENTIONS
@@ -66,8 +68,6 @@ export interface RentScheduleInput {
   leaseEnd: Date;
   /** Rent portion of the FIRST paying period. This is what escalates. */
   baseRent: DecimalLike;
-  /** NNN portion. Carried forward unchanged across every escalation. */
-  nnnAmount?: DecimalLike | null;
   /** Percent applied to the PREVIOUS period's baseRent, e.g. 5 = +5%. */
   escalationPct?: DecimalLike | null;
   /** Months between escalations (12 / 6 / 18). Interval, not anniversary month. */
@@ -84,7 +84,6 @@ export interface ComputedRentPeriod {
   /** Inclusive last day of the period. */
   endDate: Date;
   baseRent: Prisma.Decimal;
-  nnnAmount: Prisma.Decimal;
   monthlyRent: Prisma.Decimal;
   isFreeRent: boolean;
   /** Null on the first period and on free-rent periods — nothing escalated into them. */
@@ -148,23 +147,25 @@ export function monthsBetweenUtc(startInclusive: Date, endExclusive: Date): numb
 }
 
 /**
- * Throws unless monthlyRent === baseRent + nnnAmount. Called on every write path
- * (generated or manual) so a bad row can never reach the table.
+ * Throws unless monthlyRent === baseRent. Called on every write path (generated or
+ * manual) so a bad row can never reach the table.
+ *
+ * The two were allowed to differ while NNN was a monthly component of rent. Now that
+ * NNN is a one-time obligation, any gap between them means a caller is still trying to
+ * fold a second charge into the rent — which is exactly what this is here to stop.
  */
 export function assertRentInvariant(row: {
   baseRent: DecimalLike;
-  nnnAmount: DecimalLike;
   monthlyRent: DecimalLike;
 }): void {
   const base = dec(row.baseRent);
-  const nnn = dec(row.nnnAmount);
   const monthly = dec(row.monthlyRent);
-  const expected = base.add(nnn);
-  if (!monthly.equals(expected)) {
+  if (!monthly.equals(base)) {
     throw new BadRequestException(
       `Rent period invariant violated: monthlyRent (${monthly.toFixed(2)}) must equal ` +
-        `baseRent (${base.toFixed(2)}) + nnnAmount (${nnn.toFixed(2)}) = ${expected.toFixed(2)}. ` +
-        `Off by ${monthly.sub(expected).toFixed(2)}.`,
+        `baseRent (${base.toFixed(2)}). Off by ${monthly.sub(base).toFixed(2)}. ` +
+        `NNN is charged once at signing and is recorded as a lease obligation, not as ` +
+        `part of monthly rent.`,
     );
   }
 }
@@ -198,10 +199,6 @@ export function computeRentSchedule(input: RentScheduleInput): ComputedRentPerio
   const initialBase = round2(input.baseRent);
   if (initialBase.isNegative()) {
     throw new BadRequestException('baseRent cannot be negative');
-  }
-  const nnn = round2(input.nnnAmount ?? 0);
-  if (nnn.isNegative()) {
-    throw new BadRequestException('nnnAmount cannot be negative');
   }
 
   const pct = input.escalationPct == null ? null : dec(input.escalationPct);
@@ -262,8 +259,7 @@ export function computeRentSchedule(input: RentScheduleInput): ComputedRentPerio
         startDate: rangeStart,
         endDate: addDaysUtc(rangeEndExclusive, -1),
         baseRent: seg.baseRent,
-        nnnAmount: nnn,
-        monthlyRent: seg.baseRent.add(nnn),
+        monthlyRent: seg.baseRent,
         isFreeRent: false,
         escalationPct: seg.index > 0 ? pct : null,
         source: seg.index > 0 ? 'AUTO_ESCALATION' : 'INITIAL',
@@ -279,7 +275,6 @@ export function computeRentSchedule(input: RentScheduleInput): ComputedRentPerio
       startDate: freeStart,
       endDate: addDaysUtc(freeEndExclusive, -1),
       baseRent: ZERO,
-      nnnAmount: ZERO,
       monthlyRent: ZERO,
       isFreeRent: true,
       escalationPct: null,
@@ -317,7 +312,6 @@ export function summariseEffectiveRent(
     startDate: Date;
     endDate: Date | null;
     baseRent: DecimalLike;
-    nnnAmount: DecimalLike;
     monthlyRent: DecimalLike;
     isFreeRent: boolean;
   }>,
@@ -368,8 +362,7 @@ export function summariseEffectiveRent(
 export interface GenerateOptions {
   /** Overrides lease.monthlyRent as the first period's rent portion. */
   baseRent?: DecimalLike;
-  /** Lease has no NNN column today — pass it here when splitting rent out. */
-  nnnAmount?: DecimalLike;
+
   createdById?: string;
   /**
    * Terms changed after periods already existed: rewrite the FUTURE and keep the
@@ -378,14 +371,29 @@ export interface GenerateOptions {
   force?: boolean;
 }
 
+/**
+ * R22 — correcting a period that has already been billed.
+ *
+ * Every field is optional except the reason: a correction usually moves ONE thing, and
+ * demanding the whole row back invites somebody to resend a stale value they never meant
+ * to change.
+ */
+export interface CorrectPeriodInput {
+  baseRent?: DecimalLike;
+  startDate?: Date | string;
+  endDate?: Date | string | null;
+  /** REQUIRED. Same rule as BudgetRevision. */
+  reason: string;
+  correctedById: string;
+}
+
 export interface AddManualPeriodInput {
   leaseId: string;
   startDate: Date | string;
   /** Omit for "runs to lease end". */
   endDate?: Date | string | null;
   baseRent: DecimalLike;
-  nnnAmount?: DecimalLike;
-  /** Optional — derived from baseRent + nnnAmount when omitted, validated when given. */
+  /** Optional — mirrors baseRent when omitted, validated when given. */
   monthlyRent?: DecimalLike;
   /** REQUIRED. A manual rent change with no stated reason is not auditable. */
   reason: string;
@@ -446,6 +454,19 @@ export class LeaseRentPeriodService {
     opts: Omit<GenerateOptions, 'force' | 'createdById'> = {},
   ) {
     const lease = await this.loadLease(leaseId);
+
+    // Every row this method writes starts in the future, so on a sold unit there is
+    // nothing legitimate for it to do — refuse rather than filter.
+    const sold = await this.soldAt(lease);
+    if (sold) throw new BadRequestException(this.soldUnitMessage(sold));
+
+    // Same argument for a tenancy that has ended: every row would start after the
+    // tenant left. Without this, "Regenerate future" silently re-mints the periods
+    // endTenancy just cut away, and the invoice generator bills from them.
+    if (lease.terminationDate) {
+      throw new BadRequestException(this.endedTenancyMessage(lease.terminationDate));
+    }
+
     const today = startOfUtcDay(new Date());
     const existing = await this.findByLease(leaseId);
 
@@ -516,11 +537,30 @@ export class LeaseRentPeriodService {
 
     const startDate = startOfUtcDay(new Date(input.startDate));
     const endDate = input.endDate ? startOfUtcDay(new Date(input.endDate)) : null;
-    const leaseStart = startOfUtcDay(lease.leaseStart);
+    // A manual period dated after the sale would recreate exactly what the timeline
+    // suppresses. Dates BEFORE the sale stay allowed on purpose — correcting the
+    // pre-sale rent story is legitimate, and H2's backfill depends on it.
+    const soldOn = await this.soldAt(lease);
+    if (soldOn && startOfUtcDay(new Date(input.startDate)) > soldOn) {
+      throw new BadRequestException(this.soldUnitMessage(soldOn));
+    }
+    // Identical rule for an ended tenancy: dates AFTER the move-out are refused,
+    // dates before it stay legal so the historical rent story can still be corrected.
+    if (
+      lease.terminationDate &&
+      startOfUtcDay(new Date(input.startDate)) > startOfUtcDay(lease.terminationDate)
+    ) {
+      throw new BadRequestException(this.endedTenancyMessage(lease.terminationDate));
+    }
+
+    // Bound by RENT commencement, not legal commencement: a rent period before rent
+    // starts would bill a tenant during their fit-out. Falls back to leaseStart, so
+    // leases without a rent start date behave exactly as before.
+    const rentStart = startOfUtcDay(lease.rentStartDate ?? lease.leaseStart);
     const leaseEnd = startOfUtcDay(lease.leaseEnd);
 
-    if (startDate < leaseStart || startDate > leaseEnd) {
-      throw new BadRequestException('Manual period must start inside the lease term');
+    if (startDate < rentStart || startDate > leaseEnd) {
+      throw new BadRequestException('Manual period must start inside the rent term');
     }
     if (endDate && endDate < startDate) {
       throw new BadRequestException('Manual period endDate cannot precede its startDate');
@@ -530,10 +570,9 @@ export class LeaseRentPeriodService {
     }
 
     const baseRent = round2(input.baseRent);
-    const nnnAmount = round2(input.nnnAmount ?? 0);
     const monthlyRent =
-      input.monthlyRent === undefined ? baseRent.add(nnnAmount) : round2(input.monthlyRent);
-    assertRentInvariant({ baseRent, nnnAmount, monthlyRent });
+      input.monthlyRent === undefined ? baseRent : round2(input.monthlyRent);
+    assertRentInvariant({ baseRent, monthlyRent });
 
     const last = await this.prisma.leaseRentPeriod.findFirst({
       where: { leaseId: input.leaseId },
@@ -548,7 +587,6 @@ export class LeaseRentPeriodService {
         startDate,
         endDate,
         baseRent,
-        nnnAmount,
         monthlyRent,
         isFreeRent: false,
         escalationPct: null,
@@ -608,9 +646,253 @@ export class LeaseRentPeriodService {
     return lease;
   }
 
+  /**
+   * When the lease's unit was sold, if it was.
+   *
+   * `NOT_ON_SOLD_UNIT` already keeps sold units out of the rent roll, the cash-flow
+   * forecast and the billing cron — "Prime does not collect rent on a unit it has sold,
+   * under any reading of the sale". But that is a filter on READS. Nothing stopped the
+   * WRITE paths, so "Regenerate future" and "Add rent change" on a sold unit would mint
+   * fresh post-sale periods, which the invoice generator would then bill from. The read
+   * filters hid the result, which made it worse rather than better: the rows existed and
+   * nothing showed them.
+   *
+   * Returns null for a building-level lease — buildings have a phase, not a sold status.
+   */
+  private async soldAt(lease: { unitId: string | null }): Promise<Date | null> {
+    if (!lease.unitId) return null;
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: lease.unitId },
+      select: { status: true },
+    });
+    if (unit?.status !== 'SOLD') return null;
+
+    const sale = await this.prisma.sale.findFirst({
+      where: { unitId: lease.unitId, status: 'CLOSED', deletedAt: null, closingDate: { not: null } },
+      orderBy: { closingDate: 'asc' },
+      select: { closingDate: true },
+    });
+    // A unit flipped to SOLD by hand has no closing date to anchor to. Treat the whole
+    // schedule as closed rather than letting the absence of a sale row wave writes
+    // through — the 6 units found in live data on 2026-08-12 are all in exactly that
+    // state, and they are the ones most in need of the guard.
+    return sale?.closingDate ?? new Date(0);
+  }
+
+  /**
+   * Cut the rent schedule off at the move-out date.
+   *
+   * Two moves, and the distinction between them matters:
+   *   - periods starting AFTER the move-out are DELETED. They describe rent for months
+   *     nobody was in occupation; they were derived from a term that did not run, and
+   *     there is nothing to preserve.
+   *   - the period COVERING the move-out is TRUNCATED to end on it. This is the one
+   *     edit to a live period the immutability rule permits, and it is not a rewrite of
+   *     history — the period genuinely ended that day. Its rent is untouched.
+   *
+   * Runs inside endTenancy's transaction; a failure here must take the whole thing down
+   * rather than leave a lease terminated with a schedule still running past it.
+   */
+  async capAtTermination(
+    leaseId: string,
+    terminationDate: Date,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ deleted: number; truncated: number }> {
+    const client = tx ?? this.prisma;
+    const at = startOfUtcDay(terminationDate);
+
+    const { count: deleted } = await client.leaseRentPeriod.deleteMany({
+      where: { leaseId, startDate: { gt: at } },
+    });
+
+    // Open-ended periods (endDate null, "runs to lease end") are included: they are
+    // precisely the ones that would otherwise keep running forever.
+    const { count: truncated } = await client.leaseRentPeriod.updateMany({
+      where: {
+        leaseId,
+        startDate: { lte: at },
+        OR: [{ endDate: null }, { endDate: { gt: at } }],
+      },
+      data: { endDate: at },
+    });
+
+    return { deleted, truncated };
+  }
+
+  /**
+   * Correct a rent period that has already been billed (R22).
+   *
+   * The distinction from `addManualPeriod` is the whole point. A manual period says "the
+   * rent CHANGED from this date" — a real event, appended to the timeline. A correction
+   * says "the rent was never that number, we recorded it wrong", so appending would leave
+   * the wrong figure standing as history. This edits the row and preserves what it held.
+   *
+   * Three things happen in one transaction, and none of them work alone:
+   *   1. the period moves,
+   *   2. a correction row records what it moved from, who moved it and why,
+   *   3. invoices already generated from that period are FLAGGED, never adjusted.
+   *
+   * (3) is deliberate: an invoice is a record of what was actually billed. Silently
+   * restating it would destroy the discrepancy Finance needs to see in order to decide
+   * between re-issuing, crediting, and leaving it alone. That decision is theirs.
+   */
+  async correctPeriod(periodId: string, input: CorrectPeriodInput) {
+    if (!input.reason?.trim()) {
+      throw new BadRequestException('A reason is required to correct a billed rent period');
+    }
+    const period = await this.prisma.leaseRentPeriod.findUnique({ where: { id: periodId } });
+    if (!period) throw new NotFoundException('Rent period not found');
+
+    const lease = await this.loadLease(period.leaseId);
+
+    const nextStart =
+      input.startDate === undefined ? period.startDate : startOfUtcDay(new Date(input.startDate));
+    const nextEnd =
+      input.endDate === undefined
+        ? period.endDate
+        : input.endDate === null
+          ? null
+          : startOfUtcDay(new Date(input.endDate));
+    const nextRent = input.baseRent === undefined ? period.baseRent : round2(input.baseRent);
+
+    if (nextEnd && nextEnd < nextStart) {
+      throw new BadRequestException('A period cannot end before it starts');
+    }
+    // The same term bounds every other write obeys. A correction is permission to fix a
+    // wrong number, not permission to put rent outside the lease it belongs to.
+    const rentStart = startOfUtcDay(lease.rentStartDate ?? lease.leaseStart);
+    const leaseEnd = startOfUtcDay(lease.terminationDate ?? lease.leaseEnd);
+    if (nextStart < rentStart || nextStart > leaseEnd) {
+      throw new BadRequestException(
+        'A corrected period must still start inside the rent term. If the term itself is '
+        + 'wrong, correct the lease first.',
+      );
+    }
+    if (nextEnd && nextEnd > leaseEnd) {
+      throw new BadRequestException('A corrected period cannot extend past the end of the term');
+    }
+
+    const rentMoved = !nextRent.equals(period.baseRent);
+    const startMoved = nextStart.getTime() !== startOfUtcDay(period.startDate).getTime();
+    const endMoved =
+      (nextEnd?.getTime() ?? null) !== (period.endDate ? startOfUtcDay(period.endDate).getTime() : null);
+    if (!rentMoved && !startMoved && !endMoved) {
+      throw new BadRequestException('Nothing was corrected — the values are unchanged');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Only invoices that ALREADY EXIST are flagged, and only when the money moved.
+      // Shifting a period's dates changes which months it covers going forward; it does
+      // not restate a figure that was already sent out.
+      let invoicesFlagged = 0;
+      if (rentMoved) {
+        const { count } = await tx.leaseRentInvoice.updateMany({
+          where: { periodId, status: { notIn: ['VOID'] } },
+          data: {
+            needsReview: true,
+            reviewReason:
+              `Billed at ${period.baseRent.toFixed(2)} before this period was corrected to `
+              + `${nextRent.toFixed(2)}.`,
+          },
+        });
+        invoicesFlagged = count;
+      }
+
+      const updated = await tx.leaseRentPeriod.update({
+        where: { id: periodId },
+        data: {
+          baseRent: nextRent,
+          // The invariant holds through a correction too — monthlyRent is the whole rent.
+          monthlyRent: nextRent,
+          // DERIVED, not carried over. `isFreeRent` is a property of the rent, not an
+          // independent fact about the period: a month at zero IS abated, a month with
+          // rent is not. Left stale, a free period corrected to a real rent kept the flag
+          // — and `summariseEffectiveRent` skips free rows outright, so that month
+          // contributed nothing to totalContractedRent while still counting as a free
+          // month. Both the effective-rent KPI and the free-month count were wrong, and
+          // the schedule showed a period labelled "free" that carried rent.
+          //
+          // Safe when the rent did not move: re-deriving from an unchanged baseRent
+          // reproduces the flag the row already had.
+          isFreeRent: nextRent.isZero(),
+          startDate: nextStart,
+          endDate: nextEnd,
+        },
+      });
+
+      const correction = await tx.leaseRentPeriodCorrection.create({
+        data: {
+          periodId,
+          leaseId: period.leaseId,
+          previousRent: period.baseRent,
+          correctedRent: nextRent,
+          // Dates recorded only when they moved, so the row reads as "what changed"
+          // rather than a snapshot with three unchanged fields to scan past.
+          previousStartDate: startMoved ? period.startDate : null,
+          correctedStartDate: startMoved ? nextStart : null,
+          previousEndDate: endMoved ? period.endDate : null,
+          correctedEndDate: endMoved ? nextEnd : null,
+          reason: input.reason.trim(),
+          invoicesFlagged,
+          correctedById: input.correctedById,
+        },
+      });
+
+      return { period: updated, correction, invoicesFlagged };
+    });
+  }
+
+  /** Every correction on a lease, newest first — the provenance trail. */
+  async findCorrections(leaseId: string) {
+    return this.prisma.leaseRentPeriodCorrection.findMany({
+      where: { leaseId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        correctedBy: { select: { id: true, name: true, email: true } },
+        period: { select: { id: true, sequence: true, startDate: true, endDate: true } },
+      },
+    });
+  }
+
+  /**
+   * Clear the review flag once Finance has decided what to do about the discrepancy.
+   *
+   * Deliberately does NOT touch `amountDue`: whether to re-issue, credit or leave it is
+   * their call, made through the normal collection tools. This only records that somebody
+   * looked.
+   */
+  async clearInvoiceReview(invoiceId: string) {
+    const invoice = await this.prisma.leaseRentInvoice.findUnique({ where: { id: invoiceId } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    return this.prisma.leaseRentInvoice.update({
+      where: { id: invoiceId },
+      data: { needsReview: false, reviewReason: null },
+    });
+  }
+
+  /** Mirrors soldUnitMessage — same shape of refusal, different cause. */
+  private endedTenancyMessage(when: Date): string {
+    return (
+      `This tenancy ended on ${when.toISOString().slice(0, 10)}, so its rent schedule is ` +
+      'closed. Rent cannot be scheduled for months after the tenant moved out. If the ' +
+      'move-out date is wrong, correct it on the lease first.'
+    );
+  }
+
+  /** The message is the same wherever the guard fires, so it reads consistently. */
+  private soldUnitMessage(when: Date): string {
+    const on = when.getTime() === 0 ? '' : ` on ${when.toISOString().slice(0, 10)}`;
+    return (
+      `This unit has been sold${on}, so its rent schedule is closed. Rent cannot be ` +
+      'scheduled for a unit Prime no longer owns. If the sale is wrong, correct the ' +
+      "unit's status first."
+    );
+  }
+
   private toScheduleInput(
     lease: {
       leaseStart: Date;
+      rentStartDate?: Date | null;
       leaseEnd: Date;
       monthlyRent: Prisma.Decimal;
       escalationPct: Prisma.Decimal | null;
@@ -618,21 +900,22 @@ export class LeaseRentPeriodService {
       freeRentMonths: number | null;
       freeRentStartDate: Date | null;
     },
-    opts: Pick<GenerateOptions, 'baseRent' | 'nnnAmount'>,
+    opts: Pick<GenerateOptions, 'baseRent'>,
   ): RentScheduleInput {
-    // Lease has no NNN column today, so lease.monthlyRent IS the base rent unless
-    // the caller splits it explicitly. If a split is supplied, baseRent defaults to
-    // monthlyRent - nnnAmount so the headline figure stays the contractual total.
-    const nnnAmount = opts.nnnAmount === undefined ? ZERO : round2(opts.nnnAmount);
+    // `lease.monthlyRent` IS the rent now that NNN has moved off the timeline — there
+    // is no second component to subtract. The caller can still override it to re-cut a
+    // schedule at a different rate.
     const baseRent =
-      opts.baseRent !== undefined
-        ? round2(opts.baseRent)
-        : round2(dec(lease.monthlyRent).sub(nnnAmount));
+      opts.baseRent !== undefined ? round2(opts.baseRent) : round2(dec(lease.monthlyRent));
     return {
-      leaseStart: lease.leaseStart,
+      // Rent commencement, not legal commencement. A lease signed in January with rent
+      // starting in April after fit-out was previously generating three months of
+      // periods — and, through the invoice generator, three months of DUE invoices —
+      // that the tenant never owed. Null falls back to leaseStart, so nothing about an
+      // existing lease changes.
+      leaseStart: lease.rentStartDate ?? lease.leaseStart,
       leaseEnd: lease.leaseEnd,
       baseRent,
-      nnnAmount,
       escalationPct: lease.escalationPct,
       escalationFreq: lease.escalationFreq,
       freeRentMonths: lease.freeRentMonths,
@@ -652,7 +935,6 @@ export class LeaseRentPeriodService {
       startDate: p.startDate,
       endDate: p.endDate,
       baseRent: p.baseRent,
-      nnnAmount: p.nnnAmount,
       monthlyRent: p.monthlyRent,
       isFreeRent: p.isFreeRent,
       escalationPct: p.escalationPct,

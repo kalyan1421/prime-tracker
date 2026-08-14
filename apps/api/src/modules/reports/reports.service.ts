@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
+import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 
 @Injectable()
 export class ReportsService {
   constructor(
     private prisma: PrismaService,
     private encryption: EncryptionService,
+    private statusEvents: UnitStatusEventService,
   ) {}
 
   // ---- Executive Summary (Founders) ----
@@ -100,8 +102,13 @@ export class ReportsService {
 
   // ---- Sales Report (Sales Team) ----
   async getSalesSummary() {
+    // `project.deletedAt: null` everywhere in this file: archiving a project soft-deletes
+    // the PROJECT row only — its buildings, units, sales and leases keep deletedAt = null.
+    // Filtering on the child's own flag therefore leaves an archived project's rows in
+    // every cross-project rollup. getPortfolioSummary already filtered the whole chain;
+    // the reports below did not.
     const sales = await this.prisma.sale.findMany({
-      where: { deletedAt: null, project: { status: { not: 'CANCELLED' } } },
+      where: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
       include: {
         unit: { include: { building: { select: { name: true } } } },
         project: { select: { id: true, name: true } },
@@ -151,7 +158,7 @@ export class ReportsService {
       where: {
         status: 'AVAILABLE',
         deletedAt: null,
-        building: { project: { status: { not: 'CANCELLED' } } },
+        building: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
       },
       include: { building: { include: { project: { select: { name: true } } } } },
     });
@@ -186,7 +193,10 @@ export class ReportsService {
       where: {
         status: 'ACTIVE',
         deletedAt: null,
-        unit: { building: { project: { status: { not: 'CANCELLED' } } } },
+        unit: {
+          deletedAt: null,
+          building: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+        },
       },
       include: {
         unit: { include: { building: { include: { project: { select: { id: true, name: true } } } } } },
@@ -198,7 +208,10 @@ export class ReportsService {
 
     // Portfolio occupancy
     const allUnits = await this.prisma.unit.findMany({
-      where: { deletedAt: null, building: { project: { status: { not: 'CANCELLED' } } } },
+      where: {
+        deletedAt: null,
+        building: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+      },
     });
     const occupiedUnits = allUnits.filter((u) => ['LEASED', 'SOLD', 'OCCUPIED'].includes(u.status));
     const portfolioOccupancy = allUnits.length > 0 ? (occupiedUnits.length / allUnits.length) * 100 : 0;
@@ -233,7 +246,11 @@ export class ReportsService {
 
     // Revenue by project (rental + sales)
     const closedSales = await this.prisma.sale.findMany({
-      where: { status: 'CLOSED', deletedAt: null, project: { status: { not: 'CANCELLED' } } },
+      where: {
+        status: 'CLOSED',
+        deletedAt: null,
+        project: { status: { not: 'CANCELLED' }, deletedAt: null },
+      },
       include: { project: { select: { id: true, name: true } } },
     });
 
@@ -267,7 +284,7 @@ export class ReportsService {
   // ---- Debt & Financing (Founders) ----
   async getDebtSummary() {
     const loans = await this.prisma.loan.findMany({
-      where: { deletedAt: null, project: { status: { not: 'CANCELLED' } } },
+      where: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
       include: {
         project: { select: { id: true, name: true } },
         drawRequests: { orderBy: { drawNumber: 'asc' } },
@@ -455,10 +472,16 @@ export class ReportsService {
   // > 90 days are flagged warning, > 180 days critical. Filters: optional projectId,
   // optional minDays floor to only show stale rows.
   async getVacancyReport(params: { projectId?: string; minDays?: number } = {}) {
-    const where: any = { status: 'AVAILABLE', deletedAt: null };
-    if (params.projectId) {
-      where.building = { projectId: params.projectId, deletedAt: null };
-    }
+    // The building filter is unconditional. It used to be applied ONLY when a projectId
+    // was passed, so the unfiltered (all-projects) view — the one the page opens on —
+    // listed every AVAILABLE unit under archived projects and deleted buildings as
+    // stale inventory, which is exactly the inventory nobody is trying to lease.
+    const where: any = {
+      status: 'AVAILABLE',
+      deletedAt: null,
+      building: { deletedAt: null, project: { deletedAt: null } },
+    };
+    if (params.projectId) where.building.projectId = params.projectId;
 
     const units = await this.prisma.unit.findMany({
       where,
@@ -472,10 +495,24 @@ export class ReportsService {
     const now = Date.now();
     const minDays = params.minDays ?? 0;
 
+    // Days-on-market comes from the occupancy log, not from `availableSince`.
+    //
+    // `availableSince` is nulled whenever a unit leaves AVAILABLE and, measured on
+    // live data 2026-08-12, was populated on 2 of 499 units while 208 were AVAILABLE.
+    // The old `availableSince ?? createdAt` fallback below was therefore reporting the
+    // unit's AGE as its time on market for ~206 units — a unit created two years ago
+    // and re-let last month read as 730 days stale.
+    //
+    // Units with no event at all still fall back, but the H0 bootstrap gave every
+    // existing unit a row, so that path should only ever be hit by a unit created
+    // outside the service layer.
+    const vacancyStarts = await this.statusEvents.currentVacancyStartByUnit(units.map((u) => u.id));
+
     const rows = units
       .map((u) => {
-        const since = u.availableSince ? new Date(u.availableSince).getTime() : new Date(u.createdAt).getTime();
-        const days = Math.max(0, Math.floor((now - since) / 86_400_000));
+        const logged = vacancyStarts.get(u.id);
+        const since = (logged ?? u.availableSince ?? u.createdAt) as Date;
+        const days = Math.max(0, Math.floor((now - new Date(since).getTime()) / 86_400_000));
         return {
           unitId: u.id,
           unitNumber: u.unitNumber,
@@ -487,7 +524,11 @@ export class ReportsService {
           buildingName: u.building.name,
           projectId: u.building.project.id,
           projectName: u.building.project.name,
-          availableSince: u.availableSince ?? u.createdAt,
+          // The date the row's daysOnMarket is actually measured from, so the column
+          // and the number can never disagree.
+          availableSince: since,
+          /** False when we fell back — lets the UI mark the figure as approximate. */
+          vacancyFromLog: !!logged,
           daysOnMarket: days,
           severity: days >= 180 ? 'critical' : days >= 90 ? 'warning' : 'info',
         };

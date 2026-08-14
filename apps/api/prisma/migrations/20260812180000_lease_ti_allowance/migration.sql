@@ -1,0 +1,11 @@
+-- TI allowance as a headline lease term.
+--
+-- `securityDeposit` and `nnnTotalAmount` were already fields on the lease form, each
+-- seeding a LeaseObligation so the money is trackable. TI allowance was the one agreed
+-- sum with no equivalent: it could only be added from the obligations panel, so a user
+-- writing up a lease with a $45,000 TI had nowhere to put it and no prompt to go and
+-- record it elsewhere.
+--
+-- Nullable, no backfill. Existing TI obligations are untouched — the seeding logic only
+-- creates one where none exists, and never overwrites one that has payments against it.
+ALTER TABLE "leases" ADD COLUMN "tiAllowance" DECIMAL(14,2);

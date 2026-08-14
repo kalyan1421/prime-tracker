@@ -71,6 +71,21 @@ export class BrokersController {
     return this.service.getSalesByBroker(id);
   }
 
+  @Get(':id/leases')
+  @RequirePermissions('broker:view')
+  @ApiOperation({ summary: 'Leases attributed to a broker (leasing commission drilldown)' })
+  leasesByBroker(@Param('id') id: string) {
+    return this.service.getLeasesByBroker(id);
+  }
+
+  @Patch('leases/:leaseId/mark-commission-paid')
+  @RequirePermissions('broker:edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark a leasing commission as paid' })
+  markLeaseCommissionPaid(@Param('leaseId') leaseId: string) {
+    return this.service.markLeaseCommissionPaid(leaseId);
+  }
+
   @Patch('sales/:saleId/mark-commission-paid')
   @RequirePermissions('broker:edit')
   @HttpCode(HttpStatus.OK)

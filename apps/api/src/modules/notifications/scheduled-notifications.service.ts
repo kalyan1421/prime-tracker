@@ -77,6 +77,7 @@ export class ScheduledNotificationsService {
       this.checkFreeRentEnding(),
       this.checkOutstandingDeposits(),
       this.checkOverdueRent(),
+      this.checkHoldovers(),
     ]);
   }
 
@@ -435,6 +436,60 @@ export class ScheduledNotificationsService {
       }
     }
     this.logger.log(`Checked ${overdue.length} overdue milestones`);
+  }
+
+  /**
+   * Tenants occupying past their contracted end with no move-out recorded.
+   *
+   * Distinct from checkExpiringLeases, which warns BEFORE the end. This fires after it,
+   * and it is the condition under which holdover rent is being billed — so leadership
+   * should know it is happening, not discover it in a rent roll.
+   *
+   * Deliberately not bounded by a lookback window: a lease four months into holdover is
+   * MORE worth surfacing than one a week in, not less.
+   */
+  private async checkHoldovers() {
+    const today = new Date();
+    const leases = await this.prisma.lease.findMany({
+      where: {
+        deletedAt: null,
+        status: 'ACTIVE',
+        // No move-out recorded — the moment endTenancy runs, this stops matching.
+        terminationDate: null,
+        leaseEnd: { lt: today },
+        // A sold unit is not in holdover; the tenancy ended with the sale (H3).
+        ...NOT_ON_SOLD_UNIT,
+      },
+      select: {
+        id: true,
+        tenantName: true,
+        leaseEnd: true,
+        // Selected purely so the alert can tell the truth about billing: null means the
+        // invoicer generates NO holdover rent for these months (it is the default), and
+        // the notification body branches on it. This query deliberately does NOT filter
+        // on it — a holdover nobody priced is the one most worth surfacing.
+        holdoverRatePct: true,
+        unit: { select: { building: { select: { project: { select: { id: true, name: true } } } } } },
+        building: { select: { project: { select: { id: true, name: true } } } },
+      },
+    });
+
+    for (const l of leases) {
+      const project = l.unit?.building?.project ?? l.building?.project;
+      if (!project) continue;
+      const daysOver = Math.floor((today.getTime() - l.leaseEnd.getTime()) / 86_400_000);
+      await this.notifications.notifyLeaseHoldover({
+        id: l.id,
+        tenantName: l.tenantName,
+        leaseEnd: l.leaseEnd,
+        daysOver,
+        projectId: project.id,
+        projectName: project.name,
+        // Prisma Decimal → number; null stays null (the "not billed" branch).
+        holdoverRatePct: l.holdoverRatePct == null ? null : Number(l.holdoverRatePct),
+      });
+    }
+    if (leases.length) this.logger.log(`Holdover: ${leases.length} lease(s) past their term`);
   }
 
   private async checkExpiringLeases() {

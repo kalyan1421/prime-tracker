@@ -302,6 +302,20 @@ export function useUnit(id: string) {
   });
 }
 
+/**
+ * The unit's occupancy history — tenancies, sales and vacancy windows, plus lifetime
+ * totals. Server-computed: vacancy comes from the unit_status_events log, so the gap
+ * before the first lease and the vacancy open right now both appear. Neither was
+ * derivable from the lease rows this used to be built from on the client.
+ */
+export function useUnitHistory(id?: string) {
+  return useQuery({
+    queryKey: ['unit-history', id],
+    queryFn: () => api.get(`/units/${id}/history`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
 // ---- Unit Comments ----
 export function useUnitComments(unitId: string) {
   return useQuery({
@@ -384,17 +398,41 @@ export function useRentRoll(projectId: string) {
   });
 }
 
+/**
+ * Everything a lease write can touch downstream.
+ *
+ * Saving a lease seeds its deposit / NNN / TI obligations from the headline terms and
+ * regenerates its rent schedule. Neither of those was invalidated, so the server did the
+ * work and the panels kept rendering cached emptiness — a TI allowance typed on the lease
+ * form appeared nowhere until a hard reload. Prefix-invalidated because a save may touch
+ * any lease on the unit, and the caller does not always know which.
+ */
+function invalidateAfterLeaseWrite(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['leases'] });
+  qc.invalidateQueries({ queryKey: ['rent-roll'] });
+  qc.invalidateQueries({ queryKey: ['units'] });
+  qc.invalidateQueries({ queryKey: ['unit'] });
+  qc.invalidateQueries({ queryKey: ['unit-history'] });
+  qc.invalidateQueries({ queryKey: ['lease-obligations'] });
+  qc.invalidateQueries({ queryKey: ['obligation-summary'] });
+  qc.invalidateQueries({ queryKey: ['lease-rent-periods'] });
+  qc.invalidateQueries({ queryKey: ['lease-rent-summary'] });
+  // Ending a tenancy voids invoices and releases the unit, so the collection ledger
+  // and every feed that reads unit status go stale too. Left out until T1.2, which is
+  // how a unit could read AVAILABLE on one panel and LEASED on the next.
+  qc.invalidateQueries({ queryKey: ['lease-rent-invoices'] });
+  qc.invalidateQueries({ queryKey: ['rent-invoices'] });
+  qc.invalidateQueries({ queryKey: ['lease-assignments'] });
+  qc.invalidateQueries({ queryKey: ['exceptions'] });
+}
+
 export function useCreateLease() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: Record<string, unknown>) =>
       api.post('/leases', data).then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['leases'] });
-      qc.invalidateQueries({ queryKey: ['rent-roll'] });
-      // Units carry the tenant/lease columns, so a new lease makes that table stale.
-      // useCreateSale already does this; useCreateLease did not.
-      qc.invalidateQueries({ queryKey: ['units'] });
+      invalidateAfterLeaseWrite(qc);
     },
   });
 }
@@ -404,10 +442,108 @@ export function useUpdateLease() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/leases/${id}`, data).then((r) => r.data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['leases'] });
-      qc.invalidateQueries({ queryKey: ['rent-roll'] });
-    },
+    onSuccess: () => invalidateAfterLeaseWrite(qc),
+  });
+}
+
+/**
+ * End a tenancy — the one action behind turnover, renewal and relocation.
+ *
+ * Server-side this caps the rent schedule, voids unpaid invoices past the move-out
+ * date, records the deposit decision and releases the unit. That is a lot of
+ * aggregates for one POST, which is exactly why it goes through
+ * invalidateAfterLeaseWrite rather than invalidating ['leases'] alone.
+ */
+export function useEndTenancy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.post(`/leases/${id}/end-tenancy`, data).then((r) => r.data),
+    onSuccess: () => invalidateAfterLeaseWrite(qc),
+  });
+}
+
+/** The tenant-assignment chain for a lease, oldest first. */
+export function useLeaseAssignments(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-assignments', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/assignments`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+/**
+ * Assign a lease to a new tenant. Unlike ending a tenancy this touches nothing but the
+ * tenant's identity — but the unit timeline and the lease list both display the name,
+ * so the same invalidation applies.
+ */
+export function useAssignTenant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.post(`/leases/${id}/assign-tenant`, data).then((r) => r.data),
+    onSuccess: () => invalidateAfterLeaseWrite(qc),
+  });
+}
+
+/**
+ * Enter a tenancy that has already ended (H2 backfill).
+ *
+ * Writes a lease, its schedule and a complete ledger in one call, so every aggregate on
+ * the unit page moves at once — hence the full invalidation rather than just ['leases'].
+ */
+export function useBackfillTenancy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/leases/backfill', data).then((r) => r.data),
+    onSuccess: () => invalidateAfterLeaseWrite(qc),
+  });
+}
+
+/**
+ * R27 — the Founder gate on deleting a backfilled tenancy.
+ *
+ * Three calls rather than one "delete with approval": approving authorises the delete, it
+ * does not perform it. Collapsing them would make the approval a click-through instead of
+ * a decision.
+ */
+export function useRequestHistoricalDeletion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leaseId, reason }: { leaseId: string; reason: string }) =>
+      api.post(`/leases/${leaseId}/request-deletion`, { reason }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['historical-deletions'] }),
+  });
+}
+
+export function useHistoricalDeletionRequests(status = 'PENDING') {
+  // Gated on backfill, not delete — the requester has to see their own pending request.
+  const can = useCan('unit:history:backfill');
+  return useQuery({
+    queryKey: ['historical-deletions', status],
+    queryFn: () =>
+      api.get('/leases/historical-deletions', { params: { status } }).then((r) => r.data),
+    enabled: can,
+  });
+}
+
+export function useCancelHistoricalDeletion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (requestId: string) =>
+      api.post(`/leases/historical-deletions/${requestId}/cancel`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['historical-deletions'] }),
+  });
+}
+
+export function useDecideHistoricalDeletion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ requestId, approve, note }: { requestId: string; approve: boolean; note?: string }) =>
+      api.post(`/leases/historical-deletions/${requestId}/decide`, { approve, note })
+        .then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['historical-deletions'] }),
   });
 }
 
@@ -418,6 +554,8 @@ export function useDeleteLease() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leases'] });
       qc.invalidateQueries({ queryKey: ['rent-roll'] });
+      // A historical delete consumes its approval, so the Founder queue changes too.
+      qc.invalidateQueries({ queryKey: ['historical-deletions'] });
     },
   });
 }
@@ -1733,6 +1871,8 @@ export function useTasks(params?: {
   assignedTo?: string;
   status?: string;
   priority?: string;
+  /** 'TASK' = admin work items, 'CONSTRUCTION' = the site board. Omit for both. */
+  kind?: string;
 }) {
   return useQuery({
     queryKey: ['tasks', params],
@@ -1774,6 +1914,50 @@ export function useDeleteTask() {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/tasks/${id}`).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+  });
+}
+
+/** Day-wise progress updates on one item, newest day first. */
+export function useTaskUpdates(taskId?: string) {
+  return useQuery({
+    queryKey: ['task-updates', taskId],
+    queryFn: () => api.get(`/tasks/${taskId}/updates`).then((r) => r.data),
+    enabled: !!taskId,
+  });
+}
+
+export function useAddTaskUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, data }: { taskId: string; data: Record<string, unknown> }) =>
+      api.post(`/tasks/${taskId}/updates`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-updates', vars.taskId] });
+      // The board shows an update COUNT per row, so the list is stale too.
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+}
+
+export function useAddTaskUpdatePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ updateId, storagePath, caption }: {
+      updateId: string; storagePath: string; caption?: string; taskId?: string;
+    }) => api.post(`/tasks/updates/${updateId}/photos`, { storagePath, caption }).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['task-updates', vars.taskId] }),
+  });
+}
+
+export function useDeleteTaskUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ updateId }: { updateId: string; taskId?: string }) =>
+      api.delete(`/tasks/updates/${updateId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-updates', vars.taskId] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
   });
 }
 
@@ -2070,23 +2254,36 @@ export function useActuals(projectId: string | undefined, buildingId?: string, u
 // ─────────── Presigned Supabase upload ───────────
 // Two-step upload: (1) get URL from API, (2) PUT file to Supabase directly.
 // Returns a thin client wrapper that does both.
+/**
+ * Upload a file and get its storage path back.
+ *
+ * Goes THROUGH the API rather than browser → S3 direct. A presigned PUT is cross-origin
+ * and needs a CORS rule on the bucket; without one the browser blocks it at preflight and
+ * every upload dies as an opaque "Failed to fetch" — which is what was happening to site
+ * photos and building images. This route is same-origin, so it works whatever the bucket
+ * allows.
+ *
+ * Name and return shape are unchanged so every existing caller keeps working. Once the
+ * bucket has a CORS rule, `presigned-upload` is still there and worth switching back to
+ * for genuinely large files.
+ */
 export function usePresignedUpload() {
   return useMutation({
     mutationFn: async ({ file, projectId, projectName, category }: {
       file: File; projectId?: string; projectName?: string; category?: string;
     }) => {
-      const { data } = await api.post<{ uploadUrl: string; storagePath: string; token: string }>(
-        '/documents/presigned-upload',
-        { filename: file.name, projectId, projectName, category },
+      const form = new FormData();
+      form.append('file', file);
+      if (projectId) form.append('projectId', projectId);
+      if (projectName) form.append('projectName', projectName);
+      if (category) form.append('category', category);
+      // Content-Type is deliberately NOT set: the browser has to add the multipart
+      // boundary itself, and setting it by hand produces a body the server cannot parse.
+      const { data } = await api.post<{ storagePath: string; publicUrl: string; filename: string }>(
+        '/documents/upload-file',
+        form,
       );
-      // Upload directly to Supabase Storage. The token is passed via header.
-      const res = await fetch(data.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-      return { storagePath: data.storagePath, filename: file.name };
+      return { storagePath: data.storagePath, publicUrl: data.publicUrl, filename: data.filename };
     },
   });
 }
@@ -2729,6 +2926,50 @@ export function useAddManualRentPeriod() {
     mutationFn: ({ leaseId, data }: { leaseId: string; data: Record<string, any> }) =>
       api.post(`/leases/${leaseId}/rent-periods/manual`, data).then((r) => r.data),
     onSuccess: (_d, v) => invalidateRentPeriods(qc, v.leaseId),
+  });
+}
+
+/**
+ * R22 — correct a rent period that has already been billed.
+ *
+ * Invalidates the invoice queries too, not only the schedule: a correction flags the
+ * months that were billed from the old figure, and a ledger still showing them clean is
+ * the exact thing the flag exists to prevent.
+ */
+export function useCorrectRentPeriod() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ periodId, data }: { periodId: string; data: Record<string, any> }) =>
+      api.patch(`/leases/rent-periods/${periodId}/correct`, data).then((r) => r.data),
+    onSuccess: (_d, _v) => {
+      invalidateRentPeriods(qc);
+      qc.invalidateQueries({ queryKey: ['lease-rent-invoices'] });
+      qc.invalidateQueries({ queryKey: ['lease-rent-invoice-summary'] });
+      qc.invalidateQueries({ queryKey: ['lease-rent-corrections'] });
+      qc.invalidateQueries({ queryKey: ['unit-history'] });
+    },
+  });
+}
+
+/** The provenance trail — every correction on a lease, newest first. */
+export function useLeaseRentCorrections(leaseId?: string) {
+  return useQuery({
+    queryKey: ['lease-rent-corrections', leaseId],
+    queryFn: () => api.get(`/leases/${leaseId}/rent-corrections`).then((r) => r.data),
+    enabled: !!leaseId,
+  });
+}
+
+/** Acknowledge a flagged invoice. Records that somebody looked; changes no money. */
+export function useClearInvoiceReview() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (invoiceId: string) =>
+      api.post(`/leases/rent-invoices/${invoiceId}/clear-review`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lease-rent-invoices'] });
+      qc.invalidateQueries({ queryKey: ['lease-rent-invoice-summary'] });
+    },
   });
 }
 

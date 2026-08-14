@@ -3,10 +3,14 @@ import { SalesService } from './sales.service';
 
 const mockPrisma: any = {
   sale: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn() },
-  unit: { findUnique: jest.fn(), update: jest.fn() },
+  unit: { findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), update: jest.fn() },
   project: { findUnique: jest.fn() },
   orgSettings: { findUnique: jest.fn() },
   broker: { findUnique: jest.fn() },
+  // Closing a sale looks for the tenancies to end (H3). Defaults to "no lease on this
+  // unit" so the existing suites stay about the sale; the H3 cases override it. findMany,
+  // not findFirst: a unit can hold more than one non-terminated lease.
+  lease: { findMany: jest.fn().mockResolvedValue([]) },
   // Support both forms: array (batch) and callback (interactive) transactions.
   $transaction: jest.fn((arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma))),
 };
@@ -21,8 +25,20 @@ function stubCloseTxn() {
 }
 const mockBus = { emit: jest.fn() };
 
+// Occupancy-log double. The real service writes unit_status_events inside the same
+// transaction as the unit flip; these suites assert the flip, not the log, so a spy
+// is enough — but it is a spy rather than a no-op so the log-write assertions below
+// can check that a flip and its event stay in lockstep.
+const mockStatusEvents = { record: jest.fn(), recordIfChanged: jest.fn() };
+
+// Closing a sale now ends the sitting tenancy in the same transaction (H3). These suites
+// assert the SALE side; the tenancy end has its own coverage in leases.service.spec.
+const mockLeases = { endTenancyWithin: jest.fn().mockResolvedValue({}) };
+
 function makeService() {
-  return new SalesService(mockPrisma as any, mockBus as any);
+  return new SalesService(
+    mockPrisma as any, mockBus as any, mockStatusEvents as any, mockLeases as any,
+  );
 }
 
 describe('SalesService.update — unit-status side effects', () => {
@@ -35,6 +51,10 @@ describe('SalesService.update — unit-status side effects', () => {
       Promise.resolve({ id: args.where.id, status: args.data.status }),
     );
     mockPrisma.unit.update.mockResolvedValue({});
+    // The flip paths read the unit's prior status inside the transaction to stamp the
+    // occupancy event's fromStatus. Default to a reserved unit — the state the CLOSE
+    // and CANCEL paths are actually reached from.
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'UNDER_CONTRACT' });
     stubCloseTxn();
   });
 
@@ -363,5 +383,229 @@ describe('SalesService.delete — soft delete (preserves unit history)', () => {
     mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'CLOSED', unitId: 'u1', unit: {} });
     await expect(service.delete('s1', 'SALES' as any)).rejects.toThrow(ForbiddenException);
     expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H3 — closing a sale ends the tenancies in occupation
+//
+// Until this existed, SalesService.close() contained ZERO references to a lease: it
+// flipped the unit to SOLD and stopped. The lease stayed ACTIVE, and the only thing
+// stopping a departed tenant being invoiced was the billing cron's sold-unit filter.
+// ---------------------------------------------------------------------------
+const leaseRow = (over: any = {}) => ({
+  id: 'l1', tenantName: 'Sitting Tenant LLC', leaseStart: new Date('2025-01-01'), ...over,
+});
+
+describe('SalesService — a closed sale ends the sitting tenancy', () => {
+  let service: SalesService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    stubCloseTxn();
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', unitId: 'u1', projectId: 'pr1', status: 'UNDER_CONTRACT', closingDate: null,
+      salePrice: 100000,
+    });
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+    mockPrisma.lease.findMany.mockResolvedValue([leaseRow()]);
+    mockLeases.endTenancyWithin.mockResolvedValue({});
+  });
+
+  it('ends the lease at the CLOSING DATE, with reason TENANT_BOUGHT', async () => {
+    // The v1 rule is that a sale means the sitting tenant bought. Dating the end by the
+    // closing date — not by now() — is what keeps the ledger and the sale agreeing.
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    const [, leaseId, input] = mockLeases.endTenancyWithin.mock.calls[0];
+    expect(leaseId).toBe('l1');
+    expect(input.terminationReason).toBe('TENANT_BOUGHT');
+    expect(input.terminationDate).toEqual(new Date('2026-06-30'));
+    // Regression guard for the single-lease case: exactly one tenancy, ended exactly once.
+    expect(mockLeases.endTenancyWithin).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends it in the SAME transaction as the unit flip', async () => {
+    // Sold-with-a-live-lease is the exact inconsistency both halves prevent, so it must
+    // not be reachable by one half succeeding and the other not.
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    const txPassed = mockLeases.endTenancyWithin.mock.calls[0][0];
+    expect(txPassed).toBe(mockPrisma); // the interactive-transaction client
+  });
+
+  it('FAILS THE SALE when the tenancy cannot be ended', async () => {
+    // e.g. rent already collected past the closing date. Closing around a real conflict
+    // would leave a unit reading SOLD with a tenancy still running.
+    mockLeases.endTenancyWithin.mockRejectedValue(
+      new Error('Rent has already been collected for 2026-08'),
+    );
+
+    await expect(
+      service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1'),
+    ).rejects.toThrow(/already been collected/);
+  });
+
+  it('does nothing when the unit has no sitting tenancy', async () => {
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).not.toHaveBeenCalled();
+    // …and the sale still closes.
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SOLD' }) }),
+    );
+  });
+
+  it('ignores leases that already ended', async () => {
+    // The lookup filters on terminationDate + status, so a unit with three past tenancies
+    // and no current one is correctly left alone.
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    const where = mockPrisma.lease.findMany.mock.calls[0][0].where;
+    expect(where.terminationDate).toBeNull();
+    expect(where.status).toEqual({ notIn: ['EXPIRED', 'TERMINATED'] });
+    expect(where.deletedAt).toBeNull();
+  });
+
+  it('does NOT touch a lease when the sale is CANCELLED', async () => {
+    // A cancelled sale releases the unit; it does not un-end a tenancy, and it must not
+    // end one either.
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', unitId: 'u1', status: 'UNDER_CONTRACT', closingDate: null,
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+
+    await service.update('s1', { status: 'CANCELLED' } as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).not.toHaveBeenCalled();
+  });
+
+  it('does not end the tenancy twice when a concurrent close wins the lock', async () => {
+    // guard.count === 0 means another request already closed this sale — and already
+    // ended the tenancy. Running again would throw "this tenancy already ended".
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 0 });
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // More than ONE live tenancy. findFirst used to pick a single row by
+  // `leaseStart desc`, which is both too few and the wrong one.
+  // -------------------------------------------------------------------------
+
+  it('ends EVERY tenancy in occupation, not just one', async () => {
+    // A unit can hold two non-terminated leases at once: assertNoOverlappingLease permits
+    // a lease starting the day another ends. Ending only one left the other ACTIVE on a
+    // unit now reading SOLD — the exact inconsistency this code exists to prevent.
+    mockPrisma.lease.findMany.mockResolvedValue([
+      leaseRow({ id: 'l-old', tenantName: 'First Tenant', leaseStart: new Date('2024-01-01') }),
+      leaseRow({ id: 'l-new', tenantName: 'Second Tenant', leaseStart: new Date('2026-06-01') }),
+    ]);
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).toHaveBeenCalledTimes(2);
+    // Oldest first — the query orders by leaseStart asc so the outcome does not depend on
+    // whatever order the rows happen to come back in.
+    expect(mockLeases.endTenancyWithin.mock.calls.map((c: any[]) => c[1])).toEqual([
+      'l-old', 'l-new',
+    ]);
+    for (const call of mockLeases.endTenancyWithin.mock.calls) {
+      expect(call[2].terminationReason).toBe('TENANT_BOUGHT');
+      expect(call[2].terminationDate).toEqual(new Date('2026-06-30'));
+    }
+  });
+
+  it('acts on the lease IN OCCUPATION and leaves a future-dated successor alone (R4)', async () => {
+    // The unit state machine allows LEASED → LEASE_PENDING so a successor can be signed
+    // while the sitting tenant is still in. `leaseStart desc` used to pick that DRAFT
+    // successor and terminate it, leaving the ACTIVE tenancy running on a SOLD unit.
+    // Nothing can be "ended" before it starts, and the close is never blocked by one.
+    mockPrisma.lease.findMany.mockResolvedValue([
+      leaseRow({ id: 'l-active', tenantName: 'Sitting Tenant', leaseStart: new Date('2025-01-01') }),
+      leaseRow({ id: 'l-draft', tenantName: 'Next Tenant', leaseStart: new Date('2026-07-01') }),
+    ]);
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).toHaveBeenCalledTimes(1);
+    expect(mockLeases.endTenancyWithin.mock.calls[0][1]).toBe('l-active');
+    // …and the sale still closes.
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SOLD' }) }),
+    );
+  });
+
+  it('treats a lease starting ON the closing date as in occupation', async () => {
+    // Boundary: a tenancy that begins the day the sale completes is a tenancy the buyer
+    // would otherwise inherit unannounced.
+    mockPrisma.lease.findMany.mockResolvedValue([
+      leaseRow({ id: 'l-sameday', leaseStart: new Date('2026-06-30') }),
+    ]);
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin.mock.calls[0][1]).toBe('l-sameday');
+  });
+
+  // -------------------------------------------------------------------------
+  // R5 — notify on the same footing as a manual end-tenancy.
+  // endTenancyWithin deliberately emits nothing (the caller's transaction can still roll
+  // back), so the emit is this method's job. It was never written: ending a tenancy
+  // through the sale door notified nobody, while the LeasesService.endTenancy door did.
+  // -------------------------------------------------------------------------
+
+  it('emits lease.terminated once per ended tenancy, after the commit', async () => {
+    mockPrisma.lease.findMany.mockResolvedValue([
+      leaseRow({ id: 'l-old', tenantName: 'First Tenant', leaseStart: new Date('2024-01-01') }),
+      leaseRow({ id: 'l-new', tenantName: 'Second Tenant', leaseStart: new Date('2026-06-01') }),
+    ]);
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    // Same shape LeasesService.endTenancy emits, so downstream handlers cannot tell which
+    // door was used.
+    expect(mockBus.emit).toHaveBeenCalledWith({
+      type: 'lease.terminated', leaseId: 'l-old', projectId: 'pr1',
+      tenantName: 'First Tenant', reason: 'TENANT_BOUGHT',
+    });
+    expect(mockBus.emit).toHaveBeenCalledWith({
+      type: 'lease.terminated', leaseId: 'l-new', projectId: 'pr1',
+      tenantName: 'Second Tenant', reason: 'TENANT_BOUGHT',
+    });
+    expect(
+      mockBus.emit.mock.calls.filter((c: any[]) => c[0].type === 'lease.terminated'),
+    ).toHaveLength(2);
+  });
+
+  it('emits NOTHING for a tenancy when a concurrent close won the race', async () => {
+    // Nothing was written and no tenancy was ended by THIS request — the winner already
+    // announced it. A second notification would be a second alert for one move-out.
+    mockPrisma.sale.updateMany.mockResolvedValue({ count: 0 });
+
+    await service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1');
+
+    expect(mockBus.emit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'lease.terminated' }),
+    );
+  });
+
+  it('does not announce a tenancy end that rolled back with its sale', async () => {
+    // The emit sits outside the transaction on purpose. If the close throws, nothing is
+    // announced — a notification for a move-out that did not happen is worse than none.
+    mockLeases.endTenancyWithin.mockRejectedValue(
+      new Error('Rent has already been collected for 2026-08'),
+    );
+
+    await expect(
+      service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30' } as any, 'user-1'),
+    ).rejects.toThrow(/already been collected/);
+
+    expect(mockBus.emit).not.toHaveBeenCalled();
   });
 });

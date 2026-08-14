@@ -105,7 +105,10 @@ export class BrokersService {
    */
   async report() {
     // Four grouped queries — aggregate per broker, then join in memory.
-    const [brokers, leadGroups, saleGroups, paidGroups, pipelineGroups] = await Promise.all([
+    const [
+      brokers, leadGroups, saleGroups, paidGroups, pipelineGroups,
+      leaseGroups, leasePaidGroups,
+    ] = await Promise.all([
       this.prisma.broker.findMany({ where: { deletedAt: null }, orderBy: { name: 'asc' } }),
       this.prisma.lead.groupBy({
         by: ['brokerId'],
@@ -139,12 +142,49 @@ export class BrokersService {
         },
         _sum: { salePrice: true },
       }),
+      // Leasing commission (R23). Kept as its OWN pair of columns rather than added
+      // into the sale totals: a sale commission is a one-off on a disposal and a
+      // leasing fee is earned on a tenancy, so a broker's "commission earned" summed
+      // across both would not reconcile to either side's ledger. Both are shown, plus
+      // a total, and the caller can use whichever it needs.
+      //
+      // Filtered on "a commission was stamped", NOT on status: 'ACTIVE'. ACTIVE is a
+      // state a lease LEAVES — endTenancy flips it to EXPIRED when the term runs out —
+      // so an ACTIVE filter made an unpaid $18k fee silently drop out of both the earned
+      // and the owed columns the day the tenancy ended, and the report then showed Prime
+      // owing the broker nothing on a debt that was still real. The sale-side queries
+      // above filter on CLOSED, a TERMINAL state, which is why they never had this bug.
+      //
+      // brokerCommissionAmt is stamped once, at activation (LeasesService.computeBroker-
+      // Commission on the activatingNow path), so "amount is not null" means "this lease
+      // went live and earned a fee" — it excludes DRAFT leases that never activated and
+      // keeps EXPIRED/TERMINATED ones where the money was genuinely earned.
+      this.prisma.lease.groupBy({
+        by: ['brokerId'],
+        where: { brokerId: { not: null }, brokerCommissionAmt: { not: null }, deletedAt: null },
+        _count: true,
+        _sum: { brokerCommissionAmt: true, monthlyRent: true },
+      }),
+      this.prisma.lease.groupBy({
+        by: ['brokerId'],
+        where: {
+          brokerId: { not: null },
+          brokerCommissionAmt: { not: null },
+          deletedAt: null,
+          brokerCommissionPaidAt: { not: null },
+        },
+        _sum: { brokerCommissionAmt: true },
+      }),
     ]);
 
     const leadsByBroker = new Map(leadGroups.map((g) => [g.brokerId, g._count]));
     const salesByBroker = new Map(saleGroups.map((g) => [g.brokerId, g]));
     const paidByBroker = new Map(paidGroups.map((g) => [g.brokerId, Number(g._sum.brokerCommissionAmt ?? 0)]));
     const pipelineByBroker = new Map(pipelineGroups.map((g) => [g.brokerId, Number(g._sum.salePrice ?? 0)]));
+    const leasesByBroker = new Map(leaseGroups.map((g) => [g.brokerId, g]));
+    const leasePaidByBroker = new Map(
+      leasePaidGroups.map((g) => [g.brokerId, Number(g._sum.brokerCommissionAmt ?? 0)]),
+    );
 
     return brokers.map((b) => {
       const leads = leadsByBroker.get(b.id) ?? 0;
@@ -152,6 +192,10 @@ export class BrokersService {
       const closedSales = closed?._count ?? 0;
       const commissionEarned = Number(closed?._sum.brokerCommissionAmt ?? 0);
       const commissionPaid = paidByBroker.get(b.id) ?? 0;
+      const leased = leasesByBroker.get(b.id);
+      const leasesSigned = leased?._count ?? 0;
+      const leaseCommissionEarned = Number(leased?._sum.brokerCommissionAmt ?? 0);
+      const leaseCommissionPaid = leasePaidByBroker.get(b.id) ?? 0;
       const pipelineValue = pipelineByBroker.get(b.id) ?? 0;
       const rate = b.commissionRate != null ? Number(b.commissionRate) : null;
       return {
@@ -167,6 +211,24 @@ export class BrokersService {
         conversionPct: leads > 0 ? Math.round((closedSales / leads) * 100) : 0,
         commissionPaid,
         commissionOwed: commissionEarned - commissionPaid,
+        // ---- Leasing side (R23) ----
+        // Lifetime, not current: both of these now count every lease the broker signed
+        // that reached activation, including ones whose term has since ended. That is
+        // what "signed" means, and it is the only basis on which the commission columns
+        // beside them reconcile.
+        leasesSigned,
+        // Renamed from `leasedMonthlyRent` — that name read as "rent currently being
+        // collected on this broker's leases", which is no longer what it holds. This is
+        // the contracted monthly rent summed across every lease they signed.
+        signedMonthlyRent: Number(leased?._sum.monthlyRent ?? 0),
+        leaseCommissionEarned,
+        leaseCommissionPaid,
+        leaseCommissionOwed: leaseCommissionEarned - leaseCommissionPaid,
+        // Convenience totals across both sides, so a caller wanting "what do we owe
+        // this broker in all" does not have to know the split exists.
+        totalCommissionEarned: commissionEarned + leaseCommissionEarned,
+        totalCommissionOwed:
+          (commissionEarned - commissionPaid) + (leaseCommissionEarned - leaseCommissionPaid),
         pipelineValue,
         pipelineCommissionEst: rate != null ? Math.round(pipelineValue * rate / 100 * 100) / 100 : null,
       };
@@ -219,6 +281,66 @@ export class BrokersService {
 
     return this.prisma.sale.update({
       where: { id: saleId },
+      data: { brokerCommissionPaidAt: new Date() },
+      select: {
+        id: true,
+        brokerId: true,
+        brokerCommissionAmt: true,
+        brokerCommissionPaidAt: true,
+      },
+    });
+  }
+
+  /**
+   * Per-broker LEASE drilldown — the leasing counterpart to getSalesByBroker.
+   * Same shape and same cap, so the broker detail view can render the two side by side.
+   */
+  async getLeasesByBroker(brokerId: string) {
+    const broker = await this.prisma.broker.findFirst({ where: { id: brokerId, deletedAt: null } });
+    if (!broker) throw new NotFoundException('Broker not found');
+
+    return this.prisma.lease.findMany({
+      where: { brokerId, deletedAt: null },
+      select: {
+        id: true,
+        tenantName: true,
+        tenantBrand: true,
+        status: true,
+        monthlyRent: true,
+        termMonths: true,
+        leaseStart: true,
+        leaseEnd: true,
+        brokerCommissionAmt: true,
+        brokerCommissionPct: true,
+        brokerCommissionBasis: true,
+        brokerCommissionPaidAt: true,
+        unit: {
+          select: {
+            unitNumber: true,
+            building: { select: { name: true, projectId: true } },
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+    });
+  }
+
+  /**
+   * Mark a LEASING commission as paid. Separate from the sale version because the two
+   * live on different tables; sharing one endpoint would mean guessing which id was
+   * passed, and a wrong guess silently marks the wrong deal as settled.
+   */
+  async markLeaseCommissionPaid(leaseId: string) {
+    const lease = await this.prisma.lease.findFirst({
+      where: { id: leaseId, deletedAt: null },
+      select: { id: true, brokerId: true },
+    });
+    if (!lease) throw new NotFoundException('Lease not found');
+    if (!lease.brokerId) throw new NotFoundException('Lease has no broker assigned');
+
+    return this.prisma.lease.update({
+      where: { id: leaseId },
       data: { brokerCommissionPaidAt: new Date() },
       select: {
         id: true,

@@ -63,7 +63,13 @@ export class SalesController {
   @Put(':id')
   @RequirePermissions('sales:edit')
   @ApiOperation({ summary: 'Update sale (atomically updates unit status on CLOSED)' })
-  update(@Param('id') id: string, @Body() body: UpdateSaleDto) { return this.service.update(id, body as any); }
+  update(
+    @Param('id') id: string,
+    @Body() body: UpdateSaleDto,
+    @CurrentUser('sub') userId?: string,
+  ) {
+    return this.service.update(id, body as any, userId);
+  }
 
   @Delete(':id')
   @RequirePermissions('sales:edit')

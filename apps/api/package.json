@@ -13,7 +13,9 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma": "prisma",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts"
+    "db:seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts",
+    "test:integration": "jest --config ./jest.integration.json",
+    "test:all": "jest && jest --config ./jest.integration.json"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts && ts-node prisma/seed-demo-users.ts && ts-node prisma/seed-financials.ts && ts-node prisma/seed-leasing-demo.ts",

@@ -12,6 +12,8 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
+import { ApiOperation } from '@nestjs/swagger';
+import { AddTaskUpdatePhotoDto, CreateTaskUpdateDto } from './dto/task-update.dto';
 
 const UPLOADS_DIR = join(process.cwd(), 'uploads', 'tasks');
 
@@ -38,6 +40,7 @@ export class TasksController {
         @Query('status') status?: string,
         @Query('priority') priority?: string,
         @Query('search') search?: string,
+        @Query('kind') kind?: string,
     ) {
         return this.tasksService.findAll({
             projectId,
@@ -47,6 +50,7 @@ export class TasksController {
             status: status as any,
             priority: priority as any,
             search,
+            kind,
         });
     }
 
@@ -84,6 +88,42 @@ export class TasksController {
     }
 
     // ---- Comments ----
+
+    @Get(':id/updates')
+    @RequirePermissions('project:view')
+    @ApiOperation({ summary: 'Day-wise progress updates on an item, newest day first' })
+    getUpdates(@Param('id') id: string) {
+        return this.tasksService.getUpdates(id);
+    }
+
+    @Post(':id/updates')
+    @RequirePermissions('task:edit')
+    @ApiOperation({ summary: 'Post a dated progress update; @mentions notify those named' })
+    addUpdate(
+        @Param('id') id: string,
+        @CurrentUser('sub') userId: string,
+        @Body() body: CreateTaskUpdateDto,
+    ) {
+        return this.tasksService.addUpdate(id, userId, body);
+    }
+
+    @Post('updates/:updateId/photos')
+    @RequirePermissions('task:edit')
+    @ApiOperation({ summary: 'Attach a photo to an update (upload via the presigned URL first)' })
+    addUpdatePhoto(@Param('updateId') updateId: string, @Body() body: AddTaskUpdatePhotoDto) {
+        return this.tasksService.addUpdatePhoto(updateId, body);
+    }
+
+    @Delete('updates/:updateId')
+    @RequirePermissions('task:edit')
+    @ApiOperation({ summary: 'Delete an update (author or Project Manager)' })
+    deleteUpdate(
+        @Param('updateId') updateId: string,
+        @CurrentUser('sub') userId: string,
+        @CurrentUser('role') userRole: string,
+    ) {
+        return this.tasksService.deleteUpdate(updateId, userId, userRole);
+    }
 
     @Get(':id/comments')
     @RequirePermissions('project:view')

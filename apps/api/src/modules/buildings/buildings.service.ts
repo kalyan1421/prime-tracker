@@ -112,11 +112,27 @@ export class BuildingsService {
     if (unitCount > 0 && !force) {
       throw new ConflictException(
         `Building '${building.name}' has ${unitCount} unit${unitCount === 1 ? '' : 's'}. ` +
-        `Delete the units first, or pass ?force=true to delete the building and all its units.`,
+        `Delete the units first, or pass ?force=true to archive the building and its units ` +
+        `instead (their sale/lease/loan history is kept, not deleted).`,
       );
     }
 
-    const result = await this.prisma.building.delete({ where: { id } });
+    // Soft-delete, not `prisma.building.delete()`. A hard delete here used to cascade
+    // (every Sale/Lease/Loan/etc. relation on Building and Unit is `onDelete: Cascade`)
+    // and permanently erase every sale/lease/loan record under the building AND its
+    // units. `force` still archives the building's live units too — matching what it
+    // used to destroy — but the units' own history is left untouched, same as a
+    // regular unit delete.
+    const now = new Date();
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (unitCount > 0) {
+        await tx.unit.updateMany({
+          where: { buildingId: id, deletedAt: null },
+          data: { deletedAt: now },
+        });
+      }
+      return tx.building.update({ where: { id }, data: { deletedAt: now } });
+    });
     await this.projectPhase.recompute(building.projectId);
     return result;
   }

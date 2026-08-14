@@ -9,10 +9,16 @@
  * Domain rules this UI has to respect (client-confirmed 2026-07-29):
  *  1. A period is a DATE RANGE, not a month. Free rent is ONE row spanning every
  *     abated month, never one row per month.
- *  2. Escalation COMPOUNDS and applies to baseRent only — nnnAmount carries
- *     forward untouched. Base / NNN / total are therefore separate columns.
+ *  2. Escalation COMPOUNDS and applies to baseRent, which is the whole of the rent.
+ *     NNN is NOT here: it is charged once at signing (client-confirmed 2026-08-12)
+ *     and lives on the lease's obligations, beside the security deposit.
  *  3. Past periods are IMMUTABLE. Even with canEdit there is no "edit row": the
  *     only writes are appending a manual period and re-cutting the future.
+ *     The ONE exception is R22's correction, behind its own permission
+ *     (`lease:history:correct`, held by nobody by default): a period that was RECORDED
+ *     wrong can be corrected, and doing so preserves the old figure and flags the months
+ *     already billed from it. That is a different act from "the rent changed", which is
+ *     still an appended period — see the dialog copy, which says so out loud.
  *  4. `reason` is required on a manual period — blocked client-side, not left to
  *     the API's 400.
  *
@@ -22,18 +28,20 @@
 
 import { useMemo, useState } from 'react';
 import {
-  Button, Card, CardBody, Chip, Input, Tooltip,
+  Button, Card, CardBody, Chip, Input, Textarea, Tooltip,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   useDisclosure, addToast,
 } from '@heroui/react';
 import {
   FiPlus, FiRefreshCw, FiZap, FiCalendar, FiTrendingUp,
-  FiGift, FiEdit3, FiLock, FiInfo,
+  FiGift, FiEdit3, FiLock, FiInfo, FiAlertTriangle, FiTool,
 } from 'react-icons/fi';
 import {
   useLeaseRentPeriods, useLeaseRentSummary,
   useAddManualRentPeriod, useRegenerateFutureRentPeriods, useGenerateRentPeriods,
+  useCorrectRentPeriod, useLeaseRentCorrections,
 } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
 import { errMsg, fmt, fmtPct, fmtDate } from '../utils/fmt';
 import { StatCard, LoadingState, ErrorState, EmptyState } from './ui';
 import { FormError } from './FormError';
@@ -49,7 +57,6 @@ interface RentPeriod {
   endDate: string | null;
   /** Decimal-as-string. Never do arithmetic on these without num(). */
   baseRent: string | number;
-  nnnAmount: string | number;
   monthlyRent: string | number;
   isFreeRent: boolean;
   escalationPct: string | number | null;
@@ -144,7 +151,6 @@ const EMPTY_MANUAL = {
   startDate: '',
   endDate: '',
   baseRent: '',
-  nnnAmount: '',
   reason: '',
 };
 
@@ -153,9 +159,16 @@ const EMPTY_MANUAL = {
 interface LeaseRentScheduleProps {
   leaseId: string;
   canEdit: boolean;
+  /**
+   * Why writing to this schedule is closed, when it is — e.g. the unit has been sold.
+   * Distinct from `canEdit`, which is about the VIEWER's permission: this is about the
+   * lease itself no longer being schedulable, so the reason is worth saying out loud
+   * rather than just greying the buttons out.
+   */
+  lockedReason?: string | null;
 }
 
-export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) {
+export function LeaseRentSchedule({ leaseId, canEdit, lockedReason }: LeaseRentScheduleProps) {
   const periodsQ = useLeaseRentPeriods(leaseId);
   // The summary endpoint 400s on a lease with no periods (it cannot straight-line
   // nothing). That is expected on un-backfilled leases, so its error is swallowed
@@ -169,15 +182,29 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
   const manualModal = useDisclosure();
   const regenModal = useDisclosure();
 
+  // R22. Held by no role by default — Prime decides who gets it — so for almost every
+  // user this whole branch is inert and the table reads exactly as it did before.
+  const canCorrect = useAuthStore((st) => st.hasPermission('lease:history:correct'));
+  const correct = useCorrectRentPeriod();
+  const correctionsQ = useLeaseRentCorrections(leaseId);
+  const corrections = (correctionsQ.data ?? []) as any[];
+  const [correcting, setCorrecting] = useState<RentPeriod | null>(null);
+  const [correctForm, setCorrectForm] = useState<Record<string, string>>({});
+  const [correctErr, setCorrectErr] = useState<string | null>(null);
+
   const [form, setForm] = useState<Record<string, string>>(EMPTY_MANUAL);
   const [formErr, setFormErr] = useState<string | null>(null);
-  const [regenForm, setRegenForm] = useState<Record<string, string>>({ baseRent: '', nnnAmount: '' });
+  const [regenForm, setRegenForm] = useState<Record<string, string>>({ baseRent: '' });
   const [regenErr, setRegenErr] = useState<string | null>(null);
 
   const periods = (periodsQ.data ?? []) as RentPeriod[];
   const summary = summaryQ.data as RentSummary | undefined;
 
   const today = todayUtcDay();
+  const correctedIds = useMemo(
+    () => new Set(corrections.map((c: any) => c.periodId)),
+    [corrections],
+  );
 
   // The API returns periods ordered by `sequence`, and a manual mid-term period is
   // appended with the NEXT sequence — so sequence order is not chronological order.
@@ -236,11 +263,6 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
       setFormErr('Base rent must be a number of 0 or more.');
       return;
     }
-    const nnn = form.nnnAmount.trim() === '' ? undefined : Number(form.nnnAmount);
-    if (nnn !== undefined && (!Number.isFinite(nnn) || nnn < 0)) {
-      setFormErr('NNN must be a number of 0 or more.');
-      return;
-    }
 
     try {
       await addManual.mutateAsync({
@@ -250,9 +272,8 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
           // Omitted entirely (not null) so the API's whitelist is happy either way.
           ...(form.endDate ? { endDate: form.endDate } : {}),
           baseRent,
-          ...(nnn !== undefined ? { nnnAmount: nnn } : {}),
-          // monthlyRent is intentionally not sent — the server derives base + NNN,
-          // which keeps the invariant monthlyRent === baseRent + nnnAmount on it.
+          // monthlyRent is intentionally not sent — the server mirrors baseRent,
+          // which keeps the invariant monthlyRent === baseRent on it.
           reason: form.reason.trim(),
         },
       });
@@ -265,7 +286,7 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
   };
 
   const openRegen = () => {
-    setRegenForm({ baseRent: '', nnnAmount: '' });
+    setRegenForm({ baseRent: '' });
     setRegenErr(null);
     regenModal.onOpen();
   };
@@ -273,13 +294,8 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
   const handleRegen = async () => {
     setRegenErr(null);
     const base = regenForm.baseRent.trim() === '' ? undefined : Number(regenForm.baseRent);
-    const nnn = regenForm.nnnAmount.trim() === '' ? undefined : Number(regenForm.nnnAmount);
     if (base !== undefined && (!Number.isFinite(base) || base < 0)) {
       setRegenErr('Base rent must be a number of 0 or more.');
-      return;
-    }
-    if (nnn !== undefined && (!Number.isFinite(nnn) || nnn < 0)) {
-      setRegenErr('NNN must be a number of 0 or more.');
       return;
     }
     // regenerateFuture only rewrites periods that START in the future — anything
@@ -293,7 +309,7 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
     if (!hasFuturePeriod) {
       setRegenErr(
         'No period starts after today, so there is nothing to re-cut — periods already ' +
-        'running or finished are frozen. To change base rent or NNN from a date, use ' +
+        'running or finished are frozen. To change the rent from a date, use ' +
         '"Add manual period" instead.',
       );
       return;
@@ -303,13 +319,67 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
         leaseId,
         data: {
           ...(base !== undefined ? { baseRent: base } : {}),
-          ...(nnn !== undefined ? { nnnAmount: nnn } : {}),
         },
       });
       addToast({ title: 'Future periods re-cut', color: 'success' });
       regenModal.onClose();
     } catch (e) {
       setRegenErr(errMsg(e, 'Failed to regenerate future periods'));
+    }
+  };
+
+  const openCorrect = (p: RentPeriod) => {
+    // Pre-filled with what is there now, so the person corrects a value rather than
+    // reconstructing the row from memory and mistyping the parts they did not mean to
+    // touch. The API rejects a body where nothing actually differs.
+    setCorrectForm({
+      baseRent: String(num(p.baseRent)),
+      startDate: p.startDate.slice(0, 10),
+      endDate: p.endDate ? p.endDate.slice(0, 10) : '',
+      reason: '',
+    });
+    setCorrectErr(null);
+    setCorrecting(p);
+  };
+
+  const submitCorrection = async () => {
+    setCorrectErr(null);
+    if (!correcting) return;
+    if (correctForm.reason.trim().length < 10) {
+      setCorrectErr('Say what was wrong and what it should be. This note is the only account of why a billed figure changed.');
+      return;
+    }
+    const rent = Number(correctForm.baseRent);
+    if (!Number.isFinite(rent) || rent < 0) {
+      setCorrectErr('Base rent must be a number of 0 or more.');
+      return;
+    }
+    // Only send what moved. Sending the whole row makes every field an assertion, and
+    // the server then records unchanged values as part of the correction.
+    const data: Record<string, any> = { reason: correctForm.reason.trim() };
+    if (rent !== num(correcting.baseRent)) data.baseRent = rent;
+    if (correctForm.startDate !== correcting.startDate.slice(0, 10)) {
+      data.startDate = correctForm.startDate;
+    }
+    const currentEnd = correcting.endDate ? correcting.endDate.slice(0, 10) : '';
+    if (correctForm.endDate !== currentEnd) {
+      data.endDate = correctForm.endDate || null;
+    }
+    if (Object.keys(data).length === 1) {
+      setCorrectErr('Nothing has been changed yet.');
+      return;
+    }
+    try {
+      const res = await correct.mutateAsync({ periodId: correcting.id, data });
+      addToast({
+        title: res.invoicesFlagged
+          ? `Corrected — ${res.invoicesFlagged} already-billed month(s) flagged for Finance`
+          : 'Period corrected',
+        color: 'success',
+      });
+      setCorrecting(null);
+    } catch (e) {
+      setCorrectErr(errMsg(e, 'Failed to correct the period'));
     }
   };
 
@@ -329,6 +399,64 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
 
   const modals = (
     <>
+      {/* R22 — correcting a period that was already billed. The copy leads with the
+          distinction from "add a rent change", because choosing the wrong one of the two
+          is the mistake that actually happens: one records history, the other rewrites it. */}
+      <Modal isOpen={!!correcting} onClose={() => setCorrecting(null)} size="lg">
+        <ModalContent>
+          <ModalHeader className="flex flex-col gap-1">
+            <span>Correct a billed period</span>
+            <span className="text-xs font-normal text-gray-500">
+              Only if this period was RECORDED wrong. If the rent genuinely changed from a
+              date, close this and use “Add rent change” instead.
+            </span>
+          </ModalHeader>
+          <ModalBody>
+            <FormError message={correctErr} />
+            <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">
+              <FiAlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                Months already invoiced from this period will be flagged for Finance — they
+                are never restated automatically, because the invoice records what was
+                actually billed. The previous value is kept on the record.
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-1">
+              <Input
+                size="sm" type="number" label="Base rent / month"
+                value={correctForm.baseRent ?? ''}
+                onChange={(e) => setCorrectForm((f) => ({ ...f, baseRent: e.target.value }))}
+              />
+              <Input
+                size="sm" type="date" label="Starts on"
+                value={correctForm.startDate ?? ''}
+                onChange={(e) => setCorrectForm((f) => ({ ...f, startDate: e.target.value }))}
+              />
+              <Input
+                size="sm" type="date" label="Ends on"
+                description="Blank = lease end"
+                value={correctForm.endDate ?? ''}
+                onChange={(e) => setCorrectForm((f) => ({ ...f, endDate: e.target.value }))}
+              />
+            </div>
+            <Textarea
+              size="sm"
+              label="What was wrong?"
+              description="Required. Finance reconciles the ledger against this note."
+              minRows={2}
+              value={correctForm.reason ?? ''}
+              onValueChange={(v) => setCorrectForm((f) => ({ ...f, reason: v }))}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={() => setCorrecting(null)}>Cancel</Button>
+            <Button size="sm" color="warning" isLoading={correct.isPending} onPress={submitCorrection}>
+              Record correction
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       <Modal isOpen={manualModal.isOpen} onOpenChange={manualModal.onOpenChange} size="lg">
         <ModalContent>
           <ModalHeader className="flex flex-col gap-1">
@@ -355,13 +483,6 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
                 startContent={<span className="text-xs text-gray-400">$</span>}
                 value={form.baseRent} onChange={set('baseRent')}
               />
-              <Input
-                size="sm" type="number" label="NNN / month"
-                placeholder="0.00"
-                description="Carries forward unescalated"
-                startContent={<span className="text-xs text-gray-400">$</span>}
-                value={form.nnnAmount} onChange={set('nnnAmount')}
-              />
             </div>
             <Input
               size="sm" label="Reason" isRequired
@@ -370,7 +491,8 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
             />
             <p className="text-xs text-gray-500 flex items-start gap-1.5">
               <FiInfo size={12} className="shrink-0 mt-0.5" />
-              Total monthly rent is derived as base + NNN, so the schedule stays internally consistent.
+              Total monthly rent mirrors the base rent — NNN is charged once at signing and is
+              tracked in the lease's obligations, not here.
             </p>
           </ModalBody>
           <ModalFooter>
@@ -399,12 +521,6 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
                 placeholder="Leave blank to keep"
                 startContent={<span className="text-xs text-gray-400">$</span>}
                 value={regenForm.baseRent} onChange={setRegen('baseRent')}
-              />
-              <Input
-                size="sm" type="number" label="NNN override"
-                placeholder="Leave blank to keep"
-                startContent={<span className="text-xs text-gray-400">$</span>}
-                value={regenForm.nnnAmount} onChange={setRegen('nnnAmount')}
               />
             </div>
           </ModalBody>
@@ -461,7 +577,10 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
             label="Free rent"
             value={`${summary.freeRentMonths} mo`}
             colorScheme={num(summary.freeRentMonths) > 0 ? 'orange' : 'gray'}
-            helpText={`${summary.payingMonths} paying months`}
+            // Rounded: payingMonths is derived from a day count, so a part-month term
+            // yields values like 12.032258. Six decimal places of a month is not a
+            // number anyone reads — it just looks broken.
+            helpText={`${Math.round(num(summary.payingMonths) * 10) / 10} paying months`}
           />
           <StatCard
             label="First paying month"
@@ -485,22 +604,54 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
             <div className="min-w-0">
               <p className="text-sm font-semibold text-gray-900">Rent schedule &amp; history</p>
               <p className="text-xs text-gray-400">
-                Escalation compounds on base rent only — NNN carries forward unchanged.
+                Escalation compounds on the base rent. NNN is a one-time charge at signing,
+                tracked in this lease's obligations.
               </p>
             </div>
             {canEdit && (
               <div className="flex items-center gap-2 shrink-0">
-                <Tooltip content="Re-cut only the periods that start in the future" size="sm">
-                  <Button size="sm" variant="flat" startContent={<FiRefreshCw size={13} />} onPress={openRegen}>
-                    Regenerate future
-                  </Button>
+                <Tooltip
+                  content={lockedReason || 'Re-cut only the periods that start in the future'}
+                  size="sm"
+                >
+                  {/* A disabled Button does not fire pointer events, so the Tooltip needs a
+                      wrapper to hang off — otherwise the reason is unreachable exactly when
+                      it matters. */}
+                  <span className="inline-flex">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      startContent={<FiRefreshCw size={13} />}
+                      onPress={openRegen}
+                      isDisabled={!!lockedReason}
+                    >
+                      Regenerate future
+                    </Button>
+                  </span>
                 </Tooltip>
-                <Button size="sm" color="primary" startContent={<FiPlus size={13} />} onPress={openManual}>
-                  Add rent change
-                </Button>
+                <Tooltip content={lockedReason || 'Append a mid-term rent change'} size="sm">
+                  <span className="inline-flex">
+                    <Button
+                      size="sm"
+                      color="primary"
+                      startContent={<FiPlus size={13} />}
+                      onPress={openManual}
+                      isDisabled={!!lockedReason}
+                    >
+                      Add rent change
+                    </Button>
+                  </span>
+                </Tooltip>
               </div>
             )}
           </div>
+
+          {lockedReason && (
+            <div className="flex items-start gap-1.5 px-4 py-2 bg-amber-50 border-b border-amber-100">
+              <FiLock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800">{lockedReason}</p>
+            </div>
+          )}
 
           {/* Legend — the past/current/future encoding is the whole point of the table */}
           <div className="flex flex-wrap items-center gap-4 px-4 py-2 bg-gray-50/70 border-b border-gray-100 text-[11px] text-gray-500">
@@ -523,7 +674,6 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
                   <th className="text-left px-3 py-2 font-medium">Period</th>
                   <th className="text-left px-3 py-2 font-medium">Length</th>
                   <th className="text-right px-3 py-2 font-medium">Base rent</th>
-                  <th className="text-right px-3 py-2 font-medium">NNN</th>
                   <th className="text-right px-3 py-2 font-medium">Total / mo</th>
                   <th className="text-right px-3 py-2 font-medium">Escalation</th>
                   <th className="text-left px-3 py-2 font-medium">Source</th>
@@ -569,6 +719,23 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
                               <span className="text-gray-300"><FiLock size={11} /></span>
                             </Tooltip>
                           )}
+                          {correctedIds.has(p.id) && (
+                            <Tooltip content="This period was corrected — see the trail below" size="sm">
+                              <span className="text-amber-600"><FiTool size={11} /></span>
+                            </Tooltip>
+                          )}
+                          {/* Only on rows that have actually been billed. Offering it on a
+                              future period would compete with "Add rent change", which is
+                              the right tool there. */}
+                          {canCorrect && (isPast || isCurrent) && !p.isFreeRent && (
+                            <button
+                              type="button"
+                              onClick={() => openCorrect(p)}
+                              className="text-[10px] uppercase tracking-wide text-amber-700 hover:text-amber-900 underline decoration-dotted underline-offset-2"
+                            >
+                              Correct
+                            </button>
+                          )}
                           {isFuture && (
                             <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-dashed border-gray-300 rounded px-1.5 py-0.5">
                               Scheduled
@@ -588,10 +755,6 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
 
                       <td className={`px-3 py-2.5 text-right tabular-nums ${textClass}`}>
                         {p.isFreeRent ? <span className="text-green-600">Abated</span> : fmt(num(p.baseRent))}
-                      </td>
-
-                      <td className={`px-3 py-2.5 text-right tabular-nums ${isPast ? 'text-gray-300' : 'text-gray-500'}`}>
-                        {fmt(num(p.nnnAmount))}
                       </td>
 
                       <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${
@@ -623,11 +786,56 @@ export function LeaseRentSchedule({ leaseId, canEdit }: LeaseRentScheduleProps) 
             </table>
           </div>
 
+          {/* The provenance trail. Renders only when something has been corrected, so a
+              lease with a clean history says nothing at all rather than showing an empty
+              "Corrections" heading that implies the feature is in use. */}
+          {corrections.length > 0 && (
+            <div className="border-t border-amber-100 bg-amber-50/40 px-4 py-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-amber-800 flex items-center gap-1.5">
+                <FiTool size={11} />
+                Corrections to billed rent ({corrections.length})
+              </p>
+              <ul className="mt-2 space-y-2">
+                {corrections.map((c: any) => (
+                  <li key={c.id} className="text-[11px] text-gray-700">
+                    <span className="tabular-nums font-medium">
+                      {fmt(num(c.previousRent))} → {fmt(num(c.correctedRent))}
+                    </span>
+                    {c.correctedStartDate && (
+                      <span className="text-gray-500">
+                        {' '}· starts {fmtDate(c.previousStartDate)} → {fmtDate(c.correctedStartDate)}
+                      </span>
+                    )}
+                    {c.correctedEndDate && (
+                      <span className="text-gray-500">
+                        {' '}· ends {fmtDate(c.previousEndDate)} → {fmtDate(c.correctedEndDate)}
+                      </span>
+                    )}
+                    <span className="text-gray-500">
+                      {' '}· {fmtDate(c.createdAt)}
+                      {c.correctedBy?.name ? ` by ${c.correctedBy.name}` : ''}
+                    </span>
+                    {c.invoicesFlagged > 0 && (
+                      <span className="ml-1 text-amber-700">
+                        · {c.invoicesFlagged} billed month(s) flagged
+                      </span>
+                    )}
+                    <p className="italic text-gray-500 mt-0.5">“{c.reason}”</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {canEdit && (
             <div className="px-4 py-2 border-t border-gray-100 text-[11px] text-gray-400 flex items-start gap-1.5">
               <FiLock size={11} className="shrink-0 mt-0.5" />
               Periods are append-only. To change rent, add a new period from the date the change takes
               effect — existing rows are never edited or deleted.
+              {canCorrect && (
+                <> A period recorded wrong can be corrected, which keeps the old figure and
+                flags anything already billed from it.</>
+              )}
             </div>
           )}
         </CardBody>

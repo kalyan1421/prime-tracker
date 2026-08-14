@@ -86,55 +86,24 @@ describe('computeRentSchedule — compounding escalation', () => {
   });
 });
 
-describe('computeRentSchedule — NNN never escalates', () => {
-  it('carries nnnAmount forward unchanged while baseRent rises', () => {
-    const periods = computeRentSchedule({
-      ...TERM_36,
-      baseRent: 100,
-      nnnAmount: 25,
-      escalationPct: 5,
-      escalationFreq: 12,
-    });
+// The block that used to live here — "NNN never escalates" — went with the NNN column
+// itself on 2026-08-12. NNN is charged once at signing and is tracked as a lease
+// obligation, so there is nothing on this timeline for an escalation to leave alone.
+// The rule it protected (escalation compounds off baseRent) is covered above.
 
-    expect(periods.map((p) => money(p.nnnAmount))).toEqual(['25.00', '25.00', '25.00']);
-    expect(periods.map((p) => money(p.baseRent))).toEqual(['100.00', '105.00', '110.25']);
-    expect(periods.map((p) => money(p.monthlyRent))).toEqual(['125.00', '130.00', '135.25']);
-  });
-
-  it('never compounds the NNN into the escalation base', () => {
-    const periods = computeRentSchedule({
-      ...TERM_36,
-      baseRent: 100,
-      nnnAmount: 25,
-      escalationPct: 5,
-      escalationFreq: 12,
-    });
-    // If NNN had been escalated, period 2 base would be 125 * 1.05 = 131.25.
-    expect(money(periods[1].baseRent)).not.toBe('131.25');
-  });
-});
-
-describe('computeRentSchedule — monthlyRent === baseRent + nnnAmount on every row', () => {
+describe('computeRentSchedule — monthlyRent === baseRent on every row', () => {
   const cases: Array<[string, Parameters<typeof computeRentSchedule>[0]]> = [
     ['flat', { ...TERM_36, baseRent: 4200 }],
     ['escalating', { ...TERM_36, baseRent: 4200, escalationPct: 3.5, escalationFreq: 12 }],
     [
-      'escalating + NNN + free rent',
-      {
-        ...TERM_36,
-        baseRent: 4200,
-        nnnAmount: 812.5,
-        escalationPct: 3.5,
-        escalationFreq: 12,
-        freeRentMonths: 2,
-      },
+      'escalating + free rent',
+      { ...TERM_36, baseRent: 4200, escalationPct: 3.5, escalationFreq: 12, freeRentMonths: 2 },
     ],
     [
       'free rent mid-term crossing an escalation boundary',
       {
         ...TERM_36,
         baseRent: 3000,
-        nnnAmount: 400,
         escalationPct: 4,
         escalationFreq: 12,
         freeRentMonths: 4,
@@ -147,34 +116,44 @@ describe('computeRentSchedule — monthlyRent === baseRent + nnnAmount on every 
     const periods = computeRentSchedule(input);
     expect(periods.length).toBeGreaterThan(0);
     for (const p of periods) {
-      expect(money(p.monthlyRent)).toBe(money(p.baseRent.add(p.nnnAmount)));
+      expect(money(p.monthlyRent)).toBe(money(p.baseRent));
       expect(() => assertRentInvariant(p)).not.toThrow();
     }
   });
 });
 
 describe('assertRentInvariant', () => {
-  it('throws BadRequestException when monthlyRent does not equal baseRent + nnnAmount', () => {
+  it('throws BadRequestException when monthlyRent does not equal baseRent', () => {
     expect(() =>
-      assertRentInvariant({ baseRent: 100, nnnAmount: 25, monthlyRent: 130 }),
+      assertRentInvariant({ baseRent: 100, monthlyRent: 130 }),
     ).toThrow(BadRequestException);
   });
 
-  it('names both components and the delta in the message', () => {
+  it('names both figures and the delta in the message', () => {
     try {
-      assertRentInvariant({ baseRent: 100, nnnAmount: 25, monthlyRent: 130 });
+      assertRentInvariant({ baseRent: 100, monthlyRent: 130 });
       throw new Error('expected a throw');
     } catch (e) {
       expect((e as Error).message).toContain('130.00');
       expect((e as Error).message).toContain('100.00');
-      expect((e as Error).message).toContain('25.00');
-      expect((e as Error).message).toContain('Off by 5.00');
+      expect((e as Error).message).toContain('Off by 30.00');
+    }
+  });
+
+  it('explains that NNN is not part of monthly rent', () => {
+    // The likeliest reason a caller trips this is that they are still trying to fold a
+    // second charge into the rent, which is what the old schema allowed.
+    try {
+      assertRentInvariant({ baseRent: 100, monthlyRent: 130 });
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as Error).message).toMatch(/NNN is charged once at signing/);
     }
   });
 
   it('accepts an exact match', () => {
     expect(() =>
-      assertRentInvariant({ baseRent: '100.10', nnnAmount: '25.90', monthlyRent: '126.00' }),
+      assertRentInvariant({ baseRent: '126.00', monthlyRent: '126.00' }),
     ).not.toThrow();
   });
 });
@@ -220,7 +199,6 @@ describe('computeRentSchedule — free rent sits inside the term', () => {
     const free = periods.find((p) => p.isFreeRent)!;
     expect(free.source).toBe('FREE_RENT');
     expect(money(free.baseRent)).toBe('0.00');
-    expect(money(free.nnnAmount)).toBe('0.00');
     expect(money(free.monthlyRent)).toBe('0.00');
     expect(free.startDate.toISOString().slice(0, 10)).toBe('2026-01-01');
     expect(free.endDate.toISOString().slice(0, 10)).toBe('2026-03-31');
@@ -267,13 +245,13 @@ describe('computeRentSchedule — free rent sits inside the term', () => {
 
 describe('computeRentSchedule — no escalation', () => {
   it('produces exactly one period spanning the whole term when escalationPct is absent', () => {
-    const periods = computeRentSchedule({ ...TERM_36, baseRent: 4200, nnnAmount: 300 });
+    const periods = computeRentSchedule({ ...TERM_36, baseRent: 4200 });
     expect(periods).toHaveLength(1);
     expect(periods[0].source).toBe('INITIAL');
     expect(periods[0].escalationPct).toBeNull();
     expect(periods[0].startDate.toISOString().slice(0, 10)).toBe('2026-01-01');
     expect(periods[0].endDate.toISOString().slice(0, 10)).toBe('2028-12-31');
-    expect(money(periods[0].monthlyRent)).toBe('4500.00');
+    expect(money(periods[0].monthlyRent)).toBe('4200.00');
   });
 
   it('treats a 0% escalation and a missing escalationFreq the same as no escalation', () => {
@@ -369,14 +347,12 @@ describe('computeRentSchedule — rounding (half-up to 2dp at each period bounda
       leaseStart: d('2026-01-01'),
       leaseEnd: d('2031-12-31'),
       baseRent: '3333.33',
-      nnnAmount: '111.11',
       escalationPct: '3.33',
       escalationFreq: 12,
     });
     expect(periods.length).toBeGreaterThan(3);
     for (const p of periods) {
       expect(p.baseRent.decimalPlaces()).toBeLessThanOrEqual(2);
-      expect(p.nnnAmount.decimalPlaces()).toBeLessThanOrEqual(2);
       expect(p.monthlyRent.decimalPlaces()).toBeLessThanOrEqual(2);
     }
   });
@@ -437,11 +413,15 @@ describe('summariseEffectiveRent', () => {
     expect(withFree.effectiveMonthlyRent.lt(withoutFree.effectiveMonthlyRent)).toBe(true);
   });
 
-  it('separates the NNN-inclusive KPI from the base-rent-only KPI', () => {
-    const periods = computeRentSchedule({ ...TERM_36, baseRent: 1000, nnnAmount: 200 });
+  it('reports the same figure for total rent and base rent, now that NNN is not monthly', () => {
+    // The two used to differ by the monthly NNN. Both are still returned so callers do
+    // not break, and asserting they AGREE is the point: a gap between them would mean
+    // something had folded a second charge back into the rent.
+    const periods = computeRentSchedule({ ...TERM_36, baseRent: 1000 });
     const summary = summariseEffectiveRent(periods, TERM_36.leaseEnd, 36);
-    expect(money(summary.effectiveMonthlyRent)).toBe('1200.00');
+    expect(money(summary.effectiveMonthlyRent)).toBe('1000.00');
     expect(money(summary.effectiveMonthlyBaseRent)).toBe('1000.00');
+    expect(money(summary.totalContractedRent)).toBe(money(summary.totalContractedBaseRent));
   });
 });
 
@@ -468,11 +448,27 @@ const mockPrisma: any = {
   leaseRentPeriod: {
     findMany: jest.fn(),
     findFirst: jest.fn(),
+    findUnique: jest.fn(),
     create: jest.fn(),
     createMany: jest.fn(),
     deleteMany: jest.fn(),
+    update: jest.fn(),
   },
-  $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
+  // R22 corrections and the invoices a correction flags.
+  leaseRentPeriodCorrection: {
+    create: jest.fn(),
+    findMany: jest.fn().mockResolvedValue([]),
+  },
+  leaseRentInvoice: {
+    findUnique: jest.fn(),
+    update: jest.fn(),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
+  // Two shapes: an array of operations (regenerateFuture) and an interactive callback
+  // (correctPeriod). Passing mockPrisma straight through keeps assertions on the
+  // top-level doubles valid inside the transaction.
+  $transaction: jest.fn((arg: any) =>
+    typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg)),
 };
 
 const LEASE = {
@@ -498,7 +494,6 @@ const row = (
   startDate: string,
   endDate: string | null,
   base: string,
-  nnn = '0',
   extra: Record<string, unknown> = {},
 ) => ({
   id: `p${sequence}`,
@@ -507,8 +502,7 @@ const row = (
   startDate: d(startDate),
   endDate: endDate ? d(endDate) : null,
   baseRent: new Prisma.Decimal(base),
-  nnnAmount: new Prisma.Decimal(nnn),
-  monthlyRent: new Prisma.Decimal(base).add(new Prisma.Decimal(nnn)),
+  monthlyRent: new Prisma.Decimal(base),
   isFreeRent: false,
   escalationPct: null,
   source: 'INITIAL',
@@ -556,19 +550,19 @@ describe('LeaseRentPeriodService.generateForLease', () => {
     expect(result).toBe(existing);
   });
 
-  it('splits monthlyRent into base + NNN when an nnnAmount is supplied', async () => {
+  it("takes the lease's monthlyRent as the whole of the rent", async () => {
+    // Until 2026-08-12 this method split monthlyRent into base + NNN. NNN is now a
+    // one-time obligation, so the headline rent IS the base rent and nothing is
+    // subtracted from it — a lease on 1000 must schedule 1000, not 800.
     mockPrisma.leaseRentPeriod.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
-    await service.generateForLease('lease-1', { nnnAmount: 200 });
+    await service.generateForLease('lease-1');
 
     const { data } = mockPrisma.leaseRentPeriod.createMany.mock.calls[0][0];
-    // Headline monthlyRent (1000) stays the contractual total; base is the remainder.
-    expect(new Prisma.Decimal(data[0].baseRent).toFixed(2)).toBe('800.00');
-    expect(new Prisma.Decimal(data[0].nnnAmount).toFixed(2)).toBe('200.00');
+    expect(new Prisma.Decimal(data[0].baseRent).toFixed(2)).toBe('1000.00');
     expect(new Prisma.Decimal(data[0].monthlyRent).toFixed(2)).toBe('1000.00');
-    // NNN untouched by escalation; only base compounds.
-    expect(new Prisma.Decimal(data[1].nnnAmount).toFixed(2)).toBe('200.00');
-    expect(new Prisma.Decimal(data[1].baseRent).toFixed(2)).toBe('840.00');
+    // Escalation compounds off the full rent now that nothing is held back from it.
+    expect(new Prisma.Decimal(data[1].baseRent).toFixed(2)).toBe('1050.00');
   });
 
   it('rejects a lease that does not exist or was soft-deleted', async () => {
@@ -689,7 +683,7 @@ describe('LeaseRentPeriodService.getEffectivePeriod', () => {
   });
 
   it('latest-start-wins: a MANUAL period supersedes the scheduled one it lands inside', async () => {
-    const manual = row(4, '2027-07-01', '2027-12-31', '1200', '0', {
+    const manual = row(4, '2027-07-01', '2027-12-31', '1200', {
       id: 'p4',
       source: 'MANUAL',
       reason: 'renegotiated',
@@ -745,7 +739,6 @@ describe('LeaseRentPeriodService.addManualPeriod', () => {
     const created: any = await service.addManualPeriod({
       ...base,
       reason: '  Renegotiated  ',
-      nnnAmount: 150,
       createdById: 'u7',
     });
 
@@ -753,39 +746,55 @@ describe('LeaseRentPeriodService.addManualPeriod', () => {
     expect(created.reason).toBe('Renegotiated');
     expect(created.sequence).toBe(4);
     expect(created.createdById).toBe('u7');
-    expect(new Prisma.Decimal(created.monthlyRent).toFixed(2)).toBe('1350.00');
+    expect(new Prisma.Decimal(created.monthlyRent).toFixed(2)).toBe('1200.00');
     expect(created.isFreeRent).toBe(false);
   });
 
-  it('rejects a monthlyRent that breaks the base + NNN invariant', async () => {
+  it('rejects a monthlyRent that does not match the base rent', async () => {
+    // The likeliest cause is a caller still adding NNN on top, which is exactly what
+    // must not reach the table any more.
     await expect(
-      service.addManualPeriod({ ...base, nnnAmount: 150, monthlyRent: 1400 }),
+      service.addManualPeriod({ ...base, monthlyRent: 1400 }),
     ).rejects.toThrow(BadRequestException);
     expect(mockPrisma.leaseRentPeriod.create).not.toHaveBeenCalled();
   });
 
-  it('accepts a monthlyRent that matches base + NNN exactly', async () => {
-    const created: any = await service.addManualPeriod({
-      ...base,
-      nnnAmount: 150,
-      monthlyRent: 1350,
-    });
-    expect(new Prisma.Decimal(created.monthlyRent).toFixed(2)).toBe('1350.00');
+  it('accepts a monthlyRent that matches the base rent exactly', async () => {
+    const created: any = await service.addManualPeriod({ ...base, monthlyRent: 1200 });
+    expect(new Prisma.Decimal(created.monthlyRent).toFixed(2)).toBe('1200.00');
   });
 
-  it('rejects a start date outside the lease term and an end date past leaseEnd', async () => {
+  it('rejects a start date outside the rent term and an end date past leaseEnd', async () => {
     await expect(
       service.addManualPeriod({ ...base, startDate: d('2025-01-01') }),
-    ).rejects.toThrow('inside the lease term');
+    ).rejects.toThrow('inside the rent term');
     await expect(
       service.addManualPeriod({ ...base, startDate: d('2029-01-01') }),
-    ).rejects.toThrow('inside the lease term');
+    ).rejects.toThrow('inside the rent term');
     await expect(
       service.addManualPeriod({ ...base, endDate: d('2029-06-30') }),
     ).rejects.toThrow('past leaseEnd');
     await expect(
       service.addManualPeriod({ ...base, endDate: d('2027-01-01') }),
     ).rejects.toThrow('cannot precede');
+  });
+
+  it('bounds the start by RENT commencement, not legal commencement', async () => {
+    // A manual period inside the fit-out gap would bill a tenant for months in which
+    // rent has not commenced. leaseStart is 2026-01-01; rent starts three months later.
+    mockPrisma.lease.findUnique.mockResolvedValue({
+      ...LEASE,
+      rentStartDate: d('2026-04-01'),
+    });
+
+    await expect(
+      service.addManualPeriod({ ...base, startDate: d('2026-02-01') }),
+    ).rejects.toThrow('inside the rent term');
+
+    // On or after rent commencement is fine.
+    await expect(
+      service.addManualPeriod({ ...base, startDate: d('2026-04-01') }),
+    ).resolves.toBeDefined();
   });
 
   it('accepts an ISO date string as well as a Date', async () => {
@@ -859,5 +868,393 @@ describe('LeaseRentPeriodService.getEffectiveRent', () => {
     mockPrisma.leaseRentPeriod.findMany.mockResolvedValue([row(1, '2026-01-01', '2026-12-31', '1000')]);
     const summary = await service.getEffectiveRent('lease-1');
     expect(summary.hasSchedule).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// capAtTermination (T1.2)
+//
+// Only ever MOCKED in leases.service.spec, which asserts endTenancy CALLS it with the
+// right arguments — not what it does. These are the tests for the behaviour itself,
+// and it is behaviour that decides whether a departed tenant keeps getting billed.
+// ---------------------------------------------------------------------------
+describe('LeaseRentPeriodService.capAtTermination', () => {
+  let service: LeaseRentPeriodService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.leaseRentPeriod.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.leaseRentPeriod.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+  });
+
+  it('DELETES periods that start after the move-out date', async () => {
+    // They describe rent for months nobody was in occupation, derived from a term that
+    // did not run. There is nothing in them worth preserving.
+    await service.capAtTermination('lease-1', d('2026-06-30'));
+
+    expect(mockPrisma.leaseRentPeriod.deleteMany).toHaveBeenCalledWith({
+      where: { leaseId: 'lease-1', startDate: { gt: d('2026-06-30') } },
+    });
+  });
+
+  it('TRUNCATES the period covering the move-out instead of deleting it', async () => {
+    // The one edit to a live period the immutability rule allows — the period genuinely
+    // ended that day. Deleting it would erase rent the tenant really did owe.
+    await service.capAtTermination('lease-1', d('2026-06-30'));
+
+    const call = mockPrisma.leaseRentPeriod.updateMany.mock.calls[0][0];
+    expect(call.data).toEqual({ endDate: d('2026-06-30') });
+    expect(call.where.startDate).toEqual({ lte: d('2026-06-30') });
+  });
+
+  it('catches OPEN-ENDED periods, which are the ones that would run forever', async () => {
+    await service.capAtTermination('lease-1', d('2026-06-30'));
+
+    // endDate null means "runs to lease end". Matching only `endDate > at` would skip
+    // exactly the period most in need of capping.
+    const or = mockPrisma.leaseRentPeriod.updateMany.mock.calls[0][0].where.OR;
+    expect(or).toEqual([{ endDate: null }, { endDate: { gt: d('2026-06-30') } }]);
+  });
+
+  it('leaves periods that already ended before the move-out alone', async () => {
+    // Expressed by the query rather than by filtering in JS: `endDate > at` excludes
+    // them, so a past period is never rewritten.
+    await service.capAtTermination('lease-1', d('2026-06-30'));
+    const or = mockPrisma.leaseRentPeriod.updateMany.mock.calls[0][0].where.OR;
+    expect(or.some((c: any) => c.endDate?.lt)).toBe(false);
+  });
+
+  it('normalises the move-out to a UTC day boundary', async () => {
+    // A timestamp with a time component would cap mid-day and make the boundary
+    // depend on when the form happened to be submitted.
+    await service.capAtTermination('lease-1', new Date('2026-06-30T17:45:00.000Z'));
+    expect(mockPrisma.leaseRentPeriod.deleteMany.mock.calls[0][0].where.startDate.gt)
+      .toEqual(d('2026-06-30'));
+  });
+
+  it('runs on the caller transaction client when one is passed', async () => {
+    // endTenancy is one transaction. A cap that committed independently would survive
+    // a rollback and leave a schedule cut for a termination that never happened.
+    const tx: any = {
+      leaseRentPeriod: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    const result = await service.capAtTermination('lease-1', d('2026-06-30'), tx);
+
+    expect(tx.leaseRentPeriod.deleteMany).toHaveBeenCalled();
+    expect(mockPrisma.leaseRentPeriod.deleteMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ deleted: 2, truncated: 1 });
+  });
+});
+
+/**
+ * R22 — correcting a period that has already been billed.
+ *
+ * The distinction under test throughout: a MANUAL period says the rent changed on a date
+ * (an event, appended); a CORRECTION says the rent was never that number (an edit, with
+ * the old value preserved). Confusing the two leaves a wrong figure standing as history.
+ */
+describe('LeaseRentPeriodService.correctPeriod', () => {
+  let service: LeaseRentPeriodService;
+
+  const PERIOD = {
+    id: 'p1',
+    leaseId: 'lease-1',
+    sequence: 1,
+    startDate: d('2026-01-01'),
+    endDate: d('2026-12-31'),
+    baseRent: new Prisma.Decimal(1000),
+    monthlyRent: new Prisma.Decimal(1000),
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.lease.findUnique.mockResolvedValue(LEASE);
+    mockPrisma.leaseRentPeriod.findUnique.mockResolvedValue(PERIOD);
+    mockPrisma.leaseRentPeriod.update.mockImplementation(
+      ({ where, data }: any) => Promise.resolve({ id: where.id, ...data }),
+    );
+    mockPrisma.leaseRentPeriodCorrection.create.mockImplementation(
+      ({ data }: any) => Promise.resolve({ id: 'c1', ...data }),
+    );
+    mockPrisma.leaseRentInvoice.updateMany.mockResolvedValue({ count: 0 });
+    service = makeService();
+  });
+
+  it('moves the period and preserves what it moved from', async () => {
+    const res = await service.correctPeriod('p1', {
+      baseRent: 1050,
+      reason: 'Lease says 1,050 — recorded as 1,000 in error',
+      correctedById: 'user-1',
+    });
+
+    expect(money(res.period.baseRent)).toBe('1050.00');
+    expect(money(res.correction.previousRent)).toBe('1000.00');
+    expect(money(res.correction.correctedRent)).toBe('1050.00');
+    expect(res.correction.correctedById).toBe('user-1');
+  });
+
+  it('keeps the monthlyRent === baseRent invariant through a correction', async () => {
+    const res = await service.correctPeriod('p1', {
+      baseRent: 1050, reason: 'corrected from the signed lease', correctedById: 'user-1',
+    });
+
+    expect(money(res.period.monthlyRent)).toBe('1050.00');
+  });
+
+  it('flags invoices already billed from the period instead of restating them', async () => {
+    mockPrisma.leaseRentInvoice.updateMany.mockResolvedValue({ count: 4 });
+
+    const res = await service.correctPeriod('p1', {
+      baseRent: 1050, reason: 'corrected from the signed lease', correctedById: 'user-1',
+    });
+
+    const args = mockPrisma.leaseRentInvoice.updateMany.mock.calls[0][0];
+    expect(args.where).toEqual({ periodId: 'p1', status: { notIn: ['VOID'] } });
+    // needsReview, NOT amountDue — an invoice records what was actually billed, and the
+    // discrepancy is the thing Finance needs to see.
+    expect(args.data.needsReview).toBe(true);
+    expect(args.data).not.toHaveProperty('amountDue');
+    expect(args.data.reviewReason).toMatch(/1000\.00.*1050\.00/);
+    expect(res.invoicesFlagged).toBe(4);
+  });
+
+  it('records the flag count as it was at the time, not as something to recompute later', async () => {
+    mockPrisma.leaseRentInvoice.updateMany.mockResolvedValue({ count: 3 });
+
+    const res = await service.correctPeriod('p1', {
+      baseRent: 900, reason: 'corrected from the signed lease', correctedById: 'user-1',
+    });
+
+    expect(res.correction.invoicesFlagged).toBe(3);
+  });
+
+  it('does not flag invoices when only the dates moved — no figure was restated', async () => {
+    await service.correctPeriod('p1', {
+      endDate: '2026-11-30',
+      reason: 'Period ran to November, not December',
+      correctedById: 'user-1',
+    });
+
+    expect(mockPrisma.leaseRentInvoice.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('records only the fields that moved, so the row reads as what changed', async () => {
+    const res = await service.correctPeriod('p1', {
+      baseRent: 1050, reason: 'corrected from the signed lease', correctedById: 'user-1',
+    });
+
+    expect(res.correction.previousStartDate).toBeNull();
+    expect(res.correction.correctedStartDate).toBeNull();
+    expect(res.correction.previousEndDate).toBeNull();
+  });
+
+  it('refuses a correction with no reason', async () => {
+    await expect(
+      service.correctPeriod('p1', { baseRent: 1050, reason: '   ', correctedById: 'user-1' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.leaseRentPeriod.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a correction that changes nothing', async () => {
+    await expect(
+      service.correctPeriod('p1', { baseRent: 1000, reason: 'no-op', correctedById: 'user-1' }),
+    ).rejects.toThrow(/unchanged/);
+  });
+
+  it('refuses to push a period before the term starts — that is a lease change, not a correction', async () => {
+    await expect(
+      service.correctPeriod('p1', {
+        startDate: '2025-06-01', reason: 'moving it out', correctedById: 'user-1',
+      }),
+    ).rejects.toThrow(/inside the rent term/);
+  });
+
+  it('refuses to push a period past the end of the term', async () => {
+    await expect(
+      service.correctPeriod('p1', {
+        startDate: '2029-06-01', endDate: null, reason: 'moving it out', correctedById: 'user-1',
+      }),
+    ).rejects.toThrow(/inside the rent term/);
+  });
+
+  it('refuses an end date before the start', async () => {
+    await expect(
+      service.correctPeriod('p1', {
+        endDate: '2025-06-01', reason: 'bad dates', correctedById: 'user-1',
+      }),
+    ).rejects.toThrow(/cannot end before it starts/);
+  });
+
+  it('writes the period and the correction in ONE transaction — a moved figure with no provenance is the thing this prevents', async () => {
+    await service.correctPeriod('p1', {
+      baseRent: 1050, reason: 'corrected from the signed lease', correctedById: 'user-1',
+    });
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(typeof mockPrisma.$transaction.mock.calls[0][0]).toBe('function');
+  });
+
+  it('bounds a correction by the move-out date on an ended tenancy', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, terminationDate: d('2026-06-30') });
+
+    await expect(
+      service.correctPeriod('p1', {
+        startDate: '2026-09-01', reason: 'after they left', correctedById: 'user-1',
+      }),
+    ).rejects.toThrow(/inside the rent term/);
+  });
+});
+
+/**
+ * isFreeRent is DERIVED from the corrected rent, not carried over.
+ *
+ * The case that forced it: a 36-month/3-free lease had the abatement entered in the
+ * wrong months, so month 4 generated as free. Correcting it to a real rent left the flag
+ * standing — and `summariseEffectiveRent` skips free rows outright, so that month
+ * contributed nothing to totalContractedRent while still counting as a free month.
+ */
+describe('LeaseRentPeriodService.correctPeriod — the free-rent flag follows the rent', () => {
+  let service: LeaseRentPeriodService;
+
+  /** Month 4 of the term, generated as free rent by mistake. */
+  const FREE_PERIOD = {
+    id: 'p4',
+    leaseId: 'lease-1',
+    sequence: 4,
+    startDate: d('2026-04-01'),
+    endDate: d('2026-06-30'),
+    baseRent: new Prisma.Decimal(0),
+    monthlyRent: new Prisma.Decimal(0),
+    isFreeRent: true,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.lease.findUnique.mockResolvedValue(LEASE);
+    mockPrisma.leaseRentPeriod.findUnique.mockResolvedValue(FREE_PERIOD);
+    mockPrisma.leaseRentPeriod.update.mockImplementation(
+      ({ where, data }: any) => Promise.resolve({ id: where.id, ...data }),
+    );
+    mockPrisma.leaseRentPeriodCorrection.create.mockImplementation(
+      ({ data }: any) => Promise.resolve({ id: 'c1', ...data }),
+    );
+    mockPrisma.leaseRentInvoice.updateMany.mockResolvedValue({ count: 0 });
+    service = makeService();
+  });
+
+  const correctToRent = (rent: number) =>
+    service.correctPeriod('p4', {
+      baseRent: rent,
+      reason: 'Abatement was entered against the wrong months',
+      correctedById: 'user-1',
+    });
+
+  it('clears the flag when a free period is corrected to a real rent', async () => {
+    const res = await correctToRent(5000);
+
+    expect(res.period.isFreeRent).toBe(false);
+    expect(money(res.period.baseRent)).toBe('5000.00');
+    expect(money(res.period.monthlyRent)).toBe('5000.00');
+  });
+
+  it('writes the flag in the SAME update as the rent — never a second pass', async () => {
+    await correctToRent(5000);
+
+    const { data } = mockPrisma.leaseRentPeriod.update.mock.calls[0][0];
+    expect(mockPrisma.leaseRentPeriod.update).toHaveBeenCalledTimes(1);
+    expect(data).toMatchObject({ isFreeRent: false });
+    expect(money(data.baseRent)).toBe('5000.00');
+  });
+
+  it('makes the corrected month COUNT in summariseEffectiveRent, which skips free rows', async () => {
+    const res = await correctToRent(5000);
+
+    const summary = summariseEffectiveRent(
+      [
+        {
+          startDate: res.period.startDate,
+          endDate: res.period.endDate,
+          baseRent: res.period.baseRent,
+          monthlyRent: res.period.monthlyRent,
+          isFreeRent: res.period.isFreeRent,
+        },
+      ],
+      d('2026-06-30'),
+      3,
+    );
+
+    // 3 months x 5000. Before the fix this was 0.00 across 3 free months.
+    expect(money(summary.totalContractedRent)).toBe('15000.00');
+    expect(summary.payingMonths).toBe(3);
+    expect(summary.freeRentMonths).toBe(0);
+    expect(money(summary.effectiveMonthlyRent)).toBe('5000.00');
+  });
+
+  it('sets the flag when a paying period is corrected DOWN to zero — abatement runs the other way too', async () => {
+    mockPrisma.leaseRentPeriod.findUnique.mockResolvedValue({
+      ...FREE_PERIOD,
+      baseRent: new Prisma.Decimal(5000),
+      monthlyRent: new Prisma.Decimal(5000),
+      isFreeRent: false,
+    });
+
+    const res = await correctToRent(0);
+
+    expect(res.period.isFreeRent).toBe(true);
+    expect(money(res.period.baseRent)).toBe('0.00');
+  });
+
+  it('leaves the flag alone when only the dates move', async () => {
+    // Re-deriving from an unchanged baseRent reproduces the flag the row already had, on
+    // a free period and a paying one alike.
+    const free = await service.correctPeriod('p4', {
+      endDate: '2026-05-31', reason: 'Abatement ran to May', correctedById: 'user-1',
+    });
+    expect(free.period.isFreeRent).toBe(true);
+
+    mockPrisma.leaseRentPeriod.findUnique.mockResolvedValue({
+      ...FREE_PERIOD,
+      baseRent: new Prisma.Decimal(1000),
+      monthlyRent: new Prisma.Decimal(1000),
+      isFreeRent: false,
+    });
+    const paying = await service.correctPeriod('p4', {
+      endDate: '2026-05-31', reason: 'Period ran to May', correctedById: 'user-1',
+    });
+    expect(paying.period.isFreeRent).toBe(false);
+  });
+
+  it('still records the correction, so a rent appearing on a free month has provenance', async () => {
+    const res = await correctToRent(5000);
+
+    expect(money(res.correction.previousRent)).toBe('0.00');
+    expect(money(res.correction.correctedRent)).toBe('5000.00');
+    expect(res.correction.reason).toBe('Abatement was entered against the wrong months');
+  });
+});
+
+describe('LeaseRentPeriodService.clearInvoiceReview', () => {
+  let service: LeaseRentPeriodService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+  });
+
+  it('clears the flag without touching the amount — re-issue vs credit stays Finance\'s call', async () => {
+    mockPrisma.leaseRentInvoice.findUnique.mockResolvedValue({ id: 'i1', needsReview: true });
+    mockPrisma.leaseRentInvoice.update.mockResolvedValue({ id: 'i1', needsReview: false });
+
+    await service.clearInvoiceReview('i1');
+
+    expect(mockPrisma.leaseRentInvoice.update).toHaveBeenCalledWith({
+      where: { id: 'i1' },
+      data: { needsReview: false, reviewReason: null },
+    });
   });
 });

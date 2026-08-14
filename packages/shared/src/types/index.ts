@@ -153,6 +153,25 @@ export const PERMISSIONS = {
   // able to mark rent paid without also being able to rewrite the lease terms.
   RENT_COLLECT: 'rent:collect',
 
+  // Historical backfill (H2). Entering a PAST tenancy is not the same power as editing a
+  // live one: it writes a whole ledger at once, backdates occupancy events, and bypasses
+  // the unit state machine by design. Split from lease:edit so it can be granted to the
+  // people doing the data entry without also handing them the live book.
+  //
+  // Client decision 2026-08-12 (Q2, option b): Sales may CREATE and EDIT historical
+  // records; only a Founder may DELETE one — hence two permissions, not one.
+  UNIT_HISTORY_BACKFILL: 'unit:history:backfill',
+  UNIT_HISTORY_DELETE: 'unit:history:delete',
+
+  // Correcting a rent period that has ALREADY BEEN BILLED (R22).
+  //
+  // Granted to no role EXPLICITLY — deliberately. Editing future terms and rewriting a
+  // figure a tenant was already invoiced for are different powers, and this is the only
+  // one in the system that can change a number already sent out. Prime chooses who holds
+  // it; until they do, the only people who can are Founder and Super Admin, who inherit
+  // it from their blanket grants and already own the whole book.
+  LEASE_HISTORY_CORRECT: 'lease:history:correct',
+
   // Leads
   LEAD_VIEW: 'lead:view',
   LEAD_CREATE: 'lead:create',
@@ -476,6 +495,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.REPORT_REVENUE,
     PERMISSIONS.BROKER_VIEW,
     PERMISSIONS.BROKER_EDIT,
+    // Q2 option b: Sales enters the historical record, a Founder approves deletion.
+    PERMISSIONS.UNIT_HISTORY_BACKFILL,
   ],
   [UserRole.MARKETING]: [
     PERMISSIONS.TASK_VIEW,

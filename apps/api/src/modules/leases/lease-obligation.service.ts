@@ -36,7 +36,12 @@ import { EventBus } from '../../common/events/event-bus.service';
  * comparison below goes through Decimal methods.
  */
 
-export const OBLIGATION_KINDS = ['SECURITY_DEPOSIT', 'TI_ALLOWANCE', 'OTHER'] as const;
+// NNN joined this list on 2026-08-12. It used to be a MONTHLY component of rent
+// (LeaseRentPeriod.nnnAmount, folded into monthlyRent and billed every month), but the
+// client confirmed Prime charges it as a ONE-TIME sum at lease signing. That is the same
+// shape as a security deposit — an agreed total settled by one or more payments — so it
+// belongs here rather than in the rent timeline.
+export const OBLIGATION_KINDS = ['SECURITY_DEPOSIT', 'TI_ALLOWANCE', 'NNN', 'OTHER'] as const;
 export type ObligationKind = (typeof OBLIGATION_KINDS)[number];
 
 export const OBLIGATION_DIRECTIONS = ['FROM_TENANT', 'TO_TENANT'] as const;
@@ -49,6 +54,8 @@ export type ObligationStatus = (typeof OBLIGATION_STATUSES)[number];
 const REQUIRED_DIRECTION: Record<string, ObligationDirection | null> = {
   SECURITY_DEPOSIT: 'FROM_TENANT',
   TI_ALLOWANCE: 'TO_TENANT',
+  // Tenant pays Prime their share of taxes/insurance/CAM. Always inbound.
+  NNN: 'FROM_TENANT',
   OTHER: null,
 };
 
@@ -78,6 +85,8 @@ export interface RecordPaymentInput {
   documentId?: string | null;
   notes?: string | null;
   recordedById?: string | null;
+  /** Opt in to recording a payment above the agreed total. See recordPayment. */
+  allowOverpayment?: boolean;
 }
 
 interface Totals {
@@ -238,6 +247,24 @@ export class LeaseObligationService {
       if (!current) throw new NotFoundException('Lease obligation not found');
       if (current.status === 'WAIVED') {
         throw new BadRequestException('This obligation is waived; un-waive it before recording a payment');
+      }
+
+      // Overpayment guard. `paidAmount` is a mirror of the payment rows, so a mis-keyed
+      // amount used to sail through and simply flip the panel to "Overpaid — refund
+      // due" — a $100 TI allowance showing $4,400 owed back to a tenant, with nothing
+      // to indicate it was a typing error rather than a real credit. Refusing by
+      // default makes the mistake loud; the flag keeps genuine overpayments possible.
+      const projected = new Prisma.Decimal(current.paidAmount).add(amount);
+      const agreed = new Prisma.Decimal(current.totalAmount);
+      if (projected.greaterThan(agreed) && !input.allowOverpayment) {
+        const over = projected.sub(agreed);
+        throw new BadRequestException(
+          `This payment would take ${current.kind.replace(/_/g, ' ').toLowerCase()} to ` +
+          `${projected.toFixed(2)} against an agreed ${agreed.toFixed(2)} — ` +
+          `${over.toFixed(2)} more than is owed. ` +
+          `Check the amount, or raise the agreed total first if it has genuinely changed. ` +
+          `To record it as an overpayment anyway, resubmit with allowOverpayment.`,
+        );
       }
 
       const created = await tx.leaseObligationPayment.create({

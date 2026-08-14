@@ -16,68 +16,76 @@ datasource db {
 // ---- Auth & RBAC ----
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String     @id @default(cuid())
+  email        String     @unique
   name         String
   avatarUrl    String?
-  googleId     String?   @unique
+  googleId     String?    @unique
   // Directory fields — self-editable, and editable by an admin on someone else.
   // Never authorization-relevant, unlike role/roles/isActive.
   phone        String?
   jobTitle     String?
-  role         UserRole  @default(VIEWER)
+  role         UserRole   @default(VIEWER)
   roles        UserRole[]
-  isActive     Boolean   @default(true)
+  isActive     Boolean    @default(true)
   passwordHash String?
-  mfaEnabled   Boolean   @default(false)
+  mfaEnabled   Boolean    @default(false)
   mfaSecret    String? // encrypted TOTP secret
   lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
   // tenantId   String?   // future multi-tenant
 
-  milestones              Milestone[]              @relation("MilestoneOwner")
-  auditEvents             AuditEvent[]
-  sessions                RefreshToken[]
-  unitComments            UnitComment[]
-  projectComments         ProjectComment[]
-  notifications           Notification[]
-  notificationPreferences NotificationPreference[]
-  assignedLeads           Lead[]                   @relation("LeadAssignee")
-  createdLeads            Lead[]                   @relation("LeadCreator")
-  leadActivities          LeadActivity[]           @relation("ActivityCreator")
-  drawRequests            DrawRequest[]            @relation("DrawCreator")
-  approvedDraws           DrawRequest[]            @relation("DrawApprover")
-  uploadedDocuments       Document[]               @relation("DocumentUploader")
-  assignedTasks           Task[]                   @relation("TaskAssignee")
-  createdTasks            Task[]                   @relation("TaskCreator")
-  taskComments            TaskComment[]
-  taskAttachments         TaskAttachment[]         @relation("TaskAttachmentUploader")
-  orgMemberships          OrgMembership[]          @relation("OrgMember")
-  managedMembers          OrgMembership[]          @relation("ManagedBy")
-  projectMemberships      ProjectMember[]
+  milestones                   Milestone[]                 @relation("MilestoneOwner")
+  auditEvents                  AuditEvent[]
+  sessions                     RefreshToken[]
+  unitComments                 UnitComment[]
+  projectComments              ProjectComment[]
+  notifications                Notification[]
+  notificationPreferences      NotificationPreference[]
+  assignedLeads                Lead[]                      @relation("LeadAssignee")
+  createdLeads                 Lead[]                      @relation("LeadCreator")
+  leadActivities               LeadActivity[]              @relation("ActivityCreator")
+  drawRequests                 DrawRequest[]               @relation("DrawCreator")
+  approvedDraws                DrawRequest[]               @relation("DrawApprover")
+  uploadedDocuments            Document[]                  @relation("DocumentUploader")
+  assignedTasks                Task[]                      @relation("TaskAssignee")
+  createdTasks                 Task[]                      @relation("TaskCreator")
+  taskComments                 TaskComment[]
+  taskAttachments              TaskAttachment[]            @relation("TaskAttachmentUploader")
+  orgMemberships               OrgMembership[]             @relation("OrgMember")
+  managedMembers               OrgMembership[]             @relation("ManagedBy")
+  projectMemberships           ProjectMember[]
   // New relations from Slices 1, 5, 7, 8
-  milestonePhotos         MilestonePhoto[]         @relation("MilestonePhotoUploader")
-  budgetRevisionsCreated  BudgetRevision[]         @relation("BudgetRevCreator")
-  budgetRevisionsApproved BudgetRevision[]         @relation("BudgetRevApprover")
-  drawApprovals           DrawApproval[]           @relation("DrawApprovalActor")
-  drawDocuments           DrawDocument[]           @relation("DrawDocUploader")
+  milestonePhotos              MilestonePhoto[]            @relation("MilestonePhotoUploader")
+  budgetRevisionsCreated       BudgetRevision[]            @relation("BudgetRevCreator")
+  budgetRevisionsApproved      BudgetRevision[]            @relation("BudgetRevApprover")
+  drawApprovals                DrawApproval[]              @relation("DrawApprovalActor")
+  drawDocuments                DrawDocument[]              @relation("DrawDocUploader")
   // Document Vault Phase 1
-  uploadedDocVersions     DocumentVersion[]        @relation("VersionUploader")
+  uploadedDocVersions          DocumentVersion[]           @relation("VersionUploader")
   // Document Vault Phase 2 — buyer portal
-  clientProfile           Client?                  @relation("ClientUser")
+  clientProfile                Client?                     @relation("ClientUser")
   // Sprint 2 — Campaign attribution
-  campaignsCreated        Campaign[]               @relation("CampaignCreator")
-  campaignSpendRecorded   CampaignSpend[]          @relation("CampaignSpender")
+  campaignsCreated             Campaign[]                  @relation("CampaignCreator")
+  campaignSpendRecorded        CampaignSpend[]             @relation("CampaignSpender")
   // Interior / Fit-Out + Sale Payments
-  interiorProjects        InteriorProject[]        @relation("InteriorPM")
-  snagItems               SnagItem[]               @relation("SnagAssignee")
-  discountApprovedSales   Sale[]                   @relation("SaleDiscountApprover")
-  dailyLogs               DailyLog[]               @relation("DailyLogAuthor")
+  interiorProjects             InteriorProject[]           @relation("InteriorPM")
+  snagItems                    SnagItem[]                  @relation("SnagAssignee")
+  discountApprovedSales        Sale[]                      @relation("SaleDiscountApprover")
+  dailyLogs                    DailyLog[]                  @relation("DailyLogAuthor")
   // Leasing depth — rent timeline + deposit/TI ledger
-  leaseRentPeriods        LeaseRentPeriod[]        @relation("LeaseRentPeriodCreator")
-  leaseObligationPayments LeaseObligationPayment[] @relation("LeaseObligationPaymentRecorder")
-  leaseRentInvoices       LeaseRentInvoice[]       @relation("LeaseRentInvoiceRecorder")
+  leaseRentPeriods             LeaseRentPeriod[]           @relation("LeaseRentPeriodCreator")
+  leaseRentCorrections         LeaseRentPeriodCorrection[] @relation("LeaseRentPeriodCorrector")
+  leaseObligationPayments      LeaseObligationPayment[]    @relation("LeaseObligationPaymentRecorder")
+  leaseRentInvoices            LeaseRentInvoice[]          @relation("LeaseRentInvoiceRecorder")
+  leaseAssignmentsRecorded     LeaseTenantAssignment[]     @relation("LeaseAssignmentRecorder")
+  historicalDeletionsRequested HistoricalRecordDeletion[]  @relation("HistoricalDeletionRequester")
+  historicalDeletionsDecided   HistoricalRecordDeletion[]  @relation("HistoricalDeletionDecider")
+  taskUpdates                  TaskUpdate[]                @relation("TaskUpdateAuthor")
+  taskAssignments              TaskAssignment[]            @relation("TaskAssignmentUser")
+  // Unit occupancy log
+  unitStatusEvents             UnitStatusEvent[]           @relation("UnitStatusEventRecorder")
 
   @@map("users")
 }
@@ -157,51 +165,51 @@ model OrgMembership {
 // ---- Projects ----
 
 model Project {
-  id          String        @id @default(cuid())
-  name        String
-  slug        String        @unique
-  location    String
-  address     String?
-  acreage     Decimal?      @db.Decimal(10, 3)
+  id             String        @id @default(cuid())
+  name           String
+  slug           String        @unique
+  location       String
+  address        String?
+  acreage        Decimal?      @db.Decimal(10, 3)
   // Top-down "control total" approved by Finance/Founder. Detailed budget lines are
   // tracked bottom-up against this; the Approved-vs-Planned gap is a key signal.
-  approvedBudget Decimal?   @db.Decimal(14, 2)
-  status      String  @default("ACTIVE")
-  phase       String  @default("PRE_DEVELOPMENT")
-  projectType ProjectType?
-  description String?
-  startDate   DateTime?
-  targetEnd   DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  deletedAt   DateTime? // soft-delete: archived rows excluded from default reads
+  approvedBudget Decimal?      @db.Decimal(14, 2)
+  status         String        @default("ACTIVE")
+  phase          String        @default("PRE_DEVELOPMENT")
+  projectType    ProjectType?
+  description    String?
+  startDate      DateTime?
+  targetEnd      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime? // soft-delete: archived rows excluded from default reads
   // tenantId  String?
-  orgId       String?
-  org         Organization? @relation(fields: [orgId], references: [id])
+  orgId          String?
+  org            Organization? @relation(fields: [orgId], references: [id])
 
-  buildings       Building[]
-  milestones      Milestone[]
-  budgetLines     BudgetLine[]
-  commitments     Commitment[]
-  actuals         Actual[]
-  loans           Loan[]
-  sales           Sale[]
-  kpiSnapshots    KpiSnapshot[]
-  qbMappings      QBProjectMapping[]
-  comments        ProjectComment[]
-  leads           Lead[]
-  drawRequests    DrawRequest[]
-  cashFlowEntries CashFlowEntry[]
-  contracts       Contract[]
-  documents       Document[]
-  equityPositions EquityPosition[]
-  capitalCalls    CapitalCall[]
-  distributions   Distribution[]
-  tasks           Task[]
-  members         ProjectMember[]
-  clients         Client[]
+  buildings        Building[]
+  milestones       Milestone[]
+  budgetLines      BudgetLine[]
+  commitments      Commitment[]
+  actuals          Actual[]
+  loans            Loan[]
+  sales            Sale[]
+  kpiSnapshots     KpiSnapshot[]
+  qbMappings       QBProjectMapping[]
+  comments         ProjectComment[]
+  leads            Lead[]
+  drawRequests     DrawRequest[]
+  cashFlowEntries  CashFlowEntry[]
+  contracts        Contract[]
+  documents        Document[]
+  equityPositions  EquityPosition[]
+  capitalCalls     CapitalCall[]
+  distributions    Distribution[]
+  tasks            Task[]
+  members          ProjectMember[]
+  clients          Client[]
   campaignProjects CampaignProject[]
-  dailyLogs       DailyLog[]
+  dailyLogs        DailyLog[]
 
   @@index([orgId])
   @@index([status, phase])
@@ -256,7 +264,7 @@ model Building {
   buildingType   BuildingType?
   // Building-level phase: a project may have Building A in CONSTRUCTION and Building B in LEASE_UP.
   // Project.phase is computed = max(buildings.phase) — see ProjectPhaseService.
-  phase          String  @default("PRE_DEVELOPMENT")
+  phase          String        @default("PRE_DEVELOPMENT")
   coverPhotoPath String? // optional cover photo (Supabase storage path)
   sortOrder      Int           @default(0) // manual display order within a project (drag-to-reorder)
   createdAt      DateTime      @default(now())
@@ -265,6 +273,7 @@ model Building {
 
   units            Unit[]
   tasks            Task[]
+  taskBuildings    TaskBuilding[]
   documents        Document[]
   // Polymorphic back-relations: Sale/Lease/Lead/Loan can attach to a Building directly
   // (e.g. Leander Building 1 leased as one whole asset to "22 Yards Austin") in addition to
@@ -338,6 +347,7 @@ model Unit {
 
   leases           Lease[]
   sales            Sale[]
+  statusEvents     UnitStatusEvent[]
   comments         UnitComment[]
   loans            Loan[]
   budgetLines      BudgetLine[]
@@ -345,6 +355,8 @@ model Unit {
   actuals          Actual[]
   documents        Document[]
   tasks            Task[]
+  taskUnits        TaskUnit[]
+  dailyLogs        DailyLog[]
   clients          Client[]
   leads            Lead[]
   interiorProjects InteriorProject[]
@@ -363,6 +375,58 @@ model Unit {
   @@map("units")
 }
 
+// ============================================================================
+// Unit occupancy log — append-only.
+//
+// `Unit.availableSince` is a single mutable column: it is stamped with now() on a
+// flip TO AVAILABLE and NULLED on a flip away from it. That makes it a "current
+// state" field masquerading as history — once a unit leases, how long it sat
+// vacant is gone. (Measured 2026-08-12: 208 units are AVAILABLE and exactly 2 of
+// them carry an availableSince, so the Vacancy Report was reading createdAt for
+// the other 206.)
+//
+// This table is the durable record instead. One row per transition, written in
+// the SAME transaction as the unit update by every service that flips a unit.
+// Never updated, never deleted — a correction is a new row, not an edit.
+//
+// Two timestamps, deliberately:
+//   effectiveAt — when it happened in the real world. Backdatable, and the only
+//                 field vacancy/time-on-market maths should ever read.
+//   recordedAt  — when the row was written. Equal to effectiveAt for live events;
+//                 far apart for backfilled history.
+//
+// `availableSince` is kept in sync as a denormalised convenience (the stale-unit
+// cron and existing reports read it) but is no longer the source of truth.
+// ============================================================================
+
+model UnitStatusEvent {
+  id           String      @id @default(cuid())
+  unitId       String
+  unit         Unit        @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  /// Null only for the unit's first event (creation, or the bootstrap backfill row).
+  fromStatus   UnitStatus?
+  toStatus     UnitStatus
+  /// When the transition happened in the real world. Backdatable for historical entry.
+  effectiveAt  DateTime
+  /// When the row was written. Differs from effectiveAt for backfilled history.
+  recordedAt   DateTime    @default(now())
+  /// MANUAL | LEASE_ACTIVATED | LEASE_ENDED | SALE_CLOSED | SALE_CANCELLED
+  /// | UNIT_CREATED | UNIT_COMBINED | BACKFILL | SYSTEM
+  source       String
+  /// Provenance — which lease/sale drove this, when one did.
+  leaseId      String?
+  saleId       String?
+  reason       String?
+  /// True for rows created by historical backfill rather than observed live.
+  isHistorical Boolean     @default(false)
+  recordedById String?
+  recordedBy   User?       @relation("UnitStatusEventRecorder", fields: [recordedById], references: [id])
+
+  @@index([unitId, effectiveAt])
+  @@index([toStatus, effectiveAt])
+  @@map("unit_status_events")
+}
+
 enum BuildingType {
   RESIDENTIAL
   COMMERCIAL
@@ -376,8 +440,6 @@ enum BuildingType {
   // Buildings of type LOT typically have no Unit children; sale/lease attaches to the Building directly.
   LOT
 }
-
-
 
 // ---- Comments ----
 
@@ -432,7 +494,7 @@ model Milestone {
   phase                String
   dueDate              DateTime
   completedAt          DateTime?
-  status               String  @default("NOT_STARTED")
+  status               String           @default("NOT_STARTED")
   ownerId              String?
   owner                User?            @relation("MilestoneOwner", fields: [ownerId], references: [id])
   sortOrder            Int              @default(0)
@@ -472,13 +534,12 @@ model MilestonePhoto {
   @@map("milestone_photos")
 }
 
-
 // ---- Financial: Budget, Commitments, Actuals, Forecast ----
 
 model BudgetLine {
-  id          String         @id @default(cuid())
+  id          String    @id @default(cuid())
   projectId   String
-  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // Optional building/unit scoping so a project's budget can carry dedicated lines per
   // building or unit (e.g. Building 1 sitework vs Building 2 sitework), not just one
   // project-wide bucket. Mirrors the Loan polymorphic pattern. A line with neither set
@@ -486,9 +547,9 @@ model BudgetLine {
   // regardless of scope so project-level rollups (findByProject, getFinancialSummary)
   // keep working unchanged.
   buildingId  String?
-  building    Building?      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  building    Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitId      String?
-  unit        Unit?          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unit        Unit?     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   // Free-text category key backed by CustomOption (category="budget_category") — the same
   // system-defaults-plus-org-custom-values pattern already used for project/unit/sale/lead
   // status and phase. Was a hardcoded BudgetCategory enum; converted so orgs can add their
@@ -500,11 +561,11 @@ model BudgetLine {
   // baselineAmt is the original (revision 1) amount, kept here for fast reads.
   // revisedAmt mirrors the *latest* BudgetRevision.amount for fast reads.
   // Source of truth for history is the BudgetRevision table.
-  baselineAmt Decimal        @db.Decimal(14, 2)
-  revisedAmt  Decimal?       @db.Decimal(14, 2)
+  baselineAmt Decimal   @db.Decimal(14, 2)
+  revisedAmt  Decimal?  @db.Decimal(14, 2)
   notes       String?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   deletedAt   DateTime? // soft-delete
 
   revisions BudgetRevision[]
@@ -549,25 +610,25 @@ enum BudgetChangeReason {
 }
 
 model Commitment {
-  id           String         @id @default(cuid())
+  id           String    @id @default(cuid())
   projectId    String
-  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // Optional building/unit scoping — same pattern as BudgetLine/Loan. Neither set = a
   // project-level commitment (existing/default case).
   buildingId   String?
-  building     Building?      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  building     Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitId       String?
-  unit         Unit?          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unit         Unit?     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   vendor       String
   description  String
-  contractAmt  Decimal        @db.Decimal(14, 2)
-  paidToDate   Decimal        @default(0) @db.Decimal(14, 2)
-  retainage    Decimal        @default(0) @db.Decimal(14, 2)
+  contractAmt  Decimal   @db.Decimal(14, 2)
+  paidToDate   Decimal   @default(0) @db.Decimal(14, 2)
+  retainage    Decimal   @default(0) @db.Decimal(14, 2)
   category     String
   contractDate DateTime?
   notes        String?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([projectId])
   @@index([buildingId])
@@ -576,29 +637,29 @@ model Commitment {
 }
 
 model Actual {
-  id           String         @id @default(cuid())
-  projectId    String
-  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id                String           @id @default(cuid())
+  projectId         String
+  project           Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // Optional building/unit scoping — same pattern as BudgetLine/Loan/Commitment. Neither
   // set = a project-level actual (existing/default case, including all QuickBooks-synced
   // rows, which have no building/unit concept upstream).
-  buildingId   String?
-  building     Building?      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  unitId       String?
-  unit         Unit?          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  buildingId        String?
+  building          Building?        @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId            String?
+  unit              Unit?            @relation(fields: [unitId], references: [id], onDelete: Cascade)
   // Interior/TI spend is recorded as an Actual but reported inside the interior module —
   // this tags those rows so the main project's budget/variance/KPI views can exclude them.
   interiorProjectId String?
   interiorProject   InteriorProject? @relation(fields: [interiorProjectId], references: [id], onDelete: SetNull)
-  category     String
-  description  String
-  amount       Decimal        @db.Decimal(14, 2)
-  txnDate      DateTime
-  vendor       String?
-  qbTxnId      String?        @unique // QuickBooks transaction ID
-  qbSyncStatus QBSyncStatus   @default(PENDING)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  category          String
+  description       String
+  amount            Decimal          @db.Decimal(14, 2)
+  txnDate           DateTime
+  vendor            String?
+  qbTxnId           String?          @unique // QuickBooks transaction ID
+  qbSyncStatus      QBSyncStatus     @default(PENDING)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   @@index([projectId, category])
   @@index([interiorProjectId])
@@ -783,45 +844,45 @@ model DrawSchedule {
 // ---- Sales ----
 
 model Sale {
-  id                   String      @id @default(cuid())
-  projectId            String
-  project              Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id                     String      @id @default(cuid())
+  projectId              String
+  project                Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
   // Enforced at the service layer (SalesService.create/update). DB lets both be null
   // to support data migration; queries should always include the populated side.
-  unitId               String?
-  unit                 Unit?       @relation(fields: [unitId], references: [id])
-  buildingId           String?
-  building             Building?   @relation(fields: [buildingId], references: [id])
-  buyer                String?
-  salePrice            Decimal?    @db.Decimal(14, 2)
-  depositAmt           Decimal?    @db.Decimal(14, 2)
-  status               String  @default("PROSPECT")
-  loiDate              DateTime?
-  contractDate         DateTime?
-  closingDate          DateTime?
-  notes                String?
+  unitId                 String?
+  unit                   Unit?       @relation(fields: [unitId], references: [id])
+  buildingId             String?
+  building               Building?   @relation(fields: [buildingId], references: [id])
+  buyer                  String?
+  salePrice              Decimal?    @db.Decimal(14, 2)
+  depositAmt             Decimal?    @db.Decimal(14, 2)
+  status                 String      @default("PROSPECT")
+  loiDate                DateTime?
+  contractDate           DateTime?
+  closingDate            DateTime?
+  notes                  String?
   // Slice 6: Pipeline upgrade
-  lastActivityAt       DateTime? // bump on update or comment; powers activity-drought alerts
-  expectedCloseDate    DateTime? // for weighted forecast time-bucketing
-  lostReason           LostReason? // required when status -> CANCELLED
-  lostReasonNote       String?
+  lastActivityAt         DateTime? // bump on update or comment; powers activity-drought alerts
+  expectedCloseDate      DateTime? // for weighted forecast time-bucketing
+  lostReason             LostReason? // required when status -> CANCELLED
+  lostReasonNote         String?
   // Discount-approval gate: a sale priced below the unit's asking price by more than the
   // org threshold needs Founder/Co-Founder sign-off before it can be committed
   // (UNDER_CONTRACT/CLOSED). Single approval — no dual-approval (client decision).
-  discountApprovedById String?
-  discountApprovedBy   User?       @relation("SaleDiscountApprover", fields: [discountApprovedById], references: [id])
-  discountApprovedAt   DateTime?
+  discountApprovedById   String?
+  discountApprovedBy     User?       @relation("SaleDiscountApprover", fields: [discountApprovedById], references: [id])
+  discountApprovedAt     DateTime?
   // Broker attribution + commission (internal-only; brokers have no login).
   // Commission is earned/stamped when the sale CLOSES.
-  brokerId             String?
-  broker               Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  brokerCommissionPct       Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
-  brokerCommissionAmt       Decimal?    @db.Decimal(14, 2) // computed + stored on close
-  brokerCommissionPaidAt    DateTime?   // set when commission is remitted to broker
-  createdAt            DateTime    @default(now())
-  updatedAt            DateTime    @updatedAt
-  deletedAt            DateTime? // soft-delete
+  brokerId               String?
+  broker                 Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  brokerCommissionPct    Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
+  brokerCommissionAmt    Decimal?    @db.Decimal(14, 2) // computed + stored on close
+  brokerCommissionPaidAt DateTime? // set when commission is remitted to broker
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  deletedAt              DateTime? // soft-delete
 
   convertedLead Lead?
 
@@ -850,71 +911,245 @@ enum LostReason {
   OTHER
 }
 
-
 // ---- Leases ----
 
 model Lease {
-  id              String      @id @default(cuid())
+  id                     String    @id @default(cuid())
   // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
   // Service-layer enforcement; DB allows both null only during migration.
-  unitId          String?
-  unit            Unit?       @relation(fields: [unitId], references: [id])
-  buildingId      String?
-  building        Building?   @relation(fields: [buildingId], references: [id])
+  unitId                 String?
+  unit                   Unit?     @relation(fields: [unitId], references: [id])
+  buildingId             String?
+  building               Building? @relation(fields: [buildingId], references: [id])
   // tenantName: legacy field — kept populated for backwards compatibility with existing
   // queries and reporting. New rows should also populate `tenantLegalName` (the LLC /
   // legal entity that signs the lease) and `tenantBrand` (the doing-business-as / brand
   // name that customers see, e.g. "ABC LLC dba Cream Stone").
-  tenantName      String
-  tenantLegalName String?
-  tenantBrand     String?
+  tenantName             String
+  tenantLegalName        String?
+  tenantBrand            String?
   // tenantContact is the contact PERSON's name; email/phone are separate so they can be
   // validated and displayed as links. Note: tenants are never notified by the platform —
   // notifications are strictly internal (they only ever address User rows).
-  tenantContact   String?
-  tenantEmail     String?
-  tenantPhone     String?
+  tenantContact          String?
+  tenantEmail            String?
+  tenantPhone            String?
   // The CONTRACTED headline rent — deliberately NOT mirrored from the active rent
   // period. Mirroring was the original plan but is wrong: a lease inside a free-rent
   // period has an effective rent of 0, so mirroring would zero this field and the next
   // schedule regeneration would derive a zero schedule from it. What a tenant actually
   // owes in a given month comes from LeaseRentPeriod (see LeasesService.getRentRoll,
   // which returns both the effective and the contracted totals).
-  monthlyRent     Decimal     @db.Decimal(12, 2)
-  rentPerSqft     Decimal?    @db.Decimal(8, 2)
-  leaseStart      DateTime
-  leaseEnd        DateTime
-  termMonths      Int
-  escalationPct   Decimal?    @db.Decimal(5, 2)
-  escalationFreq  Int? // months between escalations
-  securityDeposit Decimal?    @db.Decimal(12, 2)
+  monthlyRent            Decimal   @db.Decimal(12, 2)
+  rentPerSqft            Decimal?  @db.Decimal(8, 2)
+  // NNN quoted the way it is actually negotiated — a rate per sqft, charged ONCE at
+  // lease signing (client-confirmed 2026-08-12). `nnnTotalAmount` is derived from the
+  // rate against the unit's area and is overridable for leases quoted as a flat sum.
+  //
+  // These are the lease's headline TERMS, exactly like `securityDeposit`. The money is
+  // tracked as a LeaseObligation of kind NNN, which is what records what was actually
+  // collected. NNN was previously a monthly component of rent; see the migration note
+  // on 20260812160000_nnn_one_time for why it moved.
+  nnnPerSqft             Decimal?  @db.Decimal(8, 2)
+  nnnTotalAmount         Decimal?  @db.Decimal(12, 2)
+  // Legal commencement — when the lease binds.
+  leaseStart             DateTime
+  // Rent commencement. Null = rent starts at leaseStart (every lease before this column
+  // existed). Distinct because a tenant fitting out for three months owes nothing during
+  // it: the schedule and the invoice ledger both begin HERE, not at leaseStart.
+  rentStartDate          DateTime?
+  // Term expiry — the rent end date.
+  leaseEnd               DateTime
+  // Derived from (rentStartDate ?? leaseStart) → leaseEnd on write. Was hand-entered and
+  // unvalidated, so it could silently disagree with the dates while still driving the
+  // effective-rent KPI (summariseEffectiveRent prefers it over what the periods cover).
+  termMonths             Int
+  escalationPct          Decimal?  @db.Decimal(5, 2)
+  escalationFreq         Int? // months between escalations
+  securityDeposit        Decimal?  @db.Decimal(12, 2)
+  // Agreed tenant-improvement allowance — money Prime owes the TENANT, the one headline
+  // term that points outward. Like securityDeposit and nnnTotalAmount this is the TERM;
+  // what was actually disbursed lives on the matching LeaseObligation, which is where
+  // the phased draw-downs are recorded.
+  tiAllowance            Decimal?  @db.Decimal(14, 2)
   // Rent abatement. Free months sit INSIDE the term — leaseEnd is unchanged and the
   // escalation clock still runs from leaseStart, so derived dates never contradict the
   // signed contract. The generator emits these months as isFreeRent periods at rent 0.
-  freeRentMonths    Int?
-  freeRentStartDate DateTime?
+  freeRentMonths         Int?
+  freeRentStartDate      DateTime?
   // Day of month rent falls due (1-31). Null = the 1st. Per-lease because Prime's
   // leases genuinely differ (5th, 10th); the invoice generator clamps to the last
   // day of short months so a "31st" lease still bills correctly in February.
-  rentDueDay        Int?
-  status          String @default("DRAFT")
-  notes           String?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  deletedAt       DateTime? // soft-delete
+  rentDueDay             Int?
+  status                 String    @default("DRAFT")
+  notes                  String?
+  // ---- Tenancy transition (T1) ----
+  // When occupancy ACTUALLY ended. Null = the lease is running, or ran, to leaseEnd.
+  //
+  // Deliberately distinct from leaseEnd, which stays the CONTRACTED expiry. The gap
+  // between them IS the early-termination exposure, and it is read by things that must
+  // not be told a different story: effective-rent straight-lining and
+  // brokerCommissionBasis = TOTAL_TERM_RENT are both computed from the signed term.
+  // Truncating leaseEnd on an early exit would silently restate a commission someone
+  // may already have been paid.
+  //
+  // The `lease_unit_no_overlap` exclusion constraint ranges over
+  // COALESCE(terminationDate, leaseEnd) for the same reason: the unit is free from the
+  // move-out date, but the contract still says what it said.
+  // Holdover rate as a PERCENTAGE of the last paying rent, for months occupied after
+  // leaseEnd. 100 = the same rent, which is the client's answer (2026-08-13).
+  //
+  // NULL = do not bill holdover on this lease, and it is the default DELIBERATELY. The
+  // system cannot tell a genuine holdover from a lease nobody closed — both are ACTIVE,
+  // past leaseEnd, with no terminationDate — and invoices are permanent once generated.
+  // So the notification fires for every holdover, and billing waits for a person to say
+  // so. See migration 20260813190000_holdover_opt_in.
+  //
+  // A rate rather than a boolean so 125-150% (the commoner commercial practice, charged
+  // to discourage overstaying) is later data entry rather than a code change.
+  holdoverRatePct        Decimal?  @db.Decimal(6, 2)
+  // Entered by hand after the fact (H2 backfill) rather than recorded as it happened.
+  // Deleting one of these needs Founder approval — see HistoricalRecordDeletion — because
+  // it takes a whole settled ledger with it, and nothing in the system witnessed the
+  // tenancy to reconstruct it from.
+  isHistorical           Boolean   @default(false)
+  terminationDate        DateTime?
+  // EXPIRED | NON_RENEWAL | EARLY_TERMINATION | EVICTION | MUTUAL |
+  // LANDLORD_TERMINATED | RENEWED | RELOCATED | ASSIGNED | TENANT_BOUGHT
+  terminationReason      String?
+  terminationNote        String?
+  // The lease that CONTINUES this tenancy. Set for a renewal (successor on the same
+  // unit) or a relocation (successor on a different unit); null for a genuine turnover
+  // where an unrelated tenant follows.
+  //
+  // Continuity is DERIVED from this plus unitId rather than stored as its own flag —
+  // one less pair of fields that can disagree. UnitHistoryService reads it to suppress
+  // the phantom vacancy entry between two linked leases.
+  //
+  // @unique so two leases cannot both claim the same successor. Cycles are rejected in
+  // the service, the same way Milestone.dependsOnId is.
+  successorLeaseId       String?   @unique
+  successorLease         Lease?    @relation("LeaseSuccession", fields: [successorLeaseId], references: [id], onDelete: SetNull)
+  predecessorLease       Lease?    @relation("LeaseSuccession")
+  // ---- Leasing commission (R23) ----
+  // Mirrors the Sale shape rather than inventing a second pattern: same field names,
+  // same "stamped when the deal completes" rule (activation here, close there).
+  //
+  // `brokerCommissionBasis` has no equivalent on Sale because a sale has one obvious
+  // base — the price. A lease does not: the fee can be the first month's rent, a
+  // percentage of the whole term, or flat, and Prime has not yet said which (Q12). It
+  // is therefore recorded PER LEASE rather than assumed, so the answer is data entry
+  // and not a code change — and when it is absent nothing is computed, rather than a
+  // guess being silently stamped.
+  brokerId               String?
+  broker                 Broker?   @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  brokerCommissionPct    Decimal?  @db.Decimal(5, 2) // per-lease override of Broker.commissionRate
+  brokerCommissionAmt    Decimal?  @db.Decimal(14, 2) // computed + stored on activation
+  brokerCommissionBasis  String? // FIRST_MONTH_RENT | TOTAL_TERM_RENT | FLAT
+  brokerCommissionPaidAt DateTime? // set when the broker is actually paid
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  deletedAt              DateTime? // soft-delete
 
-  interiorProjects InteriorProject[]
-  rentPeriods      LeaseRentPeriod[]
-  obligations      LeaseObligation[]
-  rentInvoices     LeaseRentInvoice[]
+  interiorProjects  InteriorProject[]
+  rentPeriods       LeaseRentPeriod[]
+  rentCorrections   LeaseRentPeriodCorrection[]
+  obligations       LeaseObligation[]
+  rentInvoices      LeaseRentInvoice[]
+  tenantAssignments LeaseTenantAssignment[]
+  deletionRequests  HistoricalRecordDeletion[]
 
   @@index([unitId])
   @@index([buildingId])
   @@index([status, leaseEnd])
   @@index([deletedAt])
+  @@index([terminationDate])
   @@map("leases")
 }
 
+// ============================================================================
+// Deletion approval for backfilled history (R27).
+//
+// Client decision 2026-08-12 (Q2, option b): Sales may create and edit historical
+// records; only a Founder may delete one. Modelled on Sale.discountApprovedBy — the
+// existing precedent for "this action needs someone senior to agree" — rather than
+// inventing a second approval shape.
+//
+// Why deletion specifically: a backfilled tenancy carries a complete rent ledger that a
+// person typed in from records the system never saw. Deleting it destroys data that
+// cannot be regenerated, unlike a live lease whose schedule can always be rebuilt from
+// its terms.
+// ============================================================================
+
+model HistoricalRecordDeletion {
+  id            String    @id @default(cuid())
+  leaseId       String
+  lease         Lease     @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  /// PENDING | APPROVED | REJECTED | CANCELLED | COMPLETED
+  status        String    @default("PENDING")
+  /// Mandatory. Same rule as BudgetRevision: a destructive act with no stated reason is
+  /// not auditable.
+  reason        String
+  requestedById String
+  requestedBy   User      @relation("HistoricalDeletionRequester", fields: [requestedById], references: [id])
+  requestedAt   DateTime  @default(now())
+  decidedById   String?
+  decidedBy     User?     @relation("HistoricalDeletionDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt     DateTime?
+  decisionNote  String?
+
+  @@index([leaseId, status])
+  @@index([status, requestedAt])
+  @@map("historical_record_deletions")
+}
+
+// ============================================================================
+// Tenant assignment / novation (T1).
+//
+// The fourth kind of "the unit changed hands", and the only one where the LEASE
+// DOCUMENT SURVIVES. The business is sold, or the tenant restructures its entity, and
+// a new party steps into the existing contract. The rent periods, the invoice ledger
+// and the obligations continue untouched — that is the definition of an assignment,
+// and it is why this is not modelled as terminate-and-recreate like the other three.
+//
+// It needs its own table because otherwise the only record of the change is the audit
+// interceptor's `newValues`, which is the WHOLE submitted form body and therefore
+// cannot say what changed — the same limitation that forced LeasesService
+// .recordLeaseChanges to diff against the stored row.
+//
+// Without this, editing Lease.tenantName in place silently rewrites history: last
+// year's invoices would appear to have been billed to a tenant that did not yet exist.
+// This table is what answers "who was the tenant on date X".
+// ============================================================================
+
+model LeaseTenantAssignment {
+  id                  String    @id @default(cuid())
+  leaseId             String
+  lease               Lease     @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  /// When the assignment takes legal effect — not when it was typed in.
+  effectiveDate       DateTime
+  /// The outgoing party, snapshotted. Denormalised on purpose: the lease row only ever
+  /// holds the CURRENT tenant, so without a copy here the previous name is gone.
+  fromTenantName      String
+  fromTenantLegalName String?
+  toTenantName        String
+  toTenantLegalName   String?
+  toTenantContact     String?
+  toTenantEmail       String?
+  toTenantPhone       String?
+  /// BUSINESS_SALE | NOVATION | ENTITY_RESTRUCTURE | OTHER
+  reason              String?
+  note                String?
+  /// The executed assignment agreement, if it has been uploaded.
+  documentId          String?
+  document            Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  recordedById        String?
+  recordedBy          User?     @relation("LeaseAssignmentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  createdAt           DateTime  @default(now())
+
+  @@index([leaseId, effectiveDate])
+  @@map("lease_tenant_assignments")
+}
 
 // ============================================================================
 // Lease rent timeline.
@@ -941,8 +1176,11 @@ model LeaseRentPeriod {
   startDate     DateTime
   endDate       DateTime? // null = runs to lease end
   baseRent      Decimal   @db.Decimal(12, 2) // the rent portion — this is what escalates
-  nnnAmount     Decimal   @default(0) @db.Decimal(12, 2) // NNN portion — never auto-escalated
-  // Invariant enforced in LeaseRentPeriodService: monthlyRent == baseRent + nnnAmount.
+  // Invariant enforced in LeaseRentPeriodService: monthlyRent == baseRent.
+  //
+  // The two were separated by an `nnnAmount` column until 2026-08-12, when the client
+  // confirmed NNN is charged once at signing rather than monthly. Rent is now base rent
+  // and nothing else; NNN lives on LeaseObligation.
   monthlyRent   Decimal   @db.Decimal(12, 2)
   isFreeRent    Boolean   @default(false) // abatement month -> monthlyRent 0
   escalationPct Decimal?  @db.Decimal(5, 2) // pct applied vs the PREVIOUS period
@@ -952,11 +1190,58 @@ model LeaseRentPeriod {
   createdBy     User?     @relation("LeaseRentPeriodCreator", fields: [createdById], references: [id])
   createdAt     DateTime  @default(now())
 
-  invoices LeaseRentInvoice[]
+  invoices    LeaseRentInvoice[]
+  corrections LeaseRentPeriodCorrection[]
 
   @@unique([leaseId, sequence])
   @@index([leaseId, startDate])
   @@map("lease_rent_periods")
+}
+
+// ============================================================================
+// R22 — correcting a rent period that has already been billed.
+//
+// Past periods are immutable by default (client instruction 2026-07-29): invoices are
+// generated against them, so silently editing one changes what a tenant was billed with
+// no trace. But "immutable" and "we typed 1,500 when the lease says 1,550" cannot both
+// be final, so a correction is a RECORDED ACT rather than an edit — the period moves and
+// this row preserves what it moved from, who moved it, and why.
+//
+// Deliberately not a generic audit row: the audit log records the raw request, while this
+// carries the two numbers side by side, which is the only shape Finance can reconcile a
+// ledger against.
+// ============================================================================
+model LeaseRentPeriodCorrection {
+  id                 String          @id @default(cuid())
+  periodId           String
+  period             LeaseRentPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  /// Denormalised so a lease's whole correction history is one query, and so it survives
+  /// as context if the period is ever regenerated away.
+  leaseId            String
+  lease              Lease           @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  /// What it was, and what it became. Both kept — the original value is never lost, which
+  /// is the entire justification for allowing the change at all.
+  previousRent       Decimal         @db.Decimal(12, 2)
+  correctedRent      Decimal         @db.Decimal(12, 2)
+  /// Optional: a correction may move the dates rather than the money.
+  previousStartDate  DateTime?
+  correctedStartDate DateTime?
+  previousEndDate    DateTime?
+  correctedEndDate   DateTime?
+  /// Mandatory. Same rule as BudgetRevision — a change to a billed figure with no stated
+  /// reason cannot be reconciled by anyone who was not in the room.
+  reason             String
+  /// How many already-generated invoices this correction put out of step with the
+  /// schedule. Stored rather than recomputed: it is the number that was true at the
+  /// moment of the correction, and re-deriving it later gives a different answer.
+  invoicesFlagged    Int             @default(0)
+  correctedById      String
+  correctedBy        User            @relation("LeaseRentPeriodCorrector", fields: [correctedById], references: [id])
+  createdAt          DateTime        @default(now())
+
+  @@index([leaseId, createdAt])
+  @@index([periodId])
+  @@map("lease_rent_period_corrections")
 }
 
 // ============================================================================
@@ -1042,7 +1327,20 @@ model LeaseRentInvoice {
   billedDays   Int?
   monthDays    Int?
   paidAt       DateTime?
-  status       String           @default("DUE") // DUE | PARTIAL | PAID | FREE | WAIVED
+  /// DUE | PARTIAL | PAID | FREE | WAIVED | VOID
+  ///
+  /// VOID is NOT the same as WAIVED and must not be folded into it. WAIVED is a Finance
+  /// decision — money that WAS owed and was forgiven, which belongs in concession
+  /// reporting. VOID means the tenancy had already ended and the month was never owed
+  /// at all. Collapsing the two puts phantom concessions in the numbers.
+  status       String           @default("DUE")
+  voidReason   String?
+  voidedAt     DateTime?
+  /// Set when the period this was billed from was corrected AFTER the invoice existed.
+  /// Not auto-corrected: the invoice records what was actually billed, and only Finance
+  /// can decide whether to re-issue, credit, or leave it. Cleared when they decide.
+  needsReview  Boolean          @default(false)
+  reviewReason String?
   method       String?
   reference    String?
   notes        String?
@@ -1159,7 +1457,6 @@ enum LeadSource {
   OTHER
 }
 
-
 enum LeadActivityType {
   CALL
   EMAIL
@@ -1179,7 +1476,7 @@ model Lead {
   email             String?
   phone             String?
   notes             String?
-  status            String @default("NEW")
+  status            String     @default("NEW")
   // Polymorphic asset link — a lead can be interested in a specific Unit OR a
   // whole Building (e.g. an enterprise tenant inquiring about Leander Bldg 1).
   // Service layer enforces "at most one of (unitId, buildingId)" — both can be
@@ -1310,8 +1607,8 @@ model Campaign {
   updatedAt     DateTime        @updatedAt
   deletedAt     DateTime? // soft-delete preserves attribution history
 
-  spend CampaignSpend[]
-  leads Lead[]
+  spend    CampaignSpend[]
+  leads    Lead[]
   // Cross-project campaigns (Prime Developers brand campaign) leave this empty;
   // project-specific campaigns populate one row per linked project — a campaign
   // can span 0 (portfolio-wide), 1, or several projects.
@@ -1404,6 +1701,20 @@ enum NotificationType {
   // by department) because it is addressed at one person, so it is ACTION-tier and
   // reaches them whether or not they follow that comment's department.
   COMMENT_MENTION
+  /// A work item was assigned to you. ACTION-tier like COMMENT_MENTION: it names one
+  /// person and asks them to do something, so it is not filed under a department feed.
+  /// Assigning work told nobody at all before this existed.
+  TASK_ASSIGNED
+  /// Somebody asked to delete a backfilled tenancy (R27). Leadership-routed: the whole
+  /// point of the gate is that a second person looks before history is erased.
+  HISTORY_DELETION_REQUESTED
+  /// The decision came back. Addressed at the person who raised the request — a request
+  /// that is silently approved or rejected is the same as no answer at all.
+  HISTORY_DELETION_DECIDED
+  /// A tenant is occupying past their contracted end with no move-out recorded.
+  /// Leadership-routed at the client's request (2026-08-13) because it is a commercial
+  /// decision — renew, end it, or let it run — not a task for whoever is on the unit.
+  LEASE_HOLDOVER
 }
 
 model Notification {
@@ -1437,15 +1748,15 @@ model Notification {
 }
 
 model NotificationPreference {
-  id      String           @id @default(cuid())
+  id           String           @id @default(cuid())
   // emailEnabled is NULLABLE on purpose: null means "use this notification type's
   // tier default" (action-needed types email, FYI types are in-app only). An
   // explicit true/false is a deliberate per-user override in either direction.
   emailEnabled Boolean?
-  userId  String
-  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type    NotificationType
-  enabled Boolean          @default(true)
+  userId       String
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         NotificationType
+  enabled      Boolean          @default(true)
 
   @@unique([userId, type])
   @@map("notification_preferences")
@@ -1575,20 +1886,20 @@ enum DocCategory {
 }
 
 model Document {
-  id                String            @id @default(cuid())
+  id                String                  @id @default(cuid())
   projectId         String?
-  project           Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project           Project?                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   buildingId        String?
-  building          Building?         @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  building          Building?               @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitId            String?
-  unit              Unit?             @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unit              Unit?                   @relation(fields: [unitId], references: [id], onDelete: Cascade)
   saleId            String?
-  sale              Sale?             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  sale              Sale?                   @relation(fields: [saleId], references: [id], onDelete: Cascade)
   leadId            String?
-  lead              Lead?             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead              Lead?                   @relation(fields: [leadId], references: [id], onDelete: Cascade)
   // Interior fit-out attachment (city-approval doc, handover certificate, etc.)
   interiorProjectId String?
-  interiorProject   InteriorProject?  @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  interiorProject   InteriorProject?        @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
   // Current-version metadata. On replace, the prior values are copied into a DocumentVersion row.
   fileName          String
   fileUrl           String
@@ -1598,15 +1909,16 @@ model Document {
   // First-class link target so Sales can paste a DocuSign / Drive URL instead of uploading.
   // Either fileUrl OR externalUrl will be populated (storagePath null when external).
   externalUrl       String?
-  category          DocCategory       @default(GENERAL)
+  category          DocCategory             @default(GENERAL)
   // Phase 2 portal flag. Default false — promotion is always an explicit internal action.
-  isClientVisible   Boolean           @default(false)
-  versionNumber     Int               @default(1)
+  isClientVisible   Boolean                 @default(false)
+  versionNumber     Int                     @default(1)
   uploadedById      String
-  uploadedBy        User              @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  uploadedBy        User                    @relation("DocumentUploader", fields: [uploadedById], references: [id])
   versions          DocumentVersion[]
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  leaseAssignments  LeaseTenantAssignment[]
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
   deletedAt         DateTime?
 
   @@index([projectId])
@@ -1784,10 +2096,10 @@ model AuditEvent {
 
 model CustomOption {
   id          String   @id @default(cuid())
-  category    String   // e.g. "project_phase", "unit_status", "sale_status"
-  value       String   // slug stored in DB, e.g. "INTERIOR_FITOUT"
-  label       String   // display label, e.g. "Interior Fit-Out"
-  color       String?  // tailwind color token, e.g. "blue", "amber"
+  category    String // e.g. "project_phase", "unit_status", "sale_status"
+  value       String // slug stored in DB, e.g. "INTERIOR_FITOUT"
+  label       String // display label, e.g. "Interior Fit-Out"
+  color       String? // tailwind color token, e.g. "blue", "amber"
   sortOrder   Int      @default(0)
   isSystem    Boolean  @default(false) // system defaults cannot be deleted
   isActive    Boolean  @default(true)
@@ -1803,32 +2115,142 @@ model CustomOption {
 // ---- Tasks ----
 
 model Task {
-  id            String       @id @default(cuid())
+  id            String           @id @default(cuid())
   projectId     String
-  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// LEGACY single-building link, kept for the same reason as `unitId` below: existing
+  /// rows, existing queries, and the board's group-by. Mirrored from `buildings` when an
+  /// item covers exactly one building.
   buildingId    String?
-  building      Building?    @relation(fields: [buildingId], references: [id])
+  building      Building?        @relation(fields: [buildingId], references: [id])
+  /// The real building link. Site work routinely spans buildings — one contractor doing
+  /// the same job across B1 and B2 is one item, not two.
+  buildings     TaskBuilding[]
+  /// LEGACY single-unit link. Kept so existing rows and queries keep working, and
+  /// maintained as a mirror of `units` when — and only when — an item covers exactly
+  /// one unit. New code reads `units`; nothing should write both by hand, because
+  /// dual-writing is how the two drift apart.
   unitId        String?
-  unit          Unit?        @relation(fields: [unitId], references: [id])
+  unit          Unit?            @relation(fields: [unitId], references: [id])
+  /// The real unit link. A single work item routinely covers several units at once
+  /// ("UNITS 402,403,404" on the client's board), which a scalar unitId cannot say.
+  units         TaskUnit[]
+  /// TASK        — ordinary work item, what this table has always held
+  /// CONSTRUCTION — a site/fit-out item on the construction board
+  ///
+  /// One table rather than two: Task already carries assignee, status, priority,
+  /// comments, attachments and permissions, and a parallel module would duplicate
+  /// every one of them. The discriminator exists so the two do not end up in the same
+  /// list — a PM's site board and a cross-project admin to-do list are different views
+  /// of different work, and mixing them makes both unusable.
+  kind          String           @default("TASK")
   title         String
   description   String?
-  status        String   @default("TODO")
-  priority      String @default("MEDIUM")
+  status        String           @default("TODO")
+  priority      String           @default("MEDIUM")
   dueDate       DateTime?
+  /// LEGACY single-assignee link. Mirrored from `assignees` when exactly one person
+  /// holds the item, so old filters and the `@@index([assignedTo])` keep working.
   assignedTo    String?
-  assignedUser  User?        @relation("TaskAssignee", fields: [assignedTo], references: [id])
+  assignedUser  User?            @relation("TaskAssignee", fields: [assignedTo], references: [id])
+  /// The real assignee link. Site work is held by a crew, not an individual: the client's
+  /// board routinely tags two or three people on one item, and a scalar cannot say that
+  /// without someone being silently dropped.
+  assignees     TaskAssignment[]
   createdBy     String
-  createdByUser User         @relation("TaskCreator", fields: [createdBy], references: [id])
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdByUser User             @relation("TaskCreator", fields: [createdBy], references: [id])
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   comments    TaskComment[]
   attachments TaskAttachment[]
+  updates     TaskUpdate[]
 
   @@index([projectId])
   @@index([assignedTo])
   @@index([status])
+  @@index([kind, projectId])
   @@map("tasks")
+}
+
+/// Which units a work item covers. Many-to-many because one item routinely spans
+/// several units and one unit accumulates many items over a build.
+///
+/// NOT the same thing as UnitsService.combine(), which MERGES units — creates a new
+/// summed-area unit and archives the sources behind mergedIntoId. These units stay
+/// separate and keep their own leases, sales and rent history; only the WORK is shared.
+/// A task covering several buildings. Same shape and same reasoning as TaskUnit.
+model TaskBuilding {
+  taskId     String
+  buildingId String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  building   Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, buildingId])
+  @@index([buildingId])
+  @@map("task_buildings")
+}
+
+/// A person holding a task. Carries `notifiedAt` so re-saving an item does not re-notify
+/// everybody already on it — only somebody newly added hears about it.
+model TaskAssignment {
+  taskId     String
+  userId     String
+  task       Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user       User      @relation("TaskAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedAt DateTime  @default(now())
+  notifiedAt DateTime?
+
+  @@id([taskId, userId])
+  @@index([userId])
+  @@map("task_assignments")
+}
+
+model TaskUnit {
+  taskId String
+  unitId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, unitId])
+  @@index([unitId])
+  @@map("task_units")
+}
+
+/// A dated progress update on a work item — the "Updates" column of the client's board.
+///
+/// Distinct from TaskComment, which is discussion. An update is a report of what
+/// happened on site on a given DAY, and it is what the construction board is for.
+model TaskUpdate {
+  id         String   @id @default(cuid())
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// The day being REPORTED, which is not when it was typed. Site updates are written
+  /// up in the evening or the next morning; dating them by createdAt would quietly
+  /// shift the whole record. Same reason DailyLog.logDate exists.
+  updateDate DateTime
+  authorId   String
+  author     User     @relation("TaskUpdateAuthor", fields: [authorId], references: [id])
+  content    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  photos TaskUpdatePhoto[]
+
+  @@index([taskId, updateDate])
+  @@map("task_updates")
+}
+
+model TaskUpdatePhoto {
+  id           String     @id @default(cuid())
+  taskUpdateId String
+  taskUpdate   TaskUpdate @relation(fields: [taskUpdateId], references: [id], onDelete: Cascade)
+  storagePath  String
+  caption      String?
+  uploadedAt   DateTime   @default(now())
+
+  @@index([taskUpdateId])
+  @@map("task_update_photos")
 }
 
 model TaskComment {
@@ -1938,26 +2360,26 @@ enum SalePaymentTrigger {
 // Owns the operational work (phases, scope, sub-contractor invoices, snags).
 // The client-facing per-sqft price lives on the linked Sale as a SalePayment installment.
 model InteriorProject {
-  id                String               @id @default(cuid())
+  id                String                   @id @default(cuid())
   // Anchor — exactly one of (unitId, buildingId); service-enforced (mirrors Sale/Loan).
   unitId            String?
-  unit              Unit?                @relation(fields: [unitId], references: [id])
+  unit              Unit?                    @relation(fields: [unitId], references: [id])
   buildingId        String?
-  building          Building?            @relation(fields: [buildingId], references: [id])
+  building          Building?                @relation(fields: [buildingId], references: [id])
   // Optional context links — "interior is part of the contract agreement".
   saleId            String?
-  sale              Sale?                @relation(fields: [saleId], references: [id])
+  sale              Sale?                    @relation(fields: [saleId], references: [id])
   leaseId           String?
-  lease             Lease?               @relation(fields: [leaseId], references: [id])
+  lease             Lease?                   @relation(fields: [leaseId], references: [id])
   name              String
-  status            InteriorStatus       @default(NOT_STARTED)
-  phase             InteriorPhase        @default(DESIGN)
+  status            InteriorStatus           @default(NOT_STARTED)
+  phase             InteriorPhase            @default(DESIGN)
   pmId              String? // same PM pool — no new role
-  pm                User?                @relation("InteriorPM", fields: [pmId], references: [id])
-  contractType      InteriorContractType @default(PER_SQFT)
-  ratePerSqft       Decimal?             @db.Decimal(12, 2)
-  area              Decimal?             @db.Decimal(10, 2) // sqft used for pricing
-  contractValue     Decimal?             @db.Decimal(14, 2) // internal cost-to-build; client price is on Sale
+  pm                User?                    @relation("InteriorPM", fields: [pmId], references: [id])
+  contractType      InteriorContractType     @default(PER_SQFT)
+  ratePerSqft       Decimal?                 @db.Decimal(12, 2)
+  area              Decimal?                 @db.Decimal(10, 2) // sqft used for pricing
+  contractValue     Decimal?                 @db.Decimal(14, 2) // internal cost-to-build; client price is on Sale
   encryptedFields   String? // optional AES blob (open question — currently unused)
   packageTemplateId String?
   packageTemplate   InteriorPackageTemplate? @relation(fields: [packageTemplateId], references: [id])
@@ -1969,8 +2391,8 @@ model InteriorProject {
   // Approval audit (construction team + city)
   clientApprovedAt  DateTime?
   cityApprovedAt    DateTime?
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
   deletedAt         DateTime? // soft-delete (matches Sale/Unit/Loan)
 
   scopeItems InteriorScopeItem[]
@@ -2126,6 +2548,11 @@ model DailyLog {
   project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   buildingId String?
   building   Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  // Daily logs were building-level only, so per-unit fit-out progress had nowhere to
+  // go and was written as free text into a building's log. Nullable: a site-wide log
+  // (weather, crew count, concrete pour) genuinely is not about one unit.
+  unitId     String?
+  unit       Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
   logDate    DateTime // the day being logged (distinct from createdAt)
   authorId   String
   author     User      @relation("DailyLogAuthor", fields: [authorId], references: [id])
@@ -2139,6 +2566,7 @@ model DailyLog {
 
   @@index([projectId, logDate])
   @@index([buildingId])
+  @@index([unitId, logDate])
   @@map("daily_logs")
 }
 
@@ -2176,8 +2604,9 @@ model Broker {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  leads Lead[]
-  sales Sale[]
+  leads  Lead[]
+  sales  Sale[]
+  leases Lease[]
 
   @@index([isActive, deletedAt])
   @@map("brokers")

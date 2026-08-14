@@ -51,6 +51,27 @@ export type DomainEvent =
   | { type: 'lease.freeRentEnding'; leaseId: string; projectId: string; firstPayingMonth: Date }
   | { type: 'lease.depositOutstanding'; leaseId: string; projectId: string; outstanding: number; daysLate: number }
   | { type: 'lease.tiDisbursed'; leaseId: string; projectId: string; amount: number; pending: number }
+  // R27 — the Founder gate on erasing a backfilled tenancy. `projectId` may be null: the
+  // request is about a record, and routing it must not depend on resolving a project.
+  | {
+      type: 'history.deletionRequested';
+      requestId: string;
+      leaseId: string;
+      projectId: string | null;
+      tenantName: string;
+      reason: string;
+      requestedById: string;
+    }
+  | {
+      type: 'history.deletionDecided';
+      requestId: string;
+      leaseId: string;
+      tenantName: string;
+      approved: boolean;
+      note?: string;
+      requestedById: string;
+      decidedById: string;
+    }
   | { type: 'rent.overdue'; invoiceId: string; leaseId: string; projectId: string; unitId?: string; daysOverdue: number };
 
 export type DomainEventType = DomainEvent['type'];

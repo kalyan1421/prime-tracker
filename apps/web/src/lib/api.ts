@@ -19,6 +19,18 @@ const api = axios.create({
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = useAuthStore.getState().accessToken;
   if (token) config.headers.Authorization = `Bearer ${token}`;
+
+  // A file upload has to lose the instance-wide JSON content type.
+  //
+  // `application/json` is set as a default above because almost every call is JSON — but
+  // it also overrides what a FormData body needs, which is
+  // `multipart/form-data; boundary=…`. Only the browser can produce that boundary, and it
+  // only does so when the header is absent. Leave it in place and the server receives a
+  // body it cannot parse, then answers "No file was received" — a message that points at
+  // the file input rather than at the header that actually broke it.
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
   return config;
 });
 

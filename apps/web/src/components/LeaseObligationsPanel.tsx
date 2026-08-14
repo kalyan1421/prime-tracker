@@ -202,6 +202,8 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
 
   const [obForm, setObForm] = useState<Record<string, string>>(EMPTY_OBLIGATION);
   const [payForm, setPayForm] = useState<Record<string, string>>(EMPTY_PAYMENT);
+  /** Set when the API refused an overpayment — carries the amount over the agreed total. */
+  const [overpayBy, setOverpayBy] = useState<string | null>(null);
   const [waiveReason, setWaiveReason] = useState('');
 
   const [obErr, setObErr] = useState<string | null>(null);
@@ -323,13 +325,15 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
   const openPayment = (o: LeaseObligation) => {
     setTarget(o);
     setPayForm({ ...EMPTY_PAYMENT, paidAt: todayInput() });
+    setOverpayBy(null);
     setPayErr(null);
     paymentModal.onOpen();
   };
 
-  const savePayment = async () => {
+  const savePayment = async (allowOverpayment = false) => {
     if (!target) return;
     setPayErr(null);
+    setOverpayBy(null);
     const amount = Number(payForm.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
       setPayErr('Enter an amount greater than zero.');
@@ -345,6 +349,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
           method: payForm.method || undefined,
           reference: payForm.reference || undefined,
           notes: payForm.notes || undefined,
+          ...(allowOverpayment ? { allowOverpayment: true } : {}),
         },
       });
       addToast({
@@ -354,7 +359,13 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
       setExpanded((p) => ({ ...p, [target.id]: true }));
       paymentModal.onClose();
     } catch (e) {
-      setPayErr(errMsg(e, 'Failed to record payment'));
+      const msg = errMsg(e, 'Failed to record payment');
+      // The API refuses an overpayment unless it is explicitly confirmed. Surface the
+      // shortfall figure and offer the confirm, rather than leaving a dead end that
+      // makes a legitimate top-up impossible to record.
+      const over = /([\d,]+\.\d{2}) more than is owed/.exec(msg);
+      if (over) setOverpayBy(over[1]);
+      setPayErr(msg);
     }
   };
 
@@ -408,8 +419,8 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900">Deposits &amp; Allowances</p>
           <p className="text-xs text-gray-400">Money owed in both directions on this lease</p>
         </div>
@@ -679,14 +690,36 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
             <Textarea size="sm" label="Notes" minRows={2} value={payForm.notes} onChange={setPay('notes')} />
 
             <p className="text-[11px] text-gray-400">
-              Overpayments are allowed — the balance simply flips to a refund due.
+              A payment above the agreed total needs confirming — it is usually a typo.
             </p>
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={paymentModal.onClose}>Cancel</Button>
-            <Button size="sm" color="primary" onPress={savePayment} isLoading={recordPayment.isPending}>
-              {target ? dirMeta(target.direction).actionWord : 'Record'}
-            </Button>
+            {overpayBy ? (
+              // The API already refused this once and told us by how much. Offering the
+              // override here keeps a genuine top-up recordable in one more click,
+              // while the amount is on screen to be read back before confirming.
+              <Button
+                size="sm"
+                color="warning"
+                onPress={() => savePayment(true)}
+                isLoading={recordPayment.isPending}
+              >
+                Record ${overpayBy} overpayment anyway
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                color="primary"
+                // Wrapped, not passed by reference: HeroUI hands onPress a press event,
+                // which as a truthy first argument would silently opt every payment into
+                // allowOverpayment and defeat the guard entirely.
+                onPress={() => savePayment()}
+                isLoading={recordPayment.isPending}
+              >
+                {target ? dirMeta(target.direction).actionWord : 'Record'}
+              </Button>
+            )}
           </ModalFooter>
         </ModalContent>
       </Modal>
@@ -802,7 +835,7 @@ function ObligationRow({
 
   return (
     <div className={`rounded-xl border border-gray-200 border-l-4 bg-white ${meta.accent}`}>
-      <div className="p-3.5">
+      <div className="px-3.5 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-start gap-2.5">
             <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${meta.chip} border`}>
@@ -820,13 +853,21 @@ function ObligationRow({
                   </span>
                 )}
               </div>
-              {/* Direction stated in words on every row — never inferred from colour alone. */}
-              <p className={`text-[11px] font-medium ${meta.text}`}>{meta.parties}</p>
-              {o.dueDate && (
-                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-gray-400">
-                  <FiCalendar size={10} /> Due {fmtDate(o.dueDate)}
-                </p>
-              )}
+              {/* Direction stated in words on every row — never inferred from colour
+                  alone — but on the SAME line as the due date. As two stacked lines it
+                  cost a row of height on every obligation to say what the section header
+                  above it already says. */}
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]">
+                <span className={`font-medium ${meta.text}`}>{meta.parties}</span>
+                {o.dueDate && (
+                  <>
+                    <span className="text-gray-300">·</span>
+                    <span className="flex items-center gap-1 text-gray-400">
+                      <FiCalendar size={10} /> Due {fmtDate(o.dueDate)}
+                    </span>
+                  </>
+                )}
+              </p>
             </div>
           </div>
 
@@ -838,19 +879,20 @@ function ObligationRow({
           </div>
         </div>
 
-        <div className="mt-2.5">
+        <div className="mt-2">
           <Progress
             size="sm"
-            aria-label={`${meta.paidWord} progress`}
+            aria-label={`${Math.round(pct)}% ${meta.paidWord.toLowerCase()}`}
             value={pct}
             color={waived ? 'secondary' : overpaid ? 'primary' : meta.bar}
             className="max-w-full"
           />
           <div className="mt-1.5 flex items-center justify-between text-[11px]">
+            {/* The bar IS the percentage. Printing "69% collected" beside it, above a
+                third line giving the same fact in money, is one idea said three ways —
+                and money is the one somebody acts on. */}
             <span className="text-gray-400">
-              {waived
-                ? 'Waived — no balance owed'
-                : `${Math.round(pct)}% ${meta.paidWord.toLowerCase()}`}
+              {waived ? 'Waived — no balance owed' : ''}
             </span>
             {/* Overpayment is legal, so a negative pending is a REFUND, not an error. */}
             {overpaid ? (

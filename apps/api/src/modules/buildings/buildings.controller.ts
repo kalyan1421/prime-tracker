@@ -58,7 +58,7 @@ export class BuildingsController {
 
   @Delete(':id')
   @RequirePermissions('building:edit')
-  @ApiOperation({ summary: 'Delete building (blocked if units exist unless force=true)' })
+  @ApiOperation({ summary: 'Archive (soft-delete) a building and its units — blocked if units exist unless force=true' })
   @ApiQuery({ name: 'force', required: false, type: Boolean })
   delete(
     @Param('id') id: string,

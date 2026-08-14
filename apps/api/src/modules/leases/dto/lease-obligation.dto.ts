@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsString, MaxLength } from 'class-validator';
 import { OBLIGATION_DIRECTIONS, OBLIGATION_KINDS } from '../lease-obligation.service';
 
 /**
@@ -29,6 +29,7 @@ export class CreateLeaseObligationDto {
 
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string | null;
+
 }
 
 export class UpdateLeaseObligationDto {
@@ -72,4 +73,16 @@ export class RecordObligationPaymentDto {
 
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string | null;
+
+  /**
+   * Record a payment that takes the obligation ABOVE its agreed total.
+   *
+   * Overpayment is refused by default. It is occasionally real — a deposit topped up
+   * mid-term, a tenant rounding up — but it is far more often a typo, and the failure
+   * is silent: the panel simply starts reporting a refund due. Requiring the caller to
+   * say "yes, I meant it" turns a mis-key into a question instead of a liability.
+   */
+  @IsOptional() @IsBoolean()
+  allowOverpayment?: boolean;
+
 }

@@ -14,8 +14,6 @@ export class GenerateRentPeriodsDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   baseRent?: number;
 
-  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
-  nnnAmount?: number;
 
   // Terms changed after periods already existed: rewrite the future, keep the past.
   // Without it generateForLease is a no-op on a lease that already has periods.
@@ -28,8 +26,6 @@ export class RegenerateFutureRentPeriodsDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   baseRent?: number;
 
-  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
-  nnnAmount?: number;
 }
 
 export class AddManualRentPeriodDto {
@@ -43,15 +39,38 @@ export class AddManualRentPeriodDto {
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   baseRent!: number;
 
-  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
-  nnnAmount?: number;
 
-  // Derived as baseRent + nnnAmount when omitted; validated against that sum when given.
+  // Mirrors baseRent when omitted; validated against it when given.
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   monthlyRent?: number;
 
   // REQUIRED — a mid-term rent change with no stated reason is not auditable.
   // @IsNotEmpty rejects '' here; the service additionally rejects whitespace-only.
+  @IsString() @IsNotEmpty() @MaxLength(1000)
+  reason!: string;
+}
+
+/**
+ * R22 — correcting a period that was already billed.
+ *
+ * Everything but the reason is optional: a correction usually moves one thing, and
+ * requiring the whole row back invites resending a stale value nobody meant to change.
+ * The service refuses a body where nothing actually differs.
+ */
+export class CorrectRentPeriodDto {
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
+  baseRent?: number;
+
+  @IsOptional() @IsDateString()
+  startDate?: string;
+
+  // null is meaningful — "runs to the end of the term" — so it is accepted distinctly
+  // from the field being absent.
+  @IsOptional() @IsDateString()
+  endDate?: string | null;
+
+  // Mandatory, and long enough to be worth reading. This row is the only account of why
+  // a billed figure changed.
   @IsString() @IsNotEmpty() @MaxLength(1000)
   reason!: string;
 }

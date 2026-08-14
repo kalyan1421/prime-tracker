@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Prisma } from '@prisma/client';
 import { LeasesService } from './leases.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -7,11 +8,19 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { CreateLeaseDto, UpdateLeaseDto } from './dto/create-lease.dto';
+import { EndTenancyDto } from './dto/end-tenancy.dto';
+import { AssignTenantDto } from './dto/assign-tenant.dto';
+import { BackfillTenancyDto } from './dto/backfill-tenancy.dto';
+import {
+  DecideHistoricalDeletionDto,
+  RequestHistoricalDeletionDto,
+} from './dto/historical-deletion.dto';
 import { LeaseRentPeriodService } from './lease-rent-period.service';
 import { LeaseObligationService } from './lease-obligation.service';
 import { LeaseRentInvoiceService } from './lease-rent-invoice.service';
 import {
   AddManualRentPeriodDto,
+  CorrectRentPeriodDto,
   GenerateRentPeriodsDto,
   RegenerateFutureRentPeriodsDto,
 } from './dto/rent-period.dto';
@@ -141,6 +150,59 @@ export class LeasesController {
     return this.rentInvoices.waive(invoiceId, body.reason);
   }
 
+  @Patch('rent-periods/:periodId/correct')
+  // NOT lease:edit. Editing future terms and rewriting a figure a tenant was already
+  // invoiced for are different powers — this is the only route in the system that can
+  // change a number already sent out. No role is granted it EXPLICITLY; Founder and
+  // Super Admin hold it only through their blanket grants, so until Prime assigns it the
+  // set of people who can correct billed rent is exactly the set who already own the
+  // whole book.
+  @RequirePermissions('lease:history:correct')
+  @ApiOperation({
+    summary: 'Correct a rent period that has already been billed (reason required)',
+    description:
+      'Use this only when the period was RECORDED wrong. If the rent genuinely changed '
+      + 'from a date, append a manual period instead — that is an event, not a correction. '
+      + 'The previous value is preserved, and any invoice already generated from this '
+      + 'period is flagged for Finance rather than silently restated.',
+  })
+  correctRentPeriod(
+    @Param('periodId') periodId: string,
+    @Body() body: CorrectRentPeriodDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.rentPeriods.correctPeriod(periodId, { ...body, correctedById: userId });
+  }
+
+  @Post('rent-invoices/:invoiceId/clear-review')
+  // rent:collect, not the correction permission: acknowledging a flagged invoice is a
+  // collections act, and the person who reconciles the ledger is not the person who
+  // corrects the schedule.
+  @RequirePermissions('rent:collect')
+  @ApiOperation({
+    summary: 'Mark a flagged invoice as reviewed',
+    description:
+      'Records that somebody looked. Deliberately does not change amountDue — re-issue, '
+      + 'credit or leave-it stays a Finance decision made with the normal tools.',
+  })
+  clearInvoiceReview(@Param('invoiceId') invoiceId: string) {
+    return this.rentPeriods.clearInvoiceReview(invoiceId);
+  }
+
+  // Above `@Get(':id')` — Nest matches in declaration order and would otherwise read
+  // 'historical-deletions' as a lease id.
+  @Get('historical-deletions')
+  // The BACKFILL permission, not DELETE: whoever raised a request has to be able to see
+  // that it is pending, or they will raise it again. Founders hold both.
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({
+    summary: 'Deletion requests awaiting a decision (the Founder queue)',
+    description: 'Pass ?status=APPROVED|REJECTED|COMPLETED to see decided ones.',
+  })
+  historicalDeletionRequests(@Query('status') status?: string) {
+    return this.service.listHistoricalDeletionRequests(status || 'PENDING');
+  }
+
   @Get(':id')
   @RequirePermissions('lease:view')
   @ApiOperation({ summary: 'Get lease by ID' })
@@ -221,6 +283,15 @@ export class LeasesController {
     return this.rentPeriods.addManualPeriod({ leaseId: id, ...body, createdById: userId });
   }
 
+  @Get(':id/rent-corrections')
+  @RequirePermissions('lease:view')
+  @ApiOperation({
+    summary: 'Every correction made to this lease\'s billed rent periods, newest first',
+  })
+  rentCorrections(@Param('id') id: string) {
+    return this.rentPeriods.findCorrections(id);
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // Obligations on a lease. (Mutations keyed by obligation id are declared above.)
   // ───────────────────────────────────────────────────────────────────────────
@@ -242,7 +313,10 @@ export class LeasesController {
   @ApiOperation({ summary: 'Create lease' })
   // userId is stamped onto the rent periods the service generates for this lease.
   create(@Body() body: CreateLeaseDto, @CurrentUser('sub') userId: string) {
-    return this.service.create(body, userId);
+    // termMonths is optional on the DTO (the service derives it from the dates) but
+    // required by Prisma. The cast is safe because normaliseTermAndNnn always sets it
+    // before the create — a 0 here would be overwritten, not persisted.
+    return this.service.create(body as unknown as Prisma.LeaseUncheckedCreateInput, userId);
   }
 
   @Put(':id')
@@ -254,8 +328,122 @@ export class LeasesController {
     return this.service.update(id, body, userId);
   }
 
+  @Post(':id/end-tenancy')
+  @RequirePermissions('lease:edit')
+  @ApiOperation({
+    summary: 'End a tenancy — records the move-out, caps the ledger and releases the unit',
+    description:
+      'One action behind turnover, renewal and relocation. Caps the rent schedule at the ' +
+      'move-out date, voids unpaid invoices billed after it, records the deposit decision, ' +
+      'and — unless a successor lease continues on the same unit — releases the unit and ' +
+      'writes its occupancy event. Refuses if rent has already been collected past the date.',
+  })
+  endTenancy(
+    @Param('id') id: string,
+    @Body() body: EndTenancyDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.endTenancy(id, body, userId);
+  }
+
+  @Post('backfill')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({
+    summary: 'Enter a tenancy that has already ended (historical backfill)',
+    description:
+      'Creates the lease, its rent schedule and its COMPLETE invoice ledger in one call, '
+      + 'defaulting every month to paid so a historical tenancy never shows as overdue AR. '
+      + 'Backdates two occupancy events. Deliberately does NOT change the unit\'s current '
+      + 'status — entering an old tenant must not change who the system thinks is in the '
+      + 'unit today. Refuses a move-out date in the future: that is a live lease.',
+  })
+  backfillTenancy(@Body() body: BackfillTenancyDto, @CurrentUser('sub') userId: string) {
+    return this.service.backfillTenancy(body, userId);
+  }
+
+  @Get(':id/assignments')
+  @RequirePermissions('lease:view')
+  @ApiOperation({ summary: 'The tenant-assignment chain for a lease, oldest first' })
+  assignments(@Param('id') id: string) { return this.service.findAssignments(id); }
+
+  @Post(':id/assign-tenant')
+  @RequirePermissions('lease:edit')
+  @ApiOperation({
+    summary: 'Assign the lease to a new tenant (novation) — the lease document survives',
+    description:
+      'For a business sale or entity restructure, where a new party steps into the ' +
+      'existing contract. The rent schedule, invoice ledger, obligations and unit status ' +
+      'are all left untouched — that is the definition of an assignment. Use end-tenancy ' +
+      'instead when the tenancy itself ends and a new lease begins.',
+  })
+  assignTenant(
+    @Param('id') id: string,
+    @Body() body: AssignTenantDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.assignTenant(id, body, userId);
+  }
+
+  @Post(':id/request-deletion')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({
+    summary: 'Ask a Founder to approve deleting a backfilled tenancy',
+    description:
+      'Only for historical records. A backfilled tenancy carries a ledger somebody typed '
+      + 'in from paper records the system never witnessed — deleting it destroys data '
+      + 'nothing can regenerate, so it takes a second person. A live lease needs no '
+      + 'request: its schedule can always be rebuilt from its own terms.',
+  })
+  requestHistoricalDeletion(
+    @Param('id') id: string,
+    @Body() body: RequestHistoricalDeletionDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.requestHistoricalDeletion(id, body.reason, userId);
+  }
+
+  @Post('historical-deletions/:requestId/decide')
+  @RequirePermissions('unit:history:delete')
+  @ApiOperation({
+    summary: 'Approve or reject a historical-deletion request',
+    description:
+      'Approving authorises the delete; it does not perform it. Deleting stays a separate '
+      + 'deliberate act, otherwise the approval is a formality rather than a decision.',
+  })
+  decideHistoricalDeletion(
+    @Param('requestId') requestId: string,
+    @Body() body: DecideHistoricalDeletionDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.decideHistoricalDeletion(requestId, body.approve, userId, body.note);
+  }
+
+  @Post('historical-deletions/:requestId/cancel')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({ summary: 'Withdraw your own pending deletion request' })
+  cancelHistoricalDeletion(
+    @Param('requestId') requestId: string,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.cancelHistoricalDeletion(requestId, userId);
+  }
+
   @Delete(':id')
   @RequirePermissions('lease:edit')
-  @ApiOperation({ summary: 'Delete lease' })
-  delete(@Param('id') id: string) { return this.service.delete(id); }
+  @ApiOperation({
+    summary: 'Delete lease',
+    description:
+      'A historical (backfilled) lease additionally needs approval. A `unit:history:delete` '
+      + 'holder IS the approver, so they delete directly and it is recorded as '
+      + 'self-approved; everyone else goes through POST /leases/:id/request-deletion.',
+  })
+  delete(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    // The caller's own permission, not a role check — the approval bar is a permission
+    // everywhere else in this flow and must not drift into a second definition here.
+    @CurrentUser('permissions') permissions: string[] = [],
+  ) {
+    return this.service.delete(id, userId, (permissions ?? []).includes('unit:history:delete'));
+  }
 }

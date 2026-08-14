@@ -47,6 +47,17 @@ export const NOTIFICATION_TIERS = {
   // Addressed at one named person, unlike COMMENT_* which broadcasts to a department.
   // Being named is a request for a reply, so it emails by default.
   COMMENT_MENTION: 'ACTION',
+  // ACTION, not FYI: it names one person and asks them to do something. An assignment
+  // that lands in a digest nobody opens is the same as no assignment at all.
+  TASK_ASSIGNED: 'ACTION',
+  // ACTION, not FYI: a tenant occupying past their term is a commercial decision waiting
+  // to be made (renew / end it / let it run), and it is costing or earning money either
+  // way. A digest entry would be read too late.
+  LEASE_HOLDOVER: 'ACTION',
+  // ACTION for both halves: a pending request blocks somebody's work until it is decided,
+  // and the answer is addressed at one named person.
+  HISTORY_DELETION_REQUESTED: 'ACTION',
+  HISTORY_DELETION_DECIDED: 'ACTION',
 
   // ---- FYI: awareness only ----
   LEASE_EXPIRING_30: 'FYI',
@@ -120,6 +131,17 @@ export const RECURRING_TYPES = {
   COMMENT_SALES: false,
   COMMENT_MARKETING: false,
   COMMENT_MENTION: false,
+  // Not recurring — an assignment happens once. Re-assigning fires a fresh event
+  // because the recipient changed, not because the condition persisted.
+  TASK_ASSIGNED: false,
+  // RECURRING: the condition persists day after day until someone acts, so the daily
+  // cron must be able to re-raise it. That makes a dedupeKey mandatory — see
+  // Notification.dedupeKey — or it would notify every morning forever.
+  LEASE_HOLDOVER: true,
+  // Discrete: a request is raised once and decided once. Re-raising after a rejection is
+  // a new request, not the same condition persisting.
+  HISTORY_DELETION_REQUESTED: false,
+  HISTORY_DELETION_DECIDED: false,
   DRAW_REQUEST_SUBMITTED: false,
   DRAW_REQUEST_APPROVED: false,
   DRAW_REQUEST_FUNDED: false,
@@ -550,6 +572,110 @@ export class NotificationsService {
       title: `Lease Expiring in ${daysLeft} Days`,
       body: `${lease.tenantName}'s lease in ${lease.unit.building.project.name} expires on ${lease.leaseEnd.toLocaleDateString()}.`,
       link,
+    });
+  }
+
+  /**
+   * A tenant is occupying past their contracted end with no move-out recorded.
+   *
+   * `roles: []` targets LEADERSHIP ONLY — sendToRoles adds SUPER_ADMIN / FOUNDER /
+   * EXECUTIVE unconditionally as portfolio owners, so an empty list is exactly the
+   * audience the client asked for. Not routed to FINANCE: the decision here is
+   * commercial (renew / end it / let it run), not a collections task.
+   */
+  async notifyLeaseHoldover(lease: {
+    id: string;
+    tenantName: string;
+    leaseEnd: Date;
+    daysOver: number;
+    projectId: string;
+    projectName: string;
+    /** Null (the default) means holdover rent is NOT being billed — see below. */
+    holdoverRatePct?: number | null;
+  }) {
+    // The billing half of this message has to match what the invoicer actually does.
+    // LeaseRentInvoiceService.holdoverExtension bails on `holdoverRatePct == null`, and
+    // null is the DOCUMENTED DEFAULT — so on most holdovers no rent is generated at all.
+    // This alert used to assert "rent is being billed at the holdover rate" in every
+    // case, which told leadership the money was being collected on precisely the leases
+    // where it silently was not. The cron fires for both cases (it matches on the term
+    // being past, not on the rate), so the copy is what has to distinguish them.
+    const rate = lease.holdoverRatePct;
+    const billing =
+      rate != null
+        ? `Rent is being billed at ${rate}% of the last contracted rent.`
+        : 'NO rent is being billed for these months — this lease has no holdover rate set, '
+          + 'and one must be set on the lease before any holdover rent will be generated.';
+
+    await this.sendToRoles({
+      roles: [],
+      projectId: lease.projectId,
+      type: NotificationType.LEASE_HOLDOVER,
+      // RECURRING, so this key is what stops it firing every single morning. Keyed on the
+      // lease, because the condition is "this lease is in holdover" and it persists until
+      // someone ends or extends it.
+      dedupeKey: `holdover:${lease.id}`,
+      title: `Holdover — ${lease.tenantName}`,
+      body:
+        `${lease.tenantName} is still in occupation ${lease.daysOver} days after their term `
+        + `ended on ${lease.leaseEnd.toLocaleDateString()} (${lease.projectName}). `
+        + `${billing} End the tenancy or extend the lease.`,
+      link: `/projects/${lease.projectId}/revenue`,
+    });
+  }
+
+  /**
+   * R27 — a backfilled tenancy has been put up for deletion.
+   *
+   * Routed to leadership by ROLE rather than by project membership: the gate exists so a
+   * Founder looks, and a Founder who happens not to be on that project is still the right
+   * person to look.
+   */
+  async notifyHistoryDeletionRequested(params: {
+    requestId: string;
+    leaseId: string;
+    projectId: string | null;
+    tenantName: string;
+    unitLabel: string | null;
+    reason: string;
+    requestedByName: string | null;
+    link: string | null;
+  }) {
+    await this.sendToRoles({
+      roles: [...LEADERSHIP_ROLES],
+      projectId: null,
+      type: NotificationType.HISTORY_DELETION_REQUESTED,
+      title: `Deletion requested — ${params.tenantName}`,
+      body:
+        `${params.requestedByName ?? 'Someone'} asked to delete the recorded tenancy for `
+        + `${params.tenantName}${params.unitLabel ? ` (${params.unitLabel})` : ''}. `
+        + `Reason: “${params.reason}”. This history was typed in from records, so it `
+        + `cannot be rebuilt — approve or reject it on the unit.`,
+      link: params.link ?? undefined,
+    });
+  }
+
+  /** The answer, back to whoever asked. */
+  async notifyHistoryDeletionDecided(params: {
+    requestedById: string;
+    tenantName: string;
+    approved: boolean;
+    note?: string | null;
+    link: string | null;
+  }) {
+    await this.send({
+      userIds: [params.requestedById],
+      type: NotificationType.HISTORY_DELETION_DECIDED,
+      title: params.approved
+        ? `Approved — you can delete ${params.tenantName}'s record`
+        : `Rejected — ${params.tenantName}'s record stays`,
+      body: params.approved
+        ? `A Founder approved your deletion request. The record is still there; deleting `
+          + `it is a separate step, so nothing has been removed yet.`
+          + (params.note ? ` Note: “${params.note}”` : '')
+        : `A Founder rejected your deletion request and the record is unchanged.`
+          + (params.note ? ` Note: “${params.note}”` : ''),
+      link: params.link ?? undefined,
     });
   }
 

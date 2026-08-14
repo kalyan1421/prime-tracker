@@ -2,10 +2,32 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, UserRole } from '@prisma/client';
 import { EventBus } from '../../common/events/event-bus.service';
+import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import { LeasesService } from '../leases/leases.service';
+import { startOfUtcDay } from '../leases/lease-rent-period.service';
 
 @Injectable()
 export class SalesService {
-  constructor(private prisma: PrismaService, private bus: EventBus) {}
+  constructor(
+    private prisma: PrismaService,
+    private bus: EventBus,
+    private statusEvents: UnitStatusEventService,
+    private leases: LeasesService,
+  ) {}
+
+  /**
+   * A closing date is the real-world moment a unit changed hands, so the occupancy
+   * event should carry it rather than the wall-clock time someone typed it in. Falls
+   * back to now when the date is absent or unparseable.
+   */
+  private toDateOrNow(value: unknown): Date {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (typeof value === 'string') {
+      const d = new Date(value);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  }
 
   async findByProject(projectId: string) {
     return this.prisma.sale.findMany({
@@ -129,7 +151,12 @@ export class SalesService {
     return created;
   }
 
-  async update(id: string, data: Prisma.SaleUncheckedUpdateInput) {
+  async update(
+    id: string,
+    data: Prisma.SaleUncheckedUpdateInput,
+    /** Stamped onto any occupancy event this update causes. */
+    updatedById?: string,
+  ) {
     const sale = await this.findById(id);
     for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
       if (typeof data[field] === 'string') (data as any)[field] = new Date(data[field] as unknown as string);
@@ -199,6 +226,10 @@ export class SalesService {
     // not on the pre-transaction snapshot — otherwise two concurrent CLOSEs both read
     // status=UNDER_CONTRACT and both emit, double-notifying every recipient.
     let applied = true;
+    // Set inside the transaction, emitted after it commits — a notification must not go
+    // out for a tenancy that rolled back with its sale. Plural because a unit can hold
+    // more than one tenancy in occupation (see the findMany below).
+    let endedLeases: { id: string; tenantName: string }[] = [];
     if (data.status === 'CLOSED' && sale.unitId) {
       const unitId = sale.unitId;
       // Atomic + optimistic-locked: only the NOT_CLOSED→CLOSED transition stamps the broker
@@ -213,11 +244,94 @@ export class SalesService {
           // Lost the race — already CLOSED elsewhere. Return current row, no side effects.
           return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false };
         }
+        // Read the prior status inside the transaction so the occupancy event records
+        // what the unit actually moved FROM. Reading it outside would race the very
+        // concurrent close the optimistic lock above exists to defend against.
+        const before = await tx.unit.findUniqueOrThrow({
+          where: { id: unitId },
+          select: { status: true },
+        });
         await tx.unit.update({
           where: { id: unitId },
           // Sale closed → unit becomes SOLD; clear time-on-market
           data: { status: 'SOLD', availableSince: null },
         });
+        // Only the request that won the lock reaches here, so the event is written
+        // exactly once — same guarantee the `applied` flag gives the emitted events.
+        await this.statusEvents.recordIfChanged(
+          {
+            unitId,
+            fromStatus: before.status,
+            toStatus: 'SOLD',
+            source: 'SALE_CLOSED',
+            saleId: id,
+            effectiveAt: this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate),
+            recordedById: updatedById,
+          },
+          tx,
+        );
+
+        // A sale ENDS every tenancy the unit is carrying (H3). Until this existed, closing
+        // a sale flipped the unit to SOLD and left the lease ACTIVE — only the billing
+        // cron's sold-unit filter stopped the departed tenant being invoiced, and the unit
+        // read SOLD with a tenancy still running.
+        //
+        // In the SAME transaction on purpose: sold-with-a-live-lease is exactly the
+        // inconsistency both halves exist to prevent, so it must not be reachable by one
+        // half succeeding. If a tenancy cannot be ended — rent collected past the
+        // closing date — the CLOSE fails too, which is the honest outcome: that is a real
+        // conflict a person has to resolve, not something to close around.
+        //
+        // Assumes the SITTING TENANT BOUGHT, which is the client-confirmed v1 rule. A
+        // third-party sale of a tenanted unit would need the lease to survive the sale.
+        //
+        // findMany, not findFirst: a unit can legitimately hold MORE THAN ONE
+        // non-terminated lease right now. assertNoOverlappingLease permits a lease
+        // starting the day another ends, and the unit state machine allows
+        // LEASED → LEASE_PENDING precisely so a successor can be signed while the sitting
+        // tenant is still in occupation. Ending only the newest row left the older,
+        // still-occupying tenancy ACTIVE on a unit now reading SOLD.
+        const closingDate = this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate);
+        const live = await tx.lease.findMany({
+          where: {
+            unitId,
+            deletedAt: null,
+            terminationDate: null,
+            status: { notIn: ['EXPIRED', 'TERMINATED'] },
+          },
+          orderBy: { leaseStart: 'asc' },
+          select: { id: true, tenantName: true, leaseStart: true },
+        });
+
+        // Only tenancies IN OCCUPATION on the closing date are ended by the sale (spec
+        // R4). A lease drafted to start later has nothing to end — endTenancyWithin
+        // rejects a termination dated before the lease start, so reaching for it would
+        // surface as a baffling "move-out date cannot be before the lease start date".
+        //
+        // Those future leases are deliberately left ALONE here, and the close is never
+        // blocked by one (R4). That is not the end of the story: a lease drafted for a
+        // unit Prime no longer owns is a commitment nobody can honour, and R4 requires the
+        // user be told it exists and asked what to do with it. That question belongs in
+        // the close dialog, which is a later phase — not silently answered by this method.
+        const closingDay = startOfUtcDay(closingDate);
+        const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
+
+        // ALL of them end with the sale, oldest leaseStart first so the outcome does not
+        // depend on row order.
+        endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
+        for (const lease of occupying) {
+          await this.leases.endTenancyWithin(
+            tx,
+            lease.id,
+            {
+              terminationDate: closingDate,
+              terminationReason: 'TENANT_BOUGHT',
+              terminationNote: 'Ended automatically when the sale of this unit closed.',
+            },
+            updatedById,
+          );
+        }
+
         return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
       });
       result = outcome.sale;
@@ -233,19 +347,58 @@ export class SalesService {
       });
       const reserved = unit && ['UNDER_CONTRACT', 'LEASE_PENDING'].includes(unit.status);
       if (reserved) {
-        const [updated] = await this.prisma.$transaction([
-          this.prisma.sale.update({ where: { id }, data: dataWithActivity }),
-          this.prisma.unit.update({
-            where: { id: sale.unitId },
+        // Interactive transaction rather than the array form this used to use: the
+        // occupancy event needs the unit's prior status, and array-form operations
+        // cannot read a value produced inside the same transaction.
+        const unitId = sale.unitId;
+        result = await this.prisma.$transaction(async (tx) => {
+          const updated = await tx.sale.update({ where: { id }, data: dataWithActivity });
+          const before = await tx.unit.findUniqueOrThrow({
+            where: { id: unitId },
+            select: { status: true },
+          });
+          await tx.unit.update({
+            where: { id: unitId },
             data: { status: 'AVAILABLE', availableSince: new Date() },
-          }),
-        ]);
-        result = updated;
+          });
+          await this.statusEvents.recordIfChanged(
+            {
+              unitId,
+              fromStatus: before.status,
+              toStatus: 'AVAILABLE',
+              source: 'SALE_CANCELLED',
+              saleId: id,
+              reason: 'Sale cancelled — reserved unit released back to market',
+              recordedById: updatedById,
+            },
+            tx,
+          );
+          return updated;
+        });
       } else {
         result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
       }
     } else {
       result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
+    }
+
+    // A tenancy ended by a sale must notify on exactly the same footing as one ended by
+    // hand through LeasesService.endTenancy (spec R5) — otherwise the alert depends on
+    // which door was used, and the sale door is the silent one. endTenancyWithin emits
+    // nothing by design (the caller's transaction may still roll back), so the emit is
+    // this method's job, here: after the commit, and only for a close that actually
+    // applied. Same event shape as endTenancy's, and projectId comes from the sale for
+    // the same reason unit.sold's does — the lease is on the sale's own unit.
+    if (applied && sale.projectId) {
+      for (const lease of endedLeases) {
+        this.bus.emit({
+          type: 'lease.terminated',
+          leaseId: lease.id,
+          projectId: sale.projectId,
+          tenantName: lease.tenantName,
+          reason: 'TENANT_BOUGHT',
+        });
+      }
     }
 
     // `applied` (not the stale pre-read snapshot) is what makes these events fire exactly

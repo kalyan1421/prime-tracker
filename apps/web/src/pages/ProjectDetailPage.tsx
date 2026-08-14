@@ -151,7 +151,7 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
   );
 }
 import { fmt, fmtPct, fmtDate, errMsg } from '../utils/fmt';
-import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields } from '../components/LeaseFormFields';
+import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields, leaseToForm } from '../components/LeaseFormFields';
 import { FormError } from '../components/FormError';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
@@ -159,11 +159,12 @@ import {
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
-const TAB_MAP = ['overview', 'construction', 'budget', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments', 'activity'];
+const TAB_MAP = ['overview', 'construction', 'board', 'budget', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments', 'activity'];
 
 const TAB_TITLE_MAP: Record<string, string> = {
   overview: 'Overview',
   construction: 'Construction',
+  board: 'Updates Board',
   budget: 'Budget',
   revenue: 'Revenue',
   units: 'Units',
@@ -196,6 +197,9 @@ const TAB_TITLE_MAP: Record<string, string> = {
 const TAB_PERMISSIONS: Record<string, string[]> = {
   overview: [],                    // reachable by anyone who can open the project
   construction: ['building:view'],
+  // Same bar as the Tasks tab it shares a table with: reading needs only project:view,
+  // and the board itself gates writing on task:edit.
+  board: ['project:view'],
   budget: ['budget:view'],
   // Composed tab: Sales pipeline + Leases. Visible with EITHER, and each section is
   // gated separately below so a lease-only role never triggers a sales 403.
@@ -211,6 +215,8 @@ const TAB_PERMISSIONS: Record<string, string[]> = {
   activity: ['audit:view'],
 };
 
+
+import { ConstructionBoard } from '../components/ConstructionBoard';
 
 export default function ProjectDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
@@ -328,6 +334,9 @@ export default function ProjectDetailPage() {
         {activeTab === 'draws' && <DrawsTab projectId={id!} />}
         {activeTab === 'vendors' && <VendorsTab projectId={id!} />}
         {activeTab === 'documents' && <DocumentsTab projectId={id!} />}
+        {activeTab === 'board' && (
+          <ConstructionBoard projectId={id!} canEdit={hasAnyPermission('task:edit')} />
+        )}
         {activeTab === 'tasks' && <TasksPageInner projectId={id!} />}
         {activeTab === 'comments' && <ProjectCommentsTab projectId={id!} />}
         {activeTab === 'activity' && <ProjectActivityTab projectId={id!} />}
@@ -2559,7 +2568,14 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   // step, never a gate: skipping it leaves the new status exactly as saved.
   const maybePromptForDeal = (unitBefore: any, prevStatus: string, newStatus: string) => {
     if (!unitBefore || newStatus === prevStatus) return;
-    if (newStatus !== 'SOLD' && newStatus !== 'LEASED') return;
+    // LEASE_PENDING and OCCUPIED prompt too, and for the same reason LEASED does: the
+    // rent roll and the unit's history read from the LEASE, so any of these three
+    // statuses without one records nothing. Kept in step with TENANTED_STATUSES on
+    // UnitDetailPage — two paths to the same action behaving differently is worse than
+    // either behaviour on its own. UNDER_CONTRACT is deliberately absent: that is a SALE
+    // in negotiation, and a lease form would be the wrong document.
+    const TENANTED = ['LEASED', 'LEASE_PENDING', 'OCCUPIED'];
+    if (newStatus !== 'SOLD' && !TENANTED.includes(newStatus)) return;
     const label = `Unit ${unitBefore.unitNumber || ''}`.trim();
 
     if (newStatus === 'SOLD') {
@@ -2602,7 +2618,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
     setDealForm({
       ...EMPTY_LEASE,
       unitId: unitBefore.id,
-      status: 'ACTIVE',
+      // A signed-but-not-moved-in unit gets a DRAFT lease, not an ACTIVE one — marking
+      // it ACTIVE would start billing a tenant who is still fitting out.
+      status: newStatus === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE',
       monthlyRent: unitBefore.askingRent != null ? String(unitBefore.askingRent) : '',
     });
     setDealErrors({});
@@ -3727,28 +3745,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
   };
   const openEdit = (l: any) => {
     setEditId(l.id);
-    setForm({
-      unitId: l.unitId || l.unit?.id || '',
-      tenantName: l.tenantName || '',
-      tenantLegalName: l.tenantLegalName || '',
-      tenantBrand: l.tenantBrand || '',
-      tenantContact: l.tenantContact || '',
-      tenantEmail: l.tenantEmail || '',
-      tenantPhone: l.tenantPhone || '',
-      monthlyRent: l.monthlyRent?.toString() || '',
-      leaseStart: (l.leaseStart || l.startDate) ? (l.leaseStart || l.startDate).slice(0, 10) : '',
-      leaseEnd: (l.leaseEnd || l.endDate) ? (l.leaseEnd || l.endDate).slice(0, 10) : '',
-      termMonths: l.termMonths?.toString() || '',
-      rentPerSqft: l.rentPerSqft?.toString() || '',
-      escalationPct: (l.escalationPct ?? l.annualEscalation)?.toString() || '',
-      escalationFreq: l.escalationFreq != null ? String(l.escalationFreq) : '',
-      securityDeposit: l.securityDeposit?.toString() || '',
-      rentDueDay: l.rentDueDay != null ? String(l.rentDueDay) : '',
-      freeRentMonths: l.freeRentMonths ? String(l.freeRentMonths) : '',
-      freeRentStartDate: l.freeRentStartDate ? String(l.freeRentStartDate).slice(0, 10) : '',
-      status: l.status || 'DRAFT',
-      notes: l.notes || '',
-    });
+    setForm(leaseToForm(l));
     setLeaseErrors({});
     setLeaseFormError(null);
     onFormOpen();

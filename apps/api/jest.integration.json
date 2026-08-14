@@ -1,0 +1,23 @@
+{
+  "//": "Integration tests: these need a REAL Postgres and are deliberately kept out of the default `jest` run, which must stay fast and dependency-free. rootDir is the package root because these live in test/, not src/.",
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
+  "rootDir": ".",
+  "testRegex": ".*\\.integration\\.spec\\.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "testEnvironment": "node",
+  "moduleNameMapper": {
+    "^@prime-tracker/shared$": "<rootDir>/../../packages/shared/src/types/index.ts"
+  },
+  "transformIgnorePatterns": [
+    "/node_modules/\\.pnpm/(?!uuid@)"
+  ],
+  "testTimeout": 30000,
+  "maxWorkers": 1,
+  "globalSetup": "<rootDir>/test/db-probe.setup.js"
+}

@@ -1,17 +1,19 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign } from 'react-icons/fi';
+import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import { MentionTextarea } from '../components/MentionTextarea';
 import {
   useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
-  useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers,
+  useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers, useUnitHistory,
+  useTasks,
+  useLeaseRentInvoices,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -20,16 +22,24 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   SALES: 'bg-blue-100 text-blue-700',
   FINANCIAL: 'bg-green-100 text-green-700',
 };
-import { fmt, fmtDate, errMsg } from '../utils/fmt';
+import { fmt, fmtDate, fmtPct, errMsg } from '../utils/fmt';
 import { StatusBadge, LoadingState, ErrorState, PermissionGate } from '../components/ui';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
 import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
+import { LeaseObligationsPanel } from '../components/LeaseObligationsPanel';
+import { EndTenancyDialog, AssignTenantDialog } from '../components/TenancyTransitionDialogs';
+import { UnitConstructionPanel } from '../components/ConstructionBoard';
+import { BackfillTenancyDialog } from '../components/BackfillTenancyDialog';
+import { HistoricalRecordControls } from '../components/HistoricalRecordControls';
 import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
-import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields } from '../components/LeaseFormFields';
+import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields, leaseToForm } from '../components/LeaseFormFields';
+import {
+  TENANTED_STATUSES, tenancyState, fmtChangeValue, changeDelta, summariseChanges,
+} from '../utils/tenancy';
 
 
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
@@ -48,20 +58,45 @@ function Metric({ label, value, unit, accent, sub }: { label: string; value: str
   );
 }
 
-// Consistent section card shell: tinted icon, title, optional right-side action/hint.
+/**
+ * Consistent section card shell: tinted icon, title, optional right-side action/hint.
+ *
+ * `empty` collapses the card to its header alone. A card that spends ninety vertical
+ * pixels, a centred icon and a border to say "No linked loans" is using real estate to
+ * communicate an absence — and on this page four such cards sit in a two-column grid,
+ * so the emptiest one used to set the height of the row it was in.
+ */
 function Section({
-  icon, title, count, action, children, className = '',
+  icon, title, count, action, children, empty, className = '',
 }: {
   icon: React.ReactNode;
   title: string;
   count?: number;
   action?: React.ReactNode;
   children: React.ReactNode;
+  /** Short word for "there is nothing here" — e.g. "None". Collapses the body. */
+  empty?: string | null;
   className?: string;
 }) {
+  if (empty) {
+    return (
+      <div className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5">
+          <div className="flex items-center gap-2.5">
+            {icon}
+            <h2 className="font-semibold text-sm text-gray-800">{title}</h2>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-400">{empty}</span>
+            {action}
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
-      <div className="flex items-center justify-between px-5 pt-4 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-3">
         <div className="flex items-center gap-2.5">
           {icon}
           <h2 className="font-semibold text-sm text-gray-800">
@@ -97,15 +132,13 @@ function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
 }
 
 // ---- Unit History timeline ----
-// Merges every lease (past + current) and every sale (any status) this unit has ever
-// had into one reverse-chronological list, with vacancy gaps computed between leases.
-// Reads the full, unfiltered-by-status arrays GET /units/:id already returns — no
-// separate endpoint or new table needed. A unit that gets sold doesn't lose its past
-// tenants: their lease rows are never deleted, just no longer the "current" one.
-type HistoryEntry =
-  | { id: string; kind: 'lease'; date: string; endDate: string | null; ongoing: boolean; data: any }
-  | { id: string; kind: 'sale'; date: string; data: any }
-  | { id: string; kind: 'vacant'; date: string; endDate: string };
+// Renders GET /units/:id/history. This used to be derived here on the client from the
+// lease and sale arrays, inferring vacancy from the gap between two ENDED leases. That
+// could not see three things: the vacancy BEFORE the first lease, the vacancy happening
+// RIGHT NOW (no later lease to measure against), and any vacancy on a unit that never
+// had a lease at all. The server reads those from the unit_status_events log instead,
+// so the clock comes from recorded transitions and only the narrative comes from
+// lease/sale rows.
 
 function durationLabel(startISO: string, endISO: string): string {
   const start = new Date(startISO);
@@ -121,122 +154,358 @@ function durationLabel(startISO: string, endISO: string): string {
   return parts.join(', ');
 }
 
-function buildUnitHistory(leases: any[], sales: any[]): HistoryEntry[] {
-  const entries: HistoryEntry[] = [];
+/** Compact "1 yr 2 mo" / "45 days" for a day count. */
+function daysLabel(days: number): string {
+  if (days < 60) return `${days} day${days === 1 ? '' : 's'}`;
+  const months = Math.round(days / 30.44);
+  if (months < 24) return `${months} month${months === 1 ? '' : 's'}`;
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  return rem > 0 ? `${years} yr ${rem} mo` : `${years} year${years === 1 ? '' : 's'}`;
+}
 
-  const sortedLeases = [...(leases || [])]
-    .filter((l) => l.leaseStart)
-    .sort((a, b) => new Date(a.leaseStart).getTime() - new Date(b.leaseStart).getTime());
+const DOT_CLASS: Record<string, string> = {
+  vacancy: 'bg-gray-300',
+  status: 'bg-amber-400',
+  free_rent: 'bg-purple-400',
+  fit_out: 'bg-orange-300',
+  lease_change: 'bg-indigo-400',
+  // Rose reads as an ending without reading as an error — an expiry is routine, and a
+  // red dot on every completed tenancy would make a normal history look alarming.
+  tenancy_end: 'bg-rose-400',
+  assignment: 'bg-violet-500',
+};
 
-  sortedLeases.forEach((lease, i) => {
-    const ongoing = !['EXPIRED', 'TERMINATED'].includes(lease.status);
-    entries.push({
-      id: `lease-${lease.id}`,
-      kind: 'lease',
-      date: lease.leaseStart,
-      endDate: ongoing ? null : lease.leaseEnd,
-      ongoing,
-      data: lease,
-    });
-
-    // A vacancy gap only makes sense between two leases that actually ended —
-    // an ongoing lease has no known end yet, so nothing to measure a gap from.
-    const next = sortedLeases[i + 1];
-    if (!ongoing && next) {
-      const gapMs = new Date(next.leaseStart).getTime() - new Date(lease.leaseEnd).getTime();
-      if (gapMs > 24 * 60 * 60 * 1000) {
-        entries.push({
-          id: `vacant-${lease.id}-${next.id}`,
-          kind: 'vacant',
-          date: lease.leaseEnd,
-          endDate: next.leaseStart,
-        });
-      }
-    }
-  });
-
-  for (const sale of sales || []) {
-    entries.push({
-      id: `sale-${sale.id}`,
-      kind: 'sale',
-      date: sale.closingDate || sale.updatedAt || sale.createdAt,
-      data: sale,
-    });
+function entryDot(e: any): string {
+  if (e.kind === 'sale') {
+    if (e.data?.status === 'CLOSED') return 'bg-emerald-500';
+    if (e.data?.status === 'CANCELLED') return 'bg-gray-300';
+    return 'bg-amber-400';
   }
-
-  return entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  if (e.kind === 'lease') return e.isOngoing ? 'bg-blue-500' : 'bg-gray-400';
+  // A scheduled escalation was agreed at signing; a manual change was a decision
+  // someone made later. Only the second one is worth anyone's attention.
+  if (e.kind === 'rent_change') return e.data?.isScheduled ? 'bg-teal-300' : 'bg-teal-600';
+  return DOT_CLASS[e.kind] ?? 'bg-gray-300';
 }
 
-function saleHistoryLabel(status: string): string {
-  if (status === 'CLOSED') return 'Sold';
-  if (status === 'CANCELLED') return 'Sale fell through';
-  return `Sale in progress (${status.replace(/_/g, ' ')})`;
+/** Rent movements are the noisy entries — a 5-year lease escalating annually adds 5. */
+const RENT_KINDS = ['rent_change', 'free_rent'];
+
+/**
+ * Lifetime totals above the timeline. Vacant/leased days are the numbers the client
+ * asked for ("age unit history whenever unit was available to lease") and are only
+ * answerable from the event log — `availableSince` is wiped on every status change.
+ */
+function UnitHistorySummary({ summary }: { summary: any }) {
+  if (!summary) return null;
+
+  // Day totals are only as old as the occupancy log. On a unit whose only event is the
+  // migration bootstrap row, "total leased: 21 days" sitting beside a tenancy that ran
+  // from 2020 reads as a bug rather than as a gap in the record — so when the log has
+  // nothing but that bootstrap row, the two day tiles say what they are measured from.
+  // Inferring the missing days from the lease dates would be the same guesswork the
+  // event log exists to replace; entering the history (H2) is the real fix.
+  const partial = !!summary.historyStartsAtBootstrap;
+  const since = partial ? `since ${fmtDate(summary.firstEventAt)}` : null;
+
+  const tiles = [
+    { label: 'Total vacant', value: daysLabel(summary.totalDaysVacant ?? 0), tone: 'text-gray-700', note: since },
+    { label: 'Total leased', value: daysLabel(summary.totalDaysLeased ?? 0), tone: 'text-emerald-700', note: since },
+    { label: 'Tenancies', value: String(summary.tenancyCount ?? 0), tone: 'text-gray-700', note: null },
+    { label: 'Rent collected', value: fmt(summary.lifetimeRentCollected ?? 0), tone: 'text-emerald-700', note: null },
+  ];
+  return (
+    <div className="mb-4">
+      {/* Data problems the timeline cannot fix and must not hide — most importantly a
+          unit marked SOLD that still carries an ACTIVE lease, which keeps the rent
+          invoice cron billing a tenant on a unit Prime no longer owns. */}
+      {(summary.dataWarnings ?? []).length > 0 && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+          {summary.dataWarnings.map((w: string, i: number) => (
+            <p key={i} className="text-xs text-amber-800 flex items-start gap-1.5">
+              <FiAlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>{w}</span>
+            </p>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {tiles.map((t) => (
+          <div key={t.label} className="rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{t.label}</p>
+            <p className={`text-sm font-semibold tabular-nums ${t.tone}`}>{t.value}</p>
+            {t.note && <p className="text-[10px] text-amber-600 mt-0.5">{t.note}</p>}
+          </div>
+        ))}
+      </div>
+      {summary.isCurrentlyVacant && (
+        <p className="text-xs text-amber-700 mt-2 flex items-center gap-1.5">
+          <FiClock className="w-3.5 h-3.5 shrink-0" />
+          On the market {daysLabel(summary.currentVacancyDays ?? 0)} — since {fmtDate(summary.vacantSince)}
+        </p>
+      )}
+      {summary.historyStartsAtBootstrap && (
+        // Be honest about what the record can and cannot show. Everything this unit
+        // has is the migration bootstrap row, so its timeline begins when tracking
+        // began, not when the unit did.
+        <p className="text-xs text-gray-400 mt-2">
+          Tracked history begins {fmtDate(summary.firstEventAt)} — earlier activity was never recorded.
+          {' '}Add it with a historical record.
+        </p>
+      )}
+    </div>
+  );
 }
 
-function UnitHistoryTimeline({ leases, sales }: { leases: any[]; sales: any[] }) {
-  const entries = buildUnitHistory(leases, sales);
+function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
+  const { data, isLoading, error } = useUnitHistory(unitId);
+  const [showRent, setShowRent] = useState(true);
 
-  if (entries.length === 0) {
+  if (isLoading) return <LoadingState message="Loading history…" />;
+  if (error) return <ErrorState message={errMsg(error, 'Failed to load unit history')} />;
+
+  const all: any[] = data?.entries ?? [];
+  if (all.length === 0) {
     return <EmptyRow icon={<FiClock className="w-5 h-5" />} text="No history yet" />;
   }
 
+  // Rent movements can outnumber everything else on a long tenancy, so the timeline
+  // has to still be readable as "who was here and when" with them switched off.
+  const hasRentEntries = all.some((e) => RENT_KINDS.includes(e.kind));
+  const entries = showRent ? all : all.filter((e) => !RENT_KINDS.includes(e.kind));
+
   return (
     <div>
+      <UnitHistorySummary summary={data?.summary} />
+      {hasRentEntries && (
+        <div className="flex justify-end mb-3">
+          <button
+            type="button"
+            onClick={() => setShowRent((v) => !v)}
+            aria-pressed={showRent}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              showRent
+                ? 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
+                : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+            }`}
+          >
+            {showRent ? 'Hide rent changes' : 'Show rent changes'}
+          </button>
+        </div>
+      )}
       {entries.map((e, i) => (
         <div key={e.id} className="flex gap-3">
           <div className="flex flex-col items-center">
-            <div
-              className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
-                e.kind === 'sale'
-                  ? e.data.status === 'CLOSED' ? 'bg-emerald-500' : e.data.status === 'CANCELLED' ? 'bg-gray-300' : 'bg-amber-400'
-                  : e.kind === 'vacant'
-                  ? 'bg-gray-300'
-                  : e.ongoing ? 'bg-blue-500' : 'bg-gray-400'
-              }`}
-            />
+            <div className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${entryDot(e)}`} />
             {i < entries.length - 1 && <div className="w-px flex-1 bg-gray-200 mt-1 mb-1" />}
           </div>
           <div className={`min-w-0 flex-1 ${i < entries.length - 1 ? 'pb-4' : ''}`}>
             {e.kind === 'lease' && (
               <>
                 <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
-                  Leased to {e.data.tenantBrand || e.data.tenantName}
-                  {e.ongoing && (
+                  {e.title}
+                  {e.isOngoing && (
                     <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
                       Current
                     </span>
                   )}
+                  {e.isHistorical && (
+                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      Historical
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {fmtDate(e.date)} – {e.ongoing ? 'present' : fmtDate(e.endDate)}
+                  {fmtDate(e.startDate)} – {e.isOngoing ? 'present' : fmtDate(e.endDate)}
                   {' · '}{fmt(e.data.monthlyRent)}/mo
+                  {e.data.rentPerSqft != null && ` · ${fmt(e.data.rentPerSqft)}/sqft`}
                 </p>
-                {!e.ongoing && (
+                {/* Contracted vs collected, per tenancy — the question "what did this
+                    unit actually earn from this tenant" needs both halves. */}
+                {(e.data.contracted > 0 || e.data.collected > 0) && (
+                  <p className="text-xs text-gray-500 mt-0.5 tabular-nums">
+                    Collected {fmt(e.data.collected)} of {fmt(e.data.contracted)}
+                    {e.data.outstanding > 0 && (
+                      <span className="text-amber-700"> · {fmt(e.data.outstanding)} outstanding</span>
+                    )}
+                  </p>
+                )}
+                {!e.isOngoing && (
                   <p className="text-xs text-gray-400 mt-0.5">
-                    Lease {String(e.data.status).toLowerCase()} · {durationLabel(e.date, e.endDate!)}
+                    Lease {String(e.data.status).toLowerCase()} · {durationLabel(e.startDate, e.endDate)}
                   </p>
                 )}
               </>
             )}
             {e.kind === 'sale' && (
               <>
-                <p className="text-sm font-medium text-gray-900">
-                  {saleHistoryLabel(e.data.status)}
-                  {e.data.buyer && ` — ${e.data.buyer}`}
-                </p>
+                <p className="text-sm font-medium text-gray-900">{e.title}</p>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {fmtDate(e.date)}
+                  {fmtDate(e.startDate)}
                   {e.data.salePrice != null && ` · ${fmt(e.data.salePrice)}`}
                 </p>
                 {e.data.status === 'CANCELLED' && e.data.lostReason && (
-                  <p className="text-xs text-gray-400 mt-0.5">Reason: {String(e.data.lostReason).replace(/_/g, ' ')}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Reason: {String(e.data.lostReason).replace(/_/g, ' ')}
+                  </p>
                 )}
               </>
             )}
-            {e.kind === 'vacant' && (
+            {e.kind === 'vacancy' && (
               <p className="text-sm text-gray-400 italic">
-                Vacant · {fmtDate(e.date)} – {fmtDate(e.endDate)}
+                {e.isOngoing ? (
+                  <>Vacant since {fmtDate(e.startDate)} · {daysLabel(e.durationDays)} and counting</>
+                ) : (
+                  <>Vacant · {fmtDate(e.startDate)} – {fmtDate(e.endDate)} · {daysLabel(e.durationDays)}</>
+                )}
               </p>
+            )}
+            {e.kind === 'status' && (
+              <p className="text-sm text-gray-500">
+                {e.title}
+                <span className="text-xs text-gray-400">
+                  {' · '}{fmtDate(e.startDate)}
+                  {e.endDate ? ` – ${fmtDate(e.endDate)}` : ' – present'}
+                </span>
+              </p>
+            )}
+            {e.kind === 'rent_change' && (
+              <>
+                <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
+                  {e.title}
+                  <span
+                    className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${
+                      e.data.isScheduled ? 'bg-gray-100 text-gray-500' : 'bg-teal-100 text-teal-700'
+                    }`}
+                  >
+                    {e.data.isScheduled ? 'Scheduled' : 'Manual'}
+                  </span>
+                  {/* The schedule is generated for the whole term, so most rows are
+                      still ahead. Saying so keeps a "History" panel from asserting
+                      future rent as though it had already been charged. */}
+                  {e.isProjected && (
+                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                      Upcoming
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5 tabular-nums">
+                  {fmtDate(e.startDate)}
+                  {' · '}{fmt(e.data.from)} → {fmt(e.data.to)}/mo
+                  <span className={e.data.delta >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                    {' '}({e.data.delta >= 0 ? '+' : '−'}{fmt(Math.abs(e.data.delta))})
+                  </span>
+                  {e.data.escalationPct != null && ` · ${fmtPct(e.data.escalationPct)}`}
+                </p>
+                {e.data.reason && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {e.data.reason}
+                    {e.data.changedBy?.name && ` — ${e.data.changedBy.name}`}
+                  </p>
+                )}
+              </>
+            )}
+            {e.kind === 'lease_change' && (
+              <>
+                <p className="text-sm font-medium text-gray-900">{e.title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.startDate)}
+                  {e.data.changedBy?.name && ` · ${e.data.changedBy.name}`}
+                  {/* What changed, in the header — so the timeline is readable at a
+                      glance without reading every row underneath it. */}
+                  {summariseChanges(e.data.changes) && (
+                    <span className="text-gray-400"> · {summariseChanges(e.data.changes)}</span>
+                  )}
+                </p>
+                {/* Field-by-field, because "the lease was edited" is not an answer to
+                    "what changed". Each row also says what the change MEANT — the
+                    reader was going to do that arithmetic themselves otherwise. */}
+                <ul className="mt-1.5 space-y-1">
+                  {(e.data.changes ?? []).map((c: any, i: number) => {
+                    const delta = changeDelta(c);
+                    return (
+                      <li key={i} className="text-xs leading-snug">
+                        <span className="text-gray-600">{c.label}</span>
+                        <span className="tabular-nums">
+                          <span className="text-gray-400"> {fmtChangeValue(c.from, c.type)}</span>
+                          <span className="text-gray-300"> → </span>
+                          <span className="text-gray-800 font-medium">{fmtChangeValue(c.to, c.type)}</span>
+                        </span>
+                        {delta && (
+                          <span className="ml-1.5 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 tabular-nums">
+                            {delta}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+            {e.kind === 'fit_out' && (
+              <>
+                <p className="text-sm font-medium text-orange-800">{e.title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.startDate)} – {fmtDate(e.endDate)} · {daysLabel(e.durationDays)}
+                  {' · '}signed, rent starts {fmtDate(e.data.rentStartDate)}
+                </p>
+              </>
+            )}
+            {e.kind === 'free_rent' && (
+              <>
+                <p className="text-sm font-medium text-purple-800">{e.title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.startDate)} – {fmtDate(e.endDate)} · {daysLabel(e.durationDays)} at no rent
+                  {e.data.forgoneMonthlyRent != null &&
+                    ` · ${fmt(e.data.forgoneMonthlyRent)}/mo abated`}
+                </p>
+              </>
+            )}
+            {e.kind === 'tenancy_end' && (
+              <>
+                <p className="text-sm font-medium text-rose-800">{e.title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.startDate)}
+                  {/* The gap between when they left and when the contract said they
+                      would is the early-termination exposure — the number someone
+                      opening this page is most likely looking for. */}
+                  {e.data.daysEarly > 0 && (
+                    <span className="text-rose-700">
+                      {' · '}{daysLabel(e.data.daysEarly)} early (term ran to {fmtDate(e.data.contractedEnd)})
+                    </span>
+                  )}
+                  {e.data.daysHeldOver > 0 && (
+                    <span className="text-amber-700">
+                      {' · '}held over {daysLabel(e.data.daysHeldOver)} past {fmtDate(e.data.contractedEnd)}
+                    </span>
+                  )}
+                  {e.data.continuesOnThisUnit && e.data.successorTenant && (
+                    <span className="text-gray-600">
+                      {' · '}continues as {e.data.successorTenant}
+                    </span>
+                  )}
+                </p>
+                {e.data.terminationNote && (
+                  <p className="text-xs text-gray-600 mt-1 italic">{e.data.terminationNote}</p>
+                )}
+              </>
+            )}
+            {e.kind === 'assignment' && (
+              <>
+                <p className="text-sm font-medium text-violet-800">{e.title}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fmtDate(e.startDate)}
+                  {e.data.reason && ` · ${String(e.data.reason).replace(/_/g, ' ').toLowerCase()}`}
+                  {/* Says it out loud: an assignment changes who pays, never what they
+                      pay. It is the first thing people ask when they see one. */}
+                  {' · '}same lease, terms unchanged
+                  {e.data.monthlyRent != null && ` (${fmt(e.data.monthlyRent)}/mo)`}
+                </p>
+                {e.data.note && (
+                  <p className="text-xs text-gray-600 mt-1 italic">{e.data.note}</p>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -269,13 +538,29 @@ function UnitHistoryTimeline({ leases, sales }: { leases: any[]; sales: any[] })
 // Leases arrive on the unit payload from GET /units/:id (already used above for
 // the History timeline), so this costs no extra request; only the expanded
 // lease's schedule and ledger fetch their own rows.
-function UnitRentHistory({ leases, canEdit, canCollect, unitId }: {
+function UnitRentHistory({
+  leases, canEdit, canCollect, unitId, buildingId, unitStatus, onLeaseDeleted,
+}: {
   leases: any[];
   canEdit: boolean;
   /** `rent:collect` — recording money received, deliberately not `lease:edit`. */
   canCollect: boolean;
   unitId: string | undefined;
+  /** Needed so obligation writes invalidate the BUILDING rollup too, not just the unit's. */
+  buildingId: string | undefined;
+  unitStatus?: string;
+  /** Refresh the unit + its timeline after a historical record is removed. */
+  onLeaseDeleted?: () => void;
 }) {
+  // A sold unit's rent schedule is closed. Without this the page still offered
+  // "Regenerate future" and "Add rent change", which would mint post-sale periods —
+  // precisely the rows the timeline above suppresses as impossible. The API refuses
+  // them too; this is so the button says so before it is clicked.
+  const scheduleLocked =
+    unitStatus === 'SOLD'
+      ? 'This unit has been sold, so its rent schedule is closed. Rent cannot be scheduled ' +
+        'for a unit Prime no longer owns.'
+      : null;
   const ordered = [...(leases || [])].sort(
     (a, b) => new Date(b.leaseStart || 0).getTime() - new Date(a.leaseStart || 0).getTime(),
   );
@@ -317,6 +602,13 @@ function UnitRentHistory({ leases, canEdit, canCollect, unitId }: {
                         {String(l.status).toLowerCase()}
                       </span>
                     )}
+                    {/* Says the ledger below was typed in, not observed — which changes how
+                        much you should trust it and what it takes to delete it. */}
+                    {l.isHistorical && (
+                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        Recorded
+                      </span>
+                    )}
                   </p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     {fmtDate(l.leaseStart)} – {fmtDate(l.leaseEnd)}
@@ -333,7 +625,7 @@ function UnitRentHistory({ leases, canEdit, canCollect, unitId }: {
                   <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
                     Rent schedule — what is owed
                   </p>
-                  <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} />
+                  <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} lockedReason={scheduleLocked} />
                 </div>
                 <div className="space-y-2">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
@@ -341,6 +633,26 @@ function UnitRentHistory({ leases, canEdit, canCollect, unitId }: {
                   </p>
                   <RentCollectionPanel leaseId={l.id} canCollect={canCollect} unitId={unitId} />
                 </div>
+                {/* Deposits & TI allowance, per tenancy. The ObligationSummaryCard above
+                    the rent history is a read-only unit rollup — it answers "what is
+                    outstanding on this unit", not "change this lease's TI allowance".
+                    Without this panel the unit page had no write path to an obligation
+                    at all, and the team could only edit TI from the project page's
+                    Leases tab (client feedback 2026-08-12). */}
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Deposits &amp; TI allowance — money owed both ways
+                  </p>
+                  <LeaseObligationsPanel
+                    leaseId={l.id}
+                    canEdit={canEdit}
+                    unitId={unitId}
+                    buildingId={buildingId}
+                  />
+                </div>
+                {/* Last, below the ledger it governs — the approver should have scrolled
+                    past what they are about to erase. */}
+                {l.isHistorical && <HistoricalRecordControls lease={l} onDeleted={onLeaseDeleted} />}
               </div>
             )}
           </div>
@@ -355,6 +667,24 @@ export default function UnitDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: unit, isLoading, error } = useUnit(unitId!);
+
+  // The unit payload and its history are two queries over the same underlying rows,
+  // so anything that writes a lease, sale or status has to refresh both — otherwise
+  // the panels above the timeline update and the timeline silently does not.
+  const refreshUnit = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ['unit', unitId] }),
+      qc.invalidateQueries({ queryKey: ['unit-history', unitId] }),
+      // Saving a lease can create or update its deposit / NNN / TI obligations and
+      // regenerate its rent schedule. Without these the server did the work and the
+      // panels below kept rendering their cached emptiness — a TI allowance typed on
+      // the lease form appeared nowhere until a hard reload. Prefix-invalidated rather
+      // than keyed per lease, because a save may touch any lease on the unit.
+      qc.invalidateQueries({ queryKey: ['lease-obligations'] }),
+      qc.invalidateQueries({ queryKey: ['obligation-summary'] }),
+      qc.invalidateQueries({ queryKey: ['lease-rent-periods'] }),
+      qc.invalidateQueries({ queryKey: ['lease-rent-summary'] }),
+    ]);
   const updateUnit = useUpdateUnit();
   const { data: unitTypeOpts = [] } = useCustomOptions('unit_type');
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -389,40 +719,24 @@ export default function UnitDetailPage() {
   const createLease = useCreateLease();
   const updateLease = useUpdateLease();
 
-  const openAddLease = () => {
+  const openAddLease = (leaseStatus: string = 'ACTIVE') => {
     setLeaseIsNew(true);
     setLeaseEditId(null);
-    setLeaseForm({ ...EMPTY_LEASE, unitId: unitId || '', status: 'ACTIVE' });
+    setLeaseForm({ ...EMPTY_LEASE, unitId: unitId || '', status: leaseStatus });
     setLeaseErrors({});
     setLeaseModalOpen(true);
   };
 
+  // The two tenancy transitions. Held as the lease itself rather than a boolean so
+  // the dialog always has the row it is acting on, even mid-close animation.
+  const [endLease, setEndLease] = useState<any>(null);
+  const [assignLease, setAssignLease] = useState<any>(null);
+  const [backfilling, setBackfilling] = useState(false);
+
   const openEditLease = (lease: any) => {
     setLeaseIsNew(false);
     setLeaseEditId(lease.id);
-    setLeaseForm({
-      ...EMPTY_LEASE,
-      unitId: lease.unitId || unitId || '',
-      tenantName: lease.tenantName || '',
-      tenantLegalName: lease.tenantLegalName || '',
-      tenantBrand: lease.tenantBrand || '',
-      tenantContact: lease.tenantContact || '',
-      tenantEmail: lease.tenantEmail || '',
-      tenantPhone: lease.tenantPhone || '',
-      monthlyRent: lease.monthlyRent != null ? String(Number(lease.monthlyRent)) : '',
-      rentPerSqft: lease.rentPerSqft != null ? String(Number(lease.rentPerSqft)) : '',
-      leaseStart: lease.leaseStart ? lease.leaseStart.slice(0, 10) : '',
-      leaseEnd: lease.leaseEnd ? lease.leaseEnd.slice(0, 10) : '',
-      termMonths: lease.termMonths != null ? String(lease.termMonths) : '',
-      escalationPct: lease.escalationPct != null ? String(Number(lease.escalationPct)) : '',
-      escalationFreq: lease.escalationFreq != null ? String(lease.escalationFreq) : '',
-      securityDeposit: lease.securityDeposit != null ? String(Number(lease.securityDeposit)) : '',
-      rentDueDay: lease.rentDueDay != null ? String(lease.rentDueDay) : '',
-      freeRentMonths: lease.freeRentMonths ? String(lease.freeRentMonths) : '',
-      freeRentStartDate: lease.freeRentStartDate ? String(lease.freeRentStartDate).slice(0, 10) : '',
-      status: lease.status || 'ACTIVE',
-      notes: lease.notes || '',
-    });
+    setLeaseForm(leaseToForm(lease, unitId || ''));
     setLeaseErrors({});
     setLeaseModalOpen(true);
   };
@@ -442,7 +756,7 @@ export default function UnitDetailPage() {
         await updateLease.mutateAsync({ id: leaseEditId!, data: payload });
         addToast({ title: 'Lease updated', color: 'success' });
       }
-      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      await refreshUnit();
       setLeaseModalOpen(false);
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to save lease'), color: 'danger' });
@@ -481,7 +795,7 @@ export default function UnitDetailPage() {
         notes: saleForm.notes.trim() || undefined,
       });
       addToast({ title: 'Sale recorded', color: 'success' });
-      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      await refreshUnit();
       setSaleModalOpen(false);
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to save sale'), color: 'danger' });
@@ -497,7 +811,7 @@ export default function UnitDetailPage() {
   const saveNotes = async () => {
     try {
       await updateUnit.mutateAsync({ id: unitId!, data: { notes: notesDraft || null } });
-      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      await refreshUnit();
       addToast({ title: 'Notes saved', color: 'success' });
       setEditingNotes(false);
     } catch (e) {
@@ -505,11 +819,66 @@ export default function UnitDetailPage() {
     }
   };
 
+  /**
+   * Same query key as UnitConstructionPanel's, so TanStack serves both from one cache
+   * entry and this costs nothing. The parent needs the count to decide whether the card
+   * collapses — a child cannot collapse the shell it is rendered inside.
+   */
+  const constructionItems: any[] = (useTasks({ unitId, kind: 'CONSTRUCTION' }).data as any[]) ?? [];
+  /**
+   * The ledger of the lease currently open in the edit dialog, so the form can warn
+   * before a date change silently diverges from months already billed. Enabled only
+   * while editing, so it costs nothing the rest of the time.
+   */
+  const editedLeaseLedger: any[] =
+    (useLeaseRentInvoices(leaseEditId ?? undefined).data as any[]) ?? [];
+  /** "covering Jan 2025 – Aug 2026" — the range, so the warning is specific. */
+  const ledgerSpan = useMemo(() => {
+    if (editedLeaseLedger.length === 0) return null;
+    const months = editedLeaseLedger
+      .map((i) => i.periodMonth)
+      .filter(Boolean)
+      .sort();
+    if (months.length === 0) return null;
+    const fmtMonth = (m: string) =>
+      new Date(m).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    return months.length === 1
+      ? `covering ${fmtMonth(months[0])}`
+      : `covering ${fmtMonth(months[0])} – ${fmtMonth(months[months.length - 1])}`;
+  }, [editedLeaseLedger]);
+
   if (isLoading) return <LoadingState />;
   if (error || !unit) return <ErrorState />;
 
   const u = unit as any;
   const activeLease = u.leases?.find((l: any) => !['EXPIRED', 'TERMINATED'].includes(l.status));
+  /**
+   * The most recent tenancy that HAS ended. Shown, greyed out, when there is no live
+   * lease — "no active lease" on a unit that had a tenant last month is technically
+   * true and practically useless, and it is what sent people back to spreadsheets to
+   * find out who was in there.
+   */
+  const lastEndedLease = !activeLease
+    ? (u.leases ?? [])
+        .filter((l: any) => l.terminationDate || ['EXPIRED', 'TERMINATED'].includes(l.status))
+        .sort((a: any, b: any) =>
+          new Date(b.terminationDate ?? b.leaseEnd).getTime() -
+          new Date(a.terminationDate ?? a.leaseEnd).getTime())[0]
+    : null;
+  const shownLease = activeLease ?? lastEndedLease;
+  const tenancy = shownLease ? tenancyState(shownLease) : null;
+  /**
+   * The unit's status and its lease disagree. Neither field can be trusted over the
+   * other from here — the unit status is hand-set and the lease is hand-closed — so
+   * this says what each one claims and lets a human decide, rather than silently
+   * picking a winner.
+   */
+  const statusConflict =
+    activeLease && !tenancy?.isPast && !TENANTED_STATUSES.includes(u.status) && u.status !== 'SOLD'
+      ? `This unit is marked ${String(u.status).replace(/_/g, ' ').toLowerCase()}, but ${
+          activeLease.tenantBrand || activeLease.tenantName
+        } holds a lease on it${activeLease.leaseEnd ? ` until ${fmtDate(activeLease.leaseEnd)}` : ''}.`
+      : null;
   // Money arrives as Prisma Decimal, which JSON-serializes to a STRING — always num() it
   // before arithmetic, or `0 + "500"` becomes `"0500"`.
   const num = (v: unknown) => Number(v ?? 0) || 0;
@@ -528,7 +897,6 @@ export default function UnitDetailPage() {
       return d !== 0 ? d : (b.sequence ?? 0) - (a.sequence ?? 0);
     })[0] ?? (rentPeriods as any[])[0];
   const baseRent = num(currentPeriod?.baseRent);
-  const nnnAmount = num(currentPeriod?.nnnAmount);
   const kindRow = (k: string) => (obligationSummary as any)?.byKind?.find((b: any) => b.kind === k);
   const depositAgreed = num(kindRow('SECURITY_DEPOSIT')?.totalAgreed);
   const depositPending = num(kindRow('SECURITY_DEPOSIT')?.totalPending);
@@ -569,9 +937,20 @@ export default function UnitDetailPage() {
           notes: form.notes || null,
         },
       });
-      await qc.invalidateQueries({ queryKey: ['unit', unitId] });
+      await refreshUnit();
       addToast({ title: 'Unit updated', color: 'success' });
       onClose();
+
+      // A unit marked leased with no lease on file is a dead end: the rent roll, the
+      // revenue reports and the unit's own history all read from the LEASE, not the
+      // status, so the flag on its own records nothing. Rather than block the status
+      // change — data gets entered in whatever order suits the person entering it —
+      // offer the lease form immediately, seeded to match the status they just chose.
+      const nowTenanted = TENANTED_STATUSES.includes(form.status);
+      const wasTenanted = TENANTED_STATUSES.includes(u.status);
+      if (nowTenanted && !wasTenanted && !activeLease && canEditLease) {
+        openAddLease(form.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE');
+      }
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to update unit'), color: 'danger' });
     }
@@ -699,12 +1078,33 @@ export default function UnitDetailPage() {
         <ModalContent>
           <ModalHeader>{leaseIsNew ? 'Add Lease' : 'Edit Lease'}</ModalHeader>
           <ModalBody>
+            {/* Editing a lease that already has a ledger does NOT revisit the invoices.
+                Periods that have started are frozen, and generation is idempotent on
+                (leaseId, periodMonth) — so months billed under the old dates stay billed
+                and re-generating will not correct them. Said before the save, because
+                afterwards there is nothing that tells you. */}
+            {!leaseIsNew && editedLeaseLedger.length > 0 && (
+              <div className="mb-3 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900">
+                <FiAlertTriangle className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium">
+                    {editedLeaseLedger.length} invoice(s) already exist for this lease
+                    {ledgerSpan && <> — {ledgerSpan}</>}.
+                  </p>
+                  <p className="mt-0.5">
+                    Changing the rent or the dates re-derives future months only. Months
+                    already billed are not revisited, and re-generating will not correct
+                    them — void or edit them individually if they are wrong.
+                  </p>
+                </div>
+              </div>
+            )}
             <LeaseFormFields
               form={leaseForm}
               setForm={setLeaseForm}
               errors={leaseErrors}
               clearError={(f) => setLeaseErrors((p) => { const n = { ...p }; delete n[f]; return n; })}
-              unitOptions={u ? [{ id: u.id, unitNumber: u.unitNumber }] : []}
+              unitOptions={u ? [{ id: u.id, unitNumber: u.unitNumber, sqft: u.sqft }] : []}
               lockUnit
             />
           </ModalBody>
@@ -738,6 +1138,26 @@ export default function UnitDetailPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+      <EndTenancyDialog
+        lease={endLease}
+        isOpen={!!endLease}
+        onClose={() => setEndLease(null)}
+        // The route param, NOT u.building.projectId — the unit payload nests the
+        // project as `building.project.id` and has no `projectId` field, so the old
+        // expression was always undefined and the successor dropdown never loaded.
+        projectId={projectId}
+      />
+      <AssignTenantDialog
+        lease={assignLease}
+        isOpen={!!assignLease}
+        onClose={() => setAssignLease(null)}
+      />
+      <BackfillTenancyDialog
+        unitId={unitId!}
+        unitNumber={u.unitNumber}
+        isOpen={backfilling}
+        onClose={() => setBackfilling(false)}
+      />
 
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
@@ -775,31 +1195,110 @@ export default function UnitDetailPage() {
               <p className="text-sm">This unit is marked SOLD, but no sale has been recorded yet.</p>
             </div>
             {canEditSale ? (
-              <Button size="sm" color="primary" variant="flat" onPress={openAddSale}>+ Add Sale</Button>
+              <Button size="sm" color="primary" variant="flat" className="shrink-0" onPress={openAddSale}>+ Add Sale</Button>
             ) : (
-              <span className="text-xs text-gray-400">Ask someone with sales access to record it.</span>
+              <span className="text-xs text-gray-400 shrink-0">Ask someone with sales access to record it.</span>
             )}
           </div>
         );
       })()}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 mb-5 sm:mb-6">
+      {/* Leased with nobody in it. The same shape as the SOLD panel above, and for the
+          same reason: without it the page reads as "there is no way to enter a tenant"
+          rather than "nobody has entered one yet". Reachable however the status was
+          set — the edit form, the units grid, or a script. */}
+      {TENANTED_STATUSES.includes(u.status) && !activeLease && (
+        <div className="mb-5 sm:mb-6 rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-amber-800">
+            <FiAlertTriangle className="w-4 h-4 shrink-0" />
+            <p className="text-sm">
+              This unit is marked <strong>{String(u.status).replace('_', ' ').toLowerCase()}</strong>, but
+              no tenant or lease has been recorded. Rent, the rent roll and this unit's
+              history all read from the lease, so nothing is being tracked yet.
+            </p>
+          </div>
+          {canEditLease ? (
+            <Button
+              size="sm"
+              color="primary"
+              variant="flat"
+              className="shrink-0"
+              onPress={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
+            >
+              + Add tenant
+            </Button>
+          ) : (
+            <span className="text-xs text-amber-700 shrink-0">Ask someone with lease access to record it.</span>
+          )}
+        </div>
+      )}
+
+      {/* The unit and its lease contradict each other. The mirror image of the banner
+          above, and on live data the commoner of the two — 91 units are marked tenanted
+          with no lease, and 2 are marked available while a tenant holds a lease. */}
+      {statusConflict && (
+        <div className="mb-5 sm:mb-6 rounded-2xl border border-dashed border-red-200 bg-red-50/40 p-5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-red-800">
+            <FiAlertTriangle className="w-4 h-4 shrink-0" />
+            <p className="text-sm">
+              {statusConflict} One of the two is wrong — correct the unit status, or end
+              the tenancy if the tenant has left.
+            </p>
+          </div>
+          {canEditUnit && (
+            <Button size="sm" color="danger" variant="flat" className="shrink-0" onPress={openEdit}>
+              Fix unit status
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Masonry via CSS columns, not grid.
+          A grid row is only as short as its TALLEST card, so the tall Tenant card left a
+          void beside every short one — first by stretching them (fixed with items-start),
+          then as ragged empty space below them. Columns let each card take its own height
+          AND let the next card flow up into the gap, so there is none.
+          The trade-off, accepted deliberately: reading order becomes column-major — the
+          whole left column, then the right — rather than left-to-right in pairs.
+          `break-inside-avoid` is what stops a card being split across the column boundary. */}
+      <div className="columns-1 lg:columns-2 gap-5 sm:gap-6 mb-5 sm:mb-6 [&>*]:break-inside-avoid [&>*]:mb-5 sm:[&>*]:mb-6">
         {/* Active Lease / Tenant Profile — hidden for SOLD units */}
         {u.status !== 'SOLD' && <Section
           icon={<FiHome className="w-4 h-4 text-blue-600" />}
           title="Tenant"
           action={canEditLease ? (
             activeLease ? (
-              <button
-                onClick={() => openEditLease(activeLease)}
-                className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
-                title="Edit lease"
-              >
-                <FiEdit2 className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-1">
+                {/* Ending a tenancy and assigning a lease are not edits — they are the
+                    two transitions, and burying them inside the edit form is how a user
+                    ends up hand-typing a termination the server should be deriving. */}
+                <button
+                  onClick={() => setAssignLease(activeLease)}
+                  className="text-gray-400 hover:text-violet-600 transition-colors p-1 rounded"
+                  title="Assign lease to a new tenant (the lease itself continues)"
+                >
+                  <FiRepeat className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setEndLease(activeLease)}
+                  className="text-gray-400 hover:text-rose-600 transition-colors p-1 rounded"
+                  title="End tenancy — records the move-out and releases the unit"
+                >
+                  <FiLogOut className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => openEditLease(activeLease)}
+                  className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
+                  title="Edit lease"
+                >
+                  <FiEdit2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             ) : (
               <button
-                onClick={openAddLease}
+                // Wrapped, not passed bare: openAddLease now takes the lease status to
+                // seed, and a bare handler would hand it the click event.
+                onClick={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
                 className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
               >
                 + Add Lease
@@ -807,55 +1306,67 @@ export default function UnitDetailPage() {
             )
           ) : undefined}
         >
-          {activeLease ? (
-            <div className="space-y-4">
+          {shownLease ? (
+            /* A past tenancy is dimmed as a whole, so the page never reads as though
+               someone is still in the unit. */
+            <div className={`space-y-4 ${tenancy!.isPast ? 'opacity-60' : ''}`}>
+              {tenancy!.isPast && (
+                <p className="text-xs text-gray-500 -mb-1">
+                  Nobody is in this unit now. Showing the last tenancy.
+                </p>
+              )}
               {/* Tenant identity block */}
-              <div className="flex items-start gap-3 pb-4 border-b border-gray-100">
-                <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0">
+              <div className="pb-4 border-b border-gray-100">
+              <div className="flex items-start gap-3">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  tenancy!.isPast ? 'bg-gray-400' : 'bg-blue-600'
+                }`}>
                   <span className="text-white text-sm font-bold">
-                    {(activeLease.tenantBrand || activeLease.tenantName || '?').charAt(0).toUpperCase()}
+                    {(shownLease.tenantBrand || shownLease.tenantName || '?').charAt(0).toUpperCase()}
                   </span>
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-gray-900 text-sm leading-tight truncate">
-                    {activeLease.tenantBrand || activeLease.tenantName}
+                    {shownLease.tenantBrand || shownLease.tenantName}
                   </p>
-                  {activeLease.tenantBrand && activeLease.tenantBrand !== activeLease.tenantName && (
-                    <p className="text-xs text-gray-500 truncate">{activeLease.tenantName}</p>
+                  {shownLease.tenantBrand && shownLease.tenantBrand !== shownLease.tenantName && (
+                    <p className="text-xs text-gray-500 truncate">{shownLease.tenantName}</p>
                   )}
-                  {activeLease.tenantLegalName && activeLease.tenantLegalName !== activeLease.tenantName && (
-                    <p className="text-[11px] text-gray-400 italic truncate">{activeLease.tenantLegalName}</p>
+                  {shownLease.tenantLegalName && shownLease.tenantLegalName !== shownLease.tenantName && (
+                    <p className="text-[11px] text-gray-400 italic truncate">{shownLease.tenantLegalName}</p>
                   )}
-                  {activeLease.tenantContact && (
-                    <p className="text-xs text-blue-600 mt-0.5 truncate">{activeLease.tenantContact}</p>
+                  {shownLease.tenantContact && (
+                    <p className="text-xs text-blue-600 mt-0.5 truncate">{shownLease.tenantContact}</p>
                   )}
                 </div>
                 <div className="shrink-0">
-                  {activeLease.status && activeLease.status !== 'ACTIVE' ? (
-                    <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                      {activeLease.status}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-                      Active
-                    </span>
-                  )}
+                  {/* Derived, not `status`. A lease whose term ran out last month must
+                      not wear a green "Active" chip just because nobody closed it. */}
+                  <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${tenancy!.chip}`}>
+                    {tenancy!.label}
+                  </span>
                 </div>
+              </div>
+              {/* Full width, BELOW the identity row. Sitting it beside the chip squeezed
+                  a sentence into a shrink-0 column and pushed it off the card. */}
+              {tenancy!.note && (
+                <p className="text-[11px] text-gray-500 mt-2 leading-snug">{tenancy!.note}</p>
+              )}
               </div>
 
               {/* Financial highlight */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl bg-emerald-50 px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold">Monthly Rent</p>
-                  <p className="text-lg font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(activeLease.monthlyRent)}</p>
-                  {activeLease.rentPerSqft && (
-                    <p className="text-[10px] text-emerald-600">${Number(activeLease.rentPerSqft).toFixed(2)}/sqft/mo</p>
+                  <p className="text-lg font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(shownLease.monthlyRent)}</p>
+                  {shownLease.rentPerSqft && (
+                    <p className="text-[10px] text-emerald-600">${Number(shownLease.rentPerSqft).toFixed(2)}/sqft/mo</p>
                   )}
                 </div>
-                {activeLease.securityDeposit && (
+                {shownLease.securityDeposit && (
                   <div className="rounded-xl bg-slate-50 px-3 py-2.5">
                     <p className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Deposit</p>
-                    <p className="text-lg font-bold text-slate-700 tabular-nums mt-0.5">{fmt(activeLease.securityDeposit)}</p>
+                    <p className="text-lg font-bold text-slate-700 tabular-nums mt-0.5">{fmt(shownLease.securityDeposit)}</p>
                     {depositAgreed > 0 && (
                       <p className="text-[10px] text-slate-500">
                         {depositPending > 0
@@ -867,55 +1378,32 @@ export default function UnitDetailPage() {
                 )}
               </div>
 
-              {/* Rent composition. LeaseRentPeriod enforces baseRent + nnnAmount ==
-                  monthlyRent, so this is the contractual split for whichever period
-                  covers today — not a re-derivation. Only rendered when NNN is actually
-                  in play, so gross leases stay uncluttered. */}
-              {currentPeriod && nnnAmount > 0 && (
-                <div className="rounded-xl border border-gray-100 px-3 py-2.5">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-1.5">
-                    Rent composition{currentPeriod.isFreeRent ? ' — abated this month' : ''}
-                  </p>
-                  <div className="flex items-baseline justify-between text-sm">
-                    <span className="text-gray-600">Base rent</span>
-                    <span className="tabular-nums text-gray-800">{fmt(baseRent)}</span>
-                  </div>
-                  <div className="flex items-baseline justify-between text-sm">
-                    <span className="text-gray-600">NNN</span>
-                    <span className="tabular-nums text-gray-800">+ {fmt(nnnAmount)}</span>
-                  </div>
-                  <div className="flex items-baseline justify-between text-sm border-t border-gray-100 mt-1.5 pt-1.5 font-semibold">
-                    <span className="text-gray-700">Monthly rent</span>
-                    <span className="tabular-nums text-gray-900">{fmt(baseRent + nnnAmount)}</span>
-                  </div>
-                </div>
-              )}
 
               {/* Lease timeline */}
               <dl className="text-sm divide-y divide-gray-100">
-                <Row label="Start"><span className="text-gray-700">{fmtDate(activeLease.leaseStart)}</span></Row>
+                <Row label="Start"><span className="text-gray-700">{fmtDate(shownLease.leaseStart)}</span></Row>
                 <Row label="End">
-                  <span className={`${new Date(activeLease.leaseEnd) < new Date() ? 'text-red-600' : 'text-gray-700'}`}>
-                    {fmtDate(activeLease.leaseEnd)}
+                  <span className={`${new Date(shownLease.leaseEnd) < new Date() ? 'text-red-600' : 'text-gray-700'}`}>
+                    {fmtDate(shownLease.leaseEnd)}
                   </span>
                 </Row>
-                {activeLease.termMonths && (
-                  <Row label="Term"><span className="text-gray-700">{activeLease.termMonths} months</span></Row>
+                {shownLease.termMonths && (
+                  <Row label="Term"><span className="text-gray-700">{shownLease.termMonths} months</span></Row>
                 )}
-                {activeLease.escalationPct && (
+                {shownLease.escalationPct && (
                   <Row label="Escalation">
-                    <span className="text-gray-700">{Number(activeLease.escalationPct).toFixed(1)}% every {activeLease.escalationFreq || 12} mo</span>
+                    <span className="text-gray-700">{Number(shownLease.escalationPct).toFixed(1)}% every {shownLease.escalationFreq || 12} mo</span>
                   </Row>
                 )}
-                {activeLease.rentDueDay && (
-                  <Row label="Rent due"><span className="text-gray-700">Day {activeLease.rentDueDay}</span></Row>
+                {shownLease.rentDueDay && (
+                  <Row label="Rent due"><span className="text-gray-700">Day {shownLease.rentDueDay}</span></Row>
                 )}
                 {/* Abatement sits inside the term — leaseEnd is unchanged. */}
                 <Row label="Free rent">
-                  {Number(activeLease.freeRentMonths) > 0 ? (
+                  {Number(shownLease.freeRentMonths) > 0 ? (
                     <span className="text-emerald-700 font-medium">
-                      {activeLease.freeRentMonths} mo
-                      {activeLease.freeRentStartDate ? ` from ${fmtDate(activeLease.freeRentStartDate)}` : ''}
+                      {shownLease.freeRentMonths} mo
+                      {shownLease.freeRentStartDate ? ` from ${fmtDate(shownLease.freeRentStartDate)}` : ''}
                     </span>
                   ) : (
                     <span className="text-gray-400">None</span>
@@ -942,8 +1430,26 @@ export default function UnitDetailPage() {
           )}
         </Section>}
 
+        {/* Construction — the site work covering this unit. Sits beside the tenant and
+            rent history on purpose: "is anything happening to this unit" and "who is in
+            it" are the two questions this page exists to answer, and until now the first
+            one lived in Monday. */}
+        <Section
+          icon={<FiLayers className="w-4 h-4 text-amber-600" />}
+          title="Construction"
+          count={constructionItems.length}
+          empty={constructionItems.length ? null : 'None'}
+        >
+          <UnitConstructionPanel unitId={unitId!} canEdit={hasPermission('task:edit')} />
+        </Section>
+
         {/* Linked Loans */}
-        <Section icon={<FiCreditCard className="w-4 h-4 text-violet-600" />} title="Linked Loans" count={u.loans?.length}>
+        <Section
+          icon={<FiCreditCard className="w-4 h-4 text-violet-600" />}
+          title="Linked Loans"
+          count={u.loans?.length}
+          empty={u.loans?.length ? null : 'None'}
+        >
           {u.loans?.length > 0 ? (
             <div className="space-y-4">
               {u.loans.map((loan: any) => (
@@ -981,7 +1487,7 @@ export default function UnitDetailPage() {
           (e.g. a past tenant stays visible after the unit is later sold) */}
       <div className="mb-5 sm:mb-6">
         <Section icon={<FiClock className="w-4 h-4 text-slate-600" />} title="History">
-          <UnitHistoryTimeline leases={u.leases || []} sales={u.sales || []} />
+          <UnitHistoryTimeline unitId={unitId} />
         </Section>
       </div>
 
@@ -989,8 +1495,9 @@ export default function UnitDetailPage() {
           "who was here and when"; this answers "how much, and when did it change"
           for those same leases, so the drill-down sits against the summary it
           expands rather than at the foot of the page. Not rendered inside a
-          Section: LeaseRentSchedule, RentCollectionPanel and ObligationSummaryCard
-          bring their own card chrome and would otherwise be a card inside a card.
+          Section: LeaseRentSchedule, RentCollectionPanel, LeaseObligationsPanel and
+          ObligationSummaryCard bring their own card chrome and would otherwise be a
+          card inside a card.
 
           Gated on lease:view like BuildingDetailPage does: every endpoint behind
           this block (obligation summary, rent periods, rent invoices) requires
@@ -999,22 +1506,41 @@ export default function UnitDetailPage() {
           shown a card whose only possible outcome is a 403. */}
       {canViewLeases && (
         <div className="mb-5 sm:mb-6 space-y-4">
-          <ObligationSummaryCard scope="unit" id={unitId} />
+          {/* Unit-wide rollup — ONLY when there is more than one tenancy to roll up.
+              LeaseObligationsPanel (inside Rent History, per lease) already shows the
+              same money-in / money-out totals, plus the editable rows behind them. On a
+              single-lease unit the two were identical, so the page said "Deposits &
+              Allowances" twice with the same numbers. It earns its place only when it
+              aggregates across tenancies, which is something no per-lease panel can do. */}
+          {(u.leases?.length ?? 0) > 1 && <ObligationSummaryCard scope="unit" id={unitId} />}
 
-          <div className="flex items-center gap-2.5 pt-1">
-            <FiTrendingUp className="w-4 h-4 text-emerald-600" />
-            <h2 className="font-semibold text-sm text-gray-800">
-              Rent History
-              {(u.leases?.length ?? 0) > 1 && (
-                <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
-              )}
-            </h2>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div className="flex items-center gap-2.5">
+              <FiTrendingUp className="w-4 h-4 text-emerald-600" />
+              <h2 className="font-semibold text-sm text-gray-800">
+                Rent History
+                {(u.leases?.length ?? 0) > 1 && (
+                  <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
+                )}
+              </h2>
+            </div>
+            {/* Entering history sits with the history, not with the "+ Add Lease" action
+                above — they read similarly and do very different things, and the one
+                that writes a whole settled ledger should not be the easier slip. */}
+            {hasPermission('unit:history:backfill') && (
+              <Button size="sm" variant="flat" onPress={() => setBackfilling(true)}>
+                + Record a past tenancy
+              </Button>
+            )}
           </div>
           <UnitRentHistory
             leases={u.leases || []}
             canEdit={canEditLease}
             canCollect={canCollectRent}
             unitId={unitId}
+            buildingId={u.building?.id}
+            unitStatus={u.status}
+            onLeaseDeleted={refreshUnit}
           />
         </div>
       )}
@@ -1565,7 +2091,7 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const tabToggle = (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       {canAddLead && (
         <Button size="sm" variant="flat" color="primary" startContent={<FiTarget />} onPress={() => setAddLeadOpen(true)} className="text-xs h-7">
           Add Lead

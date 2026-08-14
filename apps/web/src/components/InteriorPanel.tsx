@@ -116,7 +116,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
 
   return (
     <Card shadow="sm">
-      <CardHeader className="pb-2 flex items-center justify-between">
+      <CardHeader className="pb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <FiHome className="text-amber-600" />
           <p className="font-semibold text-sm text-gray-600">

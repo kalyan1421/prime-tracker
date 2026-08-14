@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../common/cache/cache.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
+import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 
 /**
  * Exception aggregator — the data source for the dashboard "Needs Attention" feed.
@@ -42,6 +43,7 @@ export class ExceptionsService {
     private prisma: PrismaService,
     private cache: CacheService,
     private encryption: EncryptionService,
+    private statusEvents: UnitStatusEventService,
   ) {}
 
   /**
@@ -112,26 +114,40 @@ export class ExceptionsService {
     }
 
     // ─── Stale available units ───
+    //
+    // Vacancy age comes from the occupancy log. The old query filtered on
+    // `availableSince: { lt: cutoff }`, which silently EXCLUDED every unit whose
+    // availableSince was null — 206 of the 208 available units on live data — so the
+    // stale-unit feed was effectively empty. Fetch the available units, then age them
+    // against the log.
     const cutoff = new Date(Date.now() - 90 * 86_400_000);
-    const stale = await this.prisma.unit.findMany({
-      where: { status: 'AVAILABLE', availableSince: { lt: cutoff }, deletedAt: null, ...projectFilterUnit },
+    const available = await this.prisma.unit.findMany({
+      where: { status: 'AVAILABLE', deletedAt: null, ...projectFilterUnit },
       select: {
-        id: true, unitNumber: true, availableSince: true,
+        id: true, unitNumber: true, availableSince: true, createdAt: true,
         building: { select: { name: true, project: { select: { id: true, name: true } } } },
       },
-      take: 30,
     });
-    for (const u of stale) {
-      const days = Math.floor((Date.now() - (u.availableSince?.getTime() ?? Date.now())) / 86_400_000);
+    const vacancyStarts = await this.statusEvents.currentVacancyStartByUnit(
+      available.map((u) => u.id),
+    );
+    const stale = available
+      .map((u) => ({ u, since: vacancyStarts.get(u.id) ?? u.availableSince ?? u.createdAt }))
+      .filter((r) => r.since < cutoff)
+      .sort((a, b) => a.since.getTime() - b.since.getTime())
+      .slice(0, 30);
+
+    for (const { u, since } of stale) {
+      const days = Math.floor((Date.now() - since.getTime()) / 86_400_000);
       out.push({
         id: `unit-${u.id}`,
         severity: days > 180 ? 'critical' : 'warning',
         category: 'unit',
         title: `Unit ${u.unitNumber} stale (${days}d)`,
-        detail: `Available since ${u.availableSince?.toLocaleDateString()} — review price?`,
+        detail: `Available since ${since.toLocaleDateString()} — review price?`,
         meta: u.building.project.name,
         href: `/projects/${u.building.project.id}/units/${u.id}`,
-        createdAt: u.availableSince ?? undefined,
+        createdAt: since,
       });
     }
 
