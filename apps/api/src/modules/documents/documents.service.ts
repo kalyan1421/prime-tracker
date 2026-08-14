@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { DocCategory } from '@prisma/client';
@@ -95,9 +95,29 @@ export class DocumentsService {
     );
   }
 
+  /**
+   * The one live-row predicate every read in this service spreads. `delete()` is a SOFT
+   * delete (see there for why), so "not deleted" is a condition on EVERY path — list,
+   * rename, replace, download — not just the ones that happened to remember it. It is a
+   * named constant rather than a repeated literal precisely because the module previously
+   * had it on one of four list methods and nobody could see that from the code.
+   */
+  private static readonly LIVE = { deletedAt: null } as const;
+
+  /**
+   * Resolve a single document by id, live rows only. Replaces `findUnique({ where: { id } })`
+   * on every by-id path: a soft-deleted document must 404 rather than be renamed, re-filed,
+   * or — the one that actually leaks — handed back as a signed download URL.
+   */
+  private async findLive(id: string) {
+    const doc = await this.prisma.document.findFirst({ where: { id, ...DocumentsService.LIVE } });
+    if (!doc) throw new NotFoundException('Document not found');
+    return doc;
+  }
+
   async findByProject(projectId: string) {
     const docs = await this.prisma.document.findMany({
-      where: { projectId },
+      where: { projectId, ...DocumentsService.LIVE },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -106,7 +126,7 @@ export class DocumentsService {
 
   async findByUnit(unitId: string) {
     const docs = await this.prisma.document.findMany({
-      where: { unitId },
+      where: { unitId, ...DocumentsService.LIVE },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -117,7 +137,7 @@ export class DocumentsService {
    *  contracts). Doc Vault Phase 1 already added documents.buildingId. */
   async findByBuilding(buildingId: string) {
     const docs = await this.prisma.document.findMany({
-      where: { buildingId },
+      where: { buildingId, ...DocumentsService.LIVE },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -126,7 +146,7 @@ export class DocumentsService {
 
   async findByInteriorProject(interiorProjectId: string) {
     const docs = await this.prisma.document.findMany({
-      where: { interiorProjectId, deletedAt: null },
+      where: { interiorProjectId, ...DocumentsService.LIVE },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -205,8 +225,7 @@ export class DocumentsService {
    * "clear it" would silently wipe a permit's expiry every time somebody renamed a file.
    */
   async update(id: string, dto: UpdateDocumentDto) {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc) throw new NotFoundException('Document not found');
+    await this.findLive(id);
 
     const data: { fileName?: string; expiresAt?: Date | null } = {};
 
@@ -227,13 +246,34 @@ export class DocumentsService {
     return this.decorate(updated);
   }
 
+  /**
+   * Replace the bytes behind a document, ARCHIVING the outgoing file rather than destroying
+   * it.
+   *
+   * This used to `storage.delete(doc.storagePath)` on the old object while nothing in the
+   * API had ever written a `DocumentVersion` row — so the "archive of prior versions" the
+   * schema promises (and its own comment claims this method maintains) was permanently
+   * empty, and clicking Replace silently and irreversibly destroyed the previous file.
+   *
+   * The model is kept and implemented rather than dropped, for the same reason the delete
+   * went soft: the superseded file is frequently the one that matters. The countersigned
+   * copy replaces the draft, the revised drawing replaces the one the sub actually built
+   * from, the corrected invoice replaces the one that was paid. A vault that can only ever
+   * show you the newest scan of a document cannot answer "what did we have on file in
+   * March", which is precisely the question a dispute asks. Dropping the model would also
+   * have meant a destructive migration to delete a table whose absence is the bug.
+   *
+   * Retaining the object is what makes this correct rather than merely wasteful — and the
+   * bytes it retains are covered by the same retention policy as everything else, see
+   * DocumentRetentionService (a purged version reads as `available: false`, never as a
+   * link).
+   */
   async replaceFile(
     id: string,
     file: Express.Multer.File,
     newFileName?: string,
   ) {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc) throw new NotFoundException('Document not found');
+    const doc = await this.findLive(id);
 
     // Upload new file; keep original project folder structure from storagePath if possible
     const projectId = doc.projectId ?? undefined;
@@ -244,38 +284,147 @@ export class DocumentsService {
       { projectId },
     );
 
-    // Delete old file from S3 (non-fatal if it's already gone)
-    if (doc.storagePath) {
-      await this.storage.delete(doc.storagePath).catch(() => {});
-    }
-
     const fileName = newFileName?.trim() || doc.fileName;
 
-    // `expiresAt` is deliberately untouched: replacing the FILE of a permit (a better scan,
-    // a countersigned copy) does not change when that permit lapses. A renewal is a new
-    // expiry, set explicitly through update().
-    const updated = await this.prisma.document.update({
-      where: { id },
-      data: { fileName, fileUrl: publicUrl, storagePath, fileSize: file.size, mimeType: file.mimetype },
-      include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
-    });
-    return this.decorate(updated);
+    try {
+      // Archive row and version bump in one transaction: a Document claiming to be at v3
+      // with no v2 archived is a worse state than either half of the change failing.
+      const updated = await this.prisma.$transaction(async (tx) => {
+        // `uploadedAt` on the archived version means "when these bytes went live", which is
+        // NOT doc.updatedAt — a rename touches that. The previous archive's `archivedAt` is
+        // the exact moment the outgoing version took over; for v1 it is the document's own
+        // creation.
+        const previous = await tx.documentVersion.findFirst({
+          where: { documentId: id },
+          orderBy: { versionNumber: 'desc' },
+          select: { archivedAt: true },
+        });
+
+        await tx.documentVersion.create({
+          data: {
+            documentId: id,
+            versionNumber: doc.versionNumber,
+            fileName: doc.fileName,
+            fileUrl: doc.fileUrl,
+            storagePath: doc.storagePath,
+            fileSize: doc.fileSize,
+            mimeType: doc.mimeType,
+            externalUrl: doc.externalUrl,
+            // Who filed THAT version, which is not necessarily who is replacing it now.
+            uploadedById: doc.uploadedById,
+            uploadedAt: previous?.archivedAt ?? doc.createdAt,
+          },
+        });
+
+        // `expiresAt` is deliberately untouched: replacing the FILE of a permit (a better
+        // scan, a countersigned copy) does not change when that permit lapses. A renewal is
+        // a new expiry, set explicitly through update().
+        return tx.document.update({
+          where: { id },
+          data: {
+            fileName,
+            fileUrl: publicUrl,
+            storagePath,
+            fileSize: file.size,
+            mimeType: file.mimetype,
+            versionNumber: doc.versionNumber + 1,
+          },
+          include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
+        });
+      });
+      return this.decorate(updated);
+    } catch (err: any) {
+      // Two replaces racing both read the same versionNumber; the unique
+      // (documentId, versionNumber) index rejects the loser. Surface that as a retryable
+      // conflict rather than an opaque 500 — the transaction means nothing was written.
+      if (err?.code === 'P2002') {
+        throw new ConflictException('This document was replaced by someone else — reload and try again');
+      }
+      throw err;
+    }
   }
 
+  /**
+   * The archive, newest first. Without a read path the version rows would be an internal
+   * detail, and "we kept it" is only true if somebody can get it back.
+   *
+   * `available` is the load-bearing field: a version whose object the retention purge has
+   * removed keeps its row (file name, size, who filed it, when it was superseded) but
+   * reports no URL at all. Handing back the stored `fileUrl` there would be a link into a
+   * private bucket with nothing behind it — a 403 dressed as a download.
+   */
+  async listVersions(id: string) {
+    await this.findLive(id);
+
+    const versions = await this.prisma.documentVersion.findMany({
+      where: { documentId: id },
+      orderBy: { versionNumber: 'desc' },
+      include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
+    });
+
+    return Promise.all(
+      versions.map(async (version) => {
+        let fileUrl: string | null = null;
+        if (version.storagePath) {
+          try {
+            fileUrl = await this.storage.signedUrl(version.storagePath);
+          } catch {
+            // Signing failed (object gone from the bucket by some other route) — report it
+            // as unavailable rather than as a URL that will not resolve.
+          }
+        }
+        return { ...version, fileUrl, available: fileUrl !== null };
+      }),
+    );
+  }
+
+  /**
+   * SOFT delete — set `deletedAt`, keep the row and keep the bytes.
+   *
+   * This was a `prisma.document.delete()`, which is what the rest of the app moved away
+   * from in a5a08b4 (Building / Unit / Lease / Sale) for exactly the reason that applies
+   * here. Documents are evidence, not content: `DocCategory` includes LOI, DEED,
+   * BOOKING_AGREEMENT, CONTRACT, NOC and POSSESSION_CERTIFICATE, and the sale-stage gates
+   * COUNT those rows. A hard delete therefore un-gated a transition that was previously
+   * satisfied, with nothing left to say a document had ever been filed. The row is also
+   * pointed at by LeaseTenantAssignment.documentId (`onDelete: SetNull`) — the signed
+   * agreement behind a tenancy transfer would have quietly become null — and it cascades
+   * DocumentVersion away.
+   *
+   * A deleted row is invisible to every read here (see LIVE), to the sale-stage gate and
+   * to the expiry cron, both of which already filter `deletedAt: null`: a deleted LOI does
+   * not satisfy a gate, and a deleted permit raises no renewal alert. Nothing in the API
+   * hands the file back either — `getDownloadUrl` 404s on it.
+   *
+   * THE STORED OBJECT IS DELIBERATELY LEFT IN THE BUCKET AT DELETE TIME. The row still
+   * points at it, and a DEED whose row survives while its bytes are gone is worse than no
+   * row at all: it reads as proof and isn't.
+   *
+   * The retention window that decision deferred now exists: DocumentRetentionService purges
+   * the objects behind purge-eligible categories 90 days later, leaving the row as a
+   * tombstone with `storagePath: null`. The twelve evidentiary categories are never purged
+   * at all. Read that file for the split and the reasoning — the point here is only that
+   * this method never removes bytes itself, so a delete stays reversible for the whole
+   * grace period.
+   *
+   * One cost survives and has no fix at this layer: a signed URL issued before the delete
+   * stays valid for the remainder of its 1-hour TTL. Minting a NEW one is blocked
+   * (`getDownloadUrl` 404s), which is the part that is actually enforceable without
+   * per-object key rotation.
+   */
   async delete(id: string) {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc) throw new NotFoundException('Document not found');
+    await this.findLive(id);
 
-    if ((doc as any).storagePath) {
-      await this.storage.delete((doc as any).storagePath);
-    }
-
-    return this.prisma.document.delete({ where: { id } });
+    return this.prisma.document.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
   }
 
   async getDownloadUrl(id: string): Promise<{ url: string; fileName: string }> {
-    const doc = await this.prisma.document.findUnique({ where: { id } });
-    if (!doc) throw new NotFoundException('Document not found');
+    // Live-only: the bytes outlive the delete, so this is the one read that would still
+    // hand out a deleted DEED if it resolved by bare id.
+    const doc = await this.findLive(id);
 
     const storagePath = (doc as any).storagePath as string | null;
     if (storagePath) {

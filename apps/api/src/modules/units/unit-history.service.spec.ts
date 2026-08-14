@@ -440,4 +440,38 @@ describe('assignmentEntries', () => {
     const [e] = assignmentEntries([assignment], []);
     expect(e.data.monthlyRent).toBeNull();
   });
+
+  it('links the signed agreement while it is live', () => {
+    const [e] = assignmentEntries(
+      [{ ...assignment, documentId: 'doc1', document: { id: 'doc1', deletedAt: null } }],
+      [lease()],
+    );
+
+    expect(e.data.documentId).toBe('doc1');
+    expect(e.data.documentFiled).toBe(true);
+    expect(e.data.documentRemoved).toBe(false);
+  });
+
+  it('stops linking an agreement that was deleted, but still says one existed', () => {
+    // Documents are soft-deleted, so the id column outlives the delete while every read in
+    // DocumentsService filters the row out — the raw id was a link that 404s. Dropping the
+    // fact entirely would be a different lie: "no agreement was ever filed" and "the
+    // agreement was filed and later removed" are different facts about a legal transfer.
+    const [e] = assignmentEntries(
+      [{ ...assignment, documentId: 'doc1', document: { id: 'doc1', deletedAt: new Date('2026-07-01') } }],
+      [lease()],
+    );
+
+    expect(e.data.documentId).toBeNull();
+    expect(e.data.documentFiled).toBe(true);
+    expect(e.data.documentRemoved).toBe(true);
+  });
+
+  it('says nothing at all when no agreement was ever attached', () => {
+    const [e] = assignmentEntries([assignment], [lease()]);
+
+    expect(e.data.documentId).toBeNull();
+    expect(e.data.documentFiled).toBe(false);
+    expect(e.data.documentRemoved).toBe(false);
+  });
 });

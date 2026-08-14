@@ -359,7 +359,12 @@ export class UnitHistoryService {
       ? await this.prisma.leaseTenantAssignment.findMany({
           where: { leaseId: { in: leaseIds } },
           orderBy: { effectiveDate: 'asc' },
-          include: { recordedBy: { select: { id: true, name: true, email: true } } },
+          include: {
+            recordedBy: { select: { id: true, name: true, email: true } },
+            // Joined purely for liveness: documents are soft-deleted now, and the raw
+            // `documentId` column outlives the delete. See assignmentEntries.
+            document: { select: { id: true, deletedAt: true } },
+          },
         })
       : [];
 
@@ -830,6 +835,20 @@ export function assignmentEntries(assignments: any[], leases: any[]) {
     const byId = new Map(leases.map((l) => [l.id, l]));
     return assignments.map((a) => {
       const lease = byId.get(a.leaseId);
+
+      // Documents are soft-deleted, so `a.documentId` survives the delete while every read
+      // in DocumentsService filters the row out — emitting the raw id gave the timeline a
+      // link that 404s.
+      //
+      // Resolved to null AND flagged, rather than simply dropped: "no agreement was ever
+      // filed for this assignment" and "the agreement was filed and later removed" are
+      // different facts about a legal transfer, and a history that silently converts the
+      // second into the first is worse than one with a dead link. The UI can render "signed
+      // agreement removed from the vault" — which is also the prompt somebody needs to go
+      // find out why.
+      const documentFiled = a.documentId != null;
+      const documentLive = documentFiled && a.document != null && a.document.deletedAt == null;
+
       return {
         id: `assignment-${a.id}`,
         kind: 'assignment' as TimelineEntryKind,
@@ -847,7 +866,11 @@ export function assignmentEntries(assignments: any[], leases: any[]) {
           toTenantLegalName: a.toTenantLegalName,
           reason: a.reason,
           note: a.note,
-          documentId: a.documentId,
+          documentId: documentLive ? a.documentId : null,
+          /** An agreement was attached at the time, whether or not it is still retrievable. */
+          documentFiled,
+          /** True only when it has since been removed — the case worth naming in the UI. */
+          documentRemoved: documentFiled && !documentLive,
           recordedBy: a.recordedBy ?? null,
           // Says out loud what the entry means, because "the rent did not change" is
           // the most common question an assignment raises.

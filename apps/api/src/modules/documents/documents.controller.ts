@@ -6,6 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
+import { DocumentRetentionService } from './document-retention.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -25,7 +26,11 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 @UseInterceptors(AuditInterceptor)
 @Controller('documents')
 export class DocumentsController {
-  constructor(private service: DocumentsService, private storage: StorageService) {}
+  constructor(
+    private service: DocumentsService,
+    private storage: StorageService,
+    private retention: DocumentRetentionService,
+  ) {}
 
   /**
    * POST /api/documents/presigned-upload
@@ -42,6 +47,25 @@ export class DocumentsController {
       projectName: body.projectName,
       category: body.category,
     });
+  }
+
+  /**
+   * GET /api/documents/retention/preview
+   *
+   * The dry run, on demand. The purge is the only irreversible step in the document flow,
+   * so "what would today's run remove" has to be answerable WITHOUT running it — otherwise
+   * the first time anyone sees the policy's blast radius is after it has fired.
+   *
+   * Admin-only (`user:manage`): it enumerates storage keys across every project, which is
+   * broader than the per-project document permission covers.
+   *
+   * Declared above the `:id` routes so the literal path can never be read as an id.
+   */
+  @Get('retention/preview')
+  @RequirePermissions('user:manage')
+  @ApiOperation({ summary: 'Dry-run the document retention purge — lists what would be removed' })
+  retentionPreview() {
+    return this.retention.purge({ dryRun: true });
   }
 
   @Get()
@@ -140,6 +164,18 @@ export class DocumentsController {
   @ApiOperation({ summary: 'Delete a document' })
   delete(@Param('id') id: string) {
     return this.service.delete(id);
+  }
+
+  /**
+   * The archive `replaceFile` now writes. Each entry reports `available` — false once the
+   * retention purge has removed its object — so the UI can show that a version existed
+   * without offering a link to bytes that are gone.
+   */
+  @Get(':id/versions')
+  @RequirePermissions('document:view')
+  @ApiOperation({ summary: 'List archived prior versions of a document' })
+  versions(@Param('id') id: string) {
+    return this.service.listVersions(id);
   }
 
   @Get(':id/download')
