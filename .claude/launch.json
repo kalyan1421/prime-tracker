@@ -11,7 +11,7 @@
       "name": "api",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "api", "run", "dev"],
-      "port": 3021,
+      "port": 3031,
       "autoPort": false
     }
   ]
