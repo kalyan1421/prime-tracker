@@ -57,6 +57,36 @@ async function inRolledBackTx<T>(fn: (tx: any) => Promise<T>): Promise<T> {
   return out!;
 }
 
+/**
+ * A user to attribute test rows to — created if the database has none.
+ *
+ * This suite used to reach for `tx.user.findFirst()` in four places and assume something
+ * came back, which held only because a developer's database happens to be seeded. On a
+ * FRESH database — which is exactly what CI builds from migrations — it broke two
+ * different ways: two call sites did `if (!user) return;` and passed by doing nothing
+ * (a false green on a constraint test that never ran), and two did `u?.id as string`,
+ * handing `undefined` to a required field and dying with a PrismaClientValidationError.
+ *
+ * Creating the row makes every test self-sufficient, which is what an integration test
+ * asserting DB constraints has to be — it must not depend on seed data that CI never runs.
+ * The row is created inside the caller's rolled-back transaction, so nothing persists.
+ */
+async function ensureUser(tx: any): Promise<string> {
+  const existing = await tx.user.findFirst({ where: { isActive: true }, select: { id: true } });
+  if (existing) return existing.id;
+  const suffix = Math.abs(Number(process.hrtime.bigint() % 1_000_000n));
+  const created = await tx.user.create({
+    data: {
+      email: `integration-harness-${suffix}@test.local`,
+      name: 'Integration Harness',
+      role: 'FOUNDER',
+      isActive: true,
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
+
 /** Minimal object graph: org → project → building → unit. */
 async function seedUnit(tx: any) {
   const suffix = Math.abs(Number(process.hrtime.bigint() % 1_000_000n));
@@ -307,8 +337,9 @@ maybe()('task_units', () => {
   it('cascades away with its task, leaving no orphan links', async () => {
     await inRolledBackTx(async (tx) => {
       const { project, building, unit } = await seedUnit(tx);
-      const user = await tx.user.findFirst({ select: { id: true } });
-      if (!user) return; // no users seeded — nothing to attribute the task to
+      // Was `if (!user) return;` — which made this constraint test pass by doing
+      // nothing on any database without seed data, CI's included.
+      const user = { id: await ensureUser(tx) };
 
       const task = await tx.task.create({
         data: {
@@ -332,8 +363,7 @@ maybe()('task_units', () => {
     // on the board's "shared with" label.
     await inRolledBackTx(async (tx) => {
       const { project, building, unit } = await seedUnit(tx);
-      const user = await tx.user.findFirst({ select: { id: true } });
-      if (!user) return;
+      const user = { id: await ensureUser(tx) };
 
       const task = await tx.task.create({
         data: {
@@ -513,9 +543,10 @@ maybe()('endTenancy atomicity', () => {
 
 maybe()('historical_deletion_decision_has_decider (R27)', () => {
   /** A PENDING request needs a requester who exists; borrow any active user. */
+  // Delegates to ensureUser so a fresh database gets a real id rather than `undefined`
+  // smuggled through an `as string`.
   async function anyUser(tx: any) {
-    const u = await tx.user.findFirst({ where: { isActive: true }, select: { id: true } });
-    return u?.id as string;
+    return ensureUser(tx);
   }
 
   it('accepts a PENDING request with no decider — nobody has decided yet', async () => {
@@ -580,8 +611,7 @@ maybe()('rent_correction constraints (R22)', () => {
         source: 'INITIAL',
       },
     });
-    const user = await tx.user.findFirst({ where: { isActive: true }, select: { id: true } });
-    return { lease, period, userId: user?.id as string };
+    return { lease, period, userId: await ensureUser(tx) };
   }
 
   it('records a correction that moves the rent', async () => {
