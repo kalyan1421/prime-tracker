@@ -6,6 +6,12 @@ import { UnitStatusEventService } from '../../common/utils/unit-status-event.ser
 import { LeasesService } from '../leases/leases.service';
 import { startOfUtcDay } from '../leases/lease-rent-period.service';
 import { SalePaymentsService } from './sale-payments.service';
+import {
+  docCategoryLabel,
+  requiredDocsForTransition,
+  saleStageLabel,
+  transitionSkipsStages,
+} from './sale-document-gates';
 
 /** What the caller may say about the money when cancelling a sale. All optional. */
 export interface SaleCancellationInput {
@@ -237,6 +243,15 @@ export class SalesService {
     }
 
     const cancelling = data.status === 'CANCELLED' && sale.status !== 'CANCELLED';
+
+    // Document gate (S6/D1): a sale may not ADVANCE into a stage whose paperwork is not
+    // on file. Runs before every write for the same reason the discount gate does — a
+    // refused transition must leave the sale exactly as it was. Only consulted when this
+    // request actually changes the status; an edit that leaves the stage alone, a move
+    // backwards, and a cancellation are all ungated (see requiredDocsForTransition).
+    if (typeof data.status === 'string' && data.status !== sale.status) {
+      await this.assertStageDocumentsAttached(sale, data.status);
+    }
 
     // Discount-approval gate: committing a sale (UNDER_CONTRACT/CLOSED) with an over-threshold
     // discount requires Founder/Co-Founder sign-off first. Single approval (client decision).
@@ -643,6 +658,70 @@ export class SalesService {
       );
     }
     return at;
+  }
+
+  // ─────── Stage document gate (S6 + D1) ───────
+
+  /**
+   * Refuses a stage ADVANCE whose required documents are not attached to the sale.
+   *
+   * The map lives in `sale-document-gates.ts` (mirrored for display only by
+   * apps/web/src/components/DocumentGateChip.tsx) — changing what a stage requires is an
+   * edit to that map, never to this method.
+   *
+   * NOT applied in create(): a document attaches to a sale by `saleId`, so at creation
+   * there is no sale for one to point at and the gate could never be satisfied. The
+   * "create already CLOSED" path (the units flow) is therefore ungated by construction —
+   * a deliberate seam, unlike the discount gate, which create() does mirror.
+   */
+  private async assertStageDocumentsAttached(
+    sale: { id: string; status: string; buyer?: string | null; unit?: { unitNumber?: string } | null },
+    target: string,
+  ) {
+    const required = requiredDocsForTransition(sale.status, target);
+    if (required.length === 0) return;
+
+    // Soft-deleted documents do not count — a deleted LOI is not an LOI on file.
+    const attached = await this.prisma.document.findMany({
+      where: { saleId: sale.id, deletedAt: null, category: { in: required } },
+      select: { category: true },
+    });
+    const have = new Set(attached.map((d) => d.category as string));
+    const missing = required.filter((c) => !have.has(c));
+    if (missing.length === 0) return;
+
+    // Name the sale, the stage, and every missing category by name: a gate that says only
+    // "documents required" makes the user guess which one, on which sale.
+    const names = missing.map(docCategoryLabel);
+    const list =
+      names.length === 1
+        ? names[0]
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    const isAre = missing.length === 1 ? 'is' : 'are';
+    const itThem = missing.length === 1 ? 'it' : 'them';
+    const skipNote = transitionSkipsStages(sale.status, target)
+      ? ` Moving straight from ${saleStageLabel(sale.status)} to ${saleStageLabel(target)} also ` +
+        `requires the documents for the stages being skipped.`
+      : '';
+
+    throw new ForbiddenException(
+      `${this.describeSale(sale)} cannot move to ${saleStageLabel(target)}: ${list} ` +
+        `${isAre} not attached to this sale. Upload ${itThem} to the sale's documents, then ` +
+        `move the stage.${skipNote}`,
+    );
+  }
+
+  /** Enough of the sale to identify it in a refusal without opening the record. */
+  private describeSale(sale: {
+    id: string;
+    buyer?: string | null;
+    unit?: { unitNumber?: string } | null;
+  }): string {
+    const unit = sale.unit?.unitNumber ? `unit ${sale.unit.unitNumber}` : null;
+    if (unit && sale.buyer) return `The sale of ${unit} to ${sale.buyer}`;
+    if (unit) return `The sale of ${unit}`;
+    if (sale.buyer) return `The sale to ${sale.buyer}`;
+    return `Sale ${sale.id}`;
   }
 
   /** Founder/Co-Founder records sign-off on an over-threshold discount. */

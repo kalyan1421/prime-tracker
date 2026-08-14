@@ -1764,6 +1764,13 @@ enum NotificationType {
   /// Leadership-routed at the client's request (2026-08-13) because it is a commercial
   /// decision — renew, end it, or let it run — not a task for whoever is on the unit.
   LEASE_HOLDOVER
+  /// D2 — a document with an expiry date is approaching it (60 / 30 / 7 day horizons).
+  /// FYI-tier: in-app on every horizon, but it does not email three times per permit
+  /// across a whole portfolio. Escalates into DOCUMENT_EXPIRED, which does email.
+  DOCUMENT_EXPIRING
+  /// D2 — the date has PASSED and the document is still on file. A separate type, not the
+  /// same one escalating, so that muting the early warnings can never mute the lapse.
+  DOCUMENT_EXPIRED
 }
 
 model Notification {
@@ -1959,6 +1966,16 @@ model Document {
   // Either fileUrl OR externalUrl will be populated (storagePath null when external).
   externalUrl       String?
   category          DocCategory             @default(GENERAL)
+  // D2 — validity end date. Permits, NOCs and possession certificates LAPSE, and nothing
+  // in the system tracked that before this; a permit could expire mid-build and the first
+  // anyone knew was an inspector on site.
+  //
+  // NULLABLE on purpose, and never required: most documents (photos, drawings, brochures)
+  // have no expiry at all, and a back-filled permit whose paper copy is in a drawer
+  // legitimately has no KNOWN expiry. Hard-requiring it for PERMIT/NOC/POSSESSION_CERTIFICATE
+  // would block the upload entirely, so the categories that ought to carry one are merely
+  // FLAGGED on read (`expiryExpected`) rather than refused on write.
+  expiresAt         DateTime?
   // Phase 2 portal flag. Default false — promotion is always an explicit internal action.
   isClientVisible   Boolean                 @default(false)
   versionNumber     Int                     @default(1)
@@ -1979,6 +1996,9 @@ model Document {
   @@index([category, deletedAt])
   @@index([isClientVisible, deletedAt])
   @@index([deletedAt])
+  // The expiry cron's exact lookup: live rows (deletedAt IS NULL) whose expiresAt is at or
+  // before the far horizon. Equality-ish column first, the ranged one second.
+  @@index([deletedAt, expiresAt])
   @@map("documents")
 }
 

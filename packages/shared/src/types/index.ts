@@ -708,6 +708,30 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'admin', label: 'Administration', permissions: ['user:manage', 'role:manage', 'audit:view', 'quickbooks:manage', 'system:config', 'org:manage'] },
 ];
 
+// ---- Document Expiry (D2) ----
+
+/**
+ * Document categories that genuinely LAPSE. Advisory only, in both directions:
+ *
+ *  - the API never REQUIRES `expiresAt`, for any category — back-filled and historical
+ *    documents legitimately have no known date, and refusing them would just mean the
+ *    document is never filed;
+ *  - the API returns a per-document `expiryExpected` flag derived from this same list, so
+ *    a form can prompt for the date before the document exists and a list can mark the
+ *    ones still missing it.
+ *
+ * Kept here rather than in the API so the upload form can highlight the field without a
+ * round-trip. Values match the Prisma `DocCategory` enum.
+ */
+export const EXPIRY_TRACKED_DOC_CATEGORIES = [
+  'PERMIT',
+  'NOC',
+  'POSSESSION_CERTIFICATE',
+] as const;
+
+/** Derived on read; null when the document carries no expiry date at all. */
+export type DocumentExpiryStatus = 'VALID' | 'EXPIRING_SOON' | 'EXPIRED';
+
 // ---- API Response Types ----
 
 export interface ApiResponse<T> {

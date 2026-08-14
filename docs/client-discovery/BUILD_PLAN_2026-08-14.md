@@ -247,9 +247,34 @@ loan checks, and a new `NotificationType`. Note the existing test asserts an **e
 `NotificationType` count (currently 33) — bump it deliberately, and give the new type a
 tier in `NOTIFICATION_TIERS` or it becomes unmutable in `getPreferences()`.
 
-**S6 / D1 detail:** no document check exists on any stage transition today. Build one
-gate helper and configure it per transition, so adding a fourth gate later is config, not
-code.
+**S6 / D1 detail — ✅ built.** Canonical map in `apps/api/src/modules/sales/sale-document-gates.ts`;
+`apps/web/src/components/DocumentGateChip.tsx` is the display mirror (not shared, because
+`deploy-web` does not build `@prime-tracker/shared` — see Phase 1).
+
+The map already existed on the **frontend only**, rendering a red/amber/green chip on the
+pipeline board that read *"blocks advancement"* while the transition sailed straight
+through. The UI had been advertising an enforcement that did not exist; this makes it true.
+
+- **Cumulative over the rungs a transition CROSSES**, not over the sale's whole history.
+  `PROSPECT → CLOSED` owes everything in between — a gate you can walk around by skipping a
+  stage is not a gate. But `LOI_SIGNED → UNDER_CONTRACT` owes only the Booking Agreement, so
+  sales already sitting in a stage are never retroactively trapped. For anyone moving one
+  stage at a time it is a no-op.
+- **Ungated:** backwards moves, `CANCELLED` (a deal dying because paperwork never arrived is
+  exactly when documents are missing), same-stage no-ops, and any update that does not change
+  status. `create()` is also ungated — a document attaches by `saleId`, so at creation there
+  is no sale to attach to and the gate could never be satisfied.
+
+> ### ✅ RESOLVED — the `CLOSED` list is now client-confirmed
+>
+> The three-document `CLOSED` requirement (`DEED`, `NOC`, `POSSESSION_CERTIFICATE`) had been
+> an unconfirmed assumption inherited from the frontend chip — Prime had only ever confirmed
+> LOI and Booking Agreement. It was **put to the client explicitly on 2026-08-14 and
+> confirmed as built.**
+>
+> So: Sales cannot close a deal until all three are on file, and a `PROSPECT → CLOSED` jump
+> needs five documents. That is intended, not an accident of an old default. The ⚠️ warning
+> in `sale-document-gates.ts` has been replaced with the confirmation.
 
 ---
 

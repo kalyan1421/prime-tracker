@@ -16,7 +16,22 @@ import { FiCheckCircle, FiAlertTriangle, FiXCircle } from 'react-icons/fi';
 
 // ─── doc requirement maps ─────────────────────────────────────────────────────
 
-/** Sales stage → required DocCategory values */
+/**
+ * Sales stage → required DocCategory values.
+ *
+ * ⚠️ DISPLAY MIRROR of the canonical map in
+ * `apps/api/src/modules/sales/sale-document-gates.ts`, which is what actually ENFORCES
+ * these. Until 2026-08-14 this chip was the only place the rules existed and nothing on
+ * the server checked them — so "blocks advancement" below was decorative and a sale moved
+ * stage with no documents at all. It is now true.
+ *
+ * Duplicated rather than imported because `apps/web` has no dependency on
+ * `@prime-tracker/shared` and the `deploy-web` CI job does not build that package — an
+ * import would break the production deploy. Change both together, or the chip will promise
+ * something the API does not enforce (or refuse something it does).
+ *
+ * All three rows are client-confirmed (2026-08-14), including the three-document CLOSED row.
+ */
 export const SALE_STAGE_DOCS: Record<string, string[]> = {
   LOI_SIGNED:      ['LOI'],
   UNDER_CONTRACT:  ['BOOKING_AGREEMENT'],

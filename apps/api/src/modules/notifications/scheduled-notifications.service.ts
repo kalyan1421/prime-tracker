@@ -36,6 +36,22 @@ interface LeaseWithProject {
   building?: { name?: string | null; project?: { id: string; name: string } | null } | null;
 }
 
+/**
+ * D2 — days out at which a still-valid document is flagged, widest first.
+ *
+ * Why these three, for a permit rather than a lease:
+ *   60 — the renewal LEAD TIME. A municipal permit or NOC re-issue is an application, a
+ *        fee, an inspection and an agency queue; 60 days is the last point at which
+ *        starting is comfortable. Same reasoning as LOAN_MATURITY_60 — anything that
+ *        needs a third party to act gets two months.
+ *   30 — the renewal should now be IN FLIGHT. Matches LEASE_EXPIRING_30.
+ *    7 — last chance to avoid a gap. Matches LEASE_EXPIRING_7.
+ *
+ * The widest entry also bounds the query, so this list is the single source of truth for
+ * "how far ahead do we look".
+ */
+export const DOCUMENT_EXPIRY_HORIZONS = [60, 30, 7] as const;
+
 @Injectable()
 export class ScheduledNotificationsService {
   private readonly logger = new Logger(ScheduledNotificationsService.name);
@@ -78,7 +94,106 @@ export class ScheduledNotificationsService {
       this.checkOutstandingDeposits(),
       this.checkOverdueRent(),
       this.checkHoldovers(),
+      this.checkExpiringDocuments(),
     ]);
+  }
+
+  /**
+   * D2 — documents that expire, and documents that already have.
+   *
+   * One pass covers both: the query has an UPPER bound (the widest horizon) and no lower
+   * bound at all, so already-lapsed documents come back in the same read. That is
+   * deliberate — a permit four months lapsed is more worth surfacing than one lapsed a
+   * week ago, the same call checkHoldovers makes.
+   *
+   * The two outcomes are different NotificationTypes, not one escalating type: see
+   * notifyDocumentExpired for why (muting the countdown must not mute the lapse).
+   *
+   * Public so it can be invoked directly in tests / smoke checks.
+   */
+  async checkExpiringDocuments() {
+    const now = new Date();
+    const farHorizon = new Date(now);
+    farHorizon.setDate(farHorizon.getDate() + Math.max(...DOCUMENT_EXPIRY_HORIZONS));
+
+    const docs = await this.prisma.document.findMany({
+      where: {
+        // Soft-deleted documents were never real candidates: nobody is renewing a permit
+        // that has been removed from the vault.
+        deletedAt: null,
+        // `not: null` matters as well as the bound — most documents (photos, drawings,
+        // brochures) carry no expiry and must stay silent.
+        expiresAt: { not: null, lte: farHorizon },
+        // A document on an ARCHIVED (soft-deleted) project is not somebody's problem any
+        // more, and alerting on it is the same leak that was fixed in units and reports.
+        // Each link is nullable, so each needs its own "unset OR alive" clause — a bare
+        // `project: { deletedAt: null }` would silently drop every building-, unit- and
+        // interior-anchored document, which is most of them.
+        AND: [
+          { OR: [{ projectId: null }, { project: { deletedAt: null } }] },
+          { OR: [{ buildingId: null }, { building: { deletedAt: null, project: { deletedAt: null } } }] },
+          {
+            OR: [
+              { unitId: null },
+              { unit: { deletedAt: null, building: { deletedAt: null, project: { deletedAt: null } } } },
+            ],
+          },
+        ],
+      },
+      select: {
+        id: true,
+        fileName: true,
+        category: true,
+        expiresAt: true,
+        // Documents are polymorphic like leases — resolve the owning project down whichever
+        // link is set so recipient routing can scope it.
+        project: { select: { id: true, name: true } },
+        building: { select: { project: { select: { id: true, name: true } } } },
+        unit: { select: { building: { select: { project: { select: { id: true, name: true } } } } } },
+      },
+    });
+
+    // Ascending, so `find` returns the TIGHTEST horizon that still contains the document.
+    const horizons = [...DOCUMENT_EXPIRY_HORIZONS].sort((a, b) => a - b);
+
+    let expiring = 0;
+    let expired = 0;
+    for (const doc of docs) {
+      if (!doc.expiresAt) continue;
+      const project = doc.project ?? doc.building?.project ?? doc.unit?.building?.project ?? null;
+      const common = {
+        id: doc.id,
+        fileName: doc.fileName,
+        category: doc.category as string,
+        expiresAt: doc.expiresAt,
+        projectId: project?.id ?? null,
+        projectName: project?.name ?? null,
+      };
+
+      try {
+        if (doc.expiresAt < now) {
+          // Ceil, like every other "days overdue" in this file — it also means a document
+          // that lapsed six hours ago reads "1 day(s) ago" rather than "0 day(s) ago".
+          const daysOverdue = Math.ceil((now.getTime() - doc.expiresAt.getTime()) / 86_400_000);
+          await this.notifications.notifyDocumentExpired({ ...common, daysOverdue });
+          expired++;
+          continue;
+        }
+
+        const daysLeft = Math.ceil((doc.expiresAt.getTime() - now.getTime()) / 86_400_000);
+        const horizonDays = horizons.find((h) => daysLeft <= h);
+        // Unreachable while the query is bounded by the widest horizon, but a rounding
+        // edge must skip rather than send an alert with no bucket (and so no dedupe key).
+        if (horizonDays === undefined) continue;
+        await this.notifications.notifyDocumentExpiring({ ...common, daysLeft, horizonDays });
+        expiring++;
+      } catch (err) {
+        this.logger.warn(`Document expiry notify failed for ${doc.id}: ${err}`);
+      }
+    }
+
+    this.logger.log(`Document expiry: ${expired} expired, ${expiring} expiring within ${Math.max(...DOCUMENT_EXPIRY_HORIZONS)}d`);
+    return { expired, expiring };
   }
 
   /**

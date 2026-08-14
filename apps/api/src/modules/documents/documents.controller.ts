@@ -13,6 +13,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
 import { UploadDocumentDto } from './dto/upload-document.dto';
+import { UpdateDocumentDto } from './dto/update-document.dto';
 import { PresignedUploadDto } from './dto/presigned-upload.dto';
 import { Response } from 'express';
 
@@ -106,11 +107,19 @@ export class DocumentsController {
     return this.service.create(file, body, req.user.sub);
   }
 
+  /**
+   * Rename a document and/or set/clear its expiry. Body was an inline untyped object,
+   * which the global ValidationPipe skips entirely — a real DTO is what makes `expiresAt`
+   * reachable at all under `forbidNonWhitelisted: true`.
+   *
+   * Both fields are optional: `{ fileName }` alone still works exactly as before, and
+   * `{ expiresAt: null }` clears a date that was entered in error.
+   */
   @Patch(':id')
   @RequirePermissions('document:upload')
-  @ApiOperation({ summary: 'Rename a document' })
-  rename(@Param('id') id: string, @Body() body: { fileName: string }) {
-    return this.service.rename(id, body.fileName);
+  @ApiOperation({ summary: 'Rename a document and/or set its expiry date' })
+  update(@Param('id') id: string, @Body() body: UpdateDocumentDto) {
+    return this.service.update(id, body);
   }
 
   @Post(':id/replace')

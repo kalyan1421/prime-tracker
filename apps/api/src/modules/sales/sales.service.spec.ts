@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SalesService, assertCancellationReconciles } from './sales.service';
+import { SALE_STAGE_DOCS, requiredDocsForTransition } from './sale-document-gates';
 
 const mockPrisma: any = {
   sale: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn() },
@@ -14,6 +15,17 @@ const mockPrisma: any = {
   // unit" so the existing suites stay about the sale; the H3 cases override it. findMany,
   // not findFirst: a unit can hold more than one non-terminated lease.
   lease: { findMany: jest.fn().mockResolvedValue([]) },
+  // Stage document gate (S6/D1). Defaults to "every gated document is on file" so the
+  // other suites stay about the thing they are testing; the gate suite overrides it.
+  document: {
+    findMany: jest.fn().mockResolvedValue([
+      { category: 'LOI' },
+      { category: 'BOOKING_AGREEMENT' },
+      { category: 'DEED' },
+      { category: 'NOC' },
+      { category: 'POSSESSION_CERTIFICATE' },
+    ]),
+  },
   // Support both forms: array (batch) and callback (interactive) transactions.
   $transaction: jest.fn((arg: any) => (Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma))),
 };
@@ -26,6 +38,21 @@ function stubCloseTxn() {
     Promise.resolve({ id: args.where.id, status: 'CLOSED' }),
   );
 }
+// jest.clearAllMocks() (which every suite below calls) clears CALLS but keeps
+// implementations, so a `mockResolvedValue` set by the gate suite would otherwise leak
+// into every suite that runs after it. Re-arm the "all documents on file" default here:
+// a file-scope beforeEach runs before each suite's own, so the gate suite still gets to
+// override it.
+beforeEach(() => {
+  mockPrisma.document.findMany.mockResolvedValue([
+    { category: 'LOI' },
+    { category: 'BOOKING_AGREEMENT' },
+    { category: 'DEED' },
+    { category: 'NOC' },
+    { category: 'POSSESSION_CERTIFICATE' },
+  ]);
+});
+
 const mockBus = { emit: jest.fn() };
 
 // Occupancy-log double. The real service writes unit_status_events inside the same
@@ -237,6 +264,243 @@ describe('SalesService — discount-approval gate', () => {
         data: expect.objectContaining({ discountApprovedById: 'founder-1', discountApprovedAt: expect.any(Date) }),
       }),
     );
+  });
+});
+
+describe('SalesService — stage document gate (S6/D1)', () => {
+  let service: SalesService;
+
+  /** Nothing on file unless a test says otherwise — the point of the suite. */
+  function attached(...categories: string[]) {
+    mockPrisma.document.findMany.mockResolvedValue(categories.map((category) => ({ category })));
+  }
+
+  function saleIn(status: string, over: Record<string, any> = {}) {
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1',
+      status,
+      projectId: 'pr1',
+      unitId: 'u1',
+      buyer: 'Acme Corp',
+      salePrice: 100,
+      discountApprovedAt: null,
+      unit: { id: 'u1', unitNumber: '101' },
+      ...over,
+    });
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    attached();
+    mockPrisma.sale.update.mockImplementation((args: any) => Promise.resolve({ id: args.where.id }));
+    mockPrisma.unit.update.mockResolvedValue({});
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: null }); // no discount to gate on
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+    mockPrisma.project.findUnique.mockResolvedValue({ orgId: 'o1' });
+    mockPrisma.orgSettings.findUnique.mockResolvedValue({ discountApprovalThresholdPct: 5 });
+    mockPrisma.saleCancellation.upsert.mockResolvedValue({ id: 'sc1' });
+    stubCloseTxn();
+  });
+
+  it('refuses LOI Signed when the LOI is not attached, and writes nothing', async () => {
+    saleIn('PROSPECT');
+
+    await expect(service.update('s1', { status: 'LOI_SIGNED' } as any)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+    expect(mockPrisma.sale.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('names the sale, the target stage and the exact missing category in the refusal', async () => {
+    saleIn('PROSPECT');
+
+    await expect(service.update('s1', { status: 'LOI_SIGNED' } as any)).rejects.toThrow(
+      /The sale of unit 101 to Acme Corp cannot move to LOI Signed: LOI is not attached/,
+    );
+  });
+
+  it('allows LOI Signed once the LOI is attached', async () => {
+    saleIn('PROSPECT');
+    attached('LOI');
+
+    await service.update('s1', { status: 'LOI_SIGNED' } as any);
+    expect(mockPrisma.sale.update).toHaveBeenCalled();
+  });
+
+  it('asks only for the rung being crossed — LOI Signed → Under Contract wants the Booking Agreement, not the LOI', async () => {
+    saleIn('LOI_SIGNED');
+
+    await expect(service.update('s1', { status: 'UNDER_CONTRACT' } as any)).rejects.toThrow(
+      /Booking Agreement is not attached/,
+    );
+    // A sale already sitting in LOI_SIGNED from before this gate existed is not trapped
+    // there by a missing LOI.
+    expect(mockPrisma.document.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ category: { in: ['BOOKING_AGREEMENT'] } }),
+      }),
+    );
+  });
+
+  it('allows Under Contract once the Booking Agreement is attached', async () => {
+    saleIn('LOI_SIGNED');
+    attached('BOOKING_AGREEMENT');
+
+    await service.update('s1', { status: 'UNDER_CONTRACT' } as any);
+    expect(mockPrisma.sale.update).toHaveBeenCalled();
+  });
+
+  it('lists every missing closing document by name', async () => {
+    saleIn('UNDER_CONTRACT');
+    attached('DEED');
+
+    await expect(service.update('s1', { status: 'CLOSED' } as any)).rejects.toThrow(
+      /cannot move to Closed: NOC and Possession Certificate are not attached/,
+    );
+    expect(mockPrisma.sale.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('allows Closed once all three closing documents are attached', async () => {
+    saleIn('UNDER_CONTRACT');
+    attached('DEED', 'NOC', 'POSSESSION_CERTIFICATE');
+
+    await service.update('s1', { status: 'CLOSED' } as any);
+    expect(mockPrisma.sale.updateMany).toHaveBeenCalled();
+  });
+
+  // The cumulative decision, pinned: a transition owes the documents of every rung it
+  // CROSSES, so skipping stages cannot be used to walk around the gate.
+  it('Prospect → Closed owes the skipped stages’ documents too', async () => {
+    saleIn('PROSPECT');
+    attached('DEED', 'NOC', 'POSSESSION_CERTIFICATE');
+
+    await expect(service.update('s1', { status: 'CLOSED' } as any)).rejects.toThrow(
+      /LOI and Booking Agreement are not attached/,
+    );
+    expect(mockPrisma.document.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          category: { in: ['LOI', 'BOOKING_AGREEMENT', 'DEED', 'NOC', 'POSSESSION_CERTIFICATE'] },
+        }),
+      }),
+    );
+  });
+
+  it('explains WHY a skipping transition asks for earlier documents', async () => {
+    saleIn('PROSPECT');
+    attached('DEED', 'NOC', 'POSSESSION_CERTIFICATE');
+
+    await expect(service.update('s1', { status: 'CLOSED' } as any)).rejects.toThrow(
+      /Moving straight from Prospect to Closed also requires the documents for the stages being skipped/,
+    );
+  });
+
+  it('does not gate a BACKWARDS transition (Under Contract → Prospect) with nothing on file', async () => {
+    saleIn('UNDER_CONTRACT');
+
+    await service.update('s1', { status: 'PROSPECT' } as any);
+    expect(mockPrisma.sale.update).toHaveBeenCalled();
+    expect(mockPrisma.document.findMany).not.toHaveBeenCalled();
+  });
+
+  it('does not gate CANCELLED — missing paperwork is exactly why a deal gets cancelled', async () => {
+    saleIn('UNDER_CONTRACT');
+
+    await service.update('s1', { status: 'CANCELLED' } as any);
+    expect(mockPrisma.document.findMany).not.toHaveBeenCalled();
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sale.statusChanged', to: 'CANCELLED' }),
+    );
+  });
+
+  it('does not gate an update that leaves the status alone', async () => {
+    saleIn('PROSPECT');
+
+    await service.update('s1', { notes: 'called the buyer' } as any);
+    expect(mockPrisma.document.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.sale.update).toHaveBeenCalled();
+  });
+
+  it('does not re-gate a sale already sitting in the stage', async () => {
+    // Existing sales past these stages must keep working: the gate is on the TRANSITION.
+    saleIn('CLOSED');
+
+    await service.update('s1', { status: 'CLOSED', notes: 'corrected buyer name' } as any);
+    expect(mockPrisma.document.findMany).not.toHaveBeenCalled();
+  });
+
+  it('counts only non-deleted documents on THIS sale', async () => {
+    saleIn('PROSPECT');
+    attached('LOI');
+
+    await service.update('s1', { status: 'LOI_SIGNED' } as any);
+    expect(mockPrisma.document.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ saleId: 's1', deletedAt: null }) }),
+    );
+  });
+
+  it('a soft-deleted LOI does not satisfy the gate', async () => {
+    saleIn('PROSPECT');
+    // The query filters deletedAt: null, so the deleted row simply is not returned.
+    attached();
+
+    await expect(service.update('s1', { status: 'LOI_SIGNED' } as any)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('falls back to the buyer, then the id, when there is no unit to name', async () => {
+    saleIn('PROSPECT', { unitId: null, unit: null });
+
+    await expect(service.update('s1', { status: 'LOI_SIGNED' } as any)).rejects.toThrow(
+      /The sale to Acme Corp cannot move to LOI Signed/,
+    );
+  });
+});
+
+describe('sale-document-gates — the map, in isolation', () => {
+  it('gates only the stages the client asked about', () => {
+    expect(Object.keys(SALE_STAGE_DOCS).sort()).toEqual(
+      ['CLOSED', 'LOI_SIGNED', 'UNDER_CONTRACT'].sort(),
+    );
+  });
+
+  it('a transition crossing one rung owes only that rung', () => {
+    expect(requiredDocsForTransition('PROSPECT', 'LOI_SIGNED')).toEqual(['LOI']);
+    expect(requiredDocsForTransition('LOI_SIGNED', 'UNDER_CONTRACT')).toEqual(['BOOKING_AGREEMENT']);
+    expect(requiredDocsForTransition('UNDER_CONTRACT', 'CLOSED')).toEqual([
+      'DEED',
+      'NOC',
+      'POSSESSION_CERTIFICATE',
+    ]);
+  });
+
+  it('is cumulative over crossed rungs, never over the sale’s history', () => {
+    expect(requiredDocsForTransition('PROSPECT', 'CLOSED')).toEqual([
+      'LOI',
+      'BOOKING_AGREEMENT',
+      'DEED',
+      'NOC',
+      'POSSESSION_CERTIFICATE',
+    ]);
+    // already past LOI_SIGNED → the LOI is never asked for again
+    expect(requiredDocsForTransition('LOI_SIGNED', 'CLOSED')).not.toContain('LOI');
+  });
+
+  it('never gates backwards moves, no-ops, or off-pipeline targets', () => {
+    expect(requiredDocsForTransition('CLOSED', 'PROSPECT')).toEqual([]);
+    expect(requiredDocsForTransition('UNDER_CONTRACT', 'UNDER_CONTRACT')).toEqual([]);
+    expect(requiredDocsForTransition('UNDER_CONTRACT', 'CANCELLED')).toEqual([]);
+    expect(requiredDocsForTransition('PROSPECT', 'SOMETHING_ELSE')).toEqual([]);
+  });
+
+  it('a revived CANCELLED sale owes every rung up to its target', () => {
+    expect(requiredDocsForTransition('CANCELLED', 'UNDER_CONTRACT')).toEqual([
+      'LOI',
+      'BOOKING_AGREEMENT',
+    ]);
   });
 });
 

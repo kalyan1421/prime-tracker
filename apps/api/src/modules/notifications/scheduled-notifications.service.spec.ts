@@ -14,6 +14,7 @@ const mockPrisma = {
   leaseObligation: { findMany: jest.fn() },
   leaseRentInvoice: { findMany: jest.fn() },
   lease: { findMany: jest.fn() },
+  document: { findMany: jest.fn() },
 };
 const mockNotifications = {
   notifyPaymentOverdue: jest.fn(),
@@ -22,6 +23,8 @@ const mockNotifications = {
   notifyDepositOutstanding: jest.fn(),
   notifyRentOverdue: jest.fn(),
   notifyLeaseHoldover: jest.fn(),
+  notifyDocumentExpiring: jest.fn(),
+  notifyDocumentExpired: jest.fn(),
 };
 // runDailyChecks generates the rent ledger before reading it; the per-check tests
 // below call the checks directly, so a no-op stub is enough.
@@ -593,6 +596,11 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
       // the same as no answer.
       'HISTORY_DELETION_REQUESTED',
       'HISTORY_DELETION_DECIDED',
+      // D2: permits / NOCs / possession certificates lapse. Two types, not one escalating
+      // type, because muting is per-type — turning off the 60-day countdown must not also
+      // silence the alert that says a permit has actually expired.
+      'DOCUMENT_EXPIRING',
+      'DOCUMENT_EXPIRED',
     ] as const) {
       expect(Object.values(NotificationType)).toContain(type);
       expect(NOTIFICATION_TIERS).toHaveProperty(type);
@@ -600,7 +608,7 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     // Deliberately an exact count: it is what catches an enum value added to the DB in
     // a migration but never given a tier, which would make it unmutable in
     // getPreferences(). Bump it WITH the list above, never on its own.
-    expect(Object.values(NotificationType)).toHaveLength(33);
+    expect(Object.values(NotificationType)).toHaveLength(35);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {
@@ -617,6 +625,12 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     expect(service.tierOf('UNIT_SOLD')).toBe('FYI');
     expect(service.tierOf('LEASE_ACTIVATED')).toBe('FYI');
     expect(service.tierOf('TI_DISBURSED')).toBe('FYI');
+
+    // D2 — the split is the whole point of having two types. The countdown fires at three
+    // horizons for every document that carries a date, so it stays in-app; the LAPSE is a
+    // stop-work risk and has to leave the app.
+    expect(service.tierOf('DOCUMENT_EXPIRING')).toBe('FYI');
+    expect(service.tierOf('DOCUMENT_EXPIRED')).toBe('ACTION');
   });
 
   it('falls back to FYI (never email-everyone) for an unclassified type', () => {
@@ -976,5 +990,277 @@ describe('ScheduledNotificationsService.checkHoldovers', () => {
     expect(mockNotifications.notifyLeaseHoldover).toHaveBeenNthCalledWith(
       2, expect.objectContaining({ id: 'l2', projectId: 'pr2', holdoverRatePct: null }),
     );
+  });
+});
+
+// ============================================================================
+// D2 — document expiry: permits, NOCs and possession certificates
+// ============================================================================
+//
+// Nothing tracked document validity before this: a permit could lapse mid-build and the
+// first anyone knew was an inspector on site. `expiresAt` is nullable and never required,
+// so the cron's job is to find the documents that DO carry a date, bucket them by how
+// close they are, and keep saying so — without saying it again every single morning.
+
+describe('ScheduledNotificationsService.checkExpiringDocuments', () => {
+  let service: ScheduledNotificationsService;
+
+  /** A document as the cron selects it: project-anchored, expiry set. */
+  function docFixture(over: Record<string, unknown> = {}) {
+    return {
+      id: 'd1',
+      fileName: 'Building Permit 2026.pdf',
+      category: 'PERMIT',
+      expiresAt: daysFromNow(45),
+      project: { id: 'pr1', name: 'Rio Ranch' },
+      building: null,
+      unit: null,
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.document.findMany.mockResolvedValue([]);
+    service = new ScheduledNotificationsService(
+      mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any,
+    );
+  });
+
+  it('buckets each document into the TIGHTEST horizon that still contains it', async () => {
+    mockPrisma.document.findMany.mockResolvedValue([
+      docFixture({ id: 'far', expiresAt: daysFromNow(50) }),
+      docFixture({ id: 'mid', expiresAt: daysFromNow(21) }),
+      docFixture({ id: 'near', expiresAt: daysFromNow(3) }),
+    ]);
+
+    const res = await service.checkExpiringDocuments();
+
+    expect(res).toEqual({ expired: 0, expiring: 3 });
+    expect(mockNotifications.notifyDocumentExpiring).toHaveBeenCalledTimes(3);
+    const byId = new Map(
+      mockNotifications.notifyDocumentExpiring.mock.calls.map((c: any[]) => [c[0].id, c[0]]),
+    );
+    expect(byId.get('far').horizonDays).toBe(60);
+    expect(byId.get('mid').horizonDays).toBe(30);
+    expect(byId.get('near').horizonDays).toBe(7);
+    expect(mockNotifications.notifyDocumentExpired).not.toHaveBeenCalled();
+  });
+
+  it('bounds the query at the widest horizon so documents outside it are never fetched', async () => {
+    await service.checkExpiringDocuments();
+
+    const where = mockPrisma.document.findMany.mock.calls[0][0].where;
+    // Upper bound only — 60 days out, the widest horizon.
+    const bound = where.expiresAt.lte as Date;
+    const daysOut = Math.round((bound.getTime() - Date.now()) / 86_400_000);
+    expect(daysOut).toBe(60);
+    // No LOWER bound: already-expired documents come back in the same read, deliberately.
+    expect(where.expiresAt.gte).toBeUndefined();
+    // Documents with no expiry at all (photos, drawings, brochures) must stay silent.
+    expect(where.expiresAt.not).toBeNull();
+  });
+
+  it('raises the EXPIRED alert, not the countdown, once the date has passed', async () => {
+    mockPrisma.document.findMany.mockResolvedValue([
+      docFixture({ id: 'lapsed', expiresAt: daysFromNow(-9) }),
+    ]);
+
+    const res = await service.checkExpiringDocuments();
+
+    expect(res).toEqual({ expired: 1, expiring: 0 });
+    expect(mockNotifications.notifyDocumentExpiring).not.toHaveBeenCalled();
+    expect(mockNotifications.notifyDocumentExpired).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lapsed', daysOverdue: 9, projectId: 'pr1', projectName: 'Rio Ranch' }),
+    );
+  });
+
+  it('keeps reporting a long-lapsed document — no lookback window', async () => {
+    mockPrisma.document.findMany.mockResolvedValue([
+      docFixture({ id: 'ancient', expiresAt: daysFromNow(-400) }),
+    ]);
+
+    await service.checkExpiringDocuments();
+
+    expect(mockNotifications.notifyDocumentExpired).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ancient', daysOverdue: 400 }),
+    );
+  });
+
+  it('excludes soft-deleted documents', async () => {
+    await service.checkExpiringDocuments();
+    expect(mockPrisma.document.findMany.mock.calls[0][0].where.deletedAt).toBeNull();
+  });
+
+  it('excludes documents whose owning project is archived, down every polymorphic link', async () => {
+    await service.checkExpiringDocuments();
+
+    const where = mockPrisma.document.findMany.mock.calls[0][0].where;
+    // Each link is nullable, so each needs its own "unset OR alive" clause — a bare
+    // `project: { deletedAt: null }` would drop every building- and unit-anchored
+    // document instead of only the archived ones.
+    expect(where.AND).toEqual([
+      { OR: [{ projectId: null }, { project: { deletedAt: null } }] },
+      { OR: [{ buildingId: null }, { building: { deletedAt: null, project: { deletedAt: null } } }] },
+      {
+        OR: [
+          { unitId: null },
+          { unit: { deletedAt: null, building: { deletedAt: null, project: { deletedAt: null } } } },
+        ],
+      },
+    ]);
+  });
+
+  it('resolves the owning project down the building and unit links too', async () => {
+    mockPrisma.document.findMany.mockResolvedValue([
+      docFixture({ id: 'b', project: null, building: { project: { id: 'pr2', name: 'Leander P1' } } }),
+      docFixture({
+        id: 'u',
+        project: null,
+        unit: { building: { project: { id: 'pr3', name: 'Cedar Park' } } },
+      }),
+      // Orphaned — attached to nothing. Still alerted on, just without project routing.
+      docFixture({ id: 'orphan', project: null }),
+    ]);
+
+    await service.checkExpiringDocuments();
+
+    const byId = new Map(
+      mockNotifications.notifyDocumentExpiring.mock.calls.map((c: any[]) => [c[0].id, c[0]]),
+    );
+    expect(byId.get('b')).toMatchObject({ projectId: 'pr2', projectName: 'Leander P1' });
+    expect(byId.get('u')).toMatchObject({ projectId: 'pr3', projectName: 'Cedar Park' });
+    expect(byId.get('orphan')).toMatchObject({ projectId: null, projectName: null });
+  });
+
+  it('does not let one failing document stop the rest of the run', async () => {
+    mockPrisma.document.findMany.mockResolvedValue([
+      docFixture({ id: 'bad' }),
+      docFixture({ id: 'good' }),
+    ]);
+    mockNotifications.notifyDocumentExpiring
+      .mockRejectedValueOnce(new Error('smtp down'))
+      .mockResolvedValueOnce(undefined);
+
+    const res = await service.checkExpiringDocuments();
+
+    expect(mockNotifications.notifyDocumentExpiring).toHaveBeenCalledTimes(2);
+    expect(res.expiring).toBe(1);
+  });
+});
+
+describe('NotificationsService — document expiry triggers', () => {
+  let service: NotificationsService;
+  let spy: jest.SpyInstance;
+
+  const DOC = {
+    id: 'doc1',
+    fileName: 'Building Permit 2026.pdf',
+    category: 'POSSESSION_CERTIFICATE',
+    expiresAt: new Date('2026-10-01T00:00:00Z'),
+    projectId: 'pr1',
+    projectName: 'Rio Ranch',
+  };
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    jest.clearAllMocks();
+    const prisma: any = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      projectMember: { findMany: jest.fn().mockResolvedValue([]) },
+      notificationPreference: { findMany: jest.fn().mockResolvedValue([]) },
+      notification: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const config = { get: jest.fn((_k: string, d?: string) => d) };
+    service = new NotificationsService(prisma, config as any, undefined as any);
+    spy = jest.spyOn(service, 'sendToRoles').mockResolvedValue(undefined);
+  });
+
+  it('routes to the people who actually renew a permit — not leadership alone', async () => {
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 12, horizonDays: 30 });
+
+    const args = spy.mock.calls[0][0];
+    // `roles: []` would mean LEADERSHIP ONLY (sendToRoles adds them unconditionally),
+    // which tells the founders a permit is lapsing and tells nobody who can act on it.
+    expect(args.roles).toEqual(['CONSTRUCTION', 'PROJECT_MANAGER', 'LEGAL']);
+    expect(args.roles).not.toHaveLength(0);
+    expect(args.projectId).toBe('pr1');
+    expect(args.link).toBe('/projects/pr1/documents');
+  });
+
+  it('keys the countdown on the document AND the horizon, never on the day count', async () => {
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 23, horizonDays: 30 });
+    const first = spy.mock.calls[0][0];
+
+    // Same bucket, a day later: the title has counted down but the key has NOT, so the
+    // recurring-suppression match still hits and it does not re-fire every morning.
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 22, horizonDays: 30 });
+    const second = spy.mock.calls[1][0];
+
+    expect(first.dedupeKey).toBe('document:doc1:30d');
+    expect(second.dedupeKey).toBe(first.dedupeKey);
+    expect(second.title).not.toBe(first.title);
+    expect(first.dedupeKey).not.toMatch(/23/);
+  });
+
+  it('gets a NEW key when it crosses into a tighter horizon — the escalation must land', async () => {
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 23, horizonDays: 30 });
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 5, horizonDays: 7 });
+
+    expect(spy.mock.calls[0][0].dedupeKey).toBe('document:doc1:30d');
+    expect(spy.mock.calls[1][0].dedupeKey).toBe('document:doc1:7d');
+  });
+
+  it('keys the lapse on the document alone — one condition until it is renewed', async () => {
+    await service.notifyDocumentExpired({ ...DOC, daysOverdue: 5 });
+    await service.notifyDocumentExpired({ ...DOC, daysOverdue: 6 });
+
+    expect(spy.mock.calls[0][0].dedupeKey).toBe('document:doc1');
+    expect(spy.mock.calls[1][0].dedupeKey).toBe('document:doc1');
+    expect(spy.mock.calls[0][0].type).toBe(NotificationType.DOCUMENT_EXPIRED);
+  });
+
+  it('the countdown and the lapse never share a key-and-type, so both can be delivered', async () => {
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 3, horizonDays: 7 });
+    await service.notifyDocumentExpired({ ...DOC, daysOverdue: 1 });
+
+    const [expiring, expired] = spy.mock.calls.map((c: any[]) => c[0]);
+    expect(expiring.type).toBe(NotificationType.DOCUMENT_EXPIRING);
+    expect(expired.type).toBe(NotificationType.DOCUMENT_EXPIRED);
+    expect(expiring.dedupeKey).not.toBe(expired.dedupeKey);
+  });
+
+  it('reads as a sentence: category humanised, file named, date and ask spelled out', async () => {
+    await service.notifyDocumentExpiring({ ...DOC, daysLeft: 12, horizonDays: 30 });
+    const { title, body } = spy.mock.calls[0][0];
+
+    expect(title).toContain('POSSESSION CERTIFICATE');
+    expect(title).toContain('Building Permit 2026.pdf');
+    expect(body).toContain('Rio Ranch');
+    expect(body).toContain('Start the renewal now');
+
+    await service.notifyDocumentExpired({ ...DOC, daysOverdue: 4 });
+    const expired = spy.mock.calls[1][0];
+    expect(expired.title).toContain('EXPIRED');
+    expect(expired.body).toContain('still on file');
+  });
+
+  it('omits the link rather than inventing one when the document hangs off no project', async () => {
+    await service.notifyDocumentExpiring({
+      ...DOC, projectId: null, projectName: null, daysLeft: 12, horizonDays: 30,
+    });
+
+    const args = spy.mock.calls[0][0];
+    expect(args.link).toBeUndefined();
+    expect(args.body).not.toContain('undefined');
+    expect(args.body).not.toContain('null');
+  });
+
+  it('both halves are RECURRING, which is what makes the dedupeKey mandatory', () => {
+    expect(RECURRING_TYPES.DOCUMENT_EXPIRING).toBe(true);
+    expect(RECURRING_TYPES.DOCUMENT_EXPIRED).toBe(true);
   });
 });

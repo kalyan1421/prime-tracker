@@ -58,6 +58,9 @@ export const NOTIFICATION_TIERS = {
   // and the answer is addressed at one named person.
   HISTORY_DELETION_REQUESTED: 'ACTION',
   HISTORY_DELETION_DECIDED: 'ACTION',
+  // D2 — the permit/NOC has actually LAPSED and is still on file. Operating on a lapsed
+  // permit is a stop-work risk and a compliance exposure, so it emails.
+  DOCUMENT_EXPIRED: 'ACTION',
 
   // ---- FYI: awareness only ----
   LEASE_EXPIRING_30: 'FYI',
@@ -74,6 +77,13 @@ export const NOTIFICATION_TIERS = {
   LEASE_ACTIVATED: 'FYI',
   LEASE_RENT_CHANGED: 'FYI',
   TI_DISBURSED: 'FYI',
+  // D2 — the countdown, not the lapse. FYI for the same reason LEASE_EXPIRING_30 is: it
+  // fires at THREE horizons (60/30/7) for every document that carries a date, and a
+  // portfolio holds a lot of permits. Emailing all of them is precisely the "filter the
+  // whole sender to a folder" failure described above — at which point DOCUMENT_EXPIRED
+  // goes with it. In-app on every horizon; anyone who wants the early warnings by mail
+  // sets emailEnabled: true for this one type.
+  DOCUMENT_EXPIRING: 'FYI',
 } as const satisfies Record<string, NotificationTier>;
 
 /**
@@ -125,6 +135,15 @@ export const RECURRING_TYPES = {
   INTERIOR_HANDOVER_DUE: true,
   DRAW_FUNDING_OVERDUE: true,
   FREE_RENT_ENDING_30: true,
+  // D2 — both halves are standing CONDITIONS the daily cron re-evaluates ("this permit
+  // expires in 23 days" / "this permit lapsed 5 days ago"), so both need a dedupeKey or
+  // they would notify every single morning forever. Keyed on the document:
+  //   DOCUMENT_EXPIRING -> `document:<id>:<horizon>d`  (horizon in the key so crossing
+  //                        60 -> 30 -> 7 is a genuinely new, more urgent alert)
+  //   DOCUMENT_EXPIRED  -> `document:<id>`             (one condition that persists until
+  //                        the document is renewed or removed)
+  DOCUMENT_EXPIRING: true,
+  DOCUMENT_EXPIRED: true,
 
   // Discrete events — always delivered, never deduplicated.
   COMMENT_FINANCIAL: false,
@@ -694,6 +713,96 @@ export class NotificationsService {
       title: `Loan Maturing in 60 Days`,
       body: `A loan in project ${loan.project.name} matures on ${loan.maturityDate.toLocaleDateString()}.`,
       link,
+    });
+  }
+
+  /**
+   * D2 — document expiry.
+   *
+   * Routing: CONSTRUCTION / PROJECT_MANAGER / LEGAL. These are the people who actually
+   * renew a permit, chase an NOC, or read a possession certificate. Deliberately NOT
+   * `roles: []` — that form means LEADERSHIP ONLY (sendToRoles adds SUPER_ADMIN / FOUNDER /
+   * EXECUTIVE unconditionally as portfolio owners), which would tell the founders a permit
+   * is lapsing and tell nobody who can do anything about it. Leadership still receives
+   * these on top, via that unconditional add.
+   */
+  private static readonly DOCUMENT_EXPIRY_ROLES = ['CONSTRUCTION', 'PROJECT_MANAGER', 'LEGAL'];
+
+  /** Link to wherever the document is filed; null when it hangs off no project. */
+  private documentLink(projectId?: string | null): string | undefined {
+    return projectId ? `/projects/${projectId}/documents` : undefined;
+  }
+
+  /**
+   * A document with an expiry date is approaching it. Fired once per horizon (60 / 30 / 7),
+   * never daily — see the dedupeKey.
+   */
+  async notifyDocumentExpiring(doc: {
+    id: string;
+    fileName: string;
+    category: string;
+    expiresAt: Date;
+    daysLeft: number;
+    /** Which horizon bucket this alert belongs to. Part of the dedupe key. */
+    horizonDays: number;
+    projectId?: string | null;
+    projectName?: string | null;
+  }) {
+    const where = doc.projectName ? ` (${doc.projectName})` : '';
+    await this.sendToRoles({
+      roles: NotificationsService.DOCUMENT_EXPIRY_ROLES,
+      projectId: doc.projectId,
+      type: NotificationType.DOCUMENT_EXPIRING,
+      // RECURRING. The horizon is IN the key so the same document alerts once per bucket:
+      // stable within a bucket (it does not re-fire every morning), and a new key the
+      // moment it crosses into a tighter one, which is the escalation getting through.
+      // The day count lives only in the title — never in the key, because a title that
+      // counts down changes daily and would defeat the dedupe entirely.
+      dedupeKey: `document:${doc.id}:${doc.horizonDays}d`,
+      title: `${doc.category.replace(/_/g, ' ')} expires in ${doc.daysLeft} day(s): ${doc.fileName}`,
+      body:
+        `"${doc.fileName}"${where} expires on ${doc.expiresAt.toLocaleDateString()} `
+        + `— ${doc.daysLeft} day(s) away. Start the renewal now if it is still needed; `
+        + `clear the expiry date on the document if it is not.`,
+      link: this.documentLink(doc.projectId),
+    });
+  }
+
+  /**
+   * The date has PASSED and the document is still on file.
+   *
+   * A separate type from DOCUMENT_EXPIRING rather than the same one escalating, because
+   * muting is per-type: the 60-day warning is the one somebody eventually turns off, and
+   * turning it off must not silence the alert that a permit has actually lapsed. It is
+   * also the reason the tiers differ — this one emails, the countdown does not.
+   *
+   * No lookback bound, deliberately, mirroring checkHoldovers: a permit four months lapsed
+   * is MORE worth surfacing than one lapsed a week ago, not less.
+   */
+  async notifyDocumentExpired(doc: {
+    id: string;
+    fileName: string;
+    category: string;
+    expiresAt: Date;
+    daysOverdue: number;
+    projectId?: string | null;
+    projectName?: string | null;
+  }) {
+    const where = doc.projectName ? ` (${doc.projectName})` : '';
+    await this.sendToRoles({
+      roles: NotificationsService.DOCUMENT_EXPIRY_ROLES,
+      projectId: doc.projectId,
+      type: NotificationType.DOCUMENT_EXPIRED,
+      // One standing condition per document — it persists until the document is renewed,
+      // re-dated or removed, so no bucket suffix. Keyed on the document, not the title,
+      // which carries a live day counter.
+      dedupeKey: `document:${doc.id}`,
+      title: `EXPIRED ${doc.category.replace(/_/g, ' ')}: ${doc.fileName}`,
+      body:
+        `"${doc.fileName}"${where} expired on ${doc.expiresAt.toLocaleDateString()} `
+        + `— ${doc.daysOverdue} day(s) ago and it is still on file. Upload the renewed `
+        + `document and set its new expiry, or remove it if it no longer applies.`,
+      link: this.documentLink(doc.projectId),
     });
   }
 
