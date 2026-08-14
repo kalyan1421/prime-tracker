@@ -2,7 +2,7 @@ import {
   IsString, IsOptional,
   IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
 } from 'class-validator';
-import { LostReason } from '@prisma/client';
+import { LostReason, SaleBuyerType } from '@prisma/client';
 import { SaleCancellationFieldsDto } from './sale-cancellation.dto';
 
 // Note: projectId/unitId/buildingId are deliberately absent — a sale's project and
@@ -15,6 +15,18 @@ import { SaleCancellationFieldsDto } from './sale-cancellation.dto';
 export class UpdateSaleDto extends SaleCancellationFieldsDto {
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;
+
+  /**
+   * Who the buyer is relative to the sitting tenant (S4/T1). Sent with the CLOSE, since
+   * that is the request whose behaviour it changes: SITTING_TENANT ends the tenancy as
+   * TENANT_BOUGHT, THIRD_PARTY leaves the rent schedule and invoices untouched and hands
+   * the tenancy to the buyer.
+   *
+   * A value sent on this request beats the stored one — the answer to "who bought it" is
+   * given at completion, not before it.
+   */
+  @IsOptional() @IsEnum(SaleBuyerType)
+  buyerType?: SaleBuyerType;
 
   @IsOptional() @IsNumber() @IsPositive()
   salePrice?: number;

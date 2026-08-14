@@ -893,6 +893,201 @@ describe('SalesService — a closed sale ends the sitting tenancy', () => {
 });
 
 // ---------------------------------------------------------------------------
+// S4 / T1 — who bought decides what happens to the tenancy.
+//
+// Before Sale.buyerType existed this path hard-coded TENANT_BOUGHT for every close, so a
+// third-party sale of a tenanted unit DELETED the remaining rent periods and voided the
+// future invoices of a tenant still in occupation and still owing rent. Unrecoverable,
+// and driven by an assumption nobody was asked to confirm.
+//
+// The tests below are mostly about what is NOT done, and about the default staying put:
+// every sale written before the field existed reads as SITTING_TENANT, which is exactly
+// what the old code assumed about it.
+// ---------------------------------------------------------------------------
+describe('SalesService — a third-party sale hands the tenancy over instead of ending it', () => {
+  let service: SalesService;
+
+  const sittingTenant = {
+    id: 'l1', tenantName: 'Sitting Tenant LLC', leaseStart: new Date('2025-01-01'),
+  };
+
+  /** The stored sale. `buyerType` is overridden per case; omit it to model a legacy row. */
+  const saleRow = (over: any = {}) => ({
+    id: 's1', unitId: 'u1', projectId: 'pr1', status: 'UNDER_CONTRACT', closingDate: null,
+    salePrice: 100000, ...over,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    stubCloseTxn();
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'LEASED' });
+    mockPrisma.unit.update.mockResolvedValue({});
+    mockPrisma.lease.findMany.mockResolvedValue([sittingTenant]);
+    mockLeases.endTenancyWithin.mockResolvedValue({});
+  });
+
+  const close = (over: any = {}) =>
+    service.update('s1', { status: 'CLOSED', closingDate: '2026-06-30', ...over } as any, 'user-1');
+
+  it('ends the tenancy as TENANT_BOUGHT when the SITTING TENANT bought', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'SITTING_TENANT' }));
+
+    await close();
+
+    expect(mockLeases.endTenancyWithin.mock.calls[0][2].terminationReason).toBe('TENANT_BOUGHT');
+  });
+
+  it('transfers the tenancy — NOT TENANT_BOUGHT — when a THIRD PARTY bought', async () => {
+    // The reason is the whole branch: LEASE_TRANSFERRED_WITH_SALE is what makes
+    // endTenancyWithin skip capAtTermination and voidAfter. Asserting the reason here and
+    // the skip in leases.service.spec keeps each test on one side of the seam.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+
+    await close();
+
+    const input = mockLeases.endTenancyWithin.mock.calls[0][2];
+    expect(input.terminationReason).toBe('LEASE_TRANSFERRED_WITH_SALE');
+    expect(input.terminationDate).toEqual(new Date('2026-06-30'));
+    // The note is what a human reads on the lease afterwards, so it has to say the tenant
+    // stayed — "Ended automatically when the sale closed" would be a lie.
+    expect(input.terminationNote).toMatch(/remains in occupation/);
+  });
+
+  it('flips the unit to SOLD on the third-party path too', async () => {
+    // The tenancy surviving does not make the sale any less of a sale. SOLD is also what
+    // NOT_ON_SOLD_UNIT keys off, and that filter — not the skipped cap — is what actually
+    // stops Prime billing a tenancy it handed over.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+
+    await close();
+
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SOLD' }) }),
+    );
+  });
+
+  it('marks the unit SOLD BEFORE ending the tenancy, which is what makes the transfer legal', async () => {
+    // endTenancyWithin refuses LEASE_TRANSFERRED_WITH_SALE unless the unit already reads
+    // SOLD. Reversing these two writes would make every third-party close fail on a guard
+    // it is supposed to satisfy.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+
+    await close();
+
+    expect(mockPrisma.unit.update.mock.invocationCallOrder[0]).toBeLessThan(
+      mockLeases.endTenancyWithin.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('a sale that predates the field keeps its old meaning — the tenant bought', async () => {
+    // The migration defaults every existing row to SITTING_TENANT. A close that silently
+    // changed behaviour for historical sales would be a worse bug than the one being fixed.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow()); // no buyerType at all
+
+    await close();
+
+    expect(mockLeases.endTenancyWithin.mock.calls[0][2].terminationReason).toBe('TENANT_BOUGHT');
+  });
+
+  it('takes buyerType from THIS request, not from the row it is about to overwrite', async () => {
+    // "Who bought it" is answered at completion. Closing and choosing third-party is one
+    // PUT, so reading the stored value would act on the answer from before the dialog.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'SITTING_TENANT' }));
+
+    await close({ buyerType: 'THIRD_PARTY' });
+
+    expect(mockLeases.endTenancyWithin.mock.calls[0][2].terminationReason)
+      .toBe('LEASE_TRANSFERRED_WITH_SALE');
+  });
+
+  it('changes nothing on a vacant unit — buyerType only bites when someone is in occupation', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+
+    await close();
+
+    expect(mockLeases.endTenancyWithin).not.toHaveBeenCalled();
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'SOLD' }) }),
+    );
+  });
+
+  it('transfers EVERY tenancy in occupation, not just the first', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+    mockPrisma.lease.findMany.mockResolvedValue([
+      { id: 'l-old', tenantName: 'First Tenant', leaseStart: new Date('2024-01-01') },
+      { id: 'l-new', tenantName: 'Second Tenant', leaseStart: new Date('2026-06-01') },
+    ]);
+
+    await close();
+
+    expect(mockLeases.endTenancyWithin).toHaveBeenCalledTimes(2);
+    for (const call of mockLeases.endTenancyWithin.mock.calls) {
+      expect(call[2].terminationReason).toBe('LEASE_TRANSFERRED_WITH_SALE');
+    }
+  });
+
+  // ── R5 — notification parity, on both paths ──────────────────────────────────────
+  it('announces the transfer after the commit, with the reason that tells it apart', async () => {
+    // One event type for both endings on purpose: the audience is identical (Finance
+    // stops expecting the rent, Sales stops treating the space as Prime's) and `reason`
+    // is what distinguishes them. A separate event type would be a second name for one
+    // message — and a handler that forgot to subscribe would re-create the exact R5
+    // defect of a tenancy leaving the book silently.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+
+    await close();
+
+    expect(mockBus.emit).toHaveBeenCalledWith({
+      type: 'lease.terminated', leaseId: 'l1', projectId: 'pr1',
+      tenantName: 'Sitting Tenant LLC', reason: 'LEASE_TRANSFERRED_WITH_SALE',
+    });
+  });
+
+  it('says nothing when a third-party close rolls back', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+    mockLeases.endTenancyWithin.mockRejectedValue(new Error('unit is not SOLD'));
+
+    await expect(close()).rejects.toThrow(/not SOLD/);
+    expect(mockBus.emit).not.toHaveBeenCalled();
+  });
+
+  // ── R6 — the unit's history distinguishes the two endings ────────────────────────
+  it('records the sale as a LANDLORD CHANGE when a third party bought', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+
+    await close();
+
+    const event = mockStatusEvents.recordIfChanged.mock.calls[0][0];
+    expect(event).toMatchObject({ toStatus: 'SOLD', source: 'SALE_CLOSED', saleId: 's1' });
+    expect(event.reason).toMatch(/third party/);
+    expect(event.reason).toMatch(/continues/);
+  });
+
+  it('records the sale as one continuous story when the sitting tenant bought', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'SITTING_TENANT' }));
+
+    await close();
+
+    const event = mockStatusEvents.recordIfChanged.mock.calls[0][0];
+    expect(event.reason).toMatch(/sitting tenant/);
+    expect(event.reason).toMatch(/ends at completion/);
+  });
+
+  it('narrates nothing about the buyer when there was no tenancy to reason about', async () => {
+    // On a vacant unit buyerType has no consequence, so stating one would put a
+    // distinction into the history that the sale never made.
+    mockPrisma.sale.findUnique.mockResolvedValue(saleRow({ buyerType: 'THIRD_PARTY' }));
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+
+    await close();
+
+    expect(mockStatusEvents.recordIfChanged.mock.calls[0][0].reason).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // S1 — the cancellation refund/penalty ledger
 //
 // CancelSaleModal collected a refund and a penalty and update() threw them away

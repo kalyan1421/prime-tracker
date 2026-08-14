@@ -13,6 +13,12 @@ export type UnitStatusEventSource =
   | 'LEASE_ENDED'     // a lease expired/terminated and released the unit
   | 'SALE_CLOSED'     // a sale closed → SOLD
   | 'SALE_CANCELLED'  // a sale collapsed and released a reserved unit
+  // A buyer switched units mid-contract (S3). Deliberately NOT reusing SALE_CANCELLED
+  // or MANUAL: the unit went back on the market because the deal MOVED, not because it
+  // died, and a vacancy report that cannot tell those apart reads a live buyer as a
+  // lost one.
+  | 'SALE_TRANSFERRED_OUT' // the sale holding this unit moved off to another unit
+  | 'SALE_TRANSFERRED_IN'  // an existing sale moved ONTO this unit
   | 'UNIT_CREATED'    // the unit's first state
   | 'UNIT_COMBINED'   // unit merge minted or archived this unit
   | 'BACKFILL'        // historical entry (Phase H2)

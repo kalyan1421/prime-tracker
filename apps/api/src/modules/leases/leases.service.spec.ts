@@ -1242,6 +1242,162 @@ describe('LeasesService.endTenancy', () => {
 });
 
 // ---------------------------------------------------------------------------
+// S4 / T1 — LEASE_TRANSFERRED_WITH_SALE: the tenancy leaves Prime's book INTACT.
+//
+// Every other reason means the tenancy is over, so capAtTermination deletes the rest of
+// the rent schedule and voidAfter voids the invoices after the date. When a tenanted unit
+// is sold to a third party that is exactly backwards: the tenant is still in the unit and
+// still owes the rent, to the buyer. Both deletions are unrecoverable, which is why this
+// mode exists and why the tests below are about what does NOT happen.
+// ---------------------------------------------------------------------------
+describe('LeasesService.endTenancy — tenancy transferred with the sale', () => {
+  let service: LeasesService;
+
+  const tx: any = {
+    lease: { update: jest.fn(), findUnique: (...a: any[]) => mockPrisma.lease.findUnique(...a) },
+    unit: { findUnique: jest.fn(), update: jest.fn() },
+    leaseObligation: { findFirst: jest.fn(), update: jest.fn(), create: jest.fn() },
+  };
+
+  const LEASE = {
+    id: 'l1',
+    unitId: 'u1',
+    tenantName: 'Sitting Tenant LLC',
+    leaseStart: new Date('2025-01-01'),
+    leaseEnd: new Date('2030-01-01'),
+    terminationDate: null,
+    deletedAt: null,
+    status: 'ACTIVE',
+  };
+
+  const transferInput = {
+    terminationDate: '2026-06-30',
+    terminationReason: 'LEASE_TRANSFERRED_WITH_SALE' as const,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+
+    mockAudit.log.mockResolvedValue(undefined);
+    mockPrisma.lease.findUnique.mockResolvedValue(LEASE);
+    mockPrisma.unit.findUnique.mockResolvedValue({ building: { projectId: 'p1' } });
+    mockPrisma.$transaction = jest.fn((fn: any) => fn(tx));
+
+    tx.lease.update.mockImplementation(({ data }: any) => Promise.resolve({ ...LEASE, ...data }));
+    // The sale flipped the unit to SOLD earlier in the same transaction — the state this
+    // mode is only ever legitimately reached from.
+    tx.unit.findUnique.mockResolvedValue({ status: 'SOLD' });
+    tx.unit.update.mockResolvedValue({});
+    tx.leaseObligation.findFirst.mockResolvedValue(null);
+
+    mockRentPeriods.capAtTermination = jest.fn().mockResolvedValue({ deleted: 3, truncated: 1 });
+    mockInvoices.paidAfter.mockResolvedValue([]);
+    mockInvoices.voidAfter.mockResolvedValue(4);
+    mockStatusEvents.record.mockResolvedValue({ id: 'evt1' });
+  });
+
+  it('DELETES NO RENT PERIODS AND VOIDS NO INVOICES — the data-loss case', async () => {
+    // The single most important assertion in this file. Those rows are now the buyer's
+    // record of a tenant in occupation; capAtTermination deletes them outright.
+    const result = await service.endTenancy('l1', transferInput, 'user-1');
+
+    expect(mockRentPeriods.capAtTermination).not.toHaveBeenCalled();
+    expect(mockInvoices.voidAfter).not.toHaveBeenCalled();
+    expect(result.periodsDeleted).toBe(0);
+    expect(result.periodsTruncated).toBe(0);
+    expect(result.invoicesVoided).toBe(0);
+  });
+
+  it('still marks the lease, so Prime stops treating it as its own', async () => {
+    // "Survives" means the LEDGER survives, not that the lease is left looking live on
+    // Prime's book. An untouched ACTIVE lease on a SOLD unit is the inconsistency the
+    // whole sale-ends-the-tenancy path exists to prevent.
+    await service.endTenancy('l1', transferInput, 'user-1');
+
+    const data = tx.lease.update.mock.calls[0][0].data;
+    expect(data.terminationDate).toEqual(new Date('2026-06-30'));
+    expect(data.terminationReason).toBe('LEASE_TRANSFERRED_WITH_SALE');
+    expect(data.status).toBe('TERMINATED'); // mid-term, so not EXPIRED
+  });
+
+  it('refuses the reason on a unit Prime still owns', async () => {
+    // The skipped cap and void are only safe BECAUSE the unit is SOLD: NOT_ON_SOLD_UNIT
+    // and the capAtSale / soldAt guards are what actually stop Prime billing it. On an
+    // unsold unit this would leave a "terminated" lease whose schedule keeps running and
+    // whose invoices keep being generated — the worst of both modes.
+    tx.unit.findUnique.mockResolvedValue({ status: 'LEASED' });
+
+    await expect(service.endTenancy('l1', transferInput)).rejects.toThrow(/has been SOLD/);
+    expect(tx.lease.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses on a building-level lease, which has no unit that could have been sold', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, unitId: null, buildingId: 'b1' });
+
+    await expect(service.endTenancy('l1', transferInput)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(tx.lease.update).not.toHaveBeenCalled();
+  });
+
+  it('is NOT blocked by rent already collected past the completion date', async () => {
+    // That guard exists to stop voidAfter erasing money, and nothing is voided here. Rent
+    // paid in advance across a completion is an apportionment between seller and buyer
+    // (spec non-goal 1) — routine in commercial letting, and not a reason to refuse the
+    // completion. Refusing it would also give advice ("clear those payments if they were
+    // recorded in error") that is wrong for money correctly collected.
+    mockInvoices.paidAfter.mockResolvedValue([
+      { id: 'i1', periodMonth: new Date('2026-08-01'), status: 'PAID' },
+    ]);
+
+    await expect(service.endTenancy('l1', transferInput)).resolves.toBeDefined();
+    expect(tx.lease.update).toHaveBeenCalled();
+  });
+
+  it('leaves the SOLD unit alone and logs the transfer as a LANDLORD CHANGE (R6)', async () => {
+    await service.endTenancy('l1', transferInput, 'user-1');
+
+    expect(tx.unit.update).not.toHaveBeenCalled();
+    const event = mockStatusEvents.record.mock.calls[0][0];
+    expect(event).toMatchObject({ unitId: 'u1', toStatus: 'SOLD', leaseId: 'l1' });
+    // Whoever opens this unit's history must not read that the tenant left, because they
+    // did not. "Tenancy ended (…)" is precisely the wrong sentence here.
+    expect(event.reason).toMatch(/Landlord changed/);
+    expect(event.reason).toMatch(/continues with the new owner/);
+    expect(event.reason).not.toMatch(/Tenancy ended/);
+  });
+
+  it('notifies on the same footing as any other tenancy end, carrying the reason (R5)', async () => {
+    await service.endTenancy('l1', transferInput, 'user-1');
+
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'lease.terminated',
+        leaseId: 'l1',
+        projectId: 'p1',
+        tenantName: 'Sitting Tenant LLC',
+        reason: 'LEASE_TRANSFERRED_WITH_SALE',
+      }),
+    );
+  });
+
+  it('every OTHER reason still caps and voids — regression guard on the default mode', async () => {
+    // The skip must be reachable only through the one reason that names it. If this ever
+    // fails, an ordinary move-out has stopped closing its own rent schedule.
+    tx.unit.findUnique.mockResolvedValue({ status: 'LEASED' });
+
+    await service.endTenancy('l1', {
+      terminationDate: '2026-06-30',
+      terminationReason: 'TENANT_BOUGHT',
+    });
+
+    expect(mockRentPeriods.capAtTermination).toHaveBeenCalledWith('l1', new Date('2026-06-30'), tx);
+    expect(mockInvoices.voidAfter).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // assignTenant — the lease document survives, only the party changes.
 //
 // The whole value of this method is what it does NOT touch. An assignment that

@@ -1109,7 +1109,7 @@ export class NotificationsService {
       title: `Lease terminated: ${p.tenantName}`,
       body: `${p.tenantName}'s lease${this.at(p.unitLabel)} in ${p.projectName ?? 'a project'} was terminated${
         p.terminatedOn ? ` on ${this.date(p.terminatedOn)}` : ''
-      }${p.reason ? ` — ${p.reason}` : ''}. Settle the deposit and re-list the space.`,
+      }${p.reason ? ` — ${p.reason}` : ''}. ${this.tenancyEndAdvice(p.reason)}`,
       link: `/projects/${p.projectId}/revenue`,
     });
   }
@@ -1235,6 +1235,30 @@ export class NotificationsService {
   }
 
   // ---- Formatting helpers ----
+
+  /**
+   * What to actually do about a tenancy that just ended — which is not the same sentence
+   * in every case.
+   *
+   * This used to read "Settle the deposit and re-list the space" unconditionally. That is
+   * wrong for both sale-driven endings: a SOLD unit is never re-listed. It has been
+   * misfiring on TENANT_BOUGHT since that path shipped, and the third-party transfer path
+   * would have inherited it.
+   */
+  private tenancyEndAdvice(reason?: string | null): string {
+    if (reason === 'TENANT_BOUGHT') {
+      // The tenant is now the owner, so there is no space to re-let. The deposit is still
+      // live money and still has to be settled — often against the purchase price.
+      return 'The tenant has bought the unit, so it is not returning to the market. Settle the deposit.';
+    }
+    if (reason === 'LEASE_TRANSFERRED_WITH_SALE') {
+      // Prime no longer owns the unit OR manages the tenancy. Nothing to re-list, and the
+      // deposit is the new owner's problem to take on — which is a handover, not a refund.
+      return 'The unit was sold with the tenant in place — the tenancy continues with the new owner. '
+        + 'Confirm the deposit is handed over and stop billing this lease.';
+    }
+    return 'Settle the deposit and re-list the space.';
+  }
 
   private at(unitLabel?: string | null) {
     return unitLabel ? ` at ${unitLabel}` : '';

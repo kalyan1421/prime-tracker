@@ -427,7 +427,8 @@ model UnitStatusEvent {
   /// When the row was written. Differs from effectiveAt for backfilled history.
   recordedAt   DateTime    @default(now())
   /// MANUAL | LEASE_ACTIVATED | LEASE_ENDED | SALE_CLOSED | SALE_CANCELLED
-  /// | UNIT_CREATED | UNIT_COMBINED | BACKFILL | SYSTEM
+  /// | SALE_TRANSFERRED_OUT | SALE_TRANSFERRED_IN | UNIT_CREATED | UNIT_COMBINED
+  /// | BACKFILL | SYSTEM
   source       String
   /// Provenance — which lease/sale drove this, when one did.
   leaseId      String?
@@ -1011,6 +1012,14 @@ model Sale {
   buildingId             String?
   building               Building?   @relation(fields: [buildingId], references: [id])
   buyer                  String?
+  // WHO the buyer is relative to the sitting tenancy — the fact from which the close's
+  // effect on that tenancy is DERIVED (S4/T1). A boolean `endsLease` was rejected: six
+  // months on nobody remembers what `false` meant.
+  //
+  // Only consequential when the unit has a tenancy in occupation at completion; on a
+  // vacant unit both values close identically. Defaults to SITTING_TENANT so every sale
+  // written before this field existed keeps exactly the behaviour it had.
+  buyerType              SaleBuyerType @default(SITTING_TENANT)
   salePrice              Decimal?    @db.Decimal(14, 2)
   depositAmt             Decimal?    @db.Decimal(14, 2)
   status                 String      @default("PROSPECT")
@@ -1060,6 +1069,20 @@ model Sale {
   @@index([deletedAt])
   @@index([brokerId])
   @@map("sales")
+}
+
+/// Who bought, relative to the tenant sitting in the unit. Decides what closing the sale
+/// does to that tenancy (SalesService.update):
+///   SITTING_TENANT — the tenancy ENDS at completion, reason TENANT_BOUGHT. The schedule
+///                    is capped and future invoices are voided, because there is no longer
+///                    anyone to bill: the tenant now owns the place.
+///   THIRD_PARTY    — the tenancy SURVIVES. Prime hands it over to the buyer entirely
+///                    (client-locked 2026-08-14): billing stops, but the rent schedule and
+///                    the invoices are left exactly as they are, because they are now the
+///                    new owner's record of a tenant still in occupation.
+enum SaleBuyerType {
+  SITTING_TENANT
+  THIRD_PARTY
 }
 
 enum LostReason {

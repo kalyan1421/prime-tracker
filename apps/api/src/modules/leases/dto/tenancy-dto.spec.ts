@@ -85,6 +85,9 @@ describe('EndTenancyDto', () => {
   it.each([
     'EXPIRED', 'NON_RENEWAL', 'EARLY_TERMINATION', 'EVICTION', 'MUTUAL',
     'LANDLORD_TERMINATED', 'RENEWED', 'RELOCATED', 'ASSIGNED', 'TENANT_BOUGHT',
+    // S4/T1. Accepted by the DTO like any other reason; the service refuses it unless the
+    // unit is SOLD, because that is what makes skipping the cap and the void safe.
+    'LEASE_TRANSFERRED_WITH_SALE',
   ])('accepts %s', async (terminationReason) => {
     expect(await errorsOn(EndTenancyDto, { ...VALID_END, terminationReason })).toEqual([]);
   });

@@ -765,6 +765,10 @@ const TENANCY_END_LABEL: Record<string, string> = {
   RELOCATED: 'Tenant relocated',
   ASSIGNED: 'Lease assigned',
   TENANT_BOUGHT: 'Tenant bought the unit',
+  // R6 — a third-party sale is a LANDLORD CHANGE, not an ending. Falling through to the
+  // generic 'Tenancy ended' would tell the reader the tenant left, when the whole point of
+  // this reason is that they did not.
+  LEASE_TRANSFERRED_WITH_SALE: 'Unit sold — tenancy transferred to the new owner',
 };
 
 /**

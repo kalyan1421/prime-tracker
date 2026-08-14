@@ -2,7 +2,7 @@ import {
   IsString, IsNotEmpty, IsOptional,
   IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
 } from 'class-validator';
-import { LostReason } from '@prisma/client';
+import { LostReason, SaleBuyerType } from '@prisma/client';
 
 export class CreateSaleDto {
   @IsString() @IsNotEmpty()
@@ -18,6 +18,18 @@ export class CreateSaleDto {
 
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;
+
+  /**
+   * Who the buyer is relative to the sitting tenant. Decides what closing this sale does
+   * to that tenancy: SITTING_TENANT ends it, THIRD_PARTY hands it over intact.
+   *
+   * Optional here, defaulting to SITTING_TENANT at the column, so existing API clients
+   * keep working. The close dialog is required to make it an explicit choice with no
+   * pre-selection (spec R2) — that is a UI obligation the backend deliberately does not
+   * enforce, because a hard requirement would break every caller that predates the field.
+   */
+  @IsOptional() @IsEnum(SaleBuyerType)
+  buyerType?: SaleBuyerType;
 
   @IsOptional() @IsNumber() @IsPositive()
   salePrice?: number;

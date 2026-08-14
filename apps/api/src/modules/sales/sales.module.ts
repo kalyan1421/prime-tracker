@@ -5,6 +5,7 @@ import { SalesForecastService } from './sales-forecast.service';
 import { SalesStaleCron } from './sales-stale.cron';
 import { SalePaymentsService } from './sale-payments.service';
 import { SalePaymentEventHandlers } from './sale-payment-event-handlers.service';
+import { SaleUnitTransferService } from './sale-unit-transfer.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 import { LeasesModule } from '../leases/leases.module';
@@ -20,9 +21,10 @@ import { LeasesModule } from '../leases/leases.module';
     SalesStaleCron,
     SalePaymentsService,
     SalePaymentEventHandlers,
+    SaleUnitTransferService,
     AuditService,
     UnitStatusEventService,
   ],
-  exports: [SalesService, SalesForecastService, SalePaymentsService],
+  exports: [SalesService, SalesForecastService, SalePaymentsService, SaleUnitTransferService],
 })
 export class SalesModule {}

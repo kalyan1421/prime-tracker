@@ -10,8 +10,10 @@ import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
 import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
+import { TransferSaleUnitDto } from './dto/transfer-sale-unit.dto';
 import { UserRole, SalePaymentTrigger } from '@prisma/client';
 import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
+import { SaleUnitTransferService } from './sale-unit-transfer.service';
 
 @ApiTags('Sales')
 @ApiBearerAuth()
@@ -23,6 +25,7 @@ export class SalesController {
     private service: SalesService,
     private forecast: SalesForecastService,
     private salePayments: SalePaymentsService,
+    private unitTransfers: SaleUnitTransferService,
   ) {}
 
   /** GET /api/sales/forecast?projectId=:id — probability-weighted pipeline forecast */
@@ -122,6 +125,40 @@ export class SalesController {
   @ApiOperation({ summary: 'Delete sale (CLOSED sales require Founder/SuperAdmin role)' })
   delete(@Param('id') id: string, @CurrentUser('role') userRole: UserRole) {
     return this.service.delete(id, userRole);
+  }
+
+  // ─────── Unit swap mid-contract (S3) ───────
+
+  /**
+   * POST /api/sales/:id/transfer-unit — the buyer switched units after signing.
+   *
+   * The whole deal carries: buyer, documents and broker untouched, the installment
+   * schedule rebased onto the new price, the discount approval carried only if the
+   * concession did not grow. Gated on sales:edit, the same permission that moves a
+   * sale's stage — this is a sales-desk act, not a Finance one, and the money decisions
+   * it surfaces (flagged installments) are handed to Finance rather than made here.
+   */
+  @Post(':id/transfer-unit')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({
+    summary:
+      'Transfer a live sale to a different unit (carries payments, broker and — ' +
+      'conditionally — the discount approval; releases the old unit)',
+  })
+  transferUnit(
+    @Param('id') id: string,
+    @Body() body: TransferSaleUnitDto,
+    @CurrentUser('sub') userId?: string,
+  ) {
+    return this.unitTransfers.transferUnit(id, body, userId);
+  }
+
+  /** GET /api/sales/:id/unit-transfers — every unit this sale has moved between. */
+  @Get(':id/unit-transfers')
+  @RequirePermissions('sales:view')
+  @ApiOperation({ summary: 'Unit-transfer history for a sale, oldest first' })
+  listUnitTransfers(@Param('id') id: string) {
+    return this.unitTransfers.findBySale(id);
   }
 
   @Post(':id/approve-discount')

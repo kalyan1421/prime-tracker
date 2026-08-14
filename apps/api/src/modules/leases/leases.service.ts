@@ -12,9 +12,11 @@ import { AuditService } from '../../common/utils/audit.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 
 /**
- * Why a tenancy ended. The first six end it for good; the last four say the tenancy
+ * Why a tenancy ended. The first six end it for good; the last five say the tenancy
  * CONTINUES somewhere — under a new lease (RENEWED), on another unit (RELOCATED), with
- * a new party (ASSIGNED), or because the tenant bought the place (TENANT_BOUGHT).
+ * a new party (ASSIGNED), because the tenant bought the place (TENANT_BOUGHT), or
+ * because Prime sold the unit out from under a tenancy that carries on with the new
+ * owner (LEASE_TRANSFERRED_WITH_SALE).
  */
 export const TERMINATION_REASONS = [
   'EXPIRED',
@@ -27,8 +29,31 @@ export const TERMINATION_REASONS = [
   'RELOCATED',
   'ASSIGNED',
   'TENANT_BOUGHT',
+  'LEASE_TRANSFERRED_WITH_SALE',
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];
+
+/**
+ * Reasons where the rent ledger MUST SURVIVE the end of Prime's involvement.
+ *
+ * Ending a tenancy normally caps the rent schedule at the move-out date and voids every
+ * invoice after it, because nobody owes that money any more. When a tenanted unit is sold
+ * to a THIRD PARTY that is exactly backwards: the tenant is still in occupation and still
+ * owes the rent — to the buyer. Deleting the periods and voiding the invoices destroys the
+ * new owner's record of a live tenancy, and it cannot be reconstructed.
+ *
+ * Derived from the reason rather than passed as a flag on purpose. The reason IS the fact;
+ * a separate `preserveLedger` boolean would let a caller preserve the ledger under
+ * TENANT_BOUGHT, producing a state with no name and no explanation.
+ */
+export const LEDGER_PRESERVING_REASONS: readonly TerminationReason[] = [
+  'LEASE_TRANSFERRED_WITH_SALE',
+];
+
+/** True when this reason hands the tenancy over intact instead of ending it. */
+export function preservesRentLedger(reason: TerminationReason | string | undefined): boolean {
+  return LEDGER_PRESERVING_REASONS.includes(reason as TerminationReason);
+}
 
 /** What happens to the security deposit. See LeasesService.settleDeposit. */
 export const DEPOSIT_DISPOSITIONS = ['REFUND', 'FORFEIT', 'TRANSFER', 'DECIDE_LATER'] as const;
@@ -229,6 +254,16 @@ export class LeasesService {
    * Deliberately emits NOTHING: no bus event, no audit row. The caller's transaction may
    * still roll back after this returns, and a notification for a sale that did not
    * happen is worse than a late one. The caller emits after it commits.
+   *
+   * TWO MODES, selected by the reason (see LEDGER_PRESERVING_REASONS):
+   *
+   *   normal                      the tenancy is over. Cap the schedule at the move-out
+   *                               date, void every invoice after it, release the unit.
+   *   LEASE_TRANSFERRED_WITH_SALE the tenancy is NOT over — Prime sold the unit and the
+   *                               tenant stays. Cap and void are SKIPPED, because those
+   *                               rows are now the buyer's record of a live tenancy and
+   *                               deleting them is unrecoverable. The lease is marked so
+   *                               Prime stops treating it as its own; nothing else moves.
    */
   async endTenancyWithin(
     tx: Prisma.TransactionClient,
@@ -256,17 +291,51 @@ export class LeasesService {
       throw new BadRequestException('A reason is required to end a tenancy');
     }
 
+    // Does this reason hand the tenancy over intact rather than end it? Everything below
+    // that touches the rent ledger branches on this one answer.
+    const preserveLedger = preservesRentLedger(input.terminationReason);
+
+    // A transfer is only safe BECAUSE the unit is off Prime's book. NOT_ON_SOLD_UNIT and
+    // the capAtSale / soldAt guards all refuse rent writes on a SOLD unit, which is what
+    // actually stops Prime billing a tenancy it no longer owns — the skipped cap and void
+    // do not. Recording this reason against a unit Prime still owns would therefore leave
+    // a "terminated" lease whose schedule keeps running and whose invoices keep being
+    // generated: the worst of both modes. Refuse it rather than create that state.
+    //
+    // The sale path always satisfies this: SalesService flips the unit to SOLD earlier in
+    // the same transaction, so the read below sees SOLD.
+    if (preserveLedger) {
+      const unit = before.unitId
+        ? await tx.unit.findUnique({ where: { id: before.unitId }, select: { status: true } })
+        : null;
+      if (!unit || unit.status !== 'SOLD') {
+        throw new BadRequestException(
+          'A tenancy can only be recorded as transferred with the sale on a unit that has ' +
+          'been SOLD. Close the sale — that hands the tenancy over as part of the same ' +
+          'transaction — rather than ending the tenancy by hand.',
+        );
+      }
+    }
+
     // Hard stop: money already collected for months after the move-out. Either the date
     // is wrong or a refund is owed, and neither is something an automated void should
     // decide. Name the months so whoever hit this can act on it.
-    const paid = await this.invoices.paidAfter(id, terminationDate);
-    if (paid.length > 0) {
-      const months = paid.map((p) => p.periodMonth.toISOString().slice(0, 7)).join(', ');
-      throw new BadRequestException(
-        `Rent has already been collected for ${months}, after the move-out date of ` +
-        `${terminationDate.toISOString().slice(0, 10)}. Correct the move-out date, or ` +
-        'clear those payments first if they were recorded in error.',
-      );
+    //
+    // Skipped on a transfer, because the guard exists to protect voidAfter from erasing
+    // collected money and nothing is voided here. Rent paid in advance past a completion
+    // date is an apportionment between seller and buyer (spec non-goal 1), not a reason to
+    // refuse the completion — and the refusal's own advice ("clear those payments if they
+    // were recorded in error") is wrong for money that was correctly collected.
+    if (!preserveLedger) {
+      const paid = await this.invoices.paidAfter(id, terminationDate);
+      if (paid.length > 0) {
+        const months = paid.map((p) => p.periodMonth.toISOString().slice(0, 7)).join(', ');
+        throw new BadRequestException(
+          `Rent has already been collected for ${months}, after the move-out date of ` +
+          `${terminationDate.toISOString().slice(0, 10)}. Correct the move-out date, or ` +
+          'clear those payments first if they were recorded in error.',
+        );
+      }
     }
 
     const successor = await this.loadSuccessor(input.successorLeaseId, id, before.unitId);
@@ -295,13 +364,29 @@ export class LeasesService {
         },
       });
 
-      const schedule = await this.rentPeriods.capAtTermination(id, terminationDate, tx);
-      const voided = await this.invoices.voidAfter(
-        id,
-        terminationDate,
-        `Tenancy ended ${terminationDate.toISOString().slice(0, 10)}`,
-        tx,
-      );
+      // THE data-loss case, and the reason this branch exists at all.
+      //
+      // capAtTermination DELETES every rent period starting after the date and truncates
+      // the one spanning it; voidAfter voids every invoice after it. Correct when the
+      // tenancy is over — nobody owes that money. Catastrophic when the unit was sold to a
+      // third party: the tenant is still in the unit and still owes the rent, to the buyer.
+      // Neither deletion is recoverable, so a transfer runs NEITHER and the schedule and
+      // invoices are handed over exactly as they stand.
+      //
+      // Prime still stops billing, but through the sold-unit guards (NOT_ON_SOLD_UNIT and
+      // the capAtSale / soldAt refusals), which is why those guards need no carve-out and
+      // must not be weakened: they, not this cap, are what makes the handover complete.
+      const schedule = preserveLedger
+        ? { deleted: 0, truncated: 0 }
+        : await this.rentPeriods.capAtTermination(id, terminationDate, tx);
+      const voided = preserveLedger
+        ? 0
+        : await this.invoices.voidAfter(
+            id,
+            terminationDate,
+            `Tenancy ended ${terminationDate.toISOString().slice(0, 10)}`,
+            tx,
+          );
 
       const deposit = await this.settleDeposit(tx, id, input, successor?.id, terminationDate);
 
@@ -782,6 +867,13 @@ export class LeasesService {
     input: EndTenancyInput,
     successor: { unitId: string | null } | null,
   ): string {
+    // R6 — the two endings must not read alike. A transfer is a LANDLORD CHANGE: whoever
+    // opens this unit's history later must see that the tenant did not leave, which is the
+    // opposite of what "Tenancy ended" tells them.
+    if (preservesRentLedger(input.terminationReason)) {
+      return 'Landlord changed — unit sold to a third party; the tenancy continues with ' +
+        'the new owner and Prime no longer bills it';
+    }
     const base = `Tenancy ended (${input.terminationReason})`;
     if (!successor) return base;
     return `${base} — tenancy continues under a ${

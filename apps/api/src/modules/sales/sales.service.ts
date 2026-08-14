@@ -1,9 +1,9 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { Prisma, UserRole, SaleCancellationDisposition } from '@prisma/client';
+import { Prisma, UserRole, SaleBuyerType, SaleCancellationDisposition } from '@prisma/client';
 import { EventBus } from '../../common/events/event-bus.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
-import { LeasesService } from '../leases/leases.service';
+import { LeasesService, TerminationReason } from '../leases/leases.service';
 import { startOfUtcDay } from '../leases/lease-rent-period.service';
 import { SalePaymentsService } from './sale-payments.service';
 import {
@@ -59,6 +59,26 @@ export function assertCancellationReconciles(row: {
   );
 }
 
+/**
+ * The discount a sale price represents off a unit's asking price, as a percentage.
+ * Null when it cannot be computed (no asking price, or no price on the sale) and 0 when
+ * the sale is at or above asking — i.e. no discount at all.
+ *
+ * Extracted so the unit-swap path (S3) compares the same figure the approval gate below
+ * tests, rather than a second implementation that could drift from it.
+ */
+export function discountPctOffAsking(
+  askingPrice: unknown,
+  salePrice: unknown,
+): number | null {
+  const asking = askingPrice != null ? Number(askingPrice) : null;
+  const price = salePrice != null ? Number(salePrice) : null;
+  if (asking == null || price == null) return null;
+  if (!(asking > 0)) return null;
+  if (price >= asking) return 0;
+  return ((asking - price) / asking) * 100;
+}
+
 @Injectable()
 export class SalesService {
   constructor(
@@ -81,6 +101,41 @@ export class SalesService {
       if (!Number.isNaN(d.getTime())) return d;
     }
     return new Date();
+  }
+
+  /**
+   * Who bought, relative to the sitting tenant (S4/T1).
+   *
+   * The incoming body wins when this request sets it — closing a sale and saying "a third
+   * party bought it" is one PUT, and reading the stored row would act on the value the
+   * sale had a moment ago. Prisma's update inputs allow a `{ set: value }` wrapper as well
+   * as a bare value, so both are unwrapped rather than trusting the common shape.
+   *
+   * Falls back to the stored column, then to SITTING_TENANT — the column default, and
+   * therefore exactly what every sale written before this field existed already meant.
+   */
+  private resolveBuyerType(
+    sale: { buyerType?: SaleBuyerType | null },
+    data: Prisma.SaleUncheckedUpdateInput,
+  ): SaleBuyerType {
+    const incoming = data.buyerType as SaleBuyerType | { set?: SaleBuyerType } | undefined;
+    const fromBody =
+      incoming && typeof incoming === 'object' ? incoming.set : (incoming as SaleBuyerType | undefined);
+    return fromBody ?? sale.buyerType ?? 'SITTING_TENANT';
+  }
+
+  /**
+   * What the unit's occupancy log says about this sale (R6).
+   *
+   * Only stated when there was actually a tenancy to reason about: on a vacant unit
+   * buyerType has no consequence, and narrating one would put a distinction into the
+   * history that the sale never made.
+   */
+  private saleClosedReason(tenancyTransfers: boolean, occupyingCount: number): string | undefined {
+    if (occupyingCount === 0) return undefined;
+    return tenancyTransfers
+      ? 'Sold to a third party — the sitting tenancy transfers to the new owner and continues'
+      : 'Sold to the sitting tenant — their tenancy ends at completion';
   }
 
   async findByProject(projectId: string) {
@@ -303,6 +358,18 @@ export class SalesService {
     // out for a tenancy that rolled back with its sale. Plural because a unit can hold
     // more than one tenancy in occupation (see the findMany below).
     let endedLeases: { id: string; tenantName: string }[] = [];
+    // WHO bought, relative to the sitting tenant — the whole of the S4/T1 branch derives
+    // from this one value. Read from the incoming body when this request sets it, else
+    // from the stored row; SITTING_TENANT if neither, which is the column default and
+    // therefore what every pre-existing sale means.
+    const buyerType = this.resolveBuyerType(sale, dataWithActivity);
+    // A third-party buyer takes the tenancy WITH the unit. The lease is not ended in the
+    // ordinary sense — it leaves Prime's book intact — so the rent schedule and the future
+    // invoices must survive untouched. See LEDGER_PRESERVING_REASONS in leases.service.
+    const tenancyTransfers = buyerType === 'THIRD_PARTY';
+    const terminationReason: TerminationReason = tenancyTransfers
+      ? 'LEASE_TRANSFERRED_WITH_SALE'
+      : 'TENANT_BOUGHT';
     if (data.status === 'CLOSED' && sale.unitId) {
       const unitId = sale.unitId;
       // Atomic + optimistic-locked: only the NOT_CLOSED→CLOSED transition stamps the broker
@@ -326,28 +393,19 @@ export class SalesService {
         });
         await tx.unit.update({
           where: { id: unitId },
-          // Sale closed → unit becomes SOLD; clear time-on-market
+          // Sale closed → unit becomes SOLD; clear time-on-market. Written BEFORE the
+          // tenancy work below, which is load-bearing for a transfer: endTenancyWithin
+          // refuses LEASE_TRANSFERRED_WITH_SALE unless the unit already reads SOLD, and
+          // that refusal is what stops the ledger-preserving mode being reachable on a
+          // unit Prime still owns and still bills.
           data: { status: 'SOLD', availableSince: null },
         });
-        // Only the request that won the lock reaches here, so the event is written
-        // exactly once — same guarantee the `applied` flag gives the emitted events.
-        await this.statusEvents.recordIfChanged(
-          {
-            unitId,
-            fromStatus: before.status,
-            toStatus: 'SOLD',
-            source: 'SALE_CLOSED',
-            saleId: id,
-            effectiveAt: this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate),
-            recordedById: updatedById,
-          },
-          tx,
-        );
 
-        // A sale ENDS every tenancy the unit is carrying (H3). Until this existed, closing
-        // a sale flipped the unit to SOLD and left the lease ACTIVE — only the billing
-        // cron's sold-unit filter stopped the departed tenant being invoiced, and the unit
-        // read SOLD with a tenancy still running.
+        // A sale ENDS every tenancy the unit is carrying — unless a THIRD PARTY bought it,
+        // in which case the tenancy goes with the unit (S4/T1). Until the H3 work existed,
+        // closing a sale flipped the unit to SOLD and left the lease ACTIVE — only the
+        // billing cron's sold-unit filter stopped the departed tenant being invoiced, and
+        // the unit read SOLD with a tenancy still running.
         //
         // In the SAME transaction on purpose: sold-with-a-live-lease is exactly the
         // inconsistency both halves exist to prevent, so it must not be reachable by one
@@ -355,8 +413,10 @@ export class SalesService {
         // closing date — the CLOSE fails too, which is the honest outcome: that is a real
         // conflict a person has to resolve, not something to close around.
         //
-        // Assumes the SITTING TENANT BOUGHT, which is the client-confirmed v1 rule. A
-        // third-party sale of a tenanted unit would need the lease to survive the sale.
+        // Which of the two happens is DERIVED from Sale.buyerType, never assumed. Before
+        // that field existed this path hard-coded TENANT_BOUGHT, so a third-party sale
+        // deleted the remaining rent periods and voided the future invoices of a tenant
+        // still in occupation and still owing rent.
         //
         // findMany, not findFirst: a unit can legitimately hold MORE THAN ONE
         // non-terminated lease right now. assertNoOverlappingLease permits a lease
@@ -389,8 +449,31 @@ export class SalesService {
         const closingDay = startOfUtcDay(closingDate);
         const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
 
-        // ALL of them end with the sale, oldest leaseStart first so the outcome does not
-        // depend on row order.
+        // Only the request that won the lock reaches here, so the event is written
+        // exactly once — same guarantee the `applied` flag gives the emitted events.
+        //
+        // Recorded after the tenancy lookup so its `reason` can say which of the two
+        // stories this sale is (R6). The unit's history has to distinguish "the tenant
+        // bought the place" from "the landlord changed and the tenant stayed" — they have
+        // completely different consequences for whoever reads it later.
+        await this.statusEvents.recordIfChanged(
+          {
+            unitId,
+            fromStatus: before.status,
+            toStatus: 'SOLD',
+            source: 'SALE_CLOSED',
+            saleId: id,
+            effectiveAt: this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate),
+            reason: this.saleClosedReason(tenancyTransfers, occupying.length),
+            recordedById: updatedById,
+          },
+          tx,
+        );
+
+        // ALL of them are acted on, oldest leaseStart first so the outcome does not depend
+        // on row order. `terminationReason` carries the whole branch: TENANT_BOUGHT caps
+        // the schedule and voids the future invoices, LEASE_TRANSFERRED_WITH_SALE does
+        // neither and hands both over intact.
         endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
         for (const lease of occupying) {
           await this.leases.endTenancyWithin(
@@ -398,8 +481,12 @@ export class SalesService {
             lease.id,
             {
               terminationDate: closingDate,
-              terminationReason: 'TENANT_BOUGHT',
-              terminationNote: 'Ended automatically when the sale of this unit closed.',
+              terminationReason,
+              terminationNote: tenancyTransfers
+                ? 'Transferred to the buyer when the sale of this unit closed. The tenant ' +
+                  'remains in occupation; Prime no longer manages or bills this tenancy, ' +
+                  'and the rent schedule and invoices are preserved as the new owner\'s record.'
+                : 'Ended automatically when the sale of this unit closed.',
             },
             updatedById,
           );
@@ -462,13 +549,22 @@ export class SalesService {
       result = await this.prisma.sale.update({ where: { id }, data: dataWithActivity });
     }
 
-    // A tenancy ended by a sale must notify on exactly the same footing as one ended by
-    // hand through LeasesService.endTenancy (spec R5) — otherwise the alert depends on
-    // which door was used, and the sale door is the silent one. endTenancyWithin emits
-    // nothing by design (the caller's transaction may still roll back), so the emit is
-    // this method's job, here: after the commit, and only for a close that actually
-    // applied. Same event shape as endTenancy's, and projectId comes from the sale for
-    // the same reason unit.sold's does — the lease is on the sale's own unit.
+    // A tenancy taken off Prime's book by a sale must notify on exactly the same footing
+    // as one ended by hand through LeasesService.endTenancy (spec R5) — otherwise the
+    // alert depends on which door was used, and the sale door is the silent one.
+    // endTenancyWithin emits nothing by design (the caller's transaction may still roll
+    // back), so the emit is this method's job, here: after the commit, and only for a
+    // close that actually applied. Same event shape as endTenancy's, and projectId comes
+    // from the sale for the same reason unit.sold's does — the lease is on the sale's own
+    // unit.
+    //
+    // BOTH paths emit, and `reason` is what tells them apart. A transfer does not get its
+    // own event type: the audience is identical (Finance stops expecting the rent, Sales
+    // stops treating the space as Prime's) and the required actions are the same, so a
+    // second event type would be two names for one message — and a handler that forgot to
+    // subscribe to the new one would silently re-create the exact R5 defect this fixes.
+    // Downstream can branch on `reason`, which is already how TENANT_BOUGHT is told from
+    // an ordinary move-out.
     if (applied && sale.projectId) {
       for (const lease of endedLeases) {
         this.bus.emit({
@@ -476,7 +572,7 @@ export class SalesService {
           leaseId: lease.id,
           projectId: sale.projectId,
           tenantName: lease.tenantName,
-          reason: 'TENANT_BOUGHT',
+          reason: terminationReason,
         });
       }
     }
@@ -747,11 +843,9 @@ export class SalesService {
       where: { id: sale.unitId },
       select: { askingPrice: true },
     });
-    const asking = unit?.askingPrice != null ? Number(unit.askingPrice) : null;
-    const salePrice = Number(sale.salePrice);
-    if (!asking || asking <= 0 || salePrice >= asking) return; // no discount
+    const discountPct = discountPctOffAsking(unit?.askingPrice, sale.salePrice);
+    if (discountPct == null || discountPct <= 0) return; // no computable discount
 
-    const discountPct = ((asking - salePrice) / asking) * 100;
     const threshold = await this.resolveDiscountThreshold(sale.projectId);
     if (discountPct > threshold) {
       throw new ForbiddenException(
@@ -795,7 +889,8 @@ export class SalesService {
     return undefined;
   }
 
-  private async resolveDiscountThreshold(projectId: string): Promise<number> {
+  /** Public so the unit-swap path (S3) re-gates against the same org threshold. */
+  async resolveDiscountThreshold(projectId: string): Promise<number> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { orgId: true },
