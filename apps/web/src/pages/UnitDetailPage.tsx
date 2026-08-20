@@ -13,7 +13,7 @@ import {
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
   useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers, useUnitHistory,
   useTasks,
-  useLeaseRentInvoices,
+  useLeaseRentInvoices, useBackfillTenancy,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -33,6 +33,10 @@ import { LeaseObligationsPanel } from '../components/LeaseObligationsPanel';
 import { EndTenancyDialog, AssignTenantDialog } from '../components/TenancyTransitionDialogs';
 import { UnitConstructionPanel } from '../components/ConstructionBoard';
 import { BackfillTenancyDialog } from '../components/BackfillTenancyDialog';
+import {
+  TenancyBackfillFields, useTenancyBackfillState,
+  requiredBackfillFieldError, buildCollectionOverrides, backfillSuccessToast,
+} from '../components/TenancyBackfillFields';
 import { HistoricalRecordControls } from '../components/HistoricalRecordControls';
 import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
@@ -718,12 +722,32 @@ export default function UnitDetailPage() {
   const [leaseErrors, setLeaseErrors] = useState<Record<string, string>>({});
   const createLease = useCreateLease();
   const updateLease = useUpdateLease();
+  const backfillTenancy = useBackfillTenancy();
+
+  // "Save as rental history" — lets the Add Lease dialog write a settled, already-ended
+  // tenancy (same backend call, and the same TenancyBackfillFields, as the separate
+  // "+ Record a past tenancy" flow) instead of a live one. Only offered for a brand-new
+  // lease: backfillTenancy composes create(), it does not edit an existing lease into a
+  // historical record.
+  const [isHistorical, setIsHistorical] = useState(false);
+  const historical = useTenancyBackfillState(leaseForm.leaseStart ?? '', leaseForm.monthlyRent ?? '');
+
+  const resetHistoricalFields = () => {
+    setIsHistorical(false);
+    historical.reset();
+  };
+
+  const closeLeaseModal = () => {
+    setLeaseModalOpen(false);
+    resetHistoricalFields();
+  };
 
   const openAddLease = (leaseStatus: string = 'ACTIVE') => {
     setLeaseIsNew(true);
     setLeaseEditId(null);
     setLeaseForm({ ...EMPTY_LEASE, unitId: unitId || '', status: leaseStatus });
     setLeaseErrors({});
+    resetHistoricalFields();
     setLeaseModalOpen(true);
   };
 
@@ -738,10 +762,59 @@ export default function UnitDetailPage() {
     setLeaseEditId(lease.id);
     setLeaseForm(leaseToForm(lease, unitId || ''));
     setLeaseErrors({});
+    resetHistoricalFields();
     setLeaseModalOpen(true);
   };
 
+  const saveHistoricalLease = async () => {
+    // Same field set the normal path checks (rentStartDate vs leaseStart, rentDueDay
+    // range) — the backfill DTO enforces both server-side, so skipping this client-side
+    // would just trade an inline field error for a generic toast after a round-trip.
+    const errs = validateLeaseForm(leaseForm);
+    if (Object.keys(errs).length > 0) {
+      setLeaseErrors(errs);
+      return addToast({ title: 'Please fix the highlighted fields', color: 'warning' });
+    }
+    const requiredError = requiredBackfillFieldError({
+      tenantName: leaseForm.tenantName, leaseStart: leaseForm.leaseStart,
+      leaseEnd: leaseForm.leaseEnd, terminationDate: historical.terminationDate,
+      monthlyRent: leaseForm.monthlyRent,
+    });
+    if (requiredError) return addToast({ title: requiredError, color: 'warning' });
+    if (historical.endsInFuture) {
+      return addToast({ title: 'That move-out date is in the future — use a normal lease instead', color: 'warning' });
+    }
+
+    const overrides = buildCollectionOverrides(historical.collections, historical.rent);
+
+    try {
+      const res = await backfillTenancy.mutateAsync({
+        unitId: unitId!,
+        tenantName: leaseForm.tenantName.trim(),
+        tenantLegalName: leaseForm.tenantLegalName || undefined,
+        tenantBrand: leaseForm.tenantBrand || undefined,
+        leaseStart: leaseForm.leaseStart,
+        leaseEnd: leaseForm.leaseEnd,
+        terminationDate: historical.terminationDate,
+        terminationReason: historical.terminationReason || undefined,
+        monthlyRent: Number(leaseForm.monthlyRent),
+        rentStartDate: leaseForm.rentStartDate || undefined,
+        securityDeposit: leaseForm.securityDeposit ? Number(leaseForm.securityDeposit) : undefined,
+        rentDueDay: leaseForm.rentDueDay ? Number(leaseForm.rentDueDay) : undefined,
+        notes: leaseForm.notes || undefined,
+        collections: Object.keys(overrides).length ? overrides : undefined,
+      });
+      backfillSuccessToast(res);
+      await refreshUnit();
+      closeLeaseModal();
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not record the tenancy'), color: 'danger' });
+    }
+  };
+
   const handleSaveLease = async () => {
+    if (leaseIsNew && isHistorical) return saveHistoricalLease();
+
     const errs = validateLeaseForm(leaseForm);
     if (Object.keys(errs).length > 0) {
       setLeaseErrors(errs);
@@ -757,7 +830,7 @@ export default function UnitDetailPage() {
         addToast({ title: 'Lease updated', color: 'success' });
       }
       await refreshUnit();
-      setLeaseModalOpen(false);
+      closeLeaseModal();
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to save lease'), color: 'danger' });
     }
@@ -1074,10 +1147,41 @@ export default function UnitDetailPage() {
       </Modal>
 
       {/* Lease Modal */}
-      <Modal isOpen={leaseModalOpen} onClose={() => setLeaseModalOpen(false)} size="2xl" scrollBehavior="inside">
-        <ModalContent>
-          <ModalHeader>{leaseIsNew ? 'Add Lease' : 'Edit Lease'}</ModalHeader>
+      <Modal isOpen={leaseModalOpen} onClose={closeLeaseModal} size="2xl" scrollBehavior="inside">
+        <ModalContent className={isHistorical ? 'border-2 border-amber-400' : undefined}>
+          <ModalHeader>
+            {isHistorical ? 'Record a Past Tenancy' : leaseIsNew ? 'Add Lease' : 'Edit Lease'}
+          </ModalHeader>
           <ModalBody>
+            {/* Only offered for a brand-new lease — backfillTenancy composes create(),
+                it cannot turn an existing lease into a historical record. The banner
+                stays visible for the whole dialog (not just at the top) so the mode is
+                never ambiguous, even scrolled past the fields below. */}
+            {leaseIsNew && (
+              <div className="rounded-md bg-amber-50 border border-amber-200 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-amber-900">
+                      This is a past tenancy that already ended
+                    </p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      Historical entry — the unit's current status will not change, and
+                      months default to paid in full.
+                    </p>
+                  </div>
+                  <Switch
+                    size="sm"
+                    color="warning"
+                    isSelected={isHistorical}
+                    onValueChange={(on) => {
+                      setIsHistorical(on);
+                      if (!on) historical.reset();
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Editing a lease that already has a ledger does NOT revisit the invoices.
                 Periods that have started are frozen, and generation is idempotent on
                 (leaseId, periodMonth) — so months billed under the old dates stay billed
@@ -1106,12 +1210,27 @@ export default function UnitDetailPage() {
               clearError={(f) => setLeaseErrors((p) => { const n = { ...p }; delete n[f]; return n; })}
               unitOptions={u ? [{ id: u.id, unitNumber: u.unitNumber, sqft: u.sqft }] : []}
               lockUnit
+              isHistorical={isHistorical}
             />
+
+            {/* Historical-only fields, inserted inline rather than a second modal — the
+                same component BackfillTenancyDialog renders, so the two entry points
+                can't drift on validation, copy, or the collections grid. */}
+            {isHistorical && (
+              <div className="mt-4 rounded-md border border-amber-200 p-3 space-y-3">
+                <TenancyBackfillFields state={historical} />
+              </div>
+            )}
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => setLeaseModalOpen(false)}>Cancel</Button>
-            <Button color="primary" onPress={handleSaveLease} isLoading={createLease.isPending || updateLease.isPending}>
-              {leaseIsNew ? 'Add Lease' : 'Save Changes'}
+            <Button variant="flat" onPress={closeLeaseModal}>Cancel</Button>
+            <Button
+              color={isHistorical ? 'warning' : 'primary'}
+              onPress={handleSaveLease}
+              isLoading={createLease.isPending || updateLease.isPending || backfillTenancy.isPending}
+              isDisabled={isHistorical && historical.endsInFuture}
+            >
+              {isHistorical ? 'Save Rental History' : leaseIsNew ? 'Add Lease' : 'Save Changes'}
             </Button>
           </ModalFooter>
         </ModalContent>
@@ -1307,9 +1426,11 @@ export default function UnitDetailPage() {
           ) : undefined}
         >
           {shownLease ? (
-            /* A past tenancy is dimmed as a whole, so the page never reads as though
-               someone is still in the unit. */
-            <div className={`space-y-4 ${tenancy!.isPast ? 'opacity-60' : ''}`}>
+            /* A past tenancy reads as archived through muted, desaturated colors on
+               every element — NOT blanket opacity. Opacity dims a saturated box (like
+               the emerald rent figure below) below safe text contrast, and a washed-out
+               green still reads as "active but faded" rather than clearly historical. */
+            <div className={`space-y-4 ${tenancy!.isPast ? 'border-l-2 border-gray-200 pl-3 -ml-3' : ''}`}>
               {tenancy!.isPast && (
                 <p className="text-xs text-gray-500 -mb-1">
                   Nobody is in this unit now. Showing the last tenancy.
@@ -1354,13 +1475,26 @@ export default function UnitDetailPage() {
               )}
               </div>
 
-              {/* Financial highlight */}
+              {/* Financial highlight. Emerald means "collecting this now" elsewhere in
+                  the app (the Active chip above uses the same color) — a past tenancy
+                  keeps the figure legible but in neutral slate, so it never reads as a
+                  live, currently-billing rent. */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl bg-emerald-50 px-3 py-2.5">
-                  <p className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold">Monthly Rent</p>
-                  <p className="text-lg font-bold text-emerald-700 tabular-nums mt-0.5">{fmt(shownLease.monthlyRent)}</p>
+                <div className={`rounded-xl px-3 py-2.5 ${tenancy!.isPast ? 'bg-slate-50' : 'bg-emerald-50'}`}>
+                  <p className={`text-[10px] uppercase tracking-wide font-semibold ${
+                    tenancy!.isPast ? 'text-slate-500' : 'text-emerald-600'
+                  }`}>
+                    Monthly Rent
+                  </p>
+                  <p className={`text-lg font-bold tabular-nums mt-0.5 ${
+                    tenancy!.isPast ? 'text-slate-700' : 'text-emerald-700'
+                  }`}>
+                    {fmt(shownLease.monthlyRent)}
+                  </p>
                   {shownLease.rentPerSqft && (
-                    <p className="text-[10px] text-emerald-600">${Number(shownLease.rentPerSqft).toFixed(2)}/sqft/mo</p>
+                    <p className={`text-[10px] ${tenancy!.isPast ? 'text-slate-500' : 'text-emerald-600'}`}>
+                      ${Number(shownLease.rentPerSqft).toFixed(2)}/sqft/mo
+                    </p>
                   )}
                 </div>
                 {shownLease.securityDeposit && (

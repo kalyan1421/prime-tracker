@@ -10,6 +10,7 @@ import {
   FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp, FiTrendingDown,
 } from 'react-icons/fi';
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/authStore';
 import { useDisclosure } from '@heroui/react';
 import api from '../lib/api';
@@ -306,6 +307,7 @@ function Sidebar({
 
 function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user, logout } = useAuthStore();
   const { isOpen: isMfaOpen, onOpen: onMfaOpen, onClose: onMfaClose } = useDisclosure();
   const { data: notifData } = useNotifications(20);
@@ -324,6 +326,10 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       await api.post('/auth/logout');
     } catch { /* ignore */ }
     logout();
+    // Navigation alone doesn't remount the QueryClient — without this, cached
+    // dashboard/leads/reports data from THIS user's session (fresh within its
+    // 30s staleTime) would render for whoever signs in next on the same tab.
+    queryClient.clear();
     navigate('/login');
   };
 

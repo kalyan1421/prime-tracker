@@ -8,9 +8,12 @@ const mockPrisma: any = {
 
 const mockEncryption = { decryptFields: jest.fn((l: any) => l) };
 const mockStatusEvents = { currentVacancyStartByUnit: jest.fn().mockResolvedValue(new Map()) };
+// Every existing test calls these methods with no viewer (or an unscoped one), so the
+// scope resolves to `undefined` — "no extra filter" — matching pre-scoping behavior.
+const mockAccess = { listProjectScope: jest.fn().mockResolvedValue(undefined) };
 
 function makeService() {
-  return new ReportsService(mockPrisma as any, mockEncryption as any, mockStatusEvents as any);
+  return new ReportsService(mockPrisma as any, mockEncryption as any, mockStatusEvents as any, mockAccess as any);
 }
 
 const PROJ_A = { id: 'p1', name: 'Alpha', status: 'ACTIVE', phase: 'CONSTRUCTION' };

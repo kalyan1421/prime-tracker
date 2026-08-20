@@ -31,8 +31,12 @@ const mockNotifications: any = { send: jest.fn() };
 // Photos are bucket keys; the service swaps them for signed URLs before returning.
 const mockStorage: any = { signedUrl: jest.fn().mockResolvedValue('https://signed/x.jpg') };
 
+// Every existing test calls findAll with no viewer (or an unscoped one), so the scope
+// resolves to `undefined` — "no extra filter" — matching pre-scoping behavior.
+const mockAccess: any = { listProjectScope: jest.fn().mockResolvedValue(undefined) };
+
 function makeService() {
-  return new TasksService(mockPrisma as any, mockNotifications as any, mockStorage as any);
+  return new TasksService(mockPrisma as any, mockNotifications as any, mockStorage as any, mockAccess as any);
 }
 
 const TASK = {

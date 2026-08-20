@@ -4,6 +4,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { resolveMentions } from '../comments/mentions';
 import { StorageService } from '../../common/storage/storage.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 
 /** Work-item kinds. See the note on Task.kind for why they share one table. */
 export const TASK_KINDS = ['TASK', 'CONSTRUCTION'] as const;
@@ -41,6 +42,7 @@ export class TasksService {
         private prisma: PrismaService,
         private notifications: NotificationsService,
         private storage: StorageService,
+        private access: ProjectAccessService,
     ) { }
 
     /**
@@ -70,11 +72,18 @@ export class TasksService {
         priority?: string;
         search?: string;
         kind?: string;
+        viewer?: { userId: string; role: string; roles?: string[] };
     } = {}) {
-        const { projectId, buildingId, unitId, assignedTo, status, priority, search, kind } = params;
+        const { projectId, buildingId, unitId, assignedTo, status, priority, search, kind, viewer } = params;
         const where: Prisma.TaskWhereInput = {};
 
         if (projectId) where.projectId = projectId;
+        else {
+            // Scoped field roles (Sales/Marketing/PM/Construction) only see tasks in
+            // their member projects — mirrors LeadsService.findAll.
+            const scopeIds = await this.access.listProjectScope(viewer, projectId);
+            if (scopeIds) where.projectId = { in: scopeIds };
+        }
         // All three of these go through their join table, never the legacy scalar. The
         // scalar is null on any item covering more than one — so filtering on it would
         // hide exactly the multi-building, multi-unit and multi-person items that the

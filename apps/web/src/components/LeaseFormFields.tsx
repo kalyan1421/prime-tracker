@@ -197,7 +197,7 @@ export function buildLeasePayload(form: Record<string, string>): Record<string, 
  * UnitsTab post-status-change prompt so the two can never drift apart.
  */
 export function LeaseFormFields({
-  form, setForm, errors = {}, clearError, unitOptions, lockUnit = false,
+  form, setForm, errors = {}, clearError, unitOptions, lockUnit = false, isHistorical = false,
 }: {
   form: Record<string, string>;
   setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
@@ -205,6 +205,10 @@ export function LeaseFormFields({
   clearError?: (field: string) => void;
   unitOptions: any[];
   lockUnit?: boolean;
+  /** Hides fields the backfill endpoint (POST /leases/backfill) has nowhere to put —
+   *  otherwise a value typed here would be silently discarded on save. Mirrors exactly
+   *  what BackfillTenancyDialog exposes today. */
+  isHistorical?: boolean;
 }) {
   // Fetched here rather than prop-drilled through all three call sites. useBrokers is
   // gated on broker:view, so a viewer without it gets nothing back and the commission
@@ -260,9 +264,13 @@ export function LeaseFormFields({
         onChange={set('tenantBrand')}
         description="Shown in place of the tenant name across the app"
       />
-      <Input size="sm" label="Contact Person" value={form.tenantContact} onChange={set('tenantContact')} />
-      <Input size="sm" label="Tenant Email" type="email" value={form.tenantEmail} onChange={set('tenantEmail')} />
-      <Input size="sm" label="Tenant Phone" type="tel" value={form.tenantPhone} onChange={set('tenantPhone')} />
+      {!isHistorical && (
+        <>
+          <Input size="sm" label="Contact Person" value={form.tenantContact} onChange={set('tenantContact')} />
+          <Input size="sm" label="Tenant Email" type="email" value={form.tenantEmail} onChange={set('tenantEmail')} />
+          <Input size="sm" label="Tenant Phone" type="tel" value={form.tenantPhone} onChange={set('tenantPhone')} />
+        </>
+      )}
       <Input
         size="sm"
         label="Monthly Rent ($/month)"
@@ -321,43 +329,47 @@ export function LeaseFormFields({
         description="Calculated from rent start to rent end"
         classNames={{ input: 'text-gray-500' }}
       />
-      <Input size="sm" label="Base Rent ($/sqft/month)" type="number" value={form.rentPerSqft} onChange={set('rentPerSqft')} />
-      <Input
-        size="sm"
-        label="NNN ($/sqft, one-time)"
-        type="number"
-        value={form.nnnPerSqft}
-        onChange={set('nnnPerSqft')}
-        description={
-          derivedNnnTotal != null
-            ? `= $${derivedNnnTotal.toLocaleString()} once, on ${unitSqft.toLocaleString()} sqft`
-            : 'Quoted rate. Charged once at signing — not monthly.'
-        }
-      />
-      <Input
-        size="sm"
-        label="NNN total override ($)"
-        type="number"
-        value={form.nnnTotalAmount}
-        onChange={set('nnnTotalAmount')}
-        description="Only for leases quoted as a flat one-time sum"
-      />
-      <Input
-        size="sm"
-        label="Escalation (% per step)"
-        type="number"
-        value={form.escalationPct}
-        onChange={set('escalationPct')}
-        description="Compounds, and applies to base rent only — never to NNN"
-      />
-      <Input
-        size="sm"
-        label="Escalation every (months)"
-        type="number"
-        value={form.escalationFreq}
-        onChange={set('escalationFreq')}
-        description="Blank = annual (12)"
-      />
+      {!isHistorical && (
+        <>
+          <Input size="sm" label="Base Rent ($/sqft/month)" type="number" value={form.rentPerSqft} onChange={set('rentPerSqft')} />
+          <Input
+            size="sm"
+            label="NNN ($/sqft, one-time)"
+            type="number"
+            value={form.nnnPerSqft}
+            onChange={set('nnnPerSqft')}
+            description={
+              derivedNnnTotal != null
+                ? `= $${derivedNnnTotal.toLocaleString()} once, on ${unitSqft.toLocaleString()} sqft`
+                : 'Quoted rate. Charged once at signing — not monthly.'
+            }
+          />
+          <Input
+            size="sm"
+            label="NNN total override ($)"
+            type="number"
+            value={form.nnnTotalAmount}
+            onChange={set('nnnTotalAmount')}
+            description="Only for leases quoted as a flat one-time sum"
+          />
+          <Input
+            size="sm"
+            label="Escalation (% per step)"
+            type="number"
+            value={form.escalationPct}
+            onChange={set('escalationPct')}
+            description="Compounds, and applies to base rent only — never to NNN"
+          />
+          <Input
+            size="sm"
+            label="Escalation every (months)"
+            type="number"
+            value={form.escalationFreq}
+            onChange={set('escalationFreq')}
+            description="Blank = annual (12)"
+          />
+        </>
+      )}
       {/* The three agreed sums, together. Each seeds a matching obligation on save, so
           the Deposits & Allowances panel is populated from the moment the lease exists
           rather than needing a second trip to enter the same numbers again. Editing an
@@ -370,14 +382,16 @@ export function LeaseFormFields({
         onChange={set('securityDeposit')}
         description="Tenant → Prime. Tracked in Deposits & Allowances."
       />
-      <Input
-        size="sm"
-        label="TI Allowance ($ total)"
-        type="number"
-        value={form.tiAllowance}
-        onChange={set('tiAllowance')}
-        description="Prime → Tenant. Disbursed in phases against this total."
-      />
+      {!isHistorical && (
+        <Input
+          size="sm"
+          label="TI Allowance ($ total)"
+          type="number"
+          value={form.tiAllowance}
+          onChange={set('tiAllowance')}
+          description="Prime → Tenant. Disbursed in phases against this total."
+        />
+      )}
       {/* Drives the due date on every generated rent invoice. Blank = the 1st. */}
       <Input
         size="sm"
@@ -395,34 +409,41 @@ export function LeaseFormFields({
           Blank is the default and means "do not bill", deliberately: the system cannot
           tell a real holdover from a lease nobody closed, and an invoice is permanent
           once generated. Leadership is notified either way. */}
-      <Input
-        size="sm"
-        label="Holdover rent (%)"
-        type="number"
-        min={1}
-        value={form.holdoverRatePct}
-        onChange={set('holdoverRatePct')}
-        isInvalid={!!errors.holdoverRatePct}
-        errorMessage={errors.holdoverRatePct}
-        description="If they stay past the end date. 100 = same rent. Blank = do not bill."
-      />
-      <Select
-        size="sm"
-        label="Status"
-        selectedKeys={form.status ? [form.status] : []}
-        onSelectionChange={(keys) => {
-          const val = Array.from(keys)[0] as string;
-          if (val) setForm((f) => ({ ...f, status: val }));
-        }}
-      >
-        {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((v) => (
-          <SelectItem key={v} textValue={v}>{v}</SelectItem>
-        ))}
-      </Select>
+      {!isHistorical && (
+        <>
+          <Input
+            size="sm"
+            label="Holdover rent (%)"
+            type="number"
+            min={1}
+            value={form.holdoverRatePct}
+            onChange={set('holdoverRatePct')}
+            isInvalid={!!errors.holdoverRatePct}
+            errorMessage={errors.holdoverRatePct}
+            description="If they stay past the end date. 100 = same rent. Blank = do not bill."
+          />
+          {/* Not shown in historical mode: the backfill endpoint always derives
+              EXPIRED/TERMINATED from the dates itself and ignores this field entirely. */}
+          <Select
+            size="sm"
+            label="Status"
+            selectedKeys={form.status ? [form.status] : []}
+            onSelectionChange={(keys) => {
+              const val = Array.from(keys)[0] as string;
+              if (val) setForm((f) => ({ ...f, status: val }));
+            }}
+          >
+            {['DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED'].map((v) => (
+              <SelectItem key={v} textValue={v}>{v}</SelectItem>
+            ))}
+          </Select>
+        </>
+      )}
       {/* Rent abatement. Free months sit INSIDE the term — leaseEnd is unchanged and the
           escalation clock still runs from leaseStart, so derived dates never contradict
           the signed contract. Turning the toggle off submits 0 months, which clears an
           existing abatement rather than leaving it stranded. */}
+      {!isHistorical && (
       <div className="sm:col-span-2 rounded-xl border border-gray-100 p-3">
         <Switch
           size="sm"
@@ -462,12 +483,14 @@ export function LeaseFormFields({
           </div>
         )}
       </div>
+      )}
 
       {/* Leasing commission (R23). Hidden entirely when the viewer cannot see brokers,
           rather than rendered empty — an unfillable Select reads as a broken form.
           The amount is computed server-side on activation from the chosen basis; the
-          override box is for a fee negotiated outside the formula. */}
-      {brokerOptions.length > 0 && (
+          override box is for a fee negotiated outside the formula. Also hidden in
+          historical mode: the backfill endpoint has no broker/commission fields. */}
+      {!isHistorical && brokerOptions.length > 0 && (
         <div className="sm:col-span-2 rounded-xl border border-gray-100 p-3">
           <p className="text-xs font-semibold text-gray-600 mb-3">Leasing commission</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

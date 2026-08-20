@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
+
+/** Same shape LeadsService/DashboardService thread through for project scoping. */
+type Viewer = { userId: string; role: string; roles?: string[] } | undefined;
 
 /** Fixed display order for the fit-out phase breakdown (mirrors the InteriorPhase enum). */
 const INTERIOR_PHASES = [
@@ -23,6 +27,7 @@ export class ReportsService {
     private prisma: PrismaService,
     private encryption: EncryptionService,
     private statusEvents: UnitStatusEventService,
+    private access: ProjectAccessService,
   ) {}
 
   // ---- Executive Summary (Founders) ----
@@ -41,9 +46,15 @@ export class ReportsService {
   // The ROI denominator stays construction + TI, so the headline ROI is unchanged.
   // The full fit-out picture (commitment, invoiced, remaining) lives in
   // getInteriorSummary() below.
-  async getPortfolioSummary() {
+  async getPortfolioSummary(viewer?: Viewer) {
+    // Scoped field roles (PM/Construction/Sales/Marketing) only see their member
+    // projects — mirrors LeadsService/UnitsService, `undefined` for unrestricted roles.
+    const scopeIds = await this.access.listProjectScope(viewer);
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' }, deletedAt: null },
+      where: {
+        status: { not: 'CANCELLED' }, deletedAt: null,
+        ...(scopeIds ? { id: { in: scopeIds } } : {}),
+      },
       include: {
         budgetLines: { where: { deletedAt: null } },
         actuals: true,
@@ -144,14 +155,23 @@ export class ReportsService {
   }
 
   // ---- Sales Report (Sales Team) ----
-  async getSalesSummary() {
+  async getSalesSummary(viewer?: Viewer) {
     // `project.deletedAt: null` everywhere in this file: archiving a project soft-deletes
     // the PROJECT row only — its buildings, units, sales and leases keep deletedAt = null.
     // Filtering on the child's own flag therefore leaves an archived project's rows in
     // every cross-project rollup. getPortfolioSummary already filtered the whole chain;
     // the reports below did not.
+    //
+    // Scoped field roles (Sales/Marketing) only see their member projects — this report
+    // used to aggregate across the whole portfolio regardless of who asked, unlike
+    // LeadsService/UnitsService which always scoped. Mirrors that pattern now.
+    const scopeIds = await this.access.listProjectScope(viewer);
     const sales = await this.prisma.sale.findMany({
-      where: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+      where: {
+        deletedAt: null,
+        project: { status: { not: 'CANCELLED' }, deletedAt: null },
+        ...(scopeIds ? { projectId: { in: scopeIds } } : {}),
+      },
       include: {
         unit: { include: { building: { select: { name: true } } } },
         project: { select: { id: true, name: true } },
@@ -201,7 +221,13 @@ export class ReportsService {
       where: {
         status: 'AVAILABLE',
         deletedAt: null,
-        building: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+        building: {
+          deletedAt: null,
+          project: {
+            status: { not: 'CANCELLED' }, deletedAt: null,
+            ...(scopeIds ? { id: { in: scopeIds } } : {}),
+          },
+        },
       },
       include: { building: { include: { project: { select: { name: true } } } } },
     });
@@ -231,14 +257,22 @@ export class ReportsService {
   }
 
   // ---- Revenue & Leasing (Founders + Sales) ----
-  async getRevenueSummary() {
+  async getRevenueSummary(viewer?: Viewer) {
+    // Scoped field roles only see their member projects — see getSalesSummary's note.
+    const scopeIds = await this.access.listProjectScope(viewer);
     const activeLeases = await this.prisma.lease.findMany({
       where: {
         status: 'ACTIVE',
         deletedAt: null,
         unit: {
           deletedAt: null,
-          building: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+          building: {
+            deletedAt: null,
+            project: {
+              status: { not: 'CANCELLED' }, deletedAt: null,
+              ...(scopeIds ? { id: { in: scopeIds } } : {}),
+            },
+          },
         },
       },
       include: {
@@ -253,7 +287,13 @@ export class ReportsService {
     const allUnits = await this.prisma.unit.findMany({
       where: {
         deletedAt: null,
-        building: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+        building: {
+          deletedAt: null,
+          project: {
+            status: { not: 'CANCELLED' }, deletedAt: null,
+            ...(scopeIds ? { id: { in: scopeIds } } : {}),
+          },
+        },
       },
     });
     const occupiedUnits = allUnits.filter((u) => ['LEASED', 'SOLD', 'OCCUPIED'].includes(u.status));
@@ -293,6 +333,7 @@ export class ReportsService {
         status: 'CLOSED',
         deletedAt: null,
         project: { status: { not: 'CANCELLED' }, deletedAt: null },
+        ...(scopeIds ? { projectId: { in: scopeIds } } : {}),
       },
       include: { project: { select: { id: true, name: true } } },
     });
@@ -325,9 +366,15 @@ export class ReportsService {
   }
 
   // ---- Debt & Financing (Founders) ----
-  async getDebtSummary() {
+  async getDebtSummary(viewer?: Viewer) {
+    // Scoped field roles only see their member projects — see getSalesSummary's note.
+    const scopeIds = await this.access.listProjectScope(viewer);
     const loans = await this.prisma.loan.findMany({
-      where: { deletedAt: null, project: { status: { not: 'CANCELLED' }, deletedAt: null } },
+      where: {
+        deletedAt: null,
+        project: { status: { not: 'CANCELLED' }, deletedAt: null },
+        ...(scopeIds ? { projectId: { in: scopeIds } } : {}),
+      },
       include: {
         project: { select: { id: true, name: true } },
         drawRequests: { orderBy: { drawNumber: 'asc' } },
@@ -397,9 +444,14 @@ export class ReportsService {
   }
 
   // ---- Unit Sales Value (Founders + Sales) ----
-  async getUnitSalesReport() {
+  async getUnitSalesReport(viewer?: Viewer) {
+    // Scoped field roles only see their member projects — see getSalesSummary's note.
+    const scopeIds = await this.access.listProjectScope(viewer);
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' }, deletedAt: null },
+      where: {
+        status: { not: 'CANCELLED' }, deletedAt: null,
+        ...(scopeIds ? { id: { in: scopeIds } } : {}),
+      },
       include: {
         buildings: {
           where: { deletedAt: null },
@@ -514,7 +566,7 @@ export class ReportsService {
   // the "stale inventory" problem the May 5 walkthrough called out — units sitting
   // > 90 days are flagged warning, > 180 days critical. Filters: optional projectId,
   // optional minDays floor to only show stale rows.
-  async getVacancyReport(params: { projectId?: string; minDays?: number } = {}) {
+  async getVacancyReport(params: { projectId?: string; minDays?: number; viewer?: Viewer } = {}) {
     // The building filter is unconditional. It used to be applied ONLY when a projectId
     // was passed, so the unfiltered (all-projects) view — the one the page opens on —
     // listed every AVAILABLE unit under archived projects and deleted buildings as
@@ -524,7 +576,15 @@ export class ReportsService {
       deletedAt: null,
       building: { deletedAt: null, project: { deletedAt: null } },
     };
-    if (params.projectId) where.building.projectId = params.projectId;
+    if (params.projectId) {
+      // An explicit projectId is already membership-checked by ProjectAccessGuard.
+      where.building.projectId = params.projectId;
+    } else {
+      // No explicit project — scoped field roles only see their member projects,
+      // same as the "all projects" list on LeadsService/UnitsService.
+      const scopeIds = await this.access.listProjectScope(params.viewer);
+      if (scopeIds) where.building.projectId = { in: scopeIds };
+    }
 
     const units = await this.prisma.unit.findMany({
       where,
@@ -611,11 +671,14 @@ export class ReportsService {
   // deletedAt on the Project row ONLY — it does not cascade to buildings, units, sales
   // or interiors. So the whole chain has to be filtered explicitly, the same way
   // getVacancyReport/getRevenueSummary were fixed.
-  async getInteriorSummary(params: { projectId?: string } = {}) {
+  async getInteriorSummary(params: { projectId?: string; viewer?: Viewer } = {}) {
+    // An explicit projectId is already membership-checked by ProjectAccessGuard; without
+    // one, scoped field roles only see their member projects — same as getVacancyReport.
+    const scopeIds = params.projectId ? undefined : await this.access.listProjectScope(params.viewer);
     const liveProject = {
       deletedAt: null,
       status: { not: 'CANCELLED' as const },
-      ...(params.projectId ? { id: params.projectId } : {}),
+      ...(params.projectId ? { id: params.projectId } : scopeIds ? { id: { in: scopeIds } } : {}),
     };
 
     const [projects, interiors] = await Promise.all([

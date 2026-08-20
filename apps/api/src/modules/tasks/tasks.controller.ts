@@ -41,6 +41,9 @@ export class TasksController {
         @Query('priority') priority?: string,
         @Query('search') search?: string,
         @Query('kind') kind?: string,
+        @CurrentUser('sub') userId?: string,
+        @CurrentUser('role') role?: string,
+        @CurrentUser('roles') roles?: string[],
     ) {
         return this.tasksService.findAll({
             projectId,
@@ -51,6 +54,7 @@ export class TasksController {
             priority: priority as any,
             search,
             kind,
+            viewer: userId && role ? { userId, role, roles } : undefined,
         });
     }
 

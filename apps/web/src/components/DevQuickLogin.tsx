@@ -30,6 +30,7 @@
 import { useState } from 'react';
 import { FiZap, FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/authStore';
 import api from '../lib/api';
 
@@ -57,6 +58,7 @@ const DEV_ROLES: Array<{ role: string; label: string; hint: string }> = [
 
 export function DevQuickLogin() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { setAuth } = useAuthStore();
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -67,6 +69,10 @@ export function DevQuickLogin() {
     const token = `demo-${role}`;
     setBusy(role);
     setError('');
+    // Switching roles is a same-tab identity change, same as logout→login — without
+    // this, cached queries from the PREVIOUS role (dashboard, leads, reports) would
+    // render for the new one until each query happened to refetch.
+    queryClient.clear();
 
     // Set the token first so the axios interceptor attaches it, then ask the SERVER
     // who that makes us. Deriving permissions on the client would mean maintaining a

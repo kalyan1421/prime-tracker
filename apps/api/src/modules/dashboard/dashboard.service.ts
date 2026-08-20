@@ -419,7 +419,14 @@ export class DashboardService {
       },
     });
 
+    // Scoped the same way `projects` above is (via memberScope) — this used to have no
+    // `where` at all, so a SALES/MARKETING user's dashboard showed lead activity from
+    // every project system-wide instead of just their own. Mirrors LeadsService.findAll.
+    const leadScopeIds = await this.access.listProjectScope(
+      userId && role ? { userId, role } : undefined,
+    );
     const leads = await this.prisma.lead.findMany({
+      where: leadScopeIds ? { projectId: { in: leadScopeIds } } : undefined,
       include: { project: { select: { id: true, name: true } } },
       orderBy: { updatedAt: 'desc' },
     });

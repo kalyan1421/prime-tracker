@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -15,30 +15,69 @@ import { RequirePermissions } from '../../common/decorators/index';
 export class ReportsController {
   constructor(private service: ReportsService) {}
 
+  // All "across all projects" reports below are scoped server-side to the viewer's
+  // member projects when they hold a project-scoped role (PM/Construction/Sales/
+  // Marketing) — same as LeadsService/UnitsService. `viewer` is undefined for an
+  // anonymous/malformed token, which ProjectAccessService treats as unrestricted;
+  // JwtAuthGuard has already rejected those requests by this point regardless.
+  private viewer(userId?: string, role?: string, roles?: string[]) {
+    return userId && role ? { userId, role, roles } : undefined;
+  }
+
   @Get('portfolio')
   @RequirePermissions('financial:view')
   @ApiOperation({ summary: 'Executive portfolio summary across all projects' })
-  getPortfolio() { return this.service.getPortfolioSummary(); }
+  getPortfolio(
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
+    return this.service.getPortfolioSummary(this.viewer(userId, role, roles));
+  }
 
   @Get('sales-summary')
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Sales pipeline analytics across all projects' })
-  getSalesSummary() { return this.service.getSalesSummary(); }
+  getSalesSummary(
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
+    return this.service.getSalesSummary(this.viewer(userId, role, roles));
+  }
 
   @Get('revenue')
   @RequirePermissions('lease:view')
   @ApiOperation({ summary: 'Revenue & leasing report across all projects' })
-  getRevenue() { return this.service.getRevenueSummary(); }
+  getRevenue(
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
+    return this.service.getRevenueSummary(this.viewer(userId, role, roles));
+  }
 
   @Get('debt')
   @RequirePermissions('loan:view')
   @ApiOperation({ summary: 'Debt & financing summary across all projects' })
-  getDebt() { return this.service.getDebtSummary(); }
+  getDebt(
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
+    return this.service.getDebtSummary(this.viewer(userId, role, roles));
+  }
 
   @Get('unit-sales')
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Unit sales value breakdown by project and building' })
-  getUnitSales() { return this.service.getUnitSalesReport(); }
+  getUnitSales(
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
+    return this.service.getUnitSalesReport(this.viewer(userId, role, roles));
+  }
 
   // `financial:view` matches /reports/portfolio — this is the same class of money data
   // (commitment vs spend), just the isolated fit-out side of it. `interior:view` is the
@@ -48,8 +87,13 @@ export class ReportsController {
   @ApiOperation({
     summary: 'Interior / TI fit-out summary — committed vs invoiced vs remaining, per project',
   })
-  getInterior(@Query('projectId') projectId?: string) {
-    return this.service.getInteriorSummary({ projectId });
+  getInterior(
+    @Query('projectId') projectId?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
+    return this.service.getInteriorSummary({ projectId, viewer: this.viewer(userId, role, roles) });
   }
 
   @Get('vacancy')
@@ -58,10 +102,14 @@ export class ReportsController {
   getVacancy(
     @Query('projectId') projectId?: string,
     @Query('minDays') minDays?: string,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('role') role?: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
     return this.service.getVacancyReport({
       projectId,
       minDays: minDays ? parseInt(minDays, 10) : undefined,
+      viewer: this.viewer(userId, role, roles),
     });
   }
 }
