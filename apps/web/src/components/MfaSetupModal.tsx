@@ -4,7 +4,7 @@ import {
   Button, Input, Chip, addToast,
 } from '@heroui/react';
 import { FiShield, FiCheck, FiAlertTriangle } from 'react-icons/fi';
-import { useMfaSetup, useMfaEnable } from '../hooks/useApi';
+import { useMfaSetup, useMfaEnable, useMfaDisable } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Step = 'intro' | 'qr' | 'verify' | 'done';
+type Step = 'intro' | 'qr' | 'verify' | 'done' | 'disable' | 'disabled';
 
 export default function MfaSetupModal({ isOpen, onClose }: Props) {
   const { user } = useAuthStore();
@@ -23,6 +23,7 @@ export default function MfaSetupModal({ isOpen, onClose }: Props) {
 
   const mfaSetup = useMfaSetup();
   const mfaEnable = useMfaEnable();
+  const mfaDisable = useMfaDisable();
 
   const handleStart = async () => {
     try {
@@ -43,6 +44,20 @@ export default function MfaSetupModal({ isOpen, onClose }: Props) {
     try {
       await mfaEnable.mutateAsync(token);
       setStep('done');
+    } catch {
+      addToast({ title: 'Invalid code — please try again', color: 'danger' });
+      setToken('');
+    }
+  };
+
+  const handleDisable = async () => {
+    if (token.length !== 6) {
+      addToast({ title: 'Enter the 6-digit code from your authenticator app', color: 'warning' });
+      return;
+    }
+    try {
+      await mfaDisable.mutateAsync(token);
+      setStep('disabled');
     } catch {
       addToast({ title: 'Invalid code — please try again', color: 'danger' });
       setToken('');
@@ -99,8 +114,80 @@ export default function MfaSetupModal({ isOpen, onClose }: Props) {
                 </Button>
               )}
               {user?.mfaEnabled && (
-                <Button size="sm" variant="light" onPress={handleClose}>Close</Button>
+                <>
+                  <Button size="sm" color="danger" variant="flat" onPress={() => setStep('disable')}>
+                    Disable MFA
+                  </Button>
+                  <Button size="sm" variant="light" onPress={handleClose}>Close</Button>
+                </>
               )}
+            </ModalFooter>
+          </>
+        )}
+
+        {step === 'disable' && (
+          <>
+            <ModalHeader className="flex items-center gap-2">
+              <FiAlertTriangle className="text-amber-600" />
+              Disable Two-Factor Authentication
+            </ModalHeader>
+            <ModalBody>
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Enter the current 6-digit code from your authenticator app to confirm. Your
+                  account will no longer require a second factor to sign in.
+                </p>
+                <Input
+                  size="sm"
+                  label="6-digit code"
+                  placeholder="000000"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  maxLength={6}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleDisable(); }}
+                  classNames={{ input: 'text-center text-xl tracking-[0.4em] font-mono' }}
+                />
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button size="sm" variant="light" onPress={() => { setToken(''); setStep('intro'); }}>Back</Button>
+              <Button
+                size="sm"
+                color="danger"
+                onPress={handleDisable}
+                isLoading={mfaDisable.isPending}
+                isDisabled={token.length !== 6 || mfaDisable.isPending}
+              >
+                Confirm Disable
+              </Button>
+            </ModalFooter>
+          </>
+        )}
+
+        {step === 'disabled' && (
+          <>
+            <ModalHeader className="flex items-center gap-2">
+              <FiAlertTriangle className="text-amber-600" />
+              MFA Disabled
+            </ModalHeader>
+            <ModalBody>
+              <div className="space-y-4 text-center py-4">
+                <div className="flex justify-center">
+                  <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center">
+                    <FiAlertTriangle className="text-amber-600 text-3xl" />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-gray-800">Two-factor authentication is now off</p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    You can set it up again with a new authenticator entry at any time.
+                  </p>
+                </div>
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button size="sm" color="primary" onPress={handleClose}>Done</Button>
             </ModalFooter>
           </>
         )}
@@ -165,7 +252,7 @@ export default function MfaSetupModal({ isOpen, onClose }: Props) {
                 color="primary"
                 onPress={handleVerify}
                 isLoading={mfaEnable.isPending}
-                isDisabled={token.length !== 6}
+                isDisabled={token.length !== 6 || mfaEnable.isPending}
               >
                 Verify & Enable
               </Button>

@@ -6,6 +6,11 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { authenticator } from 'otplib';
 import * as QRCode from 'qrcode';
+// otplib defaults to window: 0 (zero tolerance), which rejects a correct code
+// whenever the client's clock is a few seconds ahead/behind the 30s TOTP step
+// boundary. window: 1 accepts the adjacent step either side — standard TOTP
+// practice — without weakening the code itself (still a fresh 6-digit guess).
+authenticator.options = { window: 1 };
 import * as bcrypt from 'bcrypt';
 import { ROLE_PERMISSIONS, UserRole } from '@prime-tracker/shared';
 import { randomBytes } from 'crypto';
@@ -338,6 +343,39 @@ export class AuthService {
       entity: 'User',
       entityId: userId,
       metadata: { action: 'enabled' },
+    });
+
+    return true;
+  }
+
+  /** Requires a current TOTP code, not the password — the point of MFA is that
+   *  possessing the authenticator is a separate proof from the password, so giving
+   *  it up should require the same proof, not the weaker one it was meant to add. */
+  async disableMfa(userId: string, token: string): Promise<boolean> {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
+    if (!user.mfaEnabled || !user.mfaSecret) {
+      throw new BadRequestException('MFA is not enabled for this account');
+    }
+
+    const decryptedSecret = this.encryption.decrypt(user.mfaSecret);
+    const isValid = authenticator.verify({ token, secret: decryptedSecret });
+
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid TOTP code');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { mfaEnabled: false, mfaSecret: null },
+    });
+
+    await this.audit.log({
+      userId,
+      action: 'MFA_VERIFY',
+      entity: 'User',
+      entityId: userId,
+      metadata: { action: 'disabled' },
     });
 
     return true;

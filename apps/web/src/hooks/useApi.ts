@@ -1303,9 +1303,28 @@ export function useMfaSetup() {
 
 export function useMfaEnable() {
   const qc = useQueryClient();
+  const patchUser = useAuthStore((s) => s.patchUser);
   return useMutation({
     mutationFn: (token: string) => api.post('/auth/mfa/enable', { token }).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    // Without this, the current session's own MfaSetupModal keeps showing "not
+    // enabled" until the next full login — the mutation succeeded on the server,
+    // but nothing told the local user object it had.
+    onSuccess: () => {
+      patchUser({ mfaEnabled: true });
+      qc.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+}
+
+export function useMfaDisable() {
+  const qc = useQueryClient();
+  const patchUser = useAuthStore((s) => s.patchUser);
+  return useMutation({
+    mutationFn: (token: string) => api.post('/auth/mfa/disable', { token }).then((r) => r.data),
+    onSuccess: () => {
+      patchUser({ mfaEnabled: false });
+      qc.invalidateQueries({ queryKey: ['users'] });
+    },
   });
 }
 

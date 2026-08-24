@@ -47,6 +47,7 @@ const AUTH_ROUTES = [
   'AuthController.changePassword',
   'AuthController.setupMfa',
   'AuthController.enableMfa',
+  'AuthController.disableMfa',
   'AuthController.verifyMfa',
 ];
 
@@ -161,7 +162,7 @@ describe('the permission-free allowlist stays honest', () => {
   it('has not grown without someone noticing', () => {
     // Every entry is a route anyone signed in can reach. The number going up should be
     // a decision, not a side effect.
-    expect(PERMISSION_FREE.size).toBe(16);
+    expect(PERMISSION_FREE.size).toBe(17);
   });
 });
 

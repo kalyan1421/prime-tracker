@@ -420,21 +420,26 @@ function MfaBanner() {
   const { isOpen, onOpen, onClose } = useDisclosure();
 
   const shouldPrompt = !user?.mfaEnabled && ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'FINANCE', 'ACCOUNTING'].includes(user?.role ?? '');
-  if (!shouldPrompt) return null;
 
+  // The modal must stay mounted even after shouldPrompt flips false mid-flow: enabling
+  // MFA updates user.mfaEnabled immediately (so the banner can disappear without a
+  // reload), but that same flip used to unmount an early-return'd MfaBanner — and the
+  // modal along with it — before its own "MFA Enabled" success step ever rendered.
   return (
     <>
-      <div className="bg-amber-50 border-b border-amber-200 px-4 sm:px-6 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="flex items-start gap-2 text-sm text-amber-700">
-          <FiShield className="shrink-0 mt-0.5" />
-          <span>
-            <strong>Recommended:</strong> Enable two-factor auth to protect your {user?.role?.replace('_', ' ')} account.
-          </span>
+      {shouldPrompt && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 sm:px-6 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="flex items-start gap-2 text-sm text-amber-700">
+            <FiShield className="shrink-0 mt-0.5" />
+            <span>
+              <strong>Recommended:</strong> Enable two-factor auth to protect your {user?.role?.replace('_', ' ')} account.
+            </span>
+          </div>
+          <Button size="sm" color="warning" variant="flat" onPress={onOpen} className="self-start sm:self-auto">
+            Set Up Now
+          </Button>
         </div>
-        <Button size="sm" color="warning" variant="flat" onPress={onOpen} className="self-start sm:self-auto">
-          Set Up Now
-        </Button>
-      </div>
+      )}
       <MfaSetupModal isOpen={isOpen} onClose={onClose} />
     </>
   );

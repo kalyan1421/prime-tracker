@@ -116,6 +116,19 @@ export class AuthController {
     return { success: enabled };
   }
 
+  @Post('mfa/disable')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Disable MFA by verifying a current TOTP code' })
+  async disableMfa(
+    @CurrentUser('sub') userId: string,
+    @Body() body: { token: string },
+  ) {
+    const disabled = await this.authService.disableMfa(userId, body.token);
+    return { success: disabled };
+  }
+
   @Post('mfa/verify')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
