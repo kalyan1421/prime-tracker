@@ -25,23 +25,18 @@ import {
 } from '@heroui/react';
 import {
   FiPlus, FiCalendar, FiUser, FiLayers, FiTrash2, FiEdit2, FiCamera, FiHome,
+  FiChevronDown, FiChevronRight,
 } from 'react-icons/fi';
 import {
   useTasks, useCreateTask, useUpdateTask, useDeleteTask,
   useTaskUpdates, useAddTaskUpdate, useDeleteTaskUpdate, useAddTaskUpdatePhoto,
   useBuildings, useUnits, useUsers, useCustomOptions, usePresignedUpload,
 } from '../hooks/useApi';
+import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { errMsg, fmtDate } from '../utils/fmt';
-import { LoadingState, ErrorState, EmptyState } from './ui';
+import { LoadingState, ErrorState, EmptyState, chipColor } from './ui';
 
 const KIND = 'CONSTRUCTION';
-
-/** HeroUI chip colours, keyed by the CustomOption `color` token. */
-type ChipColor = 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
-const chipColor = (c?: string | null): ChipColor =>
-  (['default', 'primary', 'secondary', 'success', 'warning', 'danger'].includes(c ?? '')
-    ? c
-    : 'default') as ChipColor;
 
 interface OptionLike { value: string; label: string; color?: string | null }
 
@@ -106,6 +101,13 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
   const [buildingFilter, setBuildingFilter] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('');
 
+  // Undefined = follow the default (open if small or something needs attention, else
+  // collapsed); once the user manually toggles a building's section, their choice wins for
+  // the rest of the session — same pattern as ConstructionChecklistRollup. Manual overrides
+  // reset whenever a filter changes, so a group collapsed earlier can't hide a match a
+  // filter just narrowed down to.
+  const { isExpanded, toggle } = useCollapsibleGroups([buildingFilter, assigneeFilter]);
+
   /** Every building the item covers, join table first, legacy scalar as fallback. */
   const buildingsOf = (t: any): Array<{ id: string; name: string }> => {
     const linked = (t.buildings ?? [])
@@ -147,6 +149,26 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
     }
     return [...byBuilding.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name));
   }, [rows]);
+
+  // Per-building aggregate for the collapsed header: "danger"-colored status or priority
+  // (Blocked/Cancelled status, High/Urgent priority — whatever those are relabelled to)
+  // means the item needs attention; "success"-colored status is Done. Both read the same
+  // CustomOption color token the chips render with, so a client relabel never breaks this.
+  const groupStats = useMemo(() => {
+    const map = new Map<string, { attention: number; done: number; total: number }>();
+    for (const [key, group] of groups) {
+      let attention = 0;
+      let done = 0;
+      for (const t of group.items) {
+        const stColor = chipColor(statuses.of(t.status).color);
+        const prColor = chipColor(priorities.of(t.priority).color);
+        if (stColor === 'danger' || prColor === 'danger') attention += 1;
+        if (stColor === 'success') done += 1;
+      }
+      map.set(key, { attention, done, total: group.items.length });
+    }
+    return map;
+  }, [groups, statuses, priorities]);
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState message={errMsg(error, 'Could not load the board')} />;
@@ -196,14 +218,38 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
           message="Add an item for a unit, a group of units, or a whole building."
         />
       ) : (
-        groups.map(([key, group]) => (
+        groups.map(([key, group]) => {
+          const stats = groupStats.get(key) ?? { attention: 0, done: 0, total: group.items.length };
+          // Open by default when something needs attention, or when the group is small
+          // enough that a table adds no scroll cost; a manual click always wins after that.
+          const defaultExpanded = stats.attention > 0 || group.items.length <= 6;
+          const expanded = isExpanded(key, defaultExpanded);
+          const donePct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+          return (
           <div key={key} className="border border-gray-200 rounded-xl overflow-hidden">
-            <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
-              <span className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+            <button
+              type="button"
+              onClick={() => toggle(key, expanded)}
+              className="w-full flex items-center justify-between gap-3 bg-gray-50 px-4 py-2 border-b border-gray-200 text-left"
+            >
+              <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                {expanded ? <FiChevronDown className="shrink-0" /> : <FiChevronRight className="shrink-0" />}
                 {group.name}
+                <span className="ml-1 text-xs font-normal text-gray-400 normal-case">
+                  · {group.items.length} item(s)
+                </span>
               </span>
-              <span className="ml-2 text-xs text-gray-400">{group.items.length} item(s)</span>
-            </div>
+              <span className="flex items-center gap-3 text-xs shrink-0">
+                {stats.attention > 0 && (
+                  <span className="flex items-center gap-1 text-red-600 font-medium normal-case">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                    {stats.attention} need{stats.attention === 1 ? 's' : ''} attention
+                  </span>
+                )}
+                <span className="text-gray-400 normal-case">{donePct}% done</span>
+              </span>
+            </button>
+            {expanded && (
             <div className="overflow-x-auto">
               <table className="w-full text-sm min-w-[860px]">
                 <thead>
@@ -273,8 +319,10 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
                 </tbody>
               </table>
             </div>
+            )}
           </div>
-        ))
+          );
+        })
       )}
 
       <ItemDialog

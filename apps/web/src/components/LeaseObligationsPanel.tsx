@@ -927,7 +927,12 @@ function ObligationRow({
 
           <div className="flex-1" />
 
-          {canEdit && !waived && (
+          {/* Hidden once nothing is left to collect/disburse (pending <= 0) — the
+              obligation is fully settled and there is nothing left to record against it.
+              This does remove the one UI path to log a deliberate OVERPAYMENT (see the
+              module doc comment on overpayment policy) — use "Edit" to raise the agreed
+              total first if a genuine overpayment needs to be recorded. */}
+          {canEdit && !waived && pending > 0 && (
             <Button size="sm" color="primary" variant="flat" className="h-7 min-w-0 px-2.5 text-[11px]" onPress={onRecord}>
               {payments.length > 0 ? `Record another · ${meta.actionWord.replace('Record ', '')}` : meta.actionWord}
             </Button>

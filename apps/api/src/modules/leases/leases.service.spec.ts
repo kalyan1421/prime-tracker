@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { LeasesService } from './leases.service';
+import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 
 const mockPrisma: any = {
   lease: {
@@ -69,11 +70,24 @@ const mockStatusEvents: any = {
   record: jest.fn().mockResolvedValue({ id: 'evt1' }),
 };
 
+// R7 — commission installment sync. A spy is enough here; its own behavior (create vs
+// adjust vs leave-alone) is asserted in commission-installment.service.spec.ts.
+const mockCommissionInstallments: any = {
+  syncStampedAmount: jest.fn().mockResolvedValue(undefined),
+};
+
+// R6 — a real HistoricalDeletionService over the same mockPrisma, not a hand double: the
+// "delete gate" / "requesting" tests below assert against mockPrisma.historicalRecordDeletion
+// calls, and this is what makes those calls actually happen the same way they used to when
+// the logic lived inline in LeasesService.
+const mockHistoricalDeletions = new HistoricalDeletionService(mockPrisma as any);
+
 function makeService() {
   return new LeasesService(
     mockPrisma as any, mockRentPeriods as any, mockBus as any,
     mockObligations as any, mockAudit as any,
-    mockInvoices as any, mockStatusEvents as any,
+    mockInvoices as any, mockStatusEvents as any, mockCommissionInstallments as any,
+    mockHistoricalDeletions as any,
   );
 }
 
@@ -562,19 +576,20 @@ describe('LeasesService — rent commencement, derived term and NNN per sqft', (
     expect(written().termMonths).toBe(36);
   });
 
-  // NNN is a ONE-TIME charge at lease signing (client-confirmed 2026-08-12), so the
-  // per-sqft rate yields a TOTAL, not a monthly figure. It used to be a component of
-  // monthly rent; see migration 20260812160000_nnn_one_time.
-  it('derives the one-time NNN total from the per-sqft rate and the unit area', async () => {
+  // nnnPerSqft is the quoted ANNUAL rate; nnnTotalAmount is that rate against the
+  // unit's area, still stored as a headline TERM on the lease. As of 2026-08-21 the
+  // money itself is billed monthly (nnnTotalAmount / 12) via LeaseRentPeriod.nnnAmount,
+  // not as a one-time obligation — see lease-rent-period.service.ts.
+  it('derives the NNN total from the per-sqft rate and the unit area', async () => {
     await service.create({ ...base, nnnPerSqft: 0.5 });
     expect(mockPrisma.unit.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'u1' } }),
     );
-    expect(written().nnnTotalAmount).toBe(1000); // 0.50 x 2000 sqft, charged once
+    expect(written().nnnTotalAmount).toBe(1000); // 0.50 x 2000 sqft
   });
 
   it('lets an explicit total override the derived figure', async () => {
-    // Some leases are quoted as a flat one-time sum rather than a rate.
+    // Some leases are quoted as a flat sum rather than a rate.
     await service.create({ ...base, nnnPerSqft: 0.5, nnnTotalAmount: 1234 });
     expect(written().nnnTotalAmount).toBe(1234);
   });
@@ -596,9 +611,9 @@ describe('LeasesService — rent commencement, derived term and NNN per sqft', (
     expect(written().nnnTotalAmount).toBeUndefined();
   });
 
-  it('never folds NNN into the monthly rent', async () => {
-    // The regression this whole migration exists to prevent: NNN used to be added to
-    // monthlyRent and billed every month.
+  it('never folds NNN into Lease.monthlyRent — it is a separate headline term', async () => {
+    // monthlyRent is base rent only. NNN bills monthly too, but through the rent
+    // PERIOD's separate nnnAmount column, never by inflating this field.
     await service.create({ ...base, nnnPerSqft: 0.5 });
     expect(Number(written().monthlyRent)).toBe(10000);
   });
@@ -844,17 +859,18 @@ describe('LeasesService — seeding obligations from the lease terms', () => {
     );
   });
 
-  it('seeds all three agreed sums from one lease', async () => {
+  it('seeds both agreed sums from one lease', async () => {
     await service.create({ ...withDeposit, nnnTotalAmount: 2000, tiAllowance: 45000 });
     const kinds = mockObligations.create.mock.calls.map((c: any[]) => c[0].kind).sort();
-    expect(kinds).toEqual(['NNN', 'SECURITY_DEPOSIT', 'TI_ALLOWANCE']);
+    expect(kinds).toEqual(['SECURITY_DEPOSIT', 'TI_ALLOWANCE']);
   });
 
-  it('creates an NNN obligation from the one-time total', async () => {
+  it('never creates an NNN obligation — NNN bills monthly via the rent schedule, not the ledger', async () => {
+    // Reversed 2026-08-21: NNN obligations were only ever created between 2026-08-12
+    // and this reversal. See prisma/fix-nnn-monthly-migration.ts for the leases that
+    // signed in that window.
     await service.create({ ...withDeposit, securityDeposit: undefined, nnnTotalAmount: 2000 });
-    expect(mockObligations.create).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'NNN', direction: 'FROM_TENANT', totalAmount: 2000 }),
-    );
+    expect(mockObligations.create).not.toHaveBeenCalled();
   });
 
   it('seeds nothing when no money terms were entered', async () => {
@@ -1855,6 +1871,94 @@ describe('LeasesService.backfillTenancy', () => {
     mockPrisma.unit.findUnique.mockResolvedValue(null);
     await expect(service.backfillTenancy(PAST, 'user-1')).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  // R9 field-gap audit (2026-08-23): landlordEntity/tenantEmail/tenantPhone/escalationPct/
+  // rentPerSqft/nnnPerSqft/nnnTotalAmount/tiAllowance already existed on Lease and on the
+  // live create() path, but backfillTenancy silently dropped every one of them.
+  it('passes the R9 field-gap-audit fields through to the created lease', async () => {
+    await service.backfillTenancy({
+      ...PAST,
+      landlordEntity: 'Texas Hazelwood OP 2 LLC',
+      tenantEmail: 'tenant@example.com',
+      tenantPhone: '555-0100',
+      rentPerSqft: 2.5,
+      escalationPct: 3,
+      nnnPerSqft: 13,
+      nnnTotalAmount: 3304.16,
+      tiAllowance: 182400,
+    }, 'user-1');
+
+    expect(mockPrisma.lease.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          landlordEntity: 'Texas Hazelwood OP 2 LLC',
+          tenantEmail: 'tenant@example.com',
+          tenantPhone: '555-0100',
+          rentPerSqft: 2.5,
+          escalationPct: 3,
+          nnnPerSqft: 13,
+          nnnTotalAmount: 3304.16,
+          tiAllowance: 182400,
+        }),
+      }),
+    );
+  });
+
+  // R9.2 (2026-08-24): "can be active lease also, not only history" — a bulk import row
+  // with no Termination Date means the tenancy is STILL GOING, not an error.
+  describe('omitting terminationDate — the tenancy is still going', () => {
+    const STILL_GOING = {
+      unitId: 'u1',
+      tenantName: 'Current Tenant LLC',
+      leaseStart: '2021-01-01',
+      leaseEnd: '2031-01-01',
+      monthlyRent: 3000,
+      // terminationDate deliberately omitted
+    };
+
+    it('creates the lease ACTIVE with a null terminationDate', async () => {
+      await service.backfillTenancy(STILL_GOING, 'user-1');
+      expect(mockPrisma.lease.create.mock.calls[0][0].data).toMatchObject({
+        status: 'ACTIVE', terminationDate: null, terminationReason: null, isHistorical: true,
+      });
+    });
+
+    it('DOES flip the unit to LEASED — unlike an ended backfill, this one is genuinely occupied today', async () => {
+      await service.backfillTenancy(STILL_GOING, 'user-1');
+      expect(mockPrisma.unit.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'LEASED' }) }),
+      );
+    });
+
+    it('dates the occupancy event by leaseStart, and records only ONE — no manual move-out for a tenant who has not left', async () => {
+      await service.backfillTenancy(STILL_GOING, 'user-1');
+      expect(mockStatusEvents.record).toHaveBeenCalledTimes(1);
+      expect(mockStatusEvents.record.mock.calls[0][0]).toMatchObject({
+        toStatus: 'LEASED', effectiveAt: new Date('2021-01-01'),
+      });
+    });
+
+    it('generates the ledger through TODAY, not through a move-out date that does not exist', async () => {
+      const before = new Date();
+      await service.backfillTenancy(STILL_GOING, 'user-1');
+      const through = mockInvoices.generateForLease.mock.calls[0][1].through;
+      expect(through.getTime()).toBeGreaterThanOrEqual(new Date(before.toDateString()).getTime());
+      expect(through.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('still refuses a Lease Start/End that fails to parse', async () => {
+      await expect(
+        service.backfillTenancy({ ...STILL_GOING, leaseStart: 'not-a-date' }, 'user-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('still marks the ledger paid-by-default, same as an ended backfill', async () => {
+      await service.backfillTenancy(STILL_GOING, 'user-1');
+      const dueUpdate = mockPrisma.leaseRentInvoice.update.mock.calls
+        .find((c: any) => c[0].where.id === 'i1')[0].data;
+      expect(dueUpdate.status).toBe('PAID');
+    });
+  });
 });
 
 
@@ -2040,115 +2144,6 @@ describe('LeasesService — historical deletion approval', () => {
       await expect(service.requestHistoricalDeletion('l1', 'a good reason', 'user-1'))
         .rejects.toThrow(/already pending/);
     });
-  });
-
-  describe('deciding', () => {
-    const PENDING = { id: 'r1', leaseId: 'l1', status: 'PENDING', requestedById: 'user-1' };
-
-    it('approves without deleting anything — the delete stays a separate act', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(PENDING);
-
-      await service.decideHistoricalDeletion('r1', true, 'founder-1', 'confirmed with Finance');
-
-      expect(mockPrisma.historicalRecordDeletion.update).toHaveBeenCalledWith({
-        where: { id: 'r1' },
-        data: {
-          status: 'APPROVED',
-          decidedById: 'founder-1',
-          decidedAt: expect.any(Date),
-          decisionNote: 'confirmed with Finance',
-        },
-      });
-      expect(mockPrisma.lease.update).not.toHaveBeenCalled();
-    });
-
-    it('tells the requester the answer, either way', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue({
-        ...PENDING, lease: { tenantName: 'Old Tenant' },
-      });
-
-      await service.decideHistoricalDeletion('r1', false, 'founder-1', 'still needed for the audit');
-
-      expect(mockBus.emit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'history.deletionDecided',
-          approved: false,
-          requestedById: 'user-1',
-          note: 'still needed for the audit',
-        }),
-      );
-      expect(mockAudit.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'HISTORICAL_DELETION_REJECTED' }),
-      );
-    });
-
-    it('records a rejection just as fully', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(PENDING);
-
-      await service.decideHistoricalDeletion('r1', false, 'founder-1');
-
-      expect(mockPrisma.historicalRecordDeletion.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ status: 'REJECTED' }) }),
-      );
-    });
-
-    it('stops the requester approving their own request', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(PENDING);
-
-      await expect(service.decideHistoricalDeletion('r1', true, 'user-1'))
-        .rejects.toThrow(/someone else/);
-    });
-
-    it('refuses to re-decide a settled request', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique
-        .mockResolvedValue({ ...PENDING, status: 'REJECTED' });
-
-      await expect(service.decideHistoricalDeletion('r1', true, 'founder-1'))
-        .rejects.toThrow(/already rejected/);
-    });
-
-    it('404s on an unknown request', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(null);
-
-      await expect(service.decideHistoricalDeletion('nope', true, 'founder-1'))
-        .rejects.toBeInstanceOf(NotFoundException);
-    });
-  });
-
-  describe('withdrawing', () => {
-    const PENDING = { id: 'r1', leaseId: 'l1', status: 'PENDING', requestedById: 'user-1' };
-
-    it('lets the requester withdraw their own pending request', async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(PENDING);
-
-      await service.cancelHistoricalDeletion('r1', 'user-1');
-
-      expect(mockPrisma.historicalRecordDeletion.update).toHaveBeenCalledWith({
-        where: { id: 'r1' },
-        // decidedBy names whoever settled it — the DB CHECK requires any non-PENDING row
-        // to carry one, and for a withdrawal that is the requester.
-        data: {
-          status: 'CANCELLED',
-          decidedById: 'user-1',
-          decidedAt: expect.any(Date),
-        },
-      });
-    });
-
-    it("stops one person withdrawing another's request", async () => {
-      mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(PENDING);
-
-      await expect(service.cancelHistoricalDeletion('r1', 'someone-else'))
-        .rejects.toThrow(/person who raised a request/);
-    });
-
-    it("refuses to withdraw a decided request — that is the Founder's record, not theirs", async () => {
-      mockPrisma.historicalRecordDeletion.findUnique
-        .mockResolvedValue({ ...PENDING, status: 'APPROVED' });
-
-      await expect(service.cancelHistoricalDeletion('r1', 'user-1'))
-        .rejects.toThrow(/already approved/);
-    });
 
     it('lets a fresh request follow a rejection — rejection is not a permanent block', async () => {
       mockPrisma.lease.findUnique.mockResolvedValue(HISTORICAL);
@@ -2159,4 +2154,7 @@ describe('LeasesService — historical deletion approval', () => {
         .resolves.toBeTruthy();
     });
   });
+
+  // Deciding / cancelling a request moved to HistoricalDeletionService (R6, entity-agnostic
+  // — a Founder's queue mixes leases and sales) — see historical-deletion.service.spec.ts.
 });

@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { Card, CardBody, CardHeader, Chip, Tooltip, Button, Select, SelectItem, useDisclosure, addToast } from '@heroui/react';
 import {
   FiArrowLeft, FiHome, FiUsers, FiDollarSign, FiKey, FiCreditCard, FiFileText, FiClock,
-  FiPlus, FiEdit2, FiUpload,
+  FiPlus, FiEdit2, FiUpload, FiCheckSquare,
 } from 'react-icons/fi';
 import {
   useBuilding, useUnits, useLeases, useLoans, useDocuments, useBuildingFinancialSummary,
@@ -16,6 +16,7 @@ import { useAuthStore } from '../store/authStore';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, StatCard } from '../components/ui';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
+import { ConstructionTemplateEditor } from '../components/ConstructionTemplateEditor';
 
 // Unit status palette — re-uses the dashboard's status semantics so users only learn one.
 const STATUS_FILL: Record<string, string> = {
@@ -63,6 +64,8 @@ export default function BuildingDetailPage() {
   // Same permission the obligation-summary endpoints require, so we never render
   // a card whose only possible outcome is a 403 error state.
   const canViewLeases = hasPermission('lease:view');
+  const canViewChecklist = hasPermission('checklist:view');
+  const canEditChecklist = hasPermission('checklist:edit');
 
   const { data: building, isLoading: bLoading, error: bError } = useBuilding(buildingId!);
   // Scoped to the building, not the project. These used to fetch every unit and every
@@ -214,6 +217,23 @@ export default function BuildingDetailPage() {
                 colorScheme={Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'success' : 'danger'}
               />
             </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Construction Checklist template — the default ordered stage list new units
+          under this building start from. Editing here never touches units that already
+          applied a template (see ConstructionChecklistService.applyTemplate). */}
+      {canViewChecklist && (
+        <Card shadow="sm">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <FiCheckSquare className="text-teal-600" />
+              <p className="font-semibold text-sm text-gray-700">Construction Checklist Template</p>
+            </div>
+          </CardHeader>
+          <CardBody className="pt-0">
+            <ConstructionTemplateEditor buildingId={buildingId!} canEdit={canEditChecklist} />
           </CardBody>
         </Card>
       )}

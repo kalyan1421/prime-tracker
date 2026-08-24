@@ -17,6 +17,14 @@ export enum UserRole {
   MARKETING = 'MARKETING',
   LEGAL = 'LEGAL',
   VIEWER = 'VIEWER',
+  // Buyer portal role (Phase 2 of Document Vault rollout) — sees only their own unit.
+  // Mirrors prisma/schema.prisma's UserRole exactly; the two were out of sync (CLIENT
+  // existed in the DB enum but not here), which silently resolved any CLIENT user's
+  // permissions to [] via ROLE_PERMISSIONS[role] ?? [] instead of a deliberate, typed
+  // grant. No portal-specific scoping (e.g. "own unit only") exists yet — this entry
+  // just makes the role's current (intentionally empty) access explicit and keeps every
+  // Record<UserRole, ...> map below honest about covering it.
+  CLIENT = 'CLIENT',
 }
 
 export enum ProjectStatus {
@@ -255,6 +263,10 @@ export const PERMISSIONS = {
   DAILYLOG_VIEW: 'dailylog:view',
   DAILYLOG_EDIT: 'dailylog:edit',
 
+  // Unit construction checklist (per-unit stage tracking, separate from Task/kind=CONSTRUCTION)
+  CHECKLIST_VIEW: 'checklist:view',
+  CHECKLIST_EDIT: 'checklist:edit',
+
   // Brokers / referral tracking (internal-only)
   BROKER_VIEW: 'broker:view',
   BROKER_EDIT: 'broker:edit',
@@ -341,6 +353,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_APPROVE,
     PERMISSIONS.SALE_DISCOUNT_APPROVE,
     PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.CHECKLIST_VIEW,
     PERMISSIONS.BROKER_VIEW,
     PERMISSIONS.SETTINGS_MANAGE,
   ],
@@ -482,6 +495,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.DAILYLOG_VIEW,
     PERMISSIONS.DAILYLOG_EDIT,
+    PERMISSIONS.CHECKLIST_VIEW,
+    PERMISSIONS.CHECKLIST_EDIT,
   ],
   [UserRole.CONSTRUCTION]: [
     PERMISSIONS.TASK_VIEW,
@@ -503,6 +518,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.DAILYLOG_VIEW,
     PERMISSIONS.DAILYLOG_EDIT,
+    PERMISSIONS.CHECKLIST_VIEW,
+    PERMISSIONS.CHECKLIST_EDIT,
   ],
   [UserRole.SALES]: [
     PERMISSIONS.TASK_VIEW,
@@ -587,6 +604,13 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.DAILYLOG_VIEW,
   ],
+  // Buyer portal (Phase 2) — not built yet, so deliberately empty rather than granted any
+  // of the internal-staff permissions above. A CLIENT account today can only reach the
+  // handful of self-scoped routes that carry no @RequirePermissions at all (own profile,
+  // notifications, MFA). Revisit once the "own unit only" portal scoping is designed —
+  // this is NOT the place to grant unit:view etc., since every permission here is checked
+  // against the FULL portfolio, not a single unit.
+  [UserRole.CLIENT]: [],
 };
 
 // ---- Project Visibility Scoping ----
@@ -644,6 +668,7 @@ export const ROLE_META: Record<UserRole, { label: string; description: string; c
   [UserRole.MARKETING]: { label: 'Marketing', description: 'Lead management, marketing documents, and sales reporting', category: 'operations' },
   [UserRole.LEGAL]: { label: 'Legal', description: 'Contract review, lease/sale oversight, and legal documents', category: 'support' },
   [UserRole.VIEWER]: { label: 'Viewer', description: 'Read-only access to projects, buildings, units, and milestones', category: 'support' },
+  [UserRole.CLIENT]: { label: 'Client', description: 'Buyer portal (Phase 2, not yet implemented) — will see only their own unit', category: 'support' },
 };
 
 // ---- Project Team Member Roles ----
@@ -700,6 +725,7 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'sales_leasing', label: 'Sales & Leasing', permissions: ['sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'rent:collect', 'lead:view', 'lead:create', 'lead:edit', 'lead:delete', 'lead:convert'] },
   { key: 'marketing', label: 'Marketing & Campaigns', permissions: ['campaign:view', 'campaign:create', 'campaign:edit', 'campaign:spend', 'campaign:delete'] },
   { key: 'milestones', label: 'Milestones', permissions: ['milestone:view', 'milestone:edit'] },
+  { key: 'checklist', label: 'Construction Checklist', permissions: ['checklist:view', 'checklist:edit'] },
   { key: 'vendors', label: 'Vendors & Contracts', permissions: ['vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve'] },
   { key: 'documents', label: 'Documents', permissions: ['document:view', 'document:upload', 'document:delete'] },
   { key: 'investors', label: 'Investors', permissions: ['investor:view', 'investor:manage'] },

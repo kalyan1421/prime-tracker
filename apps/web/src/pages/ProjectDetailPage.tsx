@@ -14,7 +14,9 @@ import {
 } from 'recharts';
 import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare, FiMove } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
-import { DailyLogFeed } from '../components/DailyLogFeed';
+import { ConstructionChecklistRollup } from '../components/ConstructionChecklistRollup';
+import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
+import { usePagination } from '../hooks/usePagination';
 import { CombineUnitsModal } from '../components/CombineUnitsModal';
 import { CashflowForecastView } from '../components/CashflowForecastView';
 import { ObligationsPanel } from '../components/ObligationsPanel';
@@ -155,7 +157,7 @@ import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields, lea
 import { FormError } from '../components/FormError';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
-  PermissionGate, STATUS_COLORS,
+  PermissionGate, STATUS_COLORS, Pagination,
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
@@ -2814,6 +2816,14 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
     return Array.from(map.entries()).sort((a, b) => a[1].name.localeCompare(b[1].name));
   }, [filteredUnits]);
 
+  // Undefined = follow the default (open if small or has an AVAILABLE unit — a vacant unit
+  // is the thing worth surfacing without a click, same "risk forces it open" rule the
+  // Construction tab's rollup uses for blocked stages). A manual toggle wins after that,
+  // until the search/filter narrows the list — reset then, so a manually-collapsed building
+  // can never hide a match the user just searched for.
+  const { isExpanded: isBuildingExpanded, toggle: toggleBuildingExpanded } =
+    useCollapsibleGroups([unitSearch, statusFilter, filterBuildingId]);
+
   if (isLoading) {
     return (
       <div className="mt-4 space-y-4">
@@ -3051,21 +3061,43 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         </div>
       ) : (
         <div className="space-y-4">
-          {grouped.map(([buildingId, { name, units: bUnits }]) => (
-            <Card key={buildingId} shadow="sm">
-              <CardHeader className="pb-0">
-                <p className="font-semibold text-sm text-gray-600">{name} ({bUnits.length} units)</p>
-              </CardHeader>
-              <CardBody className="pt-2">
-                <div className="overflow-x-auto">
-                  <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
-                    <thead>{unitTableHeaders}</thead>
-                    <tbody>{bUnits.map(renderUnitRow)}</tbody>
-                  </table></div>
-                </div>
-              </CardBody>
-            </Card>
-          ))}
+          {grouped.map(([buildingId, { name, units: bUnits }]) => {
+            const availableCount = bUnits.filter((u: any) => u.status === 'AVAILABLE').length;
+            const defaultExpanded = availableCount > 0 || bUnits.length <= 6;
+            const expanded = isBuildingExpanded(buildingId, defaultExpanded);
+            return (
+              <Card key={buildingId} shadow="sm">
+                <CardHeader className="pb-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleBuildingExpanded(buildingId, expanded)}
+                    className="w-full flex items-center justify-between gap-3 text-left"
+                  >
+                    <span className="flex items-center gap-1.5 font-semibold text-sm text-gray-600">
+                      {expanded ? <FiChevronDown className="shrink-0" /> : <FiChevronRight className="shrink-0" />}
+                      {name} <span className="font-normal text-gray-400">({bUnits.length} units)</span>
+                    </span>
+                    {availableCount > 0 && (
+                      <span className="flex items-center gap-1 text-xs text-green-700 font-medium shrink-0">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
+                        {availableCount} available
+                      </span>
+                    )}
+                  </button>
+                </CardHeader>
+                {expanded && (
+                  <CardBody className="pt-2">
+                    <div className="overflow-x-auto">
+                      <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
+                        <thead>{unitTableHeaders}</thead>
+                        <tbody>{bUnits.map(renderUnitRow)}</tbody>
+                      </table></div>
+                    </div>
+                  </CardBody>
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -3762,8 +3794,10 @@ function MilestonesTab({ projectId }: { projectId: string }) {
 const toApiDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
 
 function LeasesTab({ projectId }: { projectId: string }) {
+  const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
   const canEditLease = hasPermission('lease:edit');
+  const canImportHistory = hasPermission('unit:history:backfill');
   // Recording rent is deliberately a separate permission: AR/AP marks rent received
   // without also being able to rewrite the lease terms.
   const canCollectRent = hasPermission('rent:collect');
@@ -3860,9 +3894,19 @@ function LeasesTab({ projectId }: { projectId: string }) {
     <div className="mt-4">
       <div className="flex justify-between items-center mb-4">
         <p className="font-semibold text-sm text-gray-600">{leaseList.length} leases</p>
-        <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
-          Add Lease
-        </Button>
+        <div className="flex gap-2">
+          {/* Deliberately not next to "Add Lease" in the same visual weight — this one
+              writes a whole batch of complete ledgers, and the one that does more should
+              not be the easier slip. Same reasoning as the single-record backfill form. */}
+          {canImportHistory && (
+            <Button size="sm" variant="flat" onPress={() => navigate(`/projects/${projectId}/rent-history-import`)}>
+              Import rent history
+            </Button>
+          )}
+          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
+            Add Lease
+          </Button>
+        </div>
       </div>
 
       {rr && (
@@ -4215,6 +4259,9 @@ function SaleFormFields({
 }
 
 function SalesTab({ projectId }: { projectId: string }) {
+  const navigate = useNavigate();
+  const { hasPermission } = useAuthStore();
+  const canImportHistory = hasPermission('unit:history:backfill');
   const { data, isLoading } = useSalesPipeline(projectId);
   const { data: forecast } = useSalesForecast(projectId);
   const { data: unitsData } = useUnits(projectId);
@@ -4352,9 +4399,18 @@ function SalesTab({ projectId }: { projectId: string }) {
 
       <div className="flex justify-between items-center mb-4">
         <p className="font-semibold text-sm text-gray-600">{allSales.length} sales</p>
-        <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
-          Add Sale
-        </Button>
+        <div className="flex gap-2">
+          {/* Same deliberate visual-weight gap from "Add Sale" as the rent-history
+              importer has from "Add Lease" — this one writes a whole closed deal. */}
+          {canImportHistory && (
+            <Button size="sm" variant="flat" onPress={() => navigate(`/projects/${projectId}/sale-history-import`)}>
+              Import sale history
+            </Button>
+          )}
+          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openCreate}>
+            Add Sale
+          </Button>
+        </div>
       </div>
 
       {!allSales.length ? (
@@ -5014,16 +5070,20 @@ function ReorderableBuildingRow({ building, onDragEnd }: { building: any; onDrag
   );
 }
 
-// ---- Construction Tab (Buildings + Budget & Costs) ----
+// ---- Construction Tab (Checklist rollup is the main content; Buildings is secondary) ----
 function ConstructionTab({ projectId }: { projectId: string }) {
   return (
     <div className="mt-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-0">🏗️ Buildings</p>
-      <BuildingsTab projectId={projectId} />
-      <PermissionGate permission="dailylog:view">
-        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-8 mb-2">📋 Daily Logs</p>
-        <DailyLogFeed projectId={projectId} />
+      <PermissionGate permission="checklist:view">
+        <div className="flex items-center gap-2 mb-3">
+          <span aria-hidden="true">✅</span>
+          <h2 className="text-base font-semibold text-gray-800">Construction Checklist</h2>
+        </div>
+        <ConstructionChecklistRollup projectId={projectId} />
       </PermissionGate>
+
+      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-10 mb-0">🏗️ Buildings</p>
+      <BuildingsTab projectId={projectId} />
       {/* Budget & Costs now lives in its own top-level Budget tab. */}
     </div>
   );
@@ -5352,6 +5412,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const setCF = (f: string, v: string) => setConvertForm((prev) => ({ ...prev, [f]: v }));
   const [filterGroup, setFilterGroup] = useState<'all' | 'active' | 'converted' | 'lost'>('all');
   const [search, setSearch] = useState('');
+  const LEADS_PAGE_SIZE = 20;
   const [popoverLeadId, setPopoverLeadId] = useState<string | null>(null);
   const [stageSuggestion, setStageSuggestion] = useState<{ leadId: string; suggestedStatus: string; label: string } | null>(null);
 
@@ -5467,6 +5528,8 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
     const matchesSearch = !search || [l.name, l.email, l.phone].some((v: any) => v?.toLowerCase().includes(search.toLowerCase()));
     return matchesGroup && matchesSearch;
   });
+  const { page: leadsPage, setPage: setLeadsPage, totalPages: leadsTotalPages, paged: pagedLeads, total: leadsFilteredTotal } =
+    usePagination(filtered, LEADS_PAGE_SIZE, [filterGroup, search]);
 
   const STATUS_BAR: Record<string, string> = {
     NEW: 'bg-slate-400', CONTACTED: 'bg-blue-400', POTENTIAL: 'bg-blue-500',
@@ -5613,7 +5676,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
             </div>
           )}
 
-          {filtered.map((lead: any) => {
+          {pagedLeads.map((lead: any) => {
             const days = daysSince(lead);
             const isSelected = selectedLead?.id === lead.id;
             return (
@@ -5709,6 +5772,16 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               </div>
             );
           })}
+
+          <Pagination
+            page={leadsPage}
+            totalPages={leadsTotalPages}
+            total={leadsFilteredTotal}
+            pageSize={LEADS_PAGE_SIZE}
+            itemLabel="leads"
+            onPrev={() => setLeadsPage((p) => p - 1)}
+            onNext={() => setLeadsPage((p) => p + 1)}
+          />
         </div>
 
         {/* Activity Panel */}
@@ -6766,6 +6839,15 @@ function VendorsTab({ projectId }: { projectId: string }) {
 
   const s = summary as any;
 
+  // Both lists here are unfiltered (no search/status controls exist yet), so pagination is
+  // the whole fix — vendors is portfolio-wide (every project's Vendors tab shows every
+  // vendor), and contracts can grow for the life of a project. Same pattern as InventoryPage.
+  const LIST_PAGE_SIZE = 20;
+  const { page: vendorsPage, setPage: setVendorsPage, totalPages: vendorsTotalPages, paged: pagedVendors, total: vendorsTotal } =
+    usePagination(vendors as any[], LIST_PAGE_SIZE);
+  const { page: contractsPage, setPage: setContractsPage, totalPages: contractsTotalPages, paged: pagedContracts, total: contractsTotal } =
+    usePagination(contracts as any[], LIST_PAGE_SIZE);
+
   const handleSaveContract = async () => {
     try {
       await createContract.mutateAsync({ projectId, ...form, originalAmount: parseFloat(form.originalAmount) });
@@ -6814,7 +6896,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
             <div className="p-6"><EmptyState message="No vendors yet" /></div>
           ) : (
             <div className="divide-y">
-              {(vendors as any[]).map((v: any) => (
+              {pagedVendors.map((v: any) => (
                 <div key={v.id} className="p-3 flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2">
@@ -6836,6 +6918,15 @@ function VendorsTab({ projectId }: { projectId: string }) {
               ))}
             </div>
           )}
+          <Pagination
+            page={vendorsPage}
+            totalPages={vendorsTotalPages}
+            total={vendorsTotal}
+            pageSize={LIST_PAGE_SIZE}
+            itemLabel="vendors"
+            onPrev={() => setVendorsPage((p) => p - 1)}
+            onNext={() => setVendorsPage((p) => p + 1)}
+          />
         </CardBody>
       </Card>
 
@@ -6849,7 +6940,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
             <div className="p-6"><EmptyState message="No contracts yet" /></div>
           ) : (
             <div className="divide-y">
-              {(contracts as any[]).map((c: any) => {
+              {pagedContracts.map((c: any) => {
                 const paid = (c.payments || []).reduce((s: number, p: any) => s + p.amount, 0);
                 const pct = c.currentAmount > 0 ? (paid / c.currentAmount) * 100 : 0;
                 const expanded = expandedIds.has(c.id);
@@ -6947,6 +7038,15 @@ function VendorsTab({ projectId }: { projectId: string }) {
               })}
             </div>
           )}
+          <Pagination
+            page={contractsPage}
+            totalPages={contractsTotalPages}
+            total={contractsTotal}
+            pageSize={LIST_PAGE_SIZE}
+            itemLabel="contracts"
+            onPrev={() => setContractsPage((p) => p - 1)}
+            onNext={() => setContractsPage((p) => p + 1)}
+          />
         </CardBody>
       </Card>
 
@@ -7054,6 +7154,12 @@ function docIcon(mime: string) {
 }
 
 function DocumentsTab({ projectId }: { projectId: string }) {
+  const { hasPermission } = useAuthStore();
+  // 'document:upload' — NOT 'document:edit', which is not a permission at all. Delete is
+  // bundled under this same permission too (see BuildingDetailPage.tsx/UnitDetailPage.tsx —
+  // same rule there). The name must match what the upload/rename/replace/delete endpoints
+  // enforce, or these controls render for everyone and 403 for most of them.
+  const canUploadDocs = hasPermission('document:upload');
   const { data: docs = [], isLoading } = useDocuments({ projectId });
   const uploadDoc = useUploadDocument();
   const deleteDoc = useDeleteDocument();
@@ -7072,6 +7178,12 @@ function DocumentsTab({ projectId }: { projectId: string }) {
   const [editErr, setEditErr] = useState<string | null>(null);
 
   const filtered = filterCat === 'ALL' ? (docs as any[]) : (docs as any[]).filter((d: any) => d.category === filterCat);
+  // 24 (not the usual 20) divides evenly into both the sm:2-col and lg:3-col grid below, so
+  // the last row of a full page is never a lonely single card — everywhere else pagination
+  // uses 20 since there's no grid-column alignment to consider.
+  const DOCS_PAGE_SIZE = 24;
+  const { page: docsPage, setPage: setDocsPage, totalPages: docsTotalPages, paged: pagedDocs, total: docsFilteredTotal } =
+    usePagination(filtered, DOCS_PAGE_SIZE, [filterCat]);
 
   const handleUpload = async () => {
     if (!file) return;
@@ -7135,14 +7247,16 @@ function DocumentsTab({ projectId }: { projectId: string }) {
             </button>
           ))}
         </div>
-        <Button size="sm" color="primary" startContent={<FiUpload />} onPress={onOpen}>Upload</Button>
+        {canUploadDocs && (
+          <Button size="sm" color="primary" startContent={<FiUpload />} onPress={onOpen}>Upload</Button>
+        )}
       </div>
 
       {filtered.length === 0 ? (
         <EmptyState message="No documents yet" />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((doc: any) => (
+          {pagedDocs.map((doc: any) => (
             <Card key={doc.id} shadow="sm">
               <CardBody className="p-4">
                 {editId === doc.id ? (
@@ -7186,12 +7300,16 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                       <a href={apiAssetUrl(doc.fileUrl)} download={doc.fileName} className="flex-1">
                         <Button size="sm" variant="flat" className="w-full" startContent={<FiDownload />}>Download</Button>
                       </a>
-                      <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(doc)} aria-label="Edit">
-                        <FiEdit2 className="w-3.5 h-3.5 text-gray-400" />
-                      </Button>
-                      <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)}>
-                        <FiTrash2 />
-                      </Button>
+                      {canUploadDocs && (
+                        <>
+                          <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(doc)} aria-label="Edit">
+                            <FiEdit2 className="w-3.5 h-3.5 text-gray-400" />
+                          </Button>
+                          <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)}>
+                            <FiTrash2 />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </>
                 )}
@@ -7200,6 +7318,16 @@ function DocumentsTab({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
+
+      <Pagination
+        page={docsPage}
+        totalPages={docsTotalPages}
+        total={docsFilteredTotal}
+        pageSize={DOCS_PAGE_SIZE}
+        itemLabel="documents"
+        onPrev={() => setDocsPage((p) => p - 1)}
+        onNext={() => setDocsPage((p) => p + 1)}
+      />
 
       <Modal isOpen={isOpen} onClose={onClose} size="md">
         <ModalContent>

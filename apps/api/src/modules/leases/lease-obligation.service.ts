@@ -36,12 +36,14 @@ import { EventBus } from '../../common/events/event-bus.service';
  * comparison below goes through Decimal methods.
  */
 
-// NNN joined this list on 2026-08-12. It used to be a MONTHLY component of rent
-// (LeaseRentPeriod.nnnAmount, folded into monthlyRent and billed every month), but the
-// client confirmed Prime charges it as a ONE-TIME sum at lease signing. That is the same
-// shape as a security deposit — an agreed total settled by one or more payments — so it
-// belongs here rather than in the rent timeline.
-export const OBLIGATION_KINDS = ['SECURITY_DEPOSIT', 'TI_ALLOWANCE', 'NNN', 'OTHER'] as const;
+// NNN joined this list on 2026-08-12 (one-time sum at signing) and left it again on
+// 2026-08-21, when the client reversed that decision back to a MONTHLY component of rent
+// (see LeaseRentPeriod.nnnAmount). 'NNN' is deliberately NOT in this whitelist any more —
+// no new one-time NNN obligation should be created — but `assertKind` is only consulted by
+// `create()`, so the handful of historical NNN rows created in that nine-day window stay
+// fully readable, payable and waivable; see prisma/fix-nnn-monthly-migration.ts for how
+// they were reconciled onto the rent timeline.
+export const OBLIGATION_KINDS = ['SECURITY_DEPOSIT', 'TI_ALLOWANCE', 'OTHER'] as const;
 export type ObligationKind = (typeof OBLIGATION_KINDS)[number];
 
 export const OBLIGATION_DIRECTIONS = ['FROM_TENANT', 'TO_TENANT'] as const;
@@ -54,8 +56,6 @@ export type ObligationStatus = (typeof OBLIGATION_STATUSES)[number];
 const REQUIRED_DIRECTION: Record<string, ObligationDirection | null> = {
   SECURITY_DEPOSIT: 'FROM_TENANT',
   TI_ALLOWANCE: 'TO_TENANT',
-  // Tenant pays Prime their share of taxes/insurance/CAM. Always inbound.
-  NNN: 'FROM_TENANT',
   OTHER: null,
 };
 

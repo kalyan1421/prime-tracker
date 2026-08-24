@@ -1,13 +1,13 @@
 /**
- * Deleting a backfilled tenancy takes a Founder (R27).
+ * Deleting a backfilled record takes a Founder (R27, generalized to sales by R6).
  *
- * The asymmetry this UI expresses: a live lease can be rebuilt from its own terms, so
- * deleting one loses nothing. A backfilled tenancy carries a ledger somebody typed in
- * from paper the system never witnessed — its deletion is unrecoverable, so it takes a
- * second person.
+ * The asymmetry this UI expresses: a live lease/sale can be rebuilt or re-entered from
+ * its own terms, so deleting one loses nothing. A backfilled record carries a ledger or
+ * deal somebody typed in from paper the system never witnessed — its deletion is
+ * unrecoverable, so it takes a second person.
  *
  * The approve/reject controls sit HERE, on the record, rather than in a separate admin
- * queue. An approver who cannot see the tenancy they are erasing is rubber-stamping, and
+ * queue. An approver who cannot see the record they are erasing is rubber-stamping, and
  * the whole point of the gate is that somebody actually looks.
  */
 
@@ -20,24 +20,39 @@ import {
   useCancelHistoricalDeletion,
   useDecideHistoricalDeletion,
   useDeleteLease,
+  useDeleteSale,
   useHistoricalDeletionRequests,
   useRequestHistoricalDeletion,
+  useRequestSaleHistoricalDeletion,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { errMsg, fmtDate } from '../utils/fmt';
 
-export function HistoricalRecordControls({ lease, onDeleted }: {
-  lease: any;
+export interface HistoricalRecord {
+  kind: 'lease' | 'sale';
+  id: string;
+  /** Tenant name for a lease, buyer for a sale — what the confirmation copy names. */
+  label: string;
+  /** e.g. "Jan 1, 2019 – Jan 1, 2022" for a lease, "Closed Mar 15, 2021" for a sale. */
+  dateRangeLabel: string;
+}
+
+export function HistoricalRecordControls({ record, onDeleted }: {
+  record: HistoricalRecord;
   onDeleted?: () => void;
 }) {
+  const { kind, id, label, dateRangeLabel } = record;
   const { user, hasPermission } = useAuthStore();
   const canRequest = hasPermission('unit:history:backfill');
   const canDecide = hasPermission('unit:history:delete');
 
-  const request = useRequestHistoricalDeletion();
+  const requestLease = useRequestHistoricalDeletion();
+  const requestSale = useRequestSaleHistoricalDeletion();
   const decide = useDecideHistoricalDeletion();
   const cancel = useCancelHistoricalDeletion();
-  const del = useDeleteLease();
+  const deleteLease = useDeleteLease();
+  const deleteSale = useDeleteSale();
+  const del = kind === 'lease' ? deleteLease : deleteSale;
   // Both queues, because the state this record is in is either pending or approved and
   // the card has to say which. Each is a cheap list and only loads for an approver.
   const { data: pending } = useHistoricalDeletionRequests('PENDING');
@@ -48,8 +63,9 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
 
-  const pendingReq = (pending ?? []).find((r: any) => r.leaseId === lease.id);
-  const approvedReq = (approved ?? []).find((r: any) => r.leaseId === lease.id);
+  const matches = (r: any) => (kind === 'lease' ? r.leaseId === id : r.saleId === id);
+  const pendingReq = (pending ?? []).find(matches);
+  const approvedReq = (approved ?? []).find(matches);
   const ownRequest = pendingReq && pendingReq.requestedById === user?.id;
 
   const submitRequest = async () => {
@@ -58,7 +74,8 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
       return;
     }
     try {
-      await request.mutateAsync({ leaseId: lease.id, reason: reason.trim() });
+      if (kind === 'lease') await requestLease.mutateAsync({ leaseId: id, reason: reason.trim() });
+      else await requestSale.mutateAsync({ saleId: id, reason: reason.trim() });
       addToast({ title: 'Sent for Founder approval', color: 'success' });
       setAskOpen(false);
       setReason('');
@@ -84,7 +101,7 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
 
   const doDelete = async () => {
     try {
-      await del.mutateAsync(lease.id);
+      await del.mutateAsync(id);
       addToast({ title: 'Historical record deleted', color: 'success' });
       onDeleted?.();
     } catch (err) {
@@ -100,8 +117,9 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
           <div className="min-w-0">
             <p className="text-xs font-semibold text-amber-900">Entered from records</p>
             <p className="text-[11px] text-amber-800/80 mt-0.5">
-              This tenancy was typed in after the fact, so its ledger cannot be rebuilt.
-              Deleting it needs a Founder's approval.
+              This {kind === 'lease' ? 'tenancy' : 'sale'} was typed in after the fact, so its
+              {kind === 'lease' ? ' ledger' : ' deal'} cannot be rebuilt. Deleting it needs a
+              Founder's approval.
             </p>
           </div>
         </div>
@@ -208,13 +226,11 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
         <ModalContent>
           <ModalHeader>Delete this historical record?</ModalHeader>
           <ModalBody className="gap-3">
-            <p className="text-sm text-gray-600">
-              {lease.tenantName || 'This tenancy'} · {fmtDate(lease.leaseStart)} – {fmtDate(lease.leaseEnd)}
-            </p>
+            <p className="text-sm text-gray-600">{label} · {dateRangeLabel}</p>
             <p className="text-sm text-gray-700">
-              This tenancy and its whole rent ledger were typed in from records, so nothing
-              here can be regenerated. You hold the approval permission, so this is recorded
-              as self-approved against your name.
+              This {kind === 'lease' ? 'tenancy and its whole rent ledger were' : 'sale and its whole deal record were'}
+              {' '}typed in from records, so nothing here can be regenerated. You hold the
+              approval permission, so this is recorded as self-approved against your name.
             </p>
           </ModalBody>
           <ModalFooter>
@@ -234,9 +250,7 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
         <ModalContent>
           <ModalHeader>Request deletion of a historical record</ModalHeader>
           <ModalBody className="gap-3">
-            <p className="text-sm text-gray-600">
-              {lease.tenantName || 'This tenancy'} · {fmtDate(lease.leaseStart)} – {fmtDate(lease.leaseEnd)}
-            </p>
+            <p className="text-sm text-gray-600">{label} · {dateRangeLabel}</p>
             <Textarea
               label="Why should this be deleted?"
               description="A Founder sees only this sentence and the record itself."
@@ -247,7 +261,11 @@ export function HistoricalRecordControls({ lease, onDeleted }: {
           </ModalBody>
           <ModalFooter>
             <Button variant="light" onPress={() => setAskOpen(false)}>Cancel</Button>
-            <Button color="danger" isLoading={request.isPending} onPress={submitRequest}>
+            <Button
+              color="danger"
+              isLoading={kind === 'lease' ? requestLease.isPending : requestSale.isPending}
+              onPress={submitRequest}
+            >
               Send for approval
             </Button>
           </ModalFooter>

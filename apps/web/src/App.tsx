@@ -33,6 +33,8 @@ import InteriorProjectDetailPage from './pages/InteriorProjectDetailPage';
 import CashflowPage from './pages/CashflowPage';
 import BrokersPage from './pages/BrokersPage';
 import ReceivablesPage from './pages/ReceivablesPage';
+import RentHistoryImportPage from './pages/RentHistoryImportPage';
+import SaleHistoryImportPage from './pages/SaleHistoryImportPage';
 
 /**
  * `permission` accepts an array for pages that are a hub over several independently
@@ -86,6 +88,8 @@ export default function App() {
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/units/:unitId" element={<UnitDetailPage />} />
         <Route path="projects/:id/buildings/:buildingId" element={<ProtectedRoute permission="building:view"><BuildingDetailPage /></ProtectedRoute>} />
+        <Route path="projects/:id/rent-history-import" element={<ProtectedRoute permission="unit:history:backfill"><RentHistoryImportPage /></ProtectedRoute>} />
+        <Route path="projects/:id/sale-history-import" element={<ProtectedRoute permission="unit:history:backfill"><SaleHistoryImportPage /></ProtectedRoute>} />
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
         <Route path="reports" element={<ProtectedRoute permission={['financial:view', 'sales:view', 'lease:view', 'loan:view']}><ReportsPage /></ProtectedRoute>} />
         <Route path="leads" element={<ProtectedRoute permission="lead:view"><LeadsPage /></ProtectedRoute>} />
@@ -107,7 +111,12 @@ export default function App() {
         <Route path="dashboard/sales" element={<ProtectedRoute permission="unit:view"><SalesDashboardPage /></ProtectedRoute>} />
         <Route path="dashboard/finance" element={<ProtectedRoute permission="financial:view"><FinanceDashboardPage /></ProtectedRoute>} />
         <Route path="reports/founder" element={<ProtectedRoute permission="financial:view"><FounderReportsPage /></ProtectedRoute>} />
-        <Route path="reports/construction" element={<ProtectedRoute permission="financial:view"><ConstructionReportsPage /></ProtectedRoute>} />
+        {/* milestone:view, not financial:view — ConstructionReportsPage's own tabs (Budget &
+            Cost / Draw Requests) each self-gate on the finer-grained permission they actually
+            need; the route itself only needs to admit anyone who can see at least ONE tab, and
+            Milestone & Schedule (financial:view-free) is the one CONSTRUCTION/PROJECT_MANAGER
+            hold that the route was previously blocking them from entirely. */}
+        <Route path="reports/construction" element={<ProtectedRoute permission="milestone:view"><ConstructionReportsPage /></ProtectedRoute>} />
         <Route path="reports/sales" element={<ProtectedRoute permission="sales:view"><SalesReportsPage /></ProtectedRoute>} />
         <Route
           path="investors"

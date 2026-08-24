@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 
 /**
  * Broker / referral tracking — internal-only (brokers have no login). Brokers bring
@@ -8,7 +9,10 @@ import { PrismaService } from '../../prisma/prisma.service';
  */
 @Injectable()
 export class BrokersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private commissionInstallments: CommissionInstallmentService,
+  ) {}
 
   findAll(includeInactive = false) {
     return this.prisma.broker.findMany({
@@ -121,16 +125,17 @@ export class BrokersService {
         _count: true,
         _sum: { salePrice: true, brokerCommissionAmt: true },
       }),
-      // Paid: CLOSED sales where brokerCommissionPaidAt IS NOT NULL
-      this.prisma.sale.groupBy({
+      // Paid: R7 — summed from actual installments marked paid, not an all-or-nothing
+      // flag on the sale. A commission paid in two parts with only the first settled now
+      // shows exactly that first amount as paid, not the whole figure or nothing.
+      this.prisma.commissionInstallment.groupBy({
         by: ['brokerId'],
         where: {
-          brokerId: { not: null },
-          status: 'CLOSED',
-          deletedAt: null,
-          brokerCommissionPaidAt: { not: null },
+          saleId: { not: null },
+          paidAt: { not: null },
+          sale: { status: 'CLOSED', deletedAt: null },
         },
-        _sum: { brokerCommissionAmt: true },
+        _sum: { amount: true },
       }),
       // Pipeline: UNDER_CONTRACT and LOI_SIGNED sales
       this.prisma.sale.groupBy({
@@ -165,25 +170,25 @@ export class BrokersService {
         _count: true,
         _sum: { brokerCommissionAmt: true, monthlyRent: true },
       }),
-      this.prisma.lease.groupBy({
+      // Leasing paid side of R7 — same installment-sum reasoning as the sale side above.
+      this.prisma.commissionInstallment.groupBy({
         by: ['brokerId'],
         where: {
-          brokerId: { not: null },
-          brokerCommissionAmt: { not: null },
-          deletedAt: null,
-          brokerCommissionPaidAt: { not: null },
+          leaseId: { not: null },
+          paidAt: { not: null },
+          lease: { deletedAt: null },
         },
-        _sum: { brokerCommissionAmt: true },
+        _sum: { amount: true },
       }),
     ]);
 
     const leadsByBroker = new Map(leadGroups.map((g) => [g.brokerId, g._count]));
     const salesByBroker = new Map(saleGroups.map((g) => [g.brokerId, g]));
-    const paidByBroker = new Map(paidGroups.map((g) => [g.brokerId, Number(g._sum.brokerCommissionAmt ?? 0)]));
+    const paidByBroker = new Map(paidGroups.map((g) => [g.brokerId, Number(g._sum.amount ?? 0)]));
     const pipelineByBroker = new Map(pipelineGroups.map((g) => [g.brokerId, Number(g._sum.salePrice ?? 0)]));
     const leasesByBroker = new Map(leaseGroups.map((g) => [g.brokerId, g]));
     const leasePaidByBroker = new Map(
-      leasePaidGroups.map((g) => [g.brokerId, Number(g._sum.brokerCommissionAmt ?? 0)]),
+      leasePaidGroups.map((g) => [g.brokerId, Number(g._sum.amount ?? 0)]),
     );
 
     return brokers.map((b) => {
@@ -261,6 +266,12 @@ export class BrokersService {
             building: { select: { name: true } },
           },
         },
+        // R7 — per-installment breakdown, so a drilldown can show "1 of 2 paid" instead
+        // of the single paid/unpaid flag above (kept for backward compatibility only).
+        commissionInstallments: {
+          select: { id: true, sequence: true, amount: true, paidAt: true, notes: true },
+          orderBy: [{ sequence: 'asc' }, { createdAt: 'asc' }],
+        },
       },
       orderBy: { updatedAt: 'desc' },
       take: 100,
@@ -268,8 +279,10 @@ export class BrokersService {
   }
 
   /**
-   * Mark broker commission as paid on a given sale (sets brokerCommissionPaidAt = now).
-   * Throws if the sale is not found or has no broker attached.
+   * Settle a sale's broker commission in full: pays off every outstanding installment
+   * (R7) and, for backward compatibility with anything still reading the flat field,
+   * also stamps brokerCommissionPaidAt. Throws if the sale is not found or has no
+   * broker attached.
    */
   async markCommissionPaid(saleId: string) {
     const sale = await this.prisma.sale.findFirst({
@@ -279,6 +292,7 @@ export class BrokersService {
     if (!sale) throw new NotFoundException('Sale not found');
     if (!sale.brokerId) throw new NotFoundException('Sale has no broker assigned');
 
+    await this.commissionInstallments.settleAll({ saleId });
     return this.prisma.sale.update({
       where: { id: saleId },
       data: { brokerCommissionPaidAt: new Date() },
@@ -287,6 +301,10 @@ export class BrokersService {
         brokerId: true,
         brokerCommissionAmt: true,
         brokerCommissionPaidAt: true,
+        commissionInstallments: {
+          select: { id: true, sequence: true, amount: true, paidAt: true },
+          orderBy: [{ sequence: 'asc' }],
+        },
       },
     });
   }
@@ -320,6 +338,11 @@ export class BrokersService {
             building: { select: { name: true, projectId: true } },
           },
         },
+        // R7 — see the matching note on getSalesByBroker.
+        commissionInstallments: {
+          select: { id: true, sequence: true, amount: true, paidAt: true, notes: true },
+          orderBy: [{ sequence: 'asc' }, { createdAt: 'asc' }],
+        },
       },
       orderBy: { updatedAt: 'desc' },
       take: 100,
@@ -327,9 +350,10 @@ export class BrokersService {
   }
 
   /**
-   * Mark a LEASING commission as paid. Separate from the sale version because the two
-   * live on different tables; sharing one endpoint would mean guessing which id was
-   * passed, and a wrong guess silently marks the wrong deal as settled.
+   * Settle a leasing commission in full — the leasing counterpart to markCommissionPaid.
+   * Separate from the sale version because the two live on different tables; sharing one
+   * endpoint would mean guessing which id was passed, and a wrong guess silently marks
+   * the wrong deal as settled.
    */
   async markLeaseCommissionPaid(leaseId: string) {
     const lease = await this.prisma.lease.findFirst({
@@ -339,6 +363,7 @@ export class BrokersService {
     if (!lease) throw new NotFoundException('Lease not found');
     if (!lease.brokerId) throw new NotFoundException('Lease has no broker assigned');
 
+    await this.commissionInstallments.settleAll({ leaseId });
     return this.prisma.lease.update({
       where: { id: leaseId },
       data: { brokerCommissionPaidAt: new Date() },
@@ -347,7 +372,38 @@ export class BrokersService {
         brokerId: true,
         brokerCommissionAmt: true,
         brokerCommissionPaidAt: true,
+        commissionInstallments: {
+          select: { id: true, sequence: true, amount: true, paidAt: true },
+          orderBy: [{ sequence: 'asc' }],
+        },
       },
     });
+  }
+
+  // ─────── Commission installments (R7) ───────
+
+  /** List installments for a sale or lease. Exactly one of the two ids is provided. */
+  getCommissionInstallments(target: { saleId?: string; leaseId?: string }) {
+    return this.commissionInstallments.list(target);
+  }
+
+  /** Add a new installment (e.g. a "2nd payment") to a sale or lease's commission. */
+  async addCommissionInstallment(
+    target: { saleId?: string; leaseId?: string },
+    input: { amount: number; paidAt?: Date | null; notes?: string },
+  ) {
+    const brokerId = target.saleId
+      ? (await this.prisma.sale.findFirst({ where: { id: target.saleId }, select: { brokerId: true } }))?.brokerId
+      : (await this.prisma.lease.findFirst({ where: { id: target.leaseId }, select: { brokerId: true } }))?.brokerId;
+    if (!brokerId) throw new BadRequestException('This deal has no broker assigned');
+    return this.commissionInstallments.add(target, { ...input, brokerId });
+  }
+
+  markCommissionInstallmentPaid(id: string, paidAt?: Date) {
+    return this.commissionInstallments.markPaid(id, paidAt);
+  }
+
+  removeCommissionInstallment(id: string) {
+    return this.commissionInstallments.remove(id);
   }
 }

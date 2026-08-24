@@ -402,6 +402,12 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
       setPayErr('Enter an amount of zero or more.');
       return;
     }
+    // The API accepts any date here — nothing stops "collected" being set in the
+    // future, which reads as money that has not actually arrived yet.
+    if (payForm.paidAt && payForm.paidAt > todayInput()) {
+      setPayErr('Collected-on date cannot be in the future.');
+      return;
+    }
 
     try {
       // Zero is the "I keyed this wrong" case. The API rejects a zero payment and

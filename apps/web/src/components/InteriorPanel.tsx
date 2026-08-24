@@ -115,7 +115,10 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
   };
 
   return (
-    <Card shadow="sm">
+    // Matches the unit page's Section chrome (rounded-2xl, bordered, no shadow) rather
+    // than HeroUI's default Card look — this panel sits directly among Section-wrapped
+    // panels on UnitDetailPage and previously looked like a different component's UI.
+    <Card className="border border-gray-200 shadow-none rounded-2xl">
       <CardHeader className="pb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <FiHome className="text-amber-600" />

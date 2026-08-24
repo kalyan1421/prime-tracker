@@ -113,6 +113,24 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'MEZZANINE',    label: 'Mezzanine',    color: 'danger'    },
     { value: 'SBA',          label: 'SBA',          color: 'success'   },
   ],
+  // Unit Construction Checklist (2026-08-21) — separate from task_status because the
+  // client's board uses this exact wording ("Not Started" / "Working on it"), and the
+  // checklist and the Task board are relabeled independently by design.
+  construction_stage_status: [
+    { value: 'NOT_STARTED', label: 'Not Started',  color: 'default' },
+    { value: 'IN_PROGRESS', label: 'Working on it', color: 'warning' },
+    { value: 'BLOCKED',     label: 'Blocked',       color: 'danger'  },
+    { value: 'DONE',        label: 'Done',          color: 'success' },
+  ],
+  // Assumed value set — the client's screenshots show this column but every visible row
+  // reads "Not Started", so the real vocabulary (e.g. Scheduled/Passed/Failed) is still an
+  // open question. Relabel or extend here once confirmed; no schema change needed either way.
+  construction_inspection_status: [
+    { value: 'NOT_STARTED', label: 'Not Started', color: 'default' },
+    { value: 'SCHEDULED',   label: 'Scheduled',    color: 'primary' },
+    { value: 'PASSED',      label: 'Passed',       color: 'success' },
+    { value: 'FAILED',      label: 'Failed',       color: 'danger'  },
+  ],
 };
 
 @Injectable()

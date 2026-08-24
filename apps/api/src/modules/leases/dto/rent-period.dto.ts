@@ -9,11 +9,15 @@ import { IsBoolean, IsDateString, IsNotEmpty, IsNumber, IsOptional, IsString, Ma
  * be declared here or the request is rejected with a 400 before it reaches it.
  */
 export class GenerateRentPeriodsDto {
-  // Splits lease.monthlyRent into base + NNN. Omit both and the whole
-  // monthlyRent is treated as base rent. Zero is legal (a fully abated lease).
+  // Overrides lease.monthlyRent as the first period's base rent. Omit to use the
+  // lease's own monthlyRent.
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   baseRent?: number;
 
+  // Overrides the derived default (lease.nnnTotalAmount / 12). Omit to use that
+  // default — NNN is re-negotiated by hand, never auto-escalated.
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
+  nnnAmount?: number;
 
   // Terms changed after periods already existed: rewrite the future, keep the past.
   // Without it generateForLease is a no-op on a lease that already has periods.
@@ -26,6 +30,8 @@ export class RegenerateFutureRentPeriodsDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   baseRent?: number;
 
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
+  nnnAmount?: number;
 }
 
 export class AddManualRentPeriodDto {
@@ -39,8 +45,10 @@ export class AddManualRentPeriodDto {
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   baseRent!: number;
 
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
+  nnnAmount?: number;
 
-  // Mirrors baseRent when omitted; validated against it when given.
+  // Derived from baseRent + nnnAmount when omitted; validated against that sum when given.
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
   monthlyRent?: number;
 

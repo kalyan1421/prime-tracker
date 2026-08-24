@@ -156,3 +156,44 @@ export function EmptyState({ title, message, action }: { title?: string; message
     </div>
   );
 }
+
+// ---- Pagination footer ----
+// One canonical "Previous / Page X of Y / Next" control, paired with the usePagination hook.
+export function Pagination({
+  page, totalPages, onPrev, onNext, total, pageSize, itemLabel = 'items',
+}: {
+  page: number;
+  totalPages: number;
+  onPrev: () => void;
+  onNext: () => void;
+  total: number;
+  pageSize: number;
+  itemLabel?: string;
+}) {
+  if (totalPages <= 1) return null;
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  return (
+    <div className="flex items-center justify-between px-3 py-2.5 border-t border-gray-100">
+      <span className="text-xs text-gray-500">
+        {start}–{end} of {total} {itemLabel}
+      </span>
+      <div className="flex items-center gap-1">
+        <Button size="sm" variant="flat" isDisabled={page === 1} onPress={onPrev}>Previous</Button>
+        <span className="text-xs text-gray-500 px-2 tabular-nums">Page {page} / {totalPages}</span>
+        <Button size="sm" variant="flat" isDisabled={page === totalPages} onPress={onNext}>Next</Button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Shared HeroUI color-token normalizer ----
+// Validates a CustomOption.color string against HeroUI's known chip/progress colors,
+// falling back to 'default' for anything unrecognized (a relabeled/custom token, null,
+// or a stale value). One canonical copy — every status/priority chip in the app should
+// read its color through this instead of hand-rolling the same 6-item allowlist.
+export type HeroColor = 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
+const HERO_COLORS: HeroColor[] = ['default', 'primary', 'secondary', 'success', 'warning', 'danger'];
+export function chipColor(color?: string | null): HeroColor {
+  return (HERO_COLORS as string[]).includes(color ?? '') ? (color as HeroColor) : 'default';
+}

@@ -1,16 +1,23 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { BrokersService } from './brokers.service';
+import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 
 const mockPrisma: any = {
   broker: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
   lead: { groupBy: jest.fn() },
-  sale: { groupBy: jest.fn() },
+  sale: { groupBy: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
   // Leasing commission (R23) — the report now aggregates leases alongside sales.
   lease: { groupBy: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+  // R7 — commission installments. `paid` figures in the report now come from here
+  // instead of a single all-or-nothing flag on the sale/lease.
+  commissionInstallment: {
+    groupBy: jest.fn(), findMany: jest.fn(), create: jest.fn(), count: jest.fn().mockResolvedValue(0),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
 };
 
 function makeService() {
-  return new BrokersService(mockPrisma as any);
+  return new BrokersService(mockPrisma as any, new CommissionInstallmentService(mockPrisma as any));
 }
 
 describe('BrokersService', () => {
@@ -60,6 +67,7 @@ describe('BrokersService', () => {
         { brokerId: 'b1', _count: 4, _sum: { salePrice: 4000000, brokerCommissionAmt: 80000 } },
       ]);
       mockPrisma.lease.groupBy.mockResolvedValue([]);
+      mockPrisma.commissionInstallment.groupBy.mockResolvedValue([]);
 
       const rows = await service.report();
 
@@ -79,6 +87,7 @@ describe('BrokersService', () => {
       mockPrisma.lead.groupBy.mockResolvedValue([]);
       mockPrisma.sale.groupBy.mockResolvedValue([]);
       mockPrisma.lease.groupBy.mockResolvedValue([]);
+      mockPrisma.commissionInstallment.groupBy.mockResolvedValue([]);
 
       const rows = await service.report();
       expect(rows[0]).toMatchObject({ leads: 0, closedSales: 0, closedValue: 0, commissionEarned: 0, conversionPct: 0 });
@@ -95,11 +104,14 @@ describe('BrokersService', () => {
       mockPrisma.lead.groupBy.mockResolvedValue([]);
       mockPrisma.sale.groupBy
         .mockResolvedValueOnce([{ brokerId: 'b1', _count: 2, _sum: { salePrice: 1000000, brokerCommissionAmt: 20000 } }])
-        .mockResolvedValueOnce([{ brokerId: 'b1', _sum: { brokerCommissionAmt: 5000 } }])  // paid
         .mockResolvedValueOnce([]);                                                        // pipeline
+      // R7: paid figures now come from commissionInstallment.groupBy — called once for
+      // the sale side, once for the lease side, in that order (see report()'s Promise.all).
+      mockPrisma.commissionInstallment.groupBy
+        .mockResolvedValueOnce([{ brokerId: 'b1', _sum: { amount: 5000 } }])  // sale paid
+        .mockResolvedValueOnce([{ brokerId: 'b1', _sum: { amount: 4000 } }]); // lease paid
       mockPrisma.lease.groupBy
-        .mockResolvedValueOnce([{ brokerId: 'b1', _count: 3, _sum: { brokerCommissionAmt: 9000, monthlyRent: 30000 } }])
-        .mockResolvedValueOnce([{ brokerId: 'b1', _sum: { brokerCommissionAmt: 4000 } }]);  // paid
+        .mockResolvedValueOnce([{ brokerId: 'b1', _count: 3, _sum: { brokerCommissionAmt: 9000, monthlyRent: 30000 } }]);
 
       const rows = await service.report();
 
@@ -125,12 +137,12 @@ describe('BrokersService', () => {
       ]);
       mockPrisma.lead.groupBy.mockResolvedValue([]);
       mockPrisma.sale.groupBy.mockResolvedValue([]);
+      mockPrisma.commissionInstallment.groupBy.mockResolvedValue([]); // nothing paid, either side
       // The EXPIRED lease — returned only because the query no longer filters on status.
       mockPrisma.lease.groupBy
         .mockResolvedValueOnce([
           { brokerId: 'b1', _count: 1, _sum: { brokerCommissionAmt: 18000, monthlyRent: 9000 } },
-        ])
-        .mockResolvedValueOnce([]); // nothing paid
+        ]);
 
       const rows = await service.report();
 
@@ -149,6 +161,7 @@ describe('BrokersService', () => {
       mockPrisma.lead.groupBy.mockResolvedValue([]);
       mockPrisma.sale.groupBy.mockResolvedValue([]);
       mockPrisma.lease.groupBy.mockResolvedValue([]);
+      mockPrisma.commissionInstallment.groupBy.mockResolvedValue([]);
 
       await service.report();
 
@@ -174,11 +187,34 @@ describe('BrokersService', () => {
       expect(mockPrisma.lease.update).not.toHaveBeenCalled();
     });
 
-    it('stamps the paid date', async () => {
+    it('stamps the paid date and settles every outstanding installment (R7)', async () => {
       mockPrisma.lease.findFirst.mockResolvedValue({ id: 'l1', brokerId: 'b1' });
       mockPrisma.lease.update.mockImplementation((a: any) => Promise.resolve(a.data));
       const res: any = await service.markLeaseCommissionPaid('l1');
       expect(res.brokerCommissionPaidAt).toBeInstanceOf(Date);
+      expect(mockPrisma.commissionInstallment.updateMany).toHaveBeenCalledWith({
+        where: { leaseId: 'l1', paidAt: null },
+        data: { paidAt: expect.any(Date) },
+      });
+    });
+  });
+
+  describe('markCommissionPaid', () => {
+    it('refuses a sale with no broker attached', async () => {
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', brokerId: null });
+      await expect(service.markCommissionPaid('s1')).rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+    });
+
+    it('stamps the paid date and settles every outstanding installment', async () => {
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', brokerId: 'b1' });
+      mockPrisma.sale.update.mockImplementation((a: any) => Promise.resolve(a.data));
+      const res: any = await service.markCommissionPaid('s1');
+      expect(res.brokerCommissionPaidAt).toBeInstanceOf(Date);
+      expect(mockPrisma.commissionInstallment.updateMany).toHaveBeenCalledWith({
+        where: { saleId: 's1', paidAt: null },
+        data: { paidAt: expect.any(Date) },
+      });
     });
   });
 });

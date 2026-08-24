@@ -33,7 +33,7 @@ const BASE_NAV_ITEMS = [
   // Any-of: the Reports hub holds four independently gated report tabs, so the link
   // shows when the viewer can see at least one of them. This was a role list, which
   // let CONSTRUCTION and VIEWER through to a page where every tab was empty.
-  { label: 'Reports', icon: FiPieChart, pathKey: 'reports', anyPermission: ['financial:view', 'sales:view', 'lease:view', 'loan:view'] },
+  { label: 'Reports', icon: FiPieChart, pathKey: 'reports', anyPermission: ['financial:view', 'sales:view', 'lease:view', 'loan:view', 'milestone:view'] },
   { label: 'Admin', icon: FiUsers, path: '/admin', permission: 'user:manage' },
 ];
 
@@ -49,15 +49,21 @@ function getDashPath(role: string) {
  *
  * Driven by permissions, not by role name, because the destinations are themselves
  * permission-gated and the two lists drifted: PROJECT_MANAGER was sent to
- * /reports/construction, which requires financial:view (ConstructionReportsPage renders
- * only the portfolio report) — a permission PROJECT_MANAGER does not hold. The link was
- * visible and clicking it bounced them silently back to "/".
+ * /reports/construction, which required financial:view — a permission PROJECT_MANAGER does
+ * not hold. The link was visible and clicking it bounced them silently back to "/".
+ *
+ * /reports/construction's own route gate was later loosened from financial:view to
+ * milestone:view (ConstructionReportsPage self-gates its Budget & Cost / Draw Requests tabs
+ * on the finer permission each actually needs — Milestone & Schedule needs nothing beyond
+ * milestone:view), so CONSTRUCTION/PROJECT_MANAGER now route here too instead of falling
+ * through to the generic hub.
  *
  * Ordered most-specific first; /reports is the hub and gates each of its tabs itself.
  */
 function getReportsPath(hasPermission: (p: string) => boolean) {
   if (hasPermission('financial:view')) return '/reports/founder';
   if (hasPermission('sales:view')) return '/reports/sales';
+  if (hasPermission('milestone:view')) return '/reports/construction';
   return '/reports';
 }
 

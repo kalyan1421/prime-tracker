@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BrokersService } from './brokers.service';
 import { BrokersController } from './brokers.controller';
 import { AuditService } from '../../common/utils/audit.service';
+import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 
 /**
  * Brokers — internal-only referral tracking + commission reporting. Commission is
@@ -9,7 +10,7 @@ import { AuditService } from '../../common/utils/audit.service';
  */
 @Module({
   controllers: [BrokersController],
-  providers: [BrokersService, AuditService],
-  exports: [BrokersService],
+  providers: [BrokersService, AuditService, CommissionInstallmentService],
+  exports: [BrokersService, CommissionInstallmentService],
 })
 export class BrokersModule {}

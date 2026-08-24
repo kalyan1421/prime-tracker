@@ -1,10 +1,10 @@
-import { useParams, useNavigate } from 'react-router-dom';
-import { useState, useRef, useMemo } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers } from 'react-icons/fi';
+import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers, FiCheckSquare, FiUsers } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import { MentionTextarea } from '../components/MentionTextarea';
 import {
@@ -32,6 +32,7 @@ import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
 import { LeaseObligationsPanel } from '../components/LeaseObligationsPanel';
 import { EndTenancyDialog, AssignTenantDialog } from '../components/TenancyTransitionDialogs';
 import { UnitConstructionPanel } from '../components/ConstructionBoard';
+import { UnitConstructionChecklist } from '../components/UnitConstructionChecklist';
 import { BackfillTenancyDialog } from '../components/BackfillTenancyDialog';
 import {
   TenancyBackfillFields, useTenancyBackfillState,
@@ -71,24 +72,32 @@ function Metric({ label, value, unit, accent, sub }: { label: string; value: str
  * so the emptiest one used to set the height of the row it was in.
  */
 function Section({
-  icon, title, count, action, children, empty, className = '',
+  icon, title, subtitle, count, action, children, empty, className = '', id,
 }: {
   icon: React.ReactNode;
   title: string;
+  /** One line under the title — for two sections whose names alone could be
+   *  mistaken for each other (e.g. "Construction" vs. "Construction Checklist"). */
+  subtitle?: string;
   count?: number;
   action?: React.ReactNode;
   children: React.ReactNode;
   /** Short word for "there is nothing here" — e.g. "None". Collapses the body. */
   empty?: string | null;
   className?: string;
+  /** DOM id so other pages (e.g. the Construction dashboard) can deep-link via #hash. */
+  id?: string;
 }) {
   if (empty) {
     return (
-      <div className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
+      <div id={id} className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5">
           <div className="flex items-center gap-2.5">
             {icon}
-            <h2 className="font-semibold text-sm text-gray-800">{title}</h2>
+            <div>
+              <h2 className="font-semibold text-sm text-gray-800">{title}</h2>
+              {subtitle && <p className="text-[11px] text-gray-400">{subtitle}</p>}
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-gray-400">{empty}</span>
@@ -99,14 +108,17 @@ function Section({
     );
   }
   return (
-    <div className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
+    <div id={id} className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-3">
         <div className="flex items-center gap-2.5">
           {icon}
-          <h2 className="font-semibold text-sm text-gray-800">
-            {title}
-            {count != null && count > 0 && <span className="text-gray-400 font-normal ml-1">({count})</span>}
-          </h2>
+          <div>
+            <h2 className="font-semibold text-sm text-gray-800">
+              {title}
+              {count != null && count > 0 && <span className="text-gray-400 font-normal ml-1">({count})</span>}
+            </h2>
+            {subtitle && <p className="text-[11px] text-gray-400">{subtitle}</p>}
+          </div>
         </div>
         {action}
       </div>
@@ -325,6 +337,13 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                   {' · '}{fmt(e.data.monthlyRent)}/mo
                   {e.data.rentPerSqft != null && ` · ${fmt(e.data.rentPerSqft)}/sqft`}
                 </p>
+                {/* R8 — a historical lease that spanned more than one physical unit
+                    (e.g. two adjacent retail suites leased as one deal). */}
+                {e.data.combinedWithUnits?.length > 0 && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Leased together with unit{e.data.combinedWithUnits.length > 1 ? 's' : ''} {e.data.combinedWithUnits.join(', ')}
+                  </p>
+                )}
                 {/* Contracted vs collected, per tenancy — the question "what did this
                     unit actually earn from this tenant" needs both halves. */}
                 {(e.data.contracted > 0 || e.data.collected > 0) && (
@@ -344,7 +363,14 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
             )}
             {e.kind === 'sale' && (
               <>
-                <p className="text-sm font-medium text-gray-900">{e.title}</p>
+                <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
+                  {e.title}
+                  {e.isHistorical && (
+                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      Historical
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {fmtDate(e.startDate)}
                   {e.data.salePrice != null && ` · ${fmt(e.data.salePrice)}`}
@@ -543,7 +569,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
 // the History timeline), so this costs no extra request; only the expanded
 // lease's schedule and ledger fetch their own rows.
 function UnitRentHistory({
-  leases, canEdit, canCollect, unitId, buildingId, unitStatus, onLeaseDeleted,
+  leases, canEdit, canCollect, unitId, buildingId, onLeaseDeleted,
 }: {
   leases: any[];
   canEdit: boolean;
@@ -552,19 +578,9 @@ function UnitRentHistory({
   unitId: string | undefined;
   /** Needed so obligation writes invalidate the BUILDING rollup too, not just the unit's. */
   buildingId: string | undefined;
-  unitStatus?: string;
   /** Refresh the unit + its timeline after a historical record is removed. */
   onLeaseDeleted?: () => void;
 }) {
-  // A sold unit's rent schedule is closed. Without this the page still offered
-  // "Regenerate future" and "Add rent change", which would mint post-sale periods —
-  // precisely the rows the timeline above suppresses as impossible. The API refuses
-  // them too; this is so the button says so before it is clicked.
-  const scheduleLocked =
-    unitStatus === 'SOLD'
-      ? 'This unit has been sold, so its rent schedule is closed. Rent cannot be scheduled ' +
-        'for a unit Prime no longer owns.'
-      : null;
   const ordered = [...(leases || [])].sort(
     (a, b) => new Date(b.leaseStart || 0).getTime() - new Date(a.leaseStart || 0).getTime(),
   );
@@ -583,12 +599,15 @@ function UnitRentHistory({
         const ongoing = !['EXPIRED', 'TERMINATED'].includes(l.status);
         const open = openIds.includes(l.id);
         return (
-          <div key={l.id}>
+          // One card per lease — the button is its header row, the expanded content is
+          // its body, so open and closed read as the same object rather than a floating
+          // toggle followed by a separately-chromed pile of unrelated-looking panels.
+          <div key={l.id} className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
             <button
               type="button"
               onClick={() => toggle(l.id)}
               aria-expanded={open}
-              className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+              className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${open ? 'border-b border-gray-100' : ''}`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="text-gray-400 shrink-0">
@@ -624,14 +643,14 @@ function UnitRentHistory({
               </span>
             </button>
             {open && (
-              <div className="mt-3 space-y-5">
+              <div className="px-4 pt-3 pb-4 space-y-5">
                 <div className="space-y-2">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
                     Rent schedule — what is owed
                   </p>
-                  <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} lockedReason={scheduleLocked} />
+                  <LeaseRentSchedule leaseId={l.id} canEdit={canEdit} />
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2 border-t border-gray-100 pt-4">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
                     Rent ledger — what was collected
                   </p>
@@ -643,7 +662,7 @@ function UnitRentHistory({
                     Without this panel the unit page had no write path to an obligation
                     at all, and the team could only edit TI from the project page's
                     Leases tab (client feedback 2026-08-12). */}
-                <div className="space-y-2">
+                <div className="space-y-2 border-t border-gray-100 pt-4">
                   <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
                     Deposits &amp; TI allowance — money owed both ways
                   </p>
@@ -656,7 +675,15 @@ function UnitRentHistory({
                 </div>
                 {/* Last, below the ledger it governs — the approver should have scrolled
                     past what they are about to erase. */}
-                {l.isHistorical && <HistoricalRecordControls lease={l} onDeleted={onLeaseDeleted} />}
+                {l.isHistorical && (
+                  <HistoricalRecordControls
+                    record={{
+                      kind: 'lease', id: l.id, label: l.tenantName || 'This tenancy',
+                      dateRangeLabel: `${fmtDate(l.leaseStart)} – ${fmtDate(l.leaseEnd)}`,
+                    }}
+                    onDeleted={onLeaseDeleted}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -669,8 +696,26 @@ function UnitRentHistory({
 export default function UnitDetailPage() {
   const { id: projectId, unitId } = useParams<{ id: string; unitId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const qc = useQueryClient();
   const { data: unit, isLoading, error } = useUnit(unitId!);
+
+  // Deep-link support (e.g. the Construction dashboard's "Update Unit Progress" picker
+  // links straight to #construction-checklist). The target section only exists once the
+  // unit has loaded, so this waits on that rather than firing on route mount. Scrolls twice:
+  // sibling sections (e.g. the sale payment schedule) finish their own async fetch shortly
+  // after mount and grow taller, which drifts an immediate scroll off-target — the second
+  // pass corrects for that once the page has settled.
+  useEffect(() => {
+    if (!unit || !location.hash) return;
+    const scrollToTarget = () => {
+      const el = document.getElementById(location.hash.slice(1));
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const t1 = setTimeout(scrollToTarget, 50);
+    const t2 = setTimeout(scrollToTarget, 500);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [unit, location.hash]);
 
   // The unit payload and its history are two queries over the same underlying rows,
   // so anything that writes a lease, sale or status has to refresh both — otherwise
@@ -703,6 +748,8 @@ export default function UnitDetailPage() {
   // cheque without being able to rewrite the lease terms behind it.
   const canCollectRent = hasPermission('rent:collect');
   const canViewBudget = hasPermission('budget:view');
+  const canViewChecklist = hasPermission('checklist:view');
+  const canEditChecklist = hasPermission('checklist:edit');
   const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
   // Derived from `unit` (not `u`) because the early returns below sit between here and
   // where `activeLease` is computed — hooks cannot live after a conditional return.
@@ -770,7 +817,9 @@ export default function UnitDetailPage() {
     // Same field set the normal path checks (rentStartDate vs leaseStart, rentDueDay
     // range) — the backfill DTO enforces both server-side, so skipping this client-side
     // would just trade an inline field error for a generic toast after a round-trip.
-    const errs = validateLeaseForm(leaseForm);
+    // isHistorical: true skips the NNN-required check — those fields are hidden here
+    // and the backfill endpoint has nowhere to put them.
+    const errs = validateLeaseForm(leaseForm, { isHistorical: true });
     if (Object.keys(errs).length > 0) {
       setLeaseErrors(errs);
       return addToast({ title: 'Please fix the highlighted fields', color: 'warning' });
@@ -1571,11 +1620,25 @@ export default function UnitDetailPage() {
         <Section
           icon={<FiLayers className="w-4 h-4 text-amber-600" />}
           title="Construction"
+          subtitle="Work items — ad-hoc tasks & day-by-day updates"
           count={constructionItems.length}
           empty={constructionItems.length ? null : 'None'}
         >
           <UnitConstructionPanel unitId={unitId!} canEdit={hasPermission('task:edit')} />
         </Section>
+
+        {/* Construction Checklist — the fixed, ordered per-unit stage list (client's Monday
+            board), distinct from the ad-hoc "Construction" work items above. */}
+        {canViewChecklist && (
+          <Section
+            id="construction-checklist"
+            icon={<FiCheckSquare className="w-4 h-4 text-teal-600" />}
+            title="Construction Checklist"
+            subtitle="Build stages — fixed template checklist"
+          >
+            <UnitConstructionChecklist unitId={unitId!} buildingId={u.building?.id} canEdit={canEditChecklist} />
+          </Section>
+        )}
 
         {/* Linked Loans */}
         <Section
@@ -1602,7 +1665,7 @@ export default function UnitDetailPage() {
 
         {/* Budget — budget/committed/actual/remaining scoped to this unit */}
         {canViewBudget && (
-          <Section icon={<FiCreditCard className="w-4 h-4 text-emerald-600" />} title="Budget">
+          <Section icon={<FiDollarSign className="w-4 h-4 text-emerald-600" />} title="Budget">
             <dl className="text-sm divide-y divide-gray-100">
               <Row label="Budget"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.budgetTotal ?? 0))}</span></Row>
               <Row label="Committed"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.committedTotal ?? 0))}</span></Row>
@@ -1629,9 +1692,10 @@ export default function UnitDetailPage() {
           "who was here and when"; this answers "how much, and when did it change"
           for those same leases, so the drill-down sits against the summary it
           expands rather than at the foot of the page. Not rendered inside a
-          Section: LeaseRentSchedule, RentCollectionPanel, LeaseObligationsPanel and
-          ObligationSummaryCard bring their own card chrome and would otherwise be a
-          card inside a card.
+          Section: ObligationSummaryCard brings its own card chrome, and each lease
+          row in UnitRentHistory is its OWN card (button = header, expanded content =
+          body) so LeaseRentSchedule/RentCollectionPanel/LeaseObligationsPanel read as
+          one bordered unit per tenancy rather than loose panels floating in the page.
 
           Gated on lease:view like BuildingDetailPage does: every endpoint behind
           this block (obligation summary, rent periods, rent invoices) requires
@@ -1673,7 +1737,6 @@ export default function UnitDetailPage() {
             canCollect={canCollectRent}
             unitId={unitId}
             buildingId={u.building?.id}
-            unitStatus={u.status}
             onLeaseDeleted={refreshUnit}
           />
         </div>
@@ -1683,7 +1746,7 @@ export default function UnitDetailPage() {
       {(u.notes || canEditUnit) && (
         <div className="mb-5 sm:mb-6">
           <Section
-            icon={<FiAlignLeft className="w-4 h-4 text-amber-600" />}
+            icon={<FiAlignLeft className="w-4 h-4 text-gray-500" />}
             title="Notes"
             action={canEditUnit && !editingNotes ? (
               <button
@@ -1919,7 +1982,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
 
   return (
     <Section
-      icon={<FiFileText className="w-4 h-4 text-violet-600" />}
+      icon={<FiFileText className="w-4 h-4 text-indigo-600" />}
       title="Documents"
       count={docs.length || undefined}
       action={uploadAction}
@@ -2154,7 +2217,7 @@ function UnitWaitlistPanel({ unitId }: { unitId: string }) {
   return (
     <div className="mb-5 sm:mb-6">
       <Section
-        icon={<FiTarget className="w-4 h-4 text-rose-600" />}
+        icon={<FiUsers className="w-4 h-4 text-rose-600" />}
         title="Waitlist"
         count={rows.length || undefined}
       >

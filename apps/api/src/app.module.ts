@@ -36,6 +36,7 @@ import { ContractsModule } from './modules/contracts/contracts.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { InvestorsModule } from './modules/investors/investors.module';
 import { TasksModule } from './modules/tasks/tasks.module';
+import { ConstructionChecklistModule } from './modules/construction-checklist/construction-checklist.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ProjectHealthModule } from './modules/project-health/project-health.module';
 import { DrawsModule } from './modules/draws/draws.module';
@@ -44,6 +45,7 @@ import { InteriorModule } from './modules/interior/interior.module';
 import { DailyLogsModule } from './modules/daily-logs/daily-logs.module';
 import { BrokersModule } from './modules/brokers/brokers.module';
 import { CustomOptionsModule } from './modules/custom-options/custom-options.module';
+import { HistoricalDeletionsModule } from './modules/historical-deletions/historical-deletions.module';
 
 @Module({
   imports: [
@@ -88,6 +90,7 @@ import { CustomOptionsModule } from './modules/custom-options/custom-options.mod
     DocumentsModule,
     InvestorsModule,
     TasksModule,
+    ConstructionChecklistModule,
     OrganizationsModule,
     ProjectHealthModule,
     DrawsModule,
@@ -96,6 +99,7 @@ import { CustomOptionsModule } from './modules/custom-options/custom-options.mod
     DailyLogsModule,
     BrokersModule,
     CustomOptionsModule,
+    HistoricalDeletionsModule,
   ],
   providers: [
     // Enforces ThrottlerModule limits across every controller.

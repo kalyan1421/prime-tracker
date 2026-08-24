@@ -178,61 +178,85 @@ export class LeaseEventHandlers implements OnModuleInit {
   }
 
   /**
-   * R27. Routed by ROLE, deliberately not by project membership — a Founder who is not
+   * R27, made polymorphic by R6 — a backfilled lease OR sale can be put up for deletion.
+   * Routed by ROLE, deliberately not by project membership — a Founder who is not
    * staffed on the project is still the right person to decide whether history is erased.
    */
   private async onHistoryDeletionRequested(e: {
     requestId: string;
-    leaseId: string;
+    leaseId?: string;
+    saleId?: string;
     projectId: string | null;
-    tenantName: string;
+    label: string;
     reason: string;
     requestedById: string;
   }) {
     const [ctx, requester] = await Promise.all([
-      this.leaseContext(e.leaseId),
+      this.historicalRecordContext(e),
       this.prisma.user.findUnique({ where: { id: e.requestedById }, select: { name: true } }),
     ]);
     await this.notifications.notifyHistoryDeletionRequested({
       requestId: e.requestId,
-      leaseId: e.leaseId,
       projectId: e.projectId,
-      tenantName: ctx?.tenantName ?? e.tenantName,
+      label: ctx?.label ?? e.label,
       unitLabel: ctx?.unitLabel ?? null,
       reason: e.reason,
       requestedByName: requester?.name ?? null,
-      link: await this.unitLink(e.leaseId),
+      link: ctx?.link ?? null,
     });
   }
 
   private async onHistoryDeletionDecided(e: {
-    leaseId: string;
-    tenantName: string;
+    leaseId?: string;
+    saleId?: string;
+    label: string;
     approved: boolean;
     note?: string;
     requestedById: string;
   }) {
+    const ctx = await this.historicalRecordContext(e);
     await this.notifications.notifyHistoryDeletionDecided({
       requestedById: e.requestedById,
-      tenantName: e.tenantName,
+      label: ctx?.label ?? e.label,
       approved: e.approved,
       note: e.note ?? null,
-      link: await this.unitLink(e.leaseId),
+      link: ctx?.link ?? null,
     });
   }
 
   /**
-   * Deep-link to the unit the record hangs off. Returns null rather than a half-built URL
-   * when the lease is building-level or already gone — a notification with a dead link is
-   * worse than one with none.
+   * Resolves a lease-or-sale historical record to what the notification body needs:
+   * label (tenant name / buyer), unit label, and a deep-link to the unit. Returns null
+   * fields rather than a half-built URL when the record is building-level or already
+   * gone — a notification with a dead link is worse than one with none.
    */
-  private async unitLink(leaseId: string) {
-    const lease = await this.prisma.lease.findUnique({
-      where: { id: leaseId },
-      select: { unit: { select: { id: true, building: { select: { projectId: true } } } } },
-    });
-    const unit = lease?.unit;
-    if (!unit?.building?.projectId) return null;
-    return `/projects/${unit.building.projectId}/units/${unit.id}`;
+  private async historicalRecordContext(e: { leaseId?: string; saleId?: string }) {
+    if (e.leaseId) {
+      const lease = await this.prisma.lease.findUnique({
+        where: { id: e.leaseId },
+        select: { tenantName: true, unit: { select: { id: true, unitNumber: true, building: { select: { projectId: true } } } } },
+      });
+      if (!lease) return null;
+      const unit = lease.unit;
+      return {
+        label: lease.tenantName,
+        unitLabel: unit?.unitNumber ?? null,
+        link: unit?.building?.projectId ? `/projects/${unit.building.projectId}/units/${unit.id}` : null,
+      };
+    }
+    if (e.saleId) {
+      const sale = await this.prisma.sale.findUnique({
+        where: { id: e.saleId },
+        select: { buyer: true, unit: { select: { id: true, unitNumber: true, building: { select: { projectId: true } } } } },
+      });
+      if (!sale) return null;
+      const unit = sale.unit;
+      return {
+        label: sale.buyer ?? 'a sale',
+        unitLabel: unit?.unitNumber ?? null,
+        link: unit?.building?.projectId ? `/projects/${unit.building.projectId}/units/${unit.id}` : null,
+      };
+    }
+    return null;
   }
 }

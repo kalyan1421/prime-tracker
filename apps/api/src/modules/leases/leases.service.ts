@@ -10,6 +10,8 @@ import { LeaseObligationService } from './lease-obligation.service';
 import { LeaseRentInvoiceService } from './lease-rent-invoice.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
+import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 
 /**
  * Why a tenancy ended. The first six end it for good; the last five say the tenancy
@@ -94,14 +96,32 @@ export interface BackfillTenancyInput {
   tenantName: string;
   tenantLegalName?: string;
   tenantBrand?: string;
+  /** Free text — the owning LLC named on the lease, if it varies property to property. */
+  landlordEntity?: string;
+  tenantEmail?: string;
+  tenantPhone?: string;
   leaseStart: string | Date;
   leaseEnd: string | Date;
-  /** When they actually left. Must be in the past — that is what makes this history. */
-  terminationDate: string | Date;
+  /**
+   * When they actually left. Must be in the past — that is what makes this history.
+   *
+   * Omit it entirely for a tenancy that is STILL GOING — the record is created ACTIVE
+   * (touching the unit's current status, exactly like a normal live lease) instead of
+   * EXPIRED/TERMINATED. Everything else about "entered by hand, from historical records"
+   * still applies: isHistorical stays true, and the ledger is still generated complete
+   * and defaulted PAID — just through today instead of through a move-out date.
+   */
+  terminationDate?: string | Date;
   terminationReason?: TerminationReason;
   monthlyRent: number;
   rentStartDate?: string | Date;
   securityDeposit?: number;
+  rentPerSqft?: number;
+  escalationPct?: number;
+  nnnPerSqft?: number;
+  nnnTotalAmount?: number;
+  /** Agreed TI allowance — seeds a TI_ALLOWANCE obligation the same way a live lease does. */
+  tiAllowance?: number;
   rentDueDay?: number;
   notes?: string;
   /**
@@ -112,6 +132,17 @@ export interface BackfillTenancyInput {
    * the 2026-08-12 decision, so a historical ledger never shows up as overdue AR.
    */
   collections?: Record<string, number>;
+  /** R8 — links this lease to its sibling(s) on other units in the same combined deal. */
+  combinedDealRef?: string;
+  /**
+   * R1/R7 — leasing commission on a backfilled tenancy. Deliberately sum-only, unlike
+   * the live path's percentage-basis computation (FIRST_MONTH_RENT/TOTAL_TERM_RENT/FLAT):
+   * a backfilled record exists BECAUSE the actual figures are known, so there is no
+   * formula to fall back to, and inventing one would put a guessed number in a report
+   * someone might pay against. No installments → nothing is stamped.
+   */
+  brokerId?: string;
+  commissionInstallments?: { amount: number; paidAt?: string }[];
 }
 
 export interface EndTenancyInput {
@@ -193,8 +224,11 @@ const SCHEDULE_INPUT_FIELDS = [
   'freeRentMonths', 'freeRentStartDate', 'leaseStart', 'leaseEnd',
   // rentStartDate is the schedule's ORIGIN — omitting it here would leave a stale
   // schedule behind after an edit that changed exactly what it derives from.
-  // (nnnMonthly used to sit here too; NNN no longer touches the rent timeline.)
   'rentStartDate',
+  // nnnTotalAmount feeds the period's monthly nnnAmount (nnnTotalAmount / 12) again as
+  // of 2026-08-21 — editing it must re-derive the future schedule the same as a rent
+  // change does.
+  'nnnTotalAmount',
 ] as const;
 
 @Injectable()
@@ -209,6 +243,8 @@ export class LeasesService {
     private audit: AuditService,
     private invoices: LeaseRentInvoiceService,
     private statusEvents: UnitStatusEventService,
+    private commissionInstallments: CommissionInstallmentService,
+    private historicalDeletions: HistoricalDeletionService,
   ) {}
 
   /**
@@ -599,41 +635,64 @@ export class LeasesService {
   }
 
   /**
-   * Enter a tenancy that has already ended (H2 backfill).
+   * Enter a tenancy from historical records (H2 backfill) — either one that has already
+   * ended, or one that is STILL GOING (input.terminationDate omitted).
    *
    * Composes the ordinary create path rather than duplicating it, so a backfilled lease
    * is a normal lease in every respect — same overlap constraint, same schedule
-   * generator, same ledger. Only three things differ, and each is deliberate:
+   * generator, same ledger. What differs depends on which of the two this is:
    *
-   *  1. The unit's CURRENT status is untouched. syncUnitFromLease only fires for
-   *     ACTIVE/DRAFT, and this writes EXPIRED/TERMINATED, so that falls out for free —
-   *     but it is the property that matters most: entering 2019's tenant must not
-   *     change who the system thinks is in the unit today.
-   *  2. The ledger is written COMPLETE and defaults to PAID, so a historical tenancy
-   *     never appears as overdue AR (client decision 2026-08-12).
-   *  3. Occupancy events are BACKDATED and flagged isHistorical, so the timeline sorts
-   *     them by when they happened rather than when they were typed.
+   *  ENDED (terminationDate given):
+   *   1. The unit's CURRENT status is untouched. syncUnitFromLease only fires for
+   *      ACTIVE/DRAFT, and this writes EXPIRED/TERMINATED, so that falls out for free —
+   *      but it is the property that matters most: entering 2019's tenant must not
+   *      change who the system thinks is in the unit today.
+   *   2. Occupancy events are BACKDATED and flagged isHistorical, so the timeline sorts
+   *      them by when they happened rather than when they were typed — both move-in and
+   *      move-out are recorded by hand here.
+   *
+   *  STILL GOING (terminationDate omitted):
+   *   1. Written status ACTIVE, terminationDate null — an ordinary live lease in every
+   *      respect once created, including that create()'s own syncUnitFromLease DOES
+   *      flip the unit to LEASED (dated by leaseStart, not today — see that method).
+   *      No manual status event is recorded here; that one call already did it.
+   *   2. Nothing to record for a move-OUT — they have not left.
+   *
+   *  Either way:
+   *   - The ledger is written COMPLETE and defaults to PAID, so a historical tenancy
+   *     never appears as overdue AR (client decision 2026-08-12) — through the move-out
+   *     date if there is one, through TODAY if not. generateForLease is append-only
+   *     (createMany + skipDuplicates on [leaseId, periodMonth]), so the nightly cron
+   *     picking this lease up afterward (it is ACTIVE, terminationDate null) only adds
+   *     genuinely NEW months going forward — it can't duplicate or re-bill these.
+   *   - isHistorical stays true regardless, correctly marking "entered from records,
+   *     not typed in real time" and putting deletion behind Founder approval (R27).
    */
   async backfillTenancy(input: BackfillTenancyInput, userId?: string) {
     const leaseStart = startOfUtcDay(new Date(input.leaseStart));
     const leaseEnd = startOfUtcDay(new Date(input.leaseEnd));
-    const terminationDate = startOfUtcDay(new Date(input.terminationDate));
     const today = startOfUtcDay(new Date());
+    const terminationDate = input.terminationDate ? startOfUtcDay(new Date(input.terminationDate)) : null;
 
-    if ([leaseStart, leaseEnd, terminationDate].some((d) => Number.isNaN(d.getTime()))) {
+    if (
+      [leaseStart, leaseEnd].some((d) => Number.isNaN(d.getTime()))
+      || (terminationDate && Number.isNaN(terminationDate.getTime()))
+    ) {
       throw new BadRequestException('Lease start, end and move-out dates must all be valid');
     }
-    // The whole point is that this is history. A tenancy that has not ended yet is a
-    // live lease and must go through the ordinary flow, where it will drive the unit's
-    // status and accrue rent as time passes.
-    if (terminationDate > today) {
-      throw new BadRequestException(
-        'This tenancy has not ended yet. Add it as a normal lease instead — backfill is for '
-        + 'tenancies that are already over.',
-      );
-    }
-    if (terminationDate < leaseStart) {
-      throw new BadRequestException('The move-out date cannot be before the lease started');
+    if (terminationDate) {
+      // The whole point is that this is history. A tenancy that has not ended yet is
+      // either omitted-terminationDate (handled below) or, via the ordinary lease form,
+      // a live lease that will drive the unit's status and accrue rent as time passes.
+      if (terminationDate > today) {
+        throw new BadRequestException(
+          'This tenancy has not ended yet. Add it as a normal lease instead — backfill is for '
+          + 'tenancies that are already over.',
+        );
+      }
+      if (terminationDate < leaseStart) {
+        throw new BadRequestException('The move-out date cannot be before the lease started');
+      }
     }
 
     const unit = await this.prisma.unit.findUnique({
@@ -642,10 +701,16 @@ export class LeasesService {
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
 
-    // EXPIRED if they ran to term, TERMINATED if they left early — derived exactly as
-    // endTenancy derives it, so a backfilled record is indistinguishable from one the
-    // system recorded live.
-    const status = terminationDate >= leaseEnd ? 'EXPIRED' : 'TERMINATED';
+    // EXPIRED if they ran to term, TERMINATED if they left early, ACTIVE if they never
+    // left — the first two derived exactly as endTenancy derives them, so an ended
+    // backfilled record is indistinguishable from one the system recorded live.
+    const status = !terminationDate ? 'ACTIVE' : (terminationDate >= leaseEnd ? 'EXPIRED' : 'TERMINATED');
+
+    // Sum-only (see BackfillTenancyInput) — the whole reason a backfilled record has a
+    // brokerCommissionAmt at all is that a human typed in the real installment figures.
+    const brokerCommissionAmt = input.commissionInstallments?.length
+      ? input.commissionInstallments.reduce((sum, c) => sum + c.amount, 0)
+      : null;
 
     const lease = await this.create(
       {
@@ -653,16 +718,33 @@ export class LeasesService {
         tenantName: input.tenantName,
         tenantLegalName: input.tenantLegalName ?? null,
         tenantBrand: input.tenantBrand ?? null,
+        landlordEntity: input.landlordEntity ?? null,
+        tenantEmail: input.tenantEmail ?? null,
+        tenantPhone: input.tenantPhone ?? null,
         monthlyRent: input.monthlyRent,
         leaseStart,
         leaseEnd,
         rentStartDate: input.rentStartDate ? startOfUtcDay(new Date(input.rentStartDate)) : null,
         rentDueDay: input.rentDueDay ?? null,
         securityDeposit: input.securityDeposit ?? null,
+        rentPerSqft: input.rentPerSqft ?? null,
+        escalationPct: input.escalationPct ?? null,
+        nnnPerSqft: input.nnnPerSqft ?? null,
+        nnnTotalAmount: input.nnnTotalAmount ?? null,
+        // Seeds a TI_ALLOWANCE obligation via the same syncHeadlineObligations() path a
+        // live lease uses — this is the agreed total, not what's been disbursed; a
+        // historical "amount already paid" figure is not recorded here (see R9 audit
+        // notes — that needs a historical-safe payment path, not yet built).
+        tiAllowance: input.tiAllowance ?? null,
         notes: input.notes ?? null,
+        combinedDealRef: input.combinedDealRef ?? null,
         terminationDate,
-        terminationReason: input.terminationReason ?? 'EXPIRED',
+        terminationReason: terminationDate ? (input.terminationReason ?? 'EXPIRED') : null,
         status,
+        // Deliberately NOT brokerId/brokerCommissionAmt here — create() would see a
+        // brokerId + amount and fire its own syncStampedAmount, auto-minting installment
+        // #1 before the loop below writes the REAL ones, leaving two "#1" rows for one
+        // commission. Both fields are set directly, after the real installments exist.
         // Marks it as entered after the fact — which is what puts its deletion behind
         // Founder approval (R27).
         isHistorical: true,
@@ -670,36 +752,63 @@ export class LeasesService {
       userId,
     );
 
-    // The ledger, complete. generateForLease caps at terminationDate (capAtEnd), so this
-    // bills exactly the months they were there and not one more.
-    await this.invoices.generateForLease(lease.id, { through: terminationDate });
+    // R7: mirror the stamped commission into the installment table. Unlike
+    // syncStampedAmount's "create #1" default, backfill's installments are ALREADY
+    // known individually — write every one of them, not just a single auto-derived row.
+    if (input.brokerId && input.commissionInstallments?.length) {
+      for (const [i, c] of input.commissionInstallments.entries()) {
+        await this.commissionInstallments.add(
+          { leaseId: lease.id },
+          { brokerId: input.brokerId, amount: c.amount, paidAt: c.paidAt ? new Date(c.paidAt) : null, sequence: i + 1 },
+        );
+      }
+      // Raw write, not this.update() — that path has its own commission re-stamp logic
+      // (restamping) which is for LIVE edits and would recompute against the installments
+      // that were just written, corrupting them the same way. This lease's commission is
+      // already fully recorded; the lease row just needs to agree with it.
+      await this.prisma.lease.update({
+        where: { id: lease.id },
+        data: { brokerId: input.brokerId, brokerCommissionAmt },
+      });
+    }
+
+    // The ledger, complete through the move-out date if there is one, through TODAY if
+    // the tenancy is still going. generateForLease caps at terminationDate (capAtEnd)
+    // in the first case, so either way this bills exactly the months owed and not one
+    // more — and being append-only, it's exactly what the nightly cron would otherwise
+    // build up piecemeal for an ACTIVE lease, just done now instead of waiting on it.
+    await this.invoices.generateForLease(lease.id, { through: terminationDate ?? today });
     const settled = await this.settleHistoricalLedger(lease.id, input.collections);
 
-    // Two events, backdated: in at the start, out at the move-out. isHistorical marks
-    // them as entered after the fact so the timeline can say so rather than implying
-    // the system watched it happen.
-    await this.statusEvents.record({
-      unitId: input.unitId,
-      fromStatus: null,
-      toStatus: 'LEASED',
-      effectiveAt: leaseStart,
-      source: 'BACKFILL',
-      leaseId: lease.id,
-      isHistorical: true,
-      recordedById: userId,
-      reason: `Historical tenancy entered by hand — ${input.tenantName}`,
-    });
-    await this.statusEvents.record({
-      unitId: input.unitId,
-      fromStatus: 'LEASED',
-      toStatus: 'AVAILABLE',
-      effectiveAt: terminationDate,
-      source: 'BACKFILL',
-      leaseId: lease.id,
-      isHistorical: true,
-      recordedById: userId,
-      reason: `Historical tenancy ended — ${input.tenantName}`,
-    });
+    if (terminationDate) {
+      // Two events, backdated: in at the start, out at the move-out. isHistorical marks
+      // them as entered after the fact so the timeline can say so rather than implying
+      // the system watched it happen.
+      await this.statusEvents.record({
+        unitId: input.unitId,
+        fromStatus: null,
+        toStatus: 'LEASED',
+        effectiveAt: leaseStart,
+        source: 'BACKFILL',
+        leaseId: lease.id,
+        isHistorical: true,
+        recordedById: userId,
+        reason: `Historical tenancy entered by hand — ${input.tenantName}`,
+      });
+      await this.statusEvents.record({
+        unitId: input.unitId,
+        fromStatus: 'LEASED',
+        toStatus: 'AVAILABLE',
+        effectiveAt: terminationDate,
+        source: 'BACKFILL',
+        leaseId: lease.id,
+        isHistorical: true,
+        recordedById: userId,
+        reason: `Historical tenancy ended — ${input.tenantName}`,
+      });
+    }
+    // else: nothing to record for a move-out (they haven't left), and the move-IN event
+    // was already recorded by create()'s own syncUnitFromLease — see the docstring.
 
     await this.audit.log({
       userId,
@@ -1018,11 +1127,13 @@ export class LeasesService {
   /**
    * Turn the lease's headline money terms into trackable obligations.
    *
-   * `securityDeposit` and `nnnTotalAmount` are fields on the lease form. Until now they
+   * `securityDeposit` and `tiAllowance` are fields on the lease form. Until now they
    * were ONLY that — a number on the lease row. The Deposits & Allowances panel reads
    * LeaseObligation, so a user who filled in a $5,000 deposit while writing the lease
    * saw the panel report "$0 agreed across 0 items", and nothing anywhere said the two
    * were different things. The deposit was recorded and simultaneously untracked.
+   * (`nnnTotalAmount` used to seed a third, one-time NNN obligation here; as of
+   * 2026-08-21 it feeds LeaseRentPeriod.nnnAmount instead — see generateSchedule.)
    *
    * So the terms now seed the ledger:
    *   - amount set, no obligation yet     -> create it
@@ -1039,14 +1150,17 @@ export class LeasesService {
    */
   private async syncHeadlineObligations(
     leaseId: string,
-    terms: { securityDeposit?: unknown; nnnTotalAmount?: unknown; tiAllowance?: unknown },
+    terms: { securityDeposit?: unknown; tiAllowance?: unknown },
   ) {
     // Direction is a property of the kind, not of the amount. TI is the only one of the
-    // three that points OUTWARD — Prime owes the tenant — so it cannot share a hardcoded
+    // two that points OUTWARD — Prime owes the tenant — so it cannot share a hardcoded
     // FROM_TENANT, and getting it wrong would put a disbursement in the "money in" tile.
+    //
+    // NNN is deliberately NOT seeded here (removed 2026-08-21, reversing 2026-08-12):
+    // it is billed monthly via LeaseRentPeriod.nnnAmount again, not tracked as a
+    // one-time obligation. See lease-obligation.service.ts.
     const TERMS = [
       { field: 'securityDeposit', kind: 'SECURITY_DEPOSIT', direction: 'FROM_TENANT' },
-      { field: 'nnnTotalAmount', kind: 'NNN', direction: 'FROM_TENANT' },
       { field: 'tiAllowance', kind: 'TI_ALLOWANCE', direction: 'TO_TENANT' },
     ] as const;
 
@@ -1366,10 +1480,11 @@ export class LeasesService {
       data.termMonths = Math.max(0, Math.round(months));
     }
 
-    // NNN $/sqft is the quoted rate; the TOTAL is derived against the unit's area. This
-    // is a one-time sum charged at signing (client-confirmed 2026-08-12), not a monthly
-    // charge — it is a headline term here, and the money is tracked as a LeaseObligation
-    // of kind NNN. An explicitly supplied total always wins, for leases quoted flat.
+    // NNN $/sqft is the quoted ANNUAL rate; the TOTAL is derived against the unit's area.
+    // It is a headline term here on the lease, same as securityDeposit — the money is
+    // billed monthly via LeaseRentPeriod.nnnAmount (nnnTotalAmount / 12; client-confirmed
+    // 2026-08-21, reversing the 2026-08-12 one-time-at-signing decision). An explicitly
+    // supplied total always wins, for leases quoted flat.
     if (data.nnnPerSqft !== undefined && data.nnnTotalAmount === undefined) {
       const unitId = (data.unitId as string) ?? merged.unitId ?? null;
       const rate = data.nnnPerSqft === null ? null : Number(data.nnnPerSqft);
@@ -1572,6 +1687,15 @@ export class LeasesService {
     // lease form is immediately visible — and collectable — in Deposits & Allowances.
     await this.syncHeadlineObligations(lease.id, data as Record<string, unknown>);
 
+    // R7: mirror the stamped commission into the installment table (creates #1, or
+    // adjusts it if nothing has been paid yet). Same "recoverable, outside the write
+    // transaction" reasoning as generateSchedule above.
+    await this.commissionInstallments.syncStampedAmount(
+      { leaseId: lease.id },
+      lease.brokerId,
+      lease.brokerCommissionAmt != null ? Number(lease.brokerCommissionAmt) : null,
+    );
+
     const projectId = await this.resolveProjectId(lease);
     if (projectId) {
       this.bus.emit({ type: 'lease.created', leaseId: lease.id, projectId, tenantName: lease.tenantName });
@@ -1710,6 +1834,17 @@ export class LeasesService {
     // re-submitted does not land on the unit's timeline.
     await this.recordLeaseChanges(id, before as any, updated as any, updatedById);
 
+    // R7: only touch installments when this write actually stamped/re-stamped/cleared
+    // brokerCommissionAmt — an unrelated edit (a note, a status tweak) must not re-run
+    // the sync and risk nudging an untouched installment's amount.
+    if (data.brokerCommissionAmt !== undefined || String(before.brokerCommissionAmt ?? '') !== String(updated.brokerCommissionAmt ?? '')) {
+      await this.commissionInstallments.syncStampedAmount(
+        { leaseId: id },
+        updated.brokerId,
+        updated.brokerCommissionAmt != null ? Number(updated.brokerCommissionAmt) : null,
+      );
+    }
+
     const projectId = await this.resolveProjectId(updated);
     if (projectId) {
       if (data.status && data.status !== before.status) {
@@ -1765,47 +1900,17 @@ export class LeasesService {
     let selfApproved = false;
 
     if (historical) {
-      const approved = await this.prisma.historicalRecordDeletion.findFirst({
-        where: { leaseId: id, status: 'APPROVED' },
-        orderBy: { decidedAt: 'desc' },
-      });
+      const target = { leaseId: id };
+      const approved = await this.historicalDeletions.findLatestApproved(target);
 
       if (approved) {
         approvalId = approved.id;
       } else if (canApproveDeletion) {
-        // The approver deleting directly. Recorded as a request they raised and decided
-        // in one act, so the trail reads the same shape as every other deletion rather
-        // than being a hole where an approval should be.
         selfApproved = true;
-        const now = new Date();
-        const pending = await this.prisma.historicalRecordDeletion.findFirst({
-          where: { leaseId: id, status: 'PENDING' },
-        });
-        const record = pending
-          ? await this.prisma.historicalRecordDeletion.update({
-              where: { id: pending.id },
-              data: {
-                status: 'APPROVED',
-                decidedById: userId,
-                decidedAt: now,
-                decisionNote: 'Approved by deleting the record directly',
-              },
-            })
-          : await this.prisma.historicalRecordDeletion.create({
-              data: {
-                leaseId: id,
-                reason: 'Deleted directly by an approver',
-                requestedById: userId!,
-                status: 'APPROVED',
-                decidedById: userId,
-                decidedAt: now,
-              },
-            });
+        const record = await this.historicalDeletions.selfApprove(target, userId!);
         approvalId = record.id;
       } else {
-        const pending = await this.prisma.historicalRecordDeletion.findFirst({
-          where: { leaseId: id, status: 'PENDING' },
-        });
+        const pending = await this.historicalDeletions.findPending(target);
         throw new ForbiddenException(
           pending
             ? 'A deletion request for this historical record is still awaiting Founder approval.'
@@ -1816,10 +1921,7 @@ export class LeasesService {
 
       // Mark the approval used, so one approval cannot authorise a second deletion if the
       // record is ever restored.
-      await this.prisma.historicalRecordDeletion.update({
-        where: { id: approvalId! },
-        data: { status: 'COMPLETED' },
-      });
+      await this.historicalDeletions.markCompleted(approvalId!);
     }
 
     const deleted = await this.prisma.lease.update({
@@ -1841,6 +1943,11 @@ export class LeasesService {
   }
 
   // ─────── Historical deletion approval (R27) ───────
+  // Deciding/cancelling/listing are entity-agnostic and now live in
+  // HistoricalDeletionsController (R6) — a Founder's queue mixes leases and sales, and a
+  // request row already names which it is. Only "raise a request" stays here, because
+  // that's the one step that needs lease-specific context (isHistorical check, tenantName
+  // for the event) before it can even exist.
 
   /** Ask a Founder to approve deleting a backfilled tenancy. Reason is mandatory. */
   async requestHistoricalDeletion(leaseId: string, reason: string, userId: string) {
@@ -1850,18 +1957,7 @@ export class LeasesService {
         'This lease was recorded live, not backfilled — delete it directly.',
       );
     }
-    if (!reason?.trim()) {
-      throw new BadRequestException('A reason is required to request deletion');
-    }
-    const existing = await this.prisma.historicalRecordDeletion.findFirst({
-      where: { leaseId, status: 'PENDING' },
-    });
-    if (existing) {
-      throw new BadRequestException('A deletion request for this record is already pending');
-    }
-    const request = await this.prisma.historicalRecordDeletion.create({
-      data: { leaseId, reason: reason.trim(), requestedById: userId },
-    });
+    const request = await this.historicalDeletions.request({ leaseId }, reason, userId);
 
     await this.audit.log({
       userId,
@@ -1875,117 +1971,10 @@ export class LeasesService {
       requestId: request.id,
       leaseId,
       projectId: await this.resolveProjectId(lease).catch(() => null),
-      tenantName: lease.tenantName,
+      label: lease.tenantName,
       reason: request.reason,
       requestedById: userId,
     });
     return request;
-  }
-
-  /**
-   * Approve or reject a pending request.
-   *
-   * Approving does NOT delete anything — it authorises the delete, which stays a separate
-   * deliberate act. One click that both approves and destroys would make the approval a
-   * formality rather than a decision.
-   */
-  async decideHistoricalDeletion(
-    requestId: string,
-    approve: boolean,
-    userId: string,
-    note?: string,
-  ) {
-    const request = await this.prisma.historicalRecordDeletion.findUnique({
-      where: { id: requestId },
-      include: { lease: { select: { tenantName: true } } },
-    });
-    if (!request) throw new NotFoundException('Deletion request not found');
-    if (request.status !== 'PENDING') {
-      throw new BadRequestException(`This request was already ${request.status.toLowerCase()}`);
-    }
-    // Nobody approves their own request. The gate exists to put a second person in the
-    // path; letting the requester decide would remove exactly that. An approver who wants
-    // to delete their own record does it directly instead — see delete().
-    if (request.requestedById === userId) {
-      throw new ForbiddenException('A deletion request must be approved by someone else');
-    }
-    const decided = await this.prisma.historicalRecordDeletion.update({
-      where: { id: requestId },
-      data: {
-        status: approve ? 'APPROVED' : 'REJECTED',
-        decidedById: userId,
-        decidedAt: new Date(),
-        decisionNote: note?.trim() || null,
-      },
-    });
-
-    await this.audit.log({
-      userId,
-      action: approve ? 'HISTORICAL_DELETION_APPROVED' : 'HISTORICAL_DELETION_REJECTED',
-      entity: 'Lease',
-      entityId: request.leaseId,
-      newValues: { requestId, decisionNote: decided.decisionNote },
-    });
-    this.bus.emit({
-      type: 'history.deletionDecided',
-      requestId,
-      leaseId: request.leaseId,
-      tenantName: request.lease?.tenantName ?? 'a tenancy',
-      approved: approve,
-      note: decided.decisionNote ?? undefined,
-      requestedById: request.requestedById,
-      decidedById: userId,
-    });
-    return decided;
-  }
-
-  /**
-   * Withdraw your own pending request.
-   *
-   * Only the requester, and only while it is pending — a decided request is a record of
-   * what a Founder decided, and the person who asked does not get to erase that.
-   */
-  async cancelHistoricalDeletion(requestId: string, userId: string) {
-    const request = await this.prisma.historicalRecordDeletion.findUnique({
-      where: { id: requestId },
-    });
-    if (!request) throw new NotFoundException('Deletion request not found');
-    if (request.requestedById !== userId) {
-      throw new ForbiddenException('Only the person who raised a request can withdraw it');
-    }
-    if (request.status !== 'PENDING') {
-      throw new BadRequestException(`This request was already ${request.status.toLowerCase()}`);
-    }
-    const cancelled = await this.prisma.historicalRecordDeletion.update({
-      where: { id: requestId },
-      // decidedBy is the person who settled it, which for a withdrawal is the requester —
-      // and the DB CHECK requires any non-PENDING row to name one.
-      data: {
-        status: 'CANCELLED',
-        decidedById: userId,
-        decidedAt: new Date(),
-      },
-    });
-    await this.audit.log({
-      userId,
-      action: 'HISTORICAL_DELETION_CANCELLED',
-      entity: 'Lease',
-      entityId: request.leaseId,
-      newValues: { requestId },
-    });
-    return cancelled;
-  }
-
-  /** Pending requests, oldest first — the Founder's queue. */
-  async listHistoricalDeletionRequests(status = 'PENDING') {
-    return this.prisma.historicalRecordDeletion.findMany({
-      where: { status },
-      orderBy: { requestedAt: 'asc' },
-      include: {
-        lease: { select: { id: true, tenantName: true, leaseStart: true, leaseEnd: true, unitId: true } },
-        requestedBy: { select: { id: true, name: true, email: true } },
-        decidedBy: { select: { id: true, name: true } },
-      },
-    });
   }
 }

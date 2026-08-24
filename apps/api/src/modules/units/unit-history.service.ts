@@ -331,7 +331,11 @@ export class UnitHistoryService {
     ]);
 
     const leaseIds = leases.map((l) => l.id);
-    const [economics, rentPeriods, leaseChanges] = await Promise.all([
+    // R8 — sibling leases of a combined multi-unit deal live on OTHER units, so they
+    // cannot come from the unit-scoped `leases` query above. Gated on there being
+    // anything to look up: the overwhelming majority of units have no combined deal.
+    const combinedRefs = [...new Set(leases.map((l) => l.combinedDealRef).filter(Boolean))] as string[];
+    const [economics, rentPeriods, leaseChanges, combinedSiblings] = await Promise.all([
       this.economicsByLease(leaseIds),
       leaseIds.length
         ? this.prisma.leaseRentPeriod.findMany({
@@ -351,7 +355,21 @@ export class UnitHistoryService {
             take: 200,
           })
         : Promise.resolve([]),
+      combinedRefs.length
+        ? this.prisma.lease.findMany({
+            where: { combinedDealRef: { in: combinedRefs }, unitId: { not: unitId }, deletedAt: null },
+            select: { combinedDealRef: true, unit: { select: { unitNumber: true } } },
+          })
+        : Promise.resolve([]),
     ]);
+
+    const combinedSiblingUnitsByRef = new Map<string, string[]>();
+    for (const s of combinedSiblings) {
+      if (!s.combinedDealRef) continue;
+      const list = combinedSiblingUnitsByRef.get(s.combinedDealRef) ?? [];
+      if (s.unit?.unitNumber) list.push(s.unit.unitNumber);
+      combinedSiblingUnitsByRef.set(s.combinedDealRef, list);
+    }
 
     // Tenant assignments. Not derivable from the lease row — it only ever holds the
     // CURRENT tenant — which is exactly why the table exists.
@@ -479,7 +497,7 @@ export class UnitHistoryService {
     });
 
     const entries = [
-      ...this.leaseEntries(leases, economics),
+      ...this.leaseEntries(leases, economics, combinedSiblingUnitsByRef),
       ...this.saleEntries(sales),
       ...this.vacancyEntries(windows, leases),
       ...this.statusEntries(windows),
@@ -611,7 +629,7 @@ export class UnitHistoryService {
     return out;
   }
 
-  private leaseEntries(leases: any[], economics: Map<string, any>) {
+  private leaseEntries(leases: any[], economics: Map<string, any>, combinedSiblingUnitsByRef: Map<string, string[]>) {
     return leases.map((l) => {
       const ended = ['EXPIRED', 'TERMINATED'].includes(String(l.status));
       const econ = economics.get(l.id);
@@ -621,7 +639,9 @@ export class UnitHistoryService {
         startDate: l.leaseStart,
         endDate: l.leaseEnd,
         isOngoing: !ended,
-        isHistorical: false,
+        // Was hardcoded false — nothing before H2's backfill (2026-08-13) could BE
+        // historical, so it went unnoticed that this never turned true afterward either.
+        isHistorical: !!l.isHistorical,
         durationDays: daysBetween(new Date(l.leaseStart), new Date(l.leaseEnd)),
         title: `Leased to ${l.tenantBrand || l.tenantName || 'unnamed tenant'}`,
         data: {
@@ -637,6 +657,8 @@ export class UnitHistoryService {
           escalationFreq: l.escalationFreq,
           freeRentMonths: l.freeRentMonths,
           securityDeposit: l.securityDeposit != null ? Number(l.securityDeposit) : null,
+          // R8 — the other unit(s) this tenancy was leased together with, if any.
+          combinedWithUnits: l.combinedDealRef ? (combinedSiblingUnitsByRef.get(l.combinedDealRef) ?? []) : [],
           ...econ,
         },
       };
@@ -656,12 +678,15 @@ export class UnitHistoryService {
       startDate: s.closingDate ?? s.contractDate ?? s.loiDate ?? s.updatedAt ?? s.createdAt,
       endDate: null,
       isOngoing: !['CLOSED', 'CANCELLED'].includes(String(s.status)),
-      isHistorical: false,
+      // R4: a sale entered by hand after the fact, same meaning as Lease.isHistorical —
+      // was false unconditionally before backfillSale existed to make it true.
+      isHistorical: !!s.isHistorical,
       durationDays: 0,
       title: s.buyer ? `${label(s.status)} — ${s.buyer}` : label(s.status),
       data: {
         saleId: s.id,
         status: s.status,
+        seller: s.seller,
         buyer: s.buyer,
         salePrice: s.salePrice != null ? Number(s.salePrice) : null,
         depositAmt: s.depositAmt != null ? Number(s.depositAmt) : null,

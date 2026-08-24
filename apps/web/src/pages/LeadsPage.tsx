@@ -15,11 +15,14 @@ import {
   useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers, useCustomOptions,
 } from '../hooks/useApi';
 import { fmtDate } from '../utils/fmt';
-import { LoadingState, ErrorState, EmptyState } from '../components/ui';
+import { LoadingState, ErrorState, EmptyState, Pagination } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
+import { usePagination } from '../hooks/usePagination';
 
 const LEAD_SOURCES = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
 const ACTIVITY_TYPES = ['CALL', 'EMAIL', 'MEETING', 'SITE_VISIT', 'FOLLOW_UP', 'NOTE', 'STATUS_CHANGE'];
+
+const PAGE_SIZE = 20;
 
 const STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'> = {
   NEW: 'default',
@@ -747,6 +750,12 @@ export default function LeadsPage() {
 
   const leadsArr = (leads as any[]) || [];
 
+  const { page, setPage, totalPages, paged: pagedLeads, total } = usePagination(
+    leadsArr,
+    PAGE_SIZE,
+    [search, statusFilter, assigneeFilter, brokerFilter],
+  );
+
   // Compute pipeline counts client-side from the (already-filtered-by-search) result set.
   // This keeps the strip in sync with the search query — searching "John" updates the
   // funnel to "John's funnel" which is the most natural read for sales reps.
@@ -899,7 +908,7 @@ export default function LeadsPage() {
         )}
 
         <div className="space-y-1.5">
-          {leadsArr.map((lead: any) => {
+          {pagedLeads.map((lead: any) => {
             const t = STATUS_TOKEN[lead.status] ?? STATUS_TOKEN.NEW;
             const stale = staleDays(lead);
             const isSelected = selectedLead?.id === lead.id;
@@ -1037,6 +1046,16 @@ export default function LeadsPage() {
             );
           })}
         </div>
+
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={PAGE_SIZE}
+          itemLabel="leads"
+          onPrev={() => setPage((p) => p - 1)}
+          onNext={() => setPage((p) => p + 1)}
+        />
       </div>
 
       {/* ── Detail panel ─────────────────────────────────────────────── */}

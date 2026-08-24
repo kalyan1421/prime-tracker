@@ -2,15 +2,30 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { SalesService, assertCancellationReconciles } from './sales.service';
 import { SALE_STAGE_DOCS, requiredDocsForTransition } from './sale-document-gates';
+import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 
 const mockPrisma: any = {
-  sale: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn() },
+  sale: {
+    findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn(),
+    create: jest.fn(),
+  },
   unit: { findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), update: jest.fn() },
+  building: { findUnique: jest.fn() },
+  salePayment: { create: jest.fn() },
   project: { findUnique: jest.fn() },
   orgSettings: { findUnique: jest.fn() },
   broker: { findUnique: jest.fn() },
   // Cancellation ledger (S1). Written inside the same transaction as the unit release.
   saleCancellation: { upsert: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+  // R6 — the Founder approval gate on deleting a backfilled sale. Defaults are the
+  // "no request exists" answers, which is what every non-historical sale sees.
+  historicalRecordDeletion: {
+    findFirst: jest.fn().mockResolvedValue(null),
+    findUnique: jest.fn().mockResolvedValue(null),
+    findMany: jest.fn().mockResolvedValue([]),
+    create: jest.fn(),
+    update: jest.fn(),
+  },
   // Closing a sale looks for the tenancies to end (H3). Defaults to "no lease on this
   // unit" so the existing suites stay about the sale; the H3 cases override it. findMany,
   // not findFirst: a unit can hold more than one non-terminated lease.
@@ -73,6 +88,20 @@ const mockSalePayments = {
   voidScheduleOnCancellation: jest.fn().mockResolvedValue(0),
 };
 
+// R7 — commission installment sync. A spy is enough here; its own behavior (create vs
+// adjust vs leave-alone) is asserted in commission-installment.service.spec.ts.
+const mockCommissionInstallments = {
+  syncStampedAmount: jest.fn().mockResolvedValue(undefined),
+  add: jest.fn().mockResolvedValue(undefined),
+};
+
+// R4 — backfillSale logs an explicit audit action beyond what AuditInterceptor covers.
+const mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
+
+// R6 — real HistoricalDeletionService over the same mockPrisma, same reasoning as the
+// leases spec: the delete-gate tests below assert against mockPrisma.historicalRecordDeletion.
+const mockHistoricalDeletions = new HistoricalDeletionService(mockPrisma as any);
+
 function makeService() {
   return new SalesService(
     mockPrisma as any,
@@ -80,6 +109,9 @@ function makeService() {
     mockStatusEvents as any,
     mockLeases as any,
     mockSalePayments as any,
+    mockCommissionInstallments as any,
+    mockHistoricalDeletions as any,
+    mockAudit as any,
   );
 }
 
@@ -648,7 +680,7 @@ describe('SalesService.delete — soft delete (preserves unit history)', () => {
     mockPrisma.sale.update.mockResolvedValue({ id: 's1', deletedAt: new Date() });
     expect(mockPrisma.sale.delete).toBeUndefined(); // never wired up — nothing in this service should call it
 
-    await service.delete('s1', 'FOUNDER' as any);
+    await service.delete('s1', 'user-1', 'FOUNDER' as any);
 
     expect(mockPrisma.sale.update).toHaveBeenCalledWith({
       where: { id: 's1' },
@@ -663,8 +695,86 @@ describe('SalesService.delete — soft delete (preserves unit history)', () => {
 
   it('still blocks a non-Founder/SuperAdmin from deleting a CLOSED sale', async () => {
     mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'CLOSED', unitId: 'u1', unit: {} });
-    await expect(service.delete('s1', 'SALES' as any)).rejects.toThrow(ForbiddenException);
+    await expect(service.delete('s1', 'user-1', 'SALES' as any)).rejects.toThrow(ForbiddenException);
     expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+  });
+});
+
+// R6 — the same Founder-approval gate a backfilled lease already has (R27), generalized
+// to sales. Mirrors leases.service.spec.ts's "historical deletion approval" suite.
+describe('SalesService — historical deletion approval (R6)', () => {
+  let service: SalesService;
+
+  const HISTORICAL = { id: 's1', unitId: 'u1', buyer: 'Old Buyer', status: 'CLOSED', isHistorical: true };
+  const LIVE = { id: 's2', unitId: 'u1', buyer: 'Current Buyer', status: 'PROSPECT', isHistorical: false };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.historicalRecordDeletion.findFirst.mockResolvedValue(null);
+    mockPrisma.historicalRecordDeletion.findUnique.mockResolvedValue(null);
+    mockPrisma.historicalRecordDeletion.create.mockImplementation(
+      ({ data }: any) => Promise.resolve({ id: 'r-new', ...data }),
+    );
+    mockPrisma.historicalRecordDeletion.update.mockImplementation(
+      ({ where, data }: any) => Promise.resolve({ id: where.id, ...data }),
+    );
+    mockPrisma.sale.update.mockResolvedValue({ id: 's1', deletedAt: new Date() });
+    service = makeService();
+  });
+
+  it('refuses to delete a historical sale with no approval', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(HISTORICAL);
+    await expect(service.delete('s1', 'user-1', 'SALES' as any)).rejects.toThrow(/Request deletion first/);
+    expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+  });
+
+  it('deletes once an approval exists, even for a role that could not otherwise delete a CLOSED sale', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(HISTORICAL);
+    mockPrisma.historicalRecordDeletion.findFirst.mockResolvedValue({ id: 'r1', status: 'APPROVED' });
+
+    await service.delete('s1', 'user-1', 'SALES' as any);
+
+    expect(mockPrisma.sale.update).toHaveBeenCalledWith({ where: { id: 's1' }, data: { deletedAt: expect.any(Date) } });
+  });
+
+  it('lets an approver delete directly, recorded as self-approved', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(HISTORICAL);
+
+    await service.delete('s1', 'founder-1', 'SALES' as any, true);
+
+    expect(mockPrisma.historicalRecordDeletion.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ saleId: 's1', status: 'APPROVED', requestedById: 'founder-1', decidedById: 'founder-1' }),
+    });
+    expect(mockAudit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'SALE_HISTORICAL_DELETED', oldValues: expect.objectContaining({ selfApproved: true }) }),
+    );
+  });
+
+  it('leaves a live sale governed by the existing role check, not the historical gate', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(LIVE);
+    await service.delete('s2', 'user-1', 'SALES' as any);
+    expect(mockPrisma.sale.update).toHaveBeenCalled();
+    expect(mockPrisma.historicalRecordDeletion.findFirst).not.toHaveBeenCalled();
+  });
+
+  describe('requesting', () => {
+    it('records the request and emits with a resolved label', async () => {
+      mockPrisma.sale.findUnique.mockResolvedValue(HISTORICAL);
+
+      await service.requestHistoricalDeletion('s1', 'duplicate entry', 'user-1');
+
+      expect(mockPrisma.historicalRecordDeletion.create).toHaveBeenCalledWith({
+        data: { saleId: 's1', reason: 'duplicate entry', requestedById: 'user-1' },
+      });
+      expect(mockBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'history.deletionRequested', saleId: 's1', label: 'Old Buyer' }),
+      );
+    });
+
+    it('refuses for a sale that was recorded live', async () => {
+      mockPrisma.sale.findUnique.mockResolvedValue(LIVE);
+      await expect(service.requestHistoricalDeletion('s2', 'a reason', 'user-1')).rejects.toThrow(/recorded live/);
+    });
   });
 });
 
@@ -1437,6 +1547,154 @@ describe('SalesService.settleCancellation — Finance decides later', () => {
         refundReference: 'ACH-88421',
         note: 'Buyer financing fell through',
       }),
+    });
+  });
+});
+
+describe('SalesService.backfillSale', () => {
+  let service: SalesService;
+
+  const PAST_SALE = {
+    unitId: 'u1',
+    buyer: 'Historical Buyer LLC',
+    salePrice: 500000,
+    closingDate: '2022-06-30',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1', deletedAt: null, building: { projectId: 'p1' } });
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'LEASED' });
+    mockPrisma.unit.update.mockResolvedValue({});
+    mockPrisma.sale.create.mockImplementation(({ data }: any) => Promise.resolve({ id: 'sale-hist1', ...data }));
+    mockPrisma.salePayment.create.mockResolvedValue({});
+    mockPrisma.lease.findMany.mockResolvedValue([]); // no tenancy on the unit by default
+    mockStatusEvents.recordIfChanged.mockResolvedValue({ id: 'evt1' });
+    mockLeases.endTenancyWithin.mockResolvedValue({});
+  });
+
+  it('refuses a closing date in the future', async () => {
+    const future = new Date();
+    future.setFullYear(future.getFullYear() + 1);
+    await expect(
+      service.backfillSale({ ...PAST_SALE, closingDate: future.toISOString() } as any, 'user-1'),
+    ).rejects.toThrow(/has not closed yet/);
+  });
+
+  it('requires exactly one of unitId/buildingId', async () => {
+    await expect(
+      service.backfillSale({ ...PAST_SALE, unitId: undefined } as any, 'user-1'),
+    ).rejects.toThrow(/unit or a building/);
+    await expect(
+      service.backfillSale({ ...PAST_SALE, buildingId: 'b1' } as any, 'user-1'),
+    ).rejects.toThrow(/cannot reference both/);
+  });
+
+  it('flags the created sale as historical and CLOSED', async () => {
+    await service.backfillSale(PAST_SALE as any, 'user-1');
+    expect(mockPrisma.sale.create.mock.calls[0][0].data).toMatchObject({
+      isHistorical: true,
+      status: 'CLOSED',
+      unitId: 'u1',
+    });
+  });
+
+  // Acceptance criterion 1 (R4 spec): no prior tenancy → SOLD, no lease side effects.
+  it('sets the unit to SOLD with no lease side effects when nothing was occupying it', async () => {
+    await service.backfillSale(PAST_SALE as any, 'user-1');
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { status: 'SOLD', availableSince: null },
+    });
+    expect(mockLeases.endTenancyWithin).not.toHaveBeenCalled();
+  });
+
+  // Acceptance criterion 2: an overlapping tenancy is ended the same way close() does.
+  it('ends an overlapping tenancy with reason TENANT_BOUGHT at the closing date', async () => {
+    mockPrisma.lease.findMany.mockResolvedValueOnce([
+      { id: 'l1', tenantName: 'Old Tenant', leaseStart: new Date('2020-01-01') },
+    ]);
+
+    await service.backfillSale(PAST_SALE as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).toHaveBeenCalledWith(
+      mockPrisma,
+      'l1',
+      expect.objectContaining({
+        terminationDate: new Date('2022-06-30'),
+        terminationReason: 'TENANT_BOUGHT',
+      }),
+      'user-1',
+    );
+  });
+
+  it('does not end a lease that starts after the closing date', async () => {
+    mockPrisma.lease.findMany.mockResolvedValueOnce([
+      { id: 'l1', tenantName: 'Future Tenant', leaseStart: new Date('2023-01-01') },
+    ]);
+
+    await service.backfillSale(PAST_SALE as any, 'user-1');
+
+    expect(mockLeases.endTenancyWithin).not.toHaveBeenCalled();
+  });
+
+  it('composes SalePayment rows for deposit/second-payment entries, already marked PAID', async () => {
+    await service.backfillSale(
+      {
+        ...PAST_SALE,
+        payments: [
+          { label: 'Deposit', amount: 50000, paidAt: '2022-01-15' },
+          { label: 'Second Payment', amount: 20000 },
+        ],
+      } as any,
+      'user-1',
+    );
+
+    expect(mockPrisma.salePayment.create).toHaveBeenCalledTimes(2);
+    const [dep, second] = mockPrisma.salePayment.create.mock.calls.map((c: any) => c[0].data);
+    expect(dep).toMatchObject({ label: 'Deposit', amount: 50000, paidAmount: 50000, status: 'PAID' });
+    expect(second.paidAt).toEqual(new Date('2022-06-30')); // no paidAt given → defaults to the closing date
+  });
+
+  // The existing Unit History sale entry reads Sale.depositAmt directly — mirroring the
+  // Deposit-labeled payment onto that column keeps it working without touching
+  // unit-history.service's rendering in this same change.
+  it('mirrors a Deposit-labeled payment onto Sale.depositAmt', async () => {
+    await service.backfillSale(
+      { ...PAST_SALE, payments: [{ label: 'Deposit', amount: 50000 }] } as any,
+      'user-1',
+    );
+    expect(mockPrisma.sale.create.mock.calls[0][0].data.depositAmt).toBe(50000);
+  });
+
+  describe('commission (R7)', () => {
+    it('sums explicit installments as the stamped total, and creates each one', async () => {
+      await service.backfillSale(
+        {
+          ...PAST_SALE,
+          brokerId: 'b1',
+          commissionInstallments: [{ amount: 5000, paidAt: '2022-06-30' }, { amount: 5000 }],
+        } as any,
+        'user-1',
+      );
+
+      expect(mockPrisma.sale.create.mock.calls[0][0].data.brokerCommissionAmt).toBe(10000);
+      expect(mockCommissionInstallments.add).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to computing from brokerCommissionPct when no installments are given', async () => {
+      mockPrisma.broker.findUnique.mockResolvedValue({ commissionRate: 2, commissionFlat: null });
+
+      await service.backfillSale(
+        { ...PAST_SALE, brokerId: 'b1', brokerCommissionPct: 3 } as any,
+        'user-1',
+      );
+
+      expect(mockPrisma.sale.create.mock.calls[0][0].data.brokerCommissionAmt).toBe(15000); // 3% of 500000
+      expect(mockCommissionInstallments.syncStampedAmount).toHaveBeenCalledWith(
+        { saleId: 'sale-hist1' }, 'b1', 15000,
+      );
     });
   });
 });

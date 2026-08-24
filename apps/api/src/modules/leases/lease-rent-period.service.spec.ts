@@ -86,24 +86,55 @@ describe('computeRentSchedule — compounding escalation', () => {
   });
 });
 
-// The block that used to live here — "NNN never escalates" — went with the NNN column
-// itself on 2026-08-12. NNN is charged once at signing and is tracked as a lease
-// obligation, so there is nothing on this timeline for an escalation to leave alone.
-// The rule it protected (escalation compounds off baseRent) is covered above.
+describe('computeRentSchedule — NNN never escalates', () => {
+  it('carries nnnAmount forward unchanged while baseRent rises', () => {
+    const periods = computeRentSchedule({
+      ...TERM_36,
+      baseRent: 100,
+      nnnAmount: 25,
+      escalationPct: 5,
+      escalationFreq: 12,
+    });
 
-describe('computeRentSchedule — monthlyRent === baseRent on every row', () => {
+    expect(periods.map((p) => money(p.nnnAmount))).toEqual(['25.00', '25.00', '25.00']);
+    expect(periods.map((p) => money(p.baseRent))).toEqual(['100.00', '105.00', '110.25']);
+    expect(periods.map((p) => money(p.monthlyRent))).toEqual(['125.00', '130.00', '135.25']);
+  });
+
+  it('never compounds the NNN into the escalation base', () => {
+    const periods = computeRentSchedule({
+      ...TERM_36,
+      baseRent: 100,
+      nnnAmount: 25,
+      escalationPct: 5,
+      escalationFreq: 12,
+    });
+    // If NNN had been escalated, period 2 base would be 125 * 1.05 = 131.25.
+    expect(money(periods[1].baseRent)).not.toBe('131.25');
+  });
+});
+
+describe('computeRentSchedule — monthlyRent === baseRent + nnnAmount on every row', () => {
   const cases: Array<[string, Parameters<typeof computeRentSchedule>[0]]> = [
     ['flat', { ...TERM_36, baseRent: 4200 }],
     ['escalating', { ...TERM_36, baseRent: 4200, escalationPct: 3.5, escalationFreq: 12 }],
     [
-      'escalating + free rent',
-      { ...TERM_36, baseRent: 4200, escalationPct: 3.5, escalationFreq: 12, freeRentMonths: 2 },
+      'escalating + NNN + free rent',
+      {
+        ...TERM_36,
+        baseRent: 4200,
+        nnnAmount: 812.5,
+        escalationPct: 3.5,
+        escalationFreq: 12,
+        freeRentMonths: 2,
+      },
     ],
     [
       'free rent mid-term crossing an escalation boundary',
       {
         ...TERM_36,
         baseRent: 3000,
+        nnnAmount: 400,
         escalationPct: 4,
         escalationFreq: 12,
         freeRentMonths: 4,
@@ -116,44 +147,34 @@ describe('computeRentSchedule — monthlyRent === baseRent on every row', () => 
     const periods = computeRentSchedule(input);
     expect(periods.length).toBeGreaterThan(0);
     for (const p of periods) {
-      expect(money(p.monthlyRent)).toBe(money(p.baseRent));
+      expect(money(p.monthlyRent)).toBe(money(p.baseRent.add(p.nnnAmount)));
       expect(() => assertRentInvariant(p)).not.toThrow();
     }
   });
 });
 
 describe('assertRentInvariant', () => {
-  it('throws BadRequestException when monthlyRent does not equal baseRent', () => {
+  it('throws BadRequestException when monthlyRent does not equal baseRent + nnnAmount', () => {
     expect(() =>
-      assertRentInvariant({ baseRent: 100, monthlyRent: 130 }),
+      assertRentInvariant({ baseRent: 100, nnnAmount: 25, monthlyRent: 130 }),
     ).toThrow(BadRequestException);
   });
 
-  it('names both figures and the delta in the message', () => {
+  it('names both components and the delta in the message', () => {
     try {
-      assertRentInvariant({ baseRent: 100, monthlyRent: 130 });
+      assertRentInvariant({ baseRent: 100, nnnAmount: 25, monthlyRent: 130 });
       throw new Error('expected a throw');
     } catch (e) {
       expect((e as Error).message).toContain('130.00');
       expect((e as Error).message).toContain('100.00');
-      expect((e as Error).message).toContain('Off by 30.00');
-    }
-  });
-
-  it('explains that NNN is not part of monthly rent', () => {
-    // The likeliest reason a caller trips this is that they are still trying to fold a
-    // second charge into the rent, which is what the old schema allowed.
-    try {
-      assertRentInvariant({ baseRent: 100, monthlyRent: 130 });
-      throw new Error('expected a throw');
-    } catch (e) {
-      expect((e as Error).message).toMatch(/NNN is charged once at signing/);
+      expect((e as Error).message).toContain('25.00');
+      expect((e as Error).message).toContain('Off by 5.00');
     }
   });
 
   it('accepts an exact match', () => {
     expect(() =>
-      assertRentInvariant({ baseRent: '126.00', monthlyRent: '126.00' }),
+      assertRentInvariant({ baseRent: '100.10', nnnAmount: '25.90', monthlyRent: '126.00' }),
     ).not.toThrow();
   });
 });
@@ -413,15 +434,11 @@ describe('summariseEffectiveRent', () => {
     expect(withFree.effectiveMonthlyRent.lt(withoutFree.effectiveMonthlyRent)).toBe(true);
   });
 
-  it('reports the same figure for total rent and base rent, now that NNN is not monthly', () => {
-    // The two used to differ by the monthly NNN. Both are still returned so callers do
-    // not break, and asserting they AGREE is the point: a gap between them would mean
-    // something had folded a second charge back into the rent.
-    const periods = computeRentSchedule({ ...TERM_36, baseRent: 1000 });
+  it('separates the NNN-inclusive KPI from the base-rent-only KPI', () => {
+    const periods = computeRentSchedule({ ...TERM_36, baseRent: 1000, nnnAmount: 200 });
     const summary = summariseEffectiveRent(periods, TERM_36.leaseEnd, 36);
-    expect(money(summary.effectiveMonthlyRent)).toBe('1000.00');
+    expect(money(summary.effectiveMonthlyRent)).toBe('1200.00');
     expect(money(summary.effectiveMonthlyBaseRent)).toBe('1000.00');
-    expect(money(summary.totalContractedRent)).toBe(money(summary.totalContractedBaseRent));
   });
 });
 
@@ -550,10 +567,10 @@ describe('LeaseRentPeriodService.generateForLease', () => {
     expect(result).toBe(existing);
   });
 
-  it("takes the lease's monthlyRent as the whole of the rent", async () => {
-    // Until 2026-08-12 this method split monthlyRent into base + NNN. NNN is now a
-    // one-time obligation, so the headline rent IS the base rent and nothing is
-    // subtracted from it — a lease on 1000 must schedule 1000, not 800.
+  it("takes the lease's monthlyRent as the whole of the base rent", async () => {
+    // lease.monthlyRent is base rent only — nnnPerSqft/nnnTotalAmount are the lease's
+    // separate quoted NNN term. This LEASE fixture has no nnnTotalAmount, so nnnAmount
+    // defaults to 0 and monthlyRent === baseRent, same as the flat-rent cases above.
     mockPrisma.leaseRentPeriod.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
     await service.generateForLease('lease-1');
@@ -563,6 +580,29 @@ describe('LeaseRentPeriodService.generateForLease', () => {
     expect(new Prisma.Decimal(data[0].monthlyRent).toFixed(2)).toBe('1000.00');
     // Escalation compounds off the full rent now that nothing is held back from it.
     expect(new Prisma.Decimal(data[1].baseRent).toFixed(2)).toBe('1050.00');
+  });
+
+  it("derives the monthly nnnAmount from the lease's nnnTotalAmount / 12 by default", async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, nnnTotalAmount: new Prisma.Decimal(2400) });
+    mockPrisma.leaseRentPeriod.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    await service.generateForLease('lease-1');
+
+    const { data } = mockPrisma.leaseRentPeriod.createMany.mock.calls[0][0];
+    expect(new Prisma.Decimal(data[0].nnnAmount).toFixed(2)).toBe('200.00');
+    expect(new Prisma.Decimal(data[0].monthlyRent).toFixed(2)).toBe('1200.00');
+    // NNN never escalates — it carries forward unchanged into the escalated period too.
+    expect(new Prisma.Decimal(data[1].nnnAmount).toFixed(2)).toBe('200.00');
+  });
+
+  it('an explicit opts.nnnAmount overrides the derived default', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, nnnTotalAmount: new Prisma.Decimal(2400) });
+    mockPrisma.leaseRentPeriod.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    await service.generateForLease('lease-1', { nnnAmount: 50 });
+
+    const { data } = mockPrisma.leaseRentPeriod.createMany.mock.calls[0][0];
+    expect(new Prisma.Decimal(data[0].nnnAmount).toFixed(2)).toBe('50.00');
   });
 
   it('rejects a lease that does not exist or was soft-deleted', async () => {
@@ -750,9 +790,7 @@ describe('LeaseRentPeriodService.addManualPeriod', () => {
     expect(created.isFreeRent).toBe(false);
   });
 
-  it('rejects a monthlyRent that does not match the base rent', async () => {
-    // The likeliest cause is a caller still adding NNN on top, which is exactly what
-    // must not reach the table any more.
+  it('rejects a monthlyRent that does not match baseRent + nnnAmount', async () => {
     await expect(
       service.addManualPeriod({ ...base, monthlyRent: 1400 }),
     ).rejects.toThrow(BadRequestException);
@@ -968,6 +1006,7 @@ describe('LeaseRentPeriodService.correctPeriod', () => {
     startDate: d('2026-01-01'),
     endDate: d('2026-12-31'),
     baseRent: new Prisma.Decimal(1000),
+    nnnAmount: new Prisma.Decimal(0),
     monthlyRent: new Prisma.Decimal(1000),
   };
 
@@ -998,12 +1037,29 @@ describe('LeaseRentPeriodService.correctPeriod', () => {
     expect(res.correction.correctedById).toBe('user-1');
   });
 
-  it('keeps the monthlyRent === baseRent invariant through a correction', async () => {
+  it('keeps the monthlyRent === baseRent + nnnAmount invariant through a correction', async () => {
     const res = await service.correctPeriod('p1', {
       baseRent: 1050, reason: 'corrected from the signed lease', correctedById: 'user-1',
     });
 
     expect(money(res.period.monthlyRent)).toBe('1050.00');
+  });
+
+  it('preserves the period\'s existing nnnAmount — R22 corrects rent, not NNN', async () => {
+    mockPrisma.leaseRentPeriod.findUnique.mockResolvedValue({
+      ...PERIOD,
+      nnnAmount: new Prisma.Decimal(150),
+      monthlyRent: new Prisma.Decimal(1150),
+    });
+
+    const res = await service.correctPeriod('p1', {
+      baseRent: 1050, reason: 'corrected from the signed lease', correctedById: 'user-1',
+    });
+
+    // The mock's update() only echoes back what was WRITTEN, so nnnAmount itself is
+    // absent from res.period (Prisma leaves an untouched column as-is); monthlyRent
+    // is the observable proof it was read and added rather than dropped.
+    expect(money(res.period.monthlyRent)).toBe('1200.00');
   });
 
   it('flags invoices already billed from the period instead of restating them', async () => {
@@ -1129,6 +1185,7 @@ describe('LeaseRentPeriodService.correctPeriod — the free-rent flag follows th
     startDate: d('2026-04-01'),
     endDate: d('2026-06-30'),
     baseRent: new Prisma.Decimal(0),
+    nnnAmount: new Prisma.Decimal(0),
     monthlyRent: new Prisma.Decimal(0),
     isFreeRent: true,
   };
@@ -1180,6 +1237,7 @@ describe('LeaseRentPeriodService.correctPeriod — the free-rent flag follows th
           startDate: res.period.startDate,
           endDate: res.period.endDate,
           baseRent: res.period.baseRent,
+          nnnAmount: res.period.nnnAmount,
           monthlyRent: res.period.monthlyRent,
           isFreeRent: res.period.isFreeRent,
         },

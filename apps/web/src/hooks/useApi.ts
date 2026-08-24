@@ -501,12 +501,145 @@ export function useBackfillTenancy() {
   });
 }
 
+// ─────────── Bulk rent history import (R1/R2/R8) ───────────
+
 /**
- * R27 — the Founder gate on deleting a backfilled tenancy.
+ * Downloads the .xlsx template. Not a plain `<a href>` — the route sits behind
+ * JwtAuthGuard like every other endpoint, and a bare browser navigation would not carry
+ * the Authorization header axios attaches. Fetched as a blob through the authenticated
+ * client instead, then saved via a throwaway object URL.
+ */
+export function useDownloadImportTemplate() {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.get('/leases/backfill/template', { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'rent-history-import-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+  });
+}
+
+/** Parses and validates an uploaded file — no writes. Returns the row-by-row preview. */
+export function usePreviewLeaseImport() {
+  return useMutation({
+    mutationFn: ({ file, projectId }: { file: File; projectId: string }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('projectId', projectId);
+      // Content-Type deliberately NOT set — see usePresignedUpload's note on why.
+      return api.post('/leases/backfill/import/preview', form).then((r) => r.data);
+    },
+  });
+}
+
+/** Commits previously-previewed rows — one backfillTenancy() per row, server-side. */
+export function useCommitLeaseImport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rows: Record<string, unknown>[]) =>
+      api.post('/leases/backfill/import/commit', { rows }).then((r) => r.data),
+    onSuccess: () => invalidateAfterLeaseWrite(qc),
+  });
+}
+
+// ─────────── Generic column-mapping import (R9) — the client's OWN spreadsheet, any layout ───────────
+
+/** Structural analysis only — no DB lookups. Returns orientation + a suggested field per column. */
+export function useAnalyzeGenericLeaseImport() {
+  return useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return api.post('/leases/backfill/import/analyze', form).then((r) => r.data);
+    },
+  });
+}
+
+/** Same output shape as usePreviewLeaseImport, but parsed via a user-confirmed column mapping. */
+export function usePreviewMappedLeaseImport() {
+  return useMutation({
+    mutationFn: ({ file, projectId, mapping, defaultBrokerId, rowBrokerOverrides }: {
+      file: File; projectId: string;
+      mapping: { orientation: 'rows' | 'columns'; columns: Array<{ columnIndex: number; field: string; splitPart?: 'psf' | 'total' }> };
+      defaultBrokerId?: string;
+      rowBrokerOverrides?: Record<number, string>;
+    }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('projectId', projectId);
+      form.append('mapping', JSON.stringify(mapping));
+      if (defaultBrokerId) form.append('defaultBrokerId', defaultBrokerId);
+      if (rowBrokerOverrides && Object.keys(rowBrokerOverrides).length) {
+        form.append('rowBrokerOverrides', JSON.stringify(rowBrokerOverrides));
+      }
+      return api.post('/leases/backfill/import/preview-mapped', form).then((r) => r.data);
+    },
+  });
+}
+
+// ─────────── Bulk sale history import (R5) ───────────
+
+/** Same reasoning as useDownloadImportTemplate on the rent-history side. */
+export function useDownloadSaleImportTemplate() {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.get('/sales/backfill/template', { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'sale-history-import-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+  });
+}
+
+export function usePreviewSaleImport() {
+  return useMutation({
+    mutationFn: ({ file, projectId }: { file: File; projectId: string }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('projectId', projectId);
+      return api.post('/sales/backfill/import/preview', form).then((r) => r.data);
+    },
+  });
+}
+
+/**
+ * Commits previously-previewed rows — one backfillSale() per row. Invalidated broadly,
+ * not just ['sales']: a backfilled sale can end a tenancy (touches leases/rent-roll) and
+ * always writes an occupancy event (touches unit-history) — the same blast radius
+ * invalidateAfterLeaseWrite exists for, on the sale side.
+ */
+export function useCommitSaleImport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rows: Record<string, unknown>[]) =>
+      api.post('/sales/backfill/import/commit', { rows }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      invalidateAfterLeaseWrite(qc);
+    },
+  });
+}
+
+/**
+ * R27 — the Founder gate on deleting a backfilled tenancy. Generalized by R6 to also
+ * cover backfilled sales — see useRequestSaleHistoricalDeletion below.
  *
  * Three calls rather than one "delete with approval": approving authorises the delete, it
  * does not perform it. Collapsing them would make the approval a click-through instead of
- * a decision.
+ * a decision. Deciding/cancelling/listing live under the shared /historical-deletions
+ * routes — a Founder's queue mixes leases and sales, and a request row already names
+ * which it is.
  */
 export function useRequestHistoricalDeletion() {
   const qc = useQueryClient();
@@ -523,7 +656,7 @@ export function useHistoricalDeletionRequests(status = 'PENDING') {
   return useQuery({
     queryKey: ['historical-deletions', status],
     queryFn: () =>
-      api.get('/leases/historical-deletions', { params: { status } }).then((r) => r.data),
+      api.get('/historical-deletions', { params: { status } }).then((r) => r.data),
     enabled: can,
   });
 }
@@ -532,7 +665,7 @@ export function useCancelHistoricalDeletion() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (requestId: string) =>
-      api.post(`/leases/historical-deletions/${requestId}/cancel`).then((r) => r.data),
+      api.post(`/historical-deletions/${requestId}/cancel`).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['historical-deletions'] }),
   });
 }
@@ -541,7 +674,7 @@ export function useDecideHistoricalDeletion() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ requestId, approve, note }: { requestId: string; approve: boolean; note?: string }) =>
-      api.post(`/leases/historical-deletions/${requestId}/decide`, { approve, note })
+      api.post(`/historical-deletions/${requestId}/decide`, { approve, note })
         .then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['historical-deletions'] }),
   });
@@ -554,6 +687,9 @@ export function useDeleteLease() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leases'] });
       qc.invalidateQueries({ queryKey: ['rent-roll'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+      qc.invalidateQueries({ queryKey: ['unit'] });
+      qc.invalidateQueries({ queryKey: ['unit-history'] });
       // A historical delete consumes its approval, so the Founder queue changes too.
       qc.invalidateQueries({ queryKey: ['historical-deletions'] });
     },
@@ -609,7 +745,24 @@ export function useDeleteSale() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sales'] });
       qc.invalidateQueries({ queryKey: ['units'] });
+      qc.invalidateQueries({ queryKey: ['unit'] });
+      qc.invalidateQueries({ queryKey: ['unit-history'] });
+      // A historical delete consumes its approval, so the Founder queue changes too.
+      qc.invalidateQueries({ queryKey: ['historical-deletions'] });
     },
+  });
+}
+
+/**
+ * R6 — the sale-side counterpart of useRequestHistoricalDeletion. Only for a backfilled
+ * sale; a live sale is deleted directly through useDeleteSale.
+ */
+export function useRequestSaleHistoricalDeletion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId, reason }: { saleId: string; reason: string }) =>
+      api.post(`/sales/${saleId}/request-deletion`, { reason }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['historical-deletions'] }),
   });
 }
 
@@ -2033,6 +2186,89 @@ export function useDeleteTaskAttachment() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['task', vars.taskId] });
     },
+  });
+}
+
+// ---- Unit Construction Checklist ----
+//
+// A fixed, ordered per-unit stage checklist — separate from the Task/kind=CONSTRUCTION
+// "Updates Board" hooks above. See construction-checklist.service.ts on the API side.
+
+export function useConstructionTemplate(buildingId?: string) {
+  return useQuery({
+    queryKey: ['construction-template', buildingId],
+    queryFn: () => api.get('/construction-checklist/template', { params: { buildingId } }).then((r) => r.data),
+    enabled: !!buildingId,
+  });
+}
+
+export function useAddConstructionTemplateItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ buildingId, label }: { buildingId: string; label: string }) =>
+      api.post('/construction-checklist/template', { label }, { params: { buildingId } }).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-template', vars.buildingId] }),
+  });
+}
+
+export function useDeleteConstructionTemplateItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ templateItemId }: { templateItemId: string; buildingId: string }) =>
+      api.delete(`/construction-checklist/template/${templateItemId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-template', vars.buildingId] }),
+  });
+}
+
+export function useUnitConstructionStages(unitId?: string) {
+  return useQuery({
+    queryKey: ['construction-stages', unitId],
+    queryFn: () => api.get('/construction-checklist/unit', { params: { unitId } }).then((r) => r.data),
+    enabled: !!unitId,
+  });
+}
+
+export function useApplyConstructionTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId }: { unitId: string }) =>
+      api.post(`/construction-checklist/unit/${unitId}/apply-template`).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+  });
+}
+
+export function useAddUnitConstructionStage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, label }: { unitId: string; label: string }) =>
+      api.post(`/construction-checklist/unit/${unitId}/stage`, { label }).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+  });
+}
+
+export function useUpdateConstructionStage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ stageId, unitId, data }: { stageId: string; unitId: string; data: Record<string, unknown> }) =>
+      api.patch(`/construction-checklist/stage/${stageId}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+  });
+}
+
+export function useDeleteConstructionStage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ stageId }: { stageId: string; unitId: string }) =>
+      api.delete(`/construction-checklist/stage/${stageId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+  });
+}
+
+export function useConstructionRollup(projectId?: string) {
+  return useQuery({
+    queryKey: ['construction-rollup', projectId],
+    queryFn: () => api.get('/construction-checklist/rollup', { params: { projectId } }).then((r) => r.data),
+    enabled: !!projectId,
   });
 }
 

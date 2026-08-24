@@ -9,13 +9,13 @@ import { PrismaService } from '../../prisma/prisma.service';
  * the rent HISTORY and free-rent months. See the schema comment above
  * `model LeaseRentPeriod` for why.
  *
- * Client-confirmed rules (2026-07-29):
+ * Client-confirmed rules (2026-07-29, NNN cadence re-confirmed 2026-08-21):
  *  1. Escalation COMPOUNDS off the previous period's baseRent, not the original.
- *  2. Escalation touches baseRent, which is the whole of the rent. NNN is NOT part of
- *     this timeline: the client confirmed on 2026-08-12 that Prime charges it once at
- *     lease signing, so it lives on LeaseObligation (kind NNN) alongside the security
- *     deposit. It used to be a column here, folded into monthlyRent and billed monthly.
- *  3. Invariant on every row: monthlyRent === baseRent.
+ *  2. Escalation touches baseRent ONLY. nnnAmount carries forward untouched and is
+ *     re-negotiated by hand — never auto-escalated. NNN briefly moved off this
+ *     timeline to a one-time LeaseObligation (2026-08-12) and was restored here
+ *     2026-08-21 when the client reversed that decision back to a monthly charge.
+ *  3. Invariant on every row: monthlyRent === baseRent + nnnAmount.
  *  4. Free-rent months sit INSIDE the term. leaseEnd is never extended and the
  *     escalation clock runs from leaseStart, not from the first paying month.
  *  5. Past periods are immutable. Regeneration rewrites only periods that START in
@@ -35,8 +35,8 @@ import { PrismaService } from '../../prisma/prisma.service';
  * end (compounding full precision internally) would make the displayed schedule
  * disagree with the sum of what was actually billed, by a cent or two per year.
  *
- * monthlyRent mirrors the already-rounded baseRent, so it never needs rounding of
- * its own.
+ * nnnAmount is rounded once on input; monthlyRent is an exact sum of two already
+ * rounded 2dp values, so it never needs rounding of its own.
  *
  * ---------------------------------------------------------------------------
  * DATE CONVENTIONS
@@ -68,6 +68,8 @@ export interface RentScheduleInput {
   leaseEnd: Date;
   /** Rent portion of the FIRST paying period. This is what escalates. */
   baseRent: DecimalLike;
+  /** NNN portion. Carried forward unchanged across every escalation. */
+  nnnAmount?: DecimalLike | null;
   /** Percent applied to the PREVIOUS period's baseRent, e.g. 5 = +5%. */
   escalationPct?: DecimalLike | null;
   /** Months between escalations (12 / 6 / 18). Interval, not anniversary month. */
@@ -84,6 +86,7 @@ export interface ComputedRentPeriod {
   /** Inclusive last day of the period. */
   endDate: Date;
   baseRent: Prisma.Decimal;
+  nnnAmount: Prisma.Decimal;
   monthlyRent: Prisma.Decimal;
   isFreeRent: boolean;
   /** Null on the first period and on free-rent periods — nothing escalated into them. */
@@ -147,25 +150,23 @@ export function monthsBetweenUtc(startInclusive: Date, endExclusive: Date): numb
 }
 
 /**
- * Throws unless monthlyRent === baseRent. Called on every write path (generated or
- * manual) so a bad row can never reach the table.
- *
- * The two were allowed to differ while NNN was a monthly component of rent. Now that
- * NNN is a one-time obligation, any gap between them means a caller is still trying to
- * fold a second charge into the rent — which is exactly what this is here to stop.
+ * Throws unless monthlyRent === baseRent + nnnAmount. Called on every write path
+ * (generated or manual) so a bad row can never reach the table.
  */
 export function assertRentInvariant(row: {
   baseRent: DecimalLike;
+  nnnAmount: DecimalLike;
   monthlyRent: DecimalLike;
 }): void {
   const base = dec(row.baseRent);
+  const nnn = dec(row.nnnAmount);
   const monthly = dec(row.monthlyRent);
-  if (!monthly.equals(base)) {
+  const expected = base.add(nnn);
+  if (!monthly.equals(expected)) {
     throw new BadRequestException(
       `Rent period invariant violated: monthlyRent (${monthly.toFixed(2)}) must equal ` +
-        `baseRent (${base.toFixed(2)}). Off by ${monthly.sub(base).toFixed(2)}. ` +
-        `NNN is charged once at signing and is recorded as a lease obligation, not as ` +
-        `part of monthly rent.`,
+        `baseRent (${base.toFixed(2)}) + nnnAmount (${nnn.toFixed(2)}) = ${expected.toFixed(2)}. ` +
+        `Off by ${monthly.sub(expected).toFixed(2)}.`,
     );
   }
 }
@@ -199,6 +200,10 @@ export function computeRentSchedule(input: RentScheduleInput): ComputedRentPerio
   const initialBase = round2(input.baseRent);
   if (initialBase.isNegative()) {
     throw new BadRequestException('baseRent cannot be negative');
+  }
+  const nnn = round2(input.nnnAmount ?? 0);
+  if (nnn.isNegative()) {
+    throw new BadRequestException('nnnAmount cannot be negative');
   }
 
   const pct = input.escalationPct == null ? null : dec(input.escalationPct);
@@ -259,7 +264,8 @@ export function computeRentSchedule(input: RentScheduleInput): ComputedRentPerio
         startDate: rangeStart,
         endDate: addDaysUtc(rangeEndExclusive, -1),
         baseRent: seg.baseRent,
-        monthlyRent: seg.baseRent,
+        nnnAmount: nnn,
+        monthlyRent: seg.baseRent.add(nnn),
         isFreeRent: false,
         escalationPct: seg.index > 0 ? pct : null,
         source: seg.index > 0 ? 'AUTO_ESCALATION' : 'INITIAL',
@@ -275,6 +281,7 @@ export function computeRentSchedule(input: RentScheduleInput): ComputedRentPerio
       startDate: freeStart,
       endDate: addDaysUtc(freeEndExclusive, -1),
       baseRent: ZERO,
+      nnnAmount: ZERO,
       monthlyRent: ZERO,
       isFreeRent: true,
       escalationPct: null,
@@ -312,6 +319,7 @@ export function summariseEffectiveRent(
     startDate: Date;
     endDate: Date | null;
     baseRent: DecimalLike;
+    nnnAmount: DecimalLike;
     monthlyRent: DecimalLike;
     isFreeRent: boolean;
   }>,
@@ -362,7 +370,11 @@ export function summariseEffectiveRent(
 export interface GenerateOptions {
   /** Overrides lease.monthlyRent as the first period's rent portion. */
   baseRent?: DecimalLike;
-
+  /**
+   * Overrides the derived default (lease.nnnTotalAmount / 12) for the monthly NNN
+   * component. Pass this for a manual re-negotiation — NNN is never auto-escalated.
+   */
+  nnnAmount?: DecimalLike;
   createdById?: string;
   /**
    * Terms changed after periods already existed: rewrite the FUTURE and keep the
@@ -393,7 +405,8 @@ export interface AddManualPeriodInput {
   /** Omit for "runs to lease end". */
   endDate?: Date | string | null;
   baseRent: DecimalLike;
-  /** Optional — mirrors baseRent when omitted, validated when given. */
+  nnnAmount?: DecimalLike;
+  /** Optional — derived from baseRent + nnnAmount when omitted, validated when given. */
   monthlyRent?: DecimalLike;
   /** REQUIRED. A manual rent change with no stated reason is not auditable. */
   reason: string;
@@ -570,9 +583,10 @@ export class LeaseRentPeriodService {
     }
 
     const baseRent = round2(input.baseRent);
+    const nnnAmount = round2(input.nnnAmount ?? 0);
     const monthlyRent =
-      input.monthlyRent === undefined ? baseRent : round2(input.monthlyRent);
-    assertRentInvariant({ baseRent, monthlyRent });
+      input.monthlyRent === undefined ? baseRent.add(nnnAmount) : round2(input.monthlyRent);
+    assertRentInvariant({ baseRent, nnnAmount, monthlyRent });
 
     const last = await this.prisma.leaseRentPeriod.findFirst({
       where: { leaseId: input.leaseId },
@@ -587,6 +601,7 @@ export class LeaseRentPeriodService {
         startDate,
         endDate,
         baseRent,
+        nnnAmount,
         monthlyRent,
         isFreeRent: false,
         escalationPct: null,
@@ -802,8 +817,10 @@ export class LeaseRentPeriodService {
         where: { id: periodId },
         data: {
           baseRent: nextRent,
-          // The invariant holds through a correction too — monthlyRent is the whole rent.
-          monthlyRent: nextRent,
+          // The invariant holds through a correction too. Only baseRent is correctable
+          // here (R22 is scoped to rent, not NNN) — nnnAmount carries over unchanged, so
+          // monthlyRent is re-derived from the period's EXISTING nnnAmount, not dropped.
+          monthlyRent: nextRent.add(period.nnnAmount),
           // DERIVED, not carried over. `isFreeRent` is a property of the rent, not an
           // independent fact about the period: a month at zero IS abated, a month with
           // rent is not. Left stale, a free period corrected to a real rent kept the flag
@@ -895,18 +912,26 @@ export class LeaseRentPeriodService {
       rentStartDate?: Date | null;
       leaseEnd: Date;
       monthlyRent: Prisma.Decimal;
+      nnnTotalAmount: Prisma.Decimal | null;
       escalationPct: Prisma.Decimal | null;
       escalationFreq: number | null;
       freeRentMonths: number | null;
       freeRentStartDate: Date | null;
     },
-    opts: Pick<GenerateOptions, 'baseRent'>,
+    opts: Pick<GenerateOptions, 'baseRent' | 'nnnAmount'>,
   ): RentScheduleInput {
-    // `lease.monthlyRent` IS the rent now that NNN has moved off the timeline — there
-    // is no second component to subtract. The caller can still override it to re-cut a
-    // schedule at a different rate.
+    // `lease.monthlyRent` is the base rent only — nnnPerSqft/nnnTotalAmount are the
+    // lease's separate quoted NNN term. The caller can still override either to re-cut
+    // a schedule at a different rate (e.g. after a manual re-negotiation).
     const baseRent =
       opts.baseRent !== undefined ? round2(opts.baseRent) : round2(dec(lease.monthlyRent));
+    // nnnTotalAmount is the ANNUAL sum (quoted rate x the unit's area) — amortize to a
+    // monthly figure. `nnnAmount` never auto-escalates; regenerating a future schedule
+    // re-derives it from the CURRENT quoted term unless the caller pins a manual value.
+    const nnnAmount =
+      opts.nnnAmount !== undefined
+        ? round2(opts.nnnAmount)
+        : round2(dec(lease.nnnTotalAmount ?? 0).div(12));
     return {
       // Rent commencement, not legal commencement. A lease signed in January with rent
       // starting in April after fit-out was previously generating three months of
@@ -916,6 +941,7 @@ export class LeaseRentPeriodService {
       leaseStart: lease.rentStartDate ?? lease.leaseStart,
       leaseEnd: lease.leaseEnd,
       baseRent,
+      nnnAmount,
       escalationPct: lease.escalationPct,
       escalationFreq: lease.escalationFreq,
       freeRentMonths: lease.freeRentMonths,
@@ -935,6 +961,7 @@ export class LeaseRentPeriodService {
       startDate: p.startDate,
       endDate: p.endDate,
       baseRent: p.baseRent,
+      nnnAmount: p.nnnAmount,
       monthlyRent: p.monthlyRent,
       isFreeRent: p.isFreeRent,
       escalationPct: p.escalationPct,

@@ -6,6 +6,9 @@ import { UnitStatusEventService } from '../../common/utils/unit-status-event.ser
 import { LeasesService, TerminationReason } from '../leases/leases.service';
 import { startOfUtcDay } from '../leases/lease-rent-period.service';
 import { SalePaymentsService } from './sale-payments.service';
+import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
+import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
+import { AuditService } from '../../common/utils/audit.service';
 import {
   docCategoryLabel,
   requiredDocsForTransition,
@@ -21,6 +24,23 @@ export interface SaleCancellationInput {
   refundPaidAt?: string | Date;
   refundReference?: string;
   note?: string;
+}
+
+/** A sale that already closed, entered by hand (R4). See SalesService.backfillSale. */
+export interface BackfillSaleInput {
+  unitId?: string | null;
+  buildingId?: string | null;
+  seller?: string | null;
+  buyer: string;
+  buyerType?: SaleBuyerType;
+  salePrice: number;
+  contractDate?: string | null;
+  closingDate: string;
+  notes?: string | null;
+  brokerId?: string | null;
+  brokerCommissionPct?: number | null;
+  payments?: { label: string; amount: number; paidAt?: string }[];
+  commissionInstallments?: { amount: number; paidAt?: string }[];
 }
 
 /** Money is compared at the precision it is stored at — Decimal(14,2). */
@@ -87,6 +107,9 @@ export class SalesService {
     private statusEvents: UnitStatusEventService,
     private leases: LeasesService,
     private salePayments: SalePaymentsService,
+    private commissionInstallments: CommissionInstallmentService,
+    private historicalDeletions: HistoricalDeletionService,
+    private audit: AuditService,
   ) {}
 
   /**
@@ -248,6 +271,15 @@ export class SalesService {
     const created = await this.prisma.sale.create({
       data: { ...data, lastActivityAt: new Date() },
     });
+
+    // R7: mirror a commission stamped at creation into the installment table.
+    if (createdClosed) {
+      await this.commissionInstallments.syncStampedAmount(
+        { saleId: created.id },
+        created.brokerId,
+        created.brokerCommissionAmt != null ? Number(created.brokerCommissionAmt) : null,
+      );
+    }
 
     // Emit for the same reason: a sale born CLOSED is still a sale that closed, and
     // Finance/Accounting learn about it through these events.
@@ -599,7 +631,240 @@ export class SalesService {
         });
       }
     }
+
+    // R7: only when this write actually applied AND touched brokerCommissionAmt — an
+    // unrelated edit, or the losing side of the optimistic-locked CLOSE race, must not
+    // re-run the sync and risk nudging an untouched installment's amount.
+    if (applied && dataWithActivity.brokerCommissionAmt !== undefined) {
+      await this.commissionInstallments.syncStampedAmount(
+        { saleId: id },
+        result.brokerId,
+        result.brokerCommissionAmt != null ? Number(result.brokerCommissionAmt) : null,
+      );
+    }
+
     return result;
+  }
+
+  // ─────── Historical backfill (R4) ───────
+
+  /**
+   * A sale that already closed, entered by hand — the sale-side counterpart to
+   * LeasesService.backfillTenancy (H2). Deliberately does NOT compose create()/update():
+   * those carry live-workflow gates (discount approval, stage-document requirements) that
+   * exist to govern a deal that is ABOUT to happen. A historical sale already happened —
+   * gating it behind today's discount threshold or document checklist would block
+   * legitimate old data for reasons that have nothing to do with it.
+   */
+  async backfillSale(input: BackfillSaleInput, userId?: string) {
+    if (!input.unitId && !input.buildingId) {
+      throw new BadRequestException('Sale must reference either a unit or a building');
+    }
+    if (input.unitId && input.buildingId) {
+      throw new BadRequestException('Sale cannot reference both a unit and a building');
+    }
+
+    const closingDate = startOfUtcDay(new Date(input.closingDate));
+    const today = startOfUtcDay(new Date());
+    if (Number.isNaN(closingDate.getTime())) {
+      throw new BadRequestException('Closing date must be a valid date');
+    }
+    // The whole point is that this is history — exactly backfillTenancy's guard.
+    if (closingDate > today) {
+      throw new BadRequestException(
+        'This sale has not closed yet. Add it as a normal sale instead — backfill is for '
+        + 'deals that already closed.',
+      );
+    }
+    const contractDate = input.contractDate ? startOfUtcDay(new Date(input.contractDate)) : null;
+
+    let projectId: string;
+    let unitId: string | null = null;
+    let buildingId: string | null = null;
+    if (input.unitId) {
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: input.unitId },
+        select: { id: true, deletedAt: true, building: { select: { projectId: true } } },
+      });
+      if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+      projectId = unit.building.projectId;
+      unitId = input.unitId;
+    } else {
+      const building = await this.prisma.building.findUnique({
+        where: { id: input.buildingId! },
+        select: { id: true, deletedAt: true, projectId: true },
+      });
+      if (!building || building.deletedAt) throw new NotFoundException('Building not found');
+      projectId = building.projectId;
+      buildingId = input.buildingId!;
+    }
+
+    const buyerType = input.buyerType ?? 'SITTING_TENANT';
+    const tenancyTransfers = buyerType === 'THIRD_PARTY';
+    const terminationReason: TerminationReason = tenancyTransfers
+      ? 'LEASE_TRANSFERRED_WITH_SALE'
+      : 'TENANT_BOUGHT';
+
+    // Commission (R7): prefer the ACTUAL installment amounts if the caller has them —
+    // backfill data records what really happened, which may not match today's formula.
+    // Falls back to the same computeBrokerCommission the live close() path uses.
+    let brokerCommissionAmt: number | null = null;
+    if (input.brokerId) {
+      if (input.commissionInstallments?.length) {
+        brokerCommissionAmt = input.commissionInstallments.reduce((sum, c) => sum + c.amount, 0);
+      } else {
+        const computed = await this.computeBrokerCommission(
+          { brokerId: input.brokerId, salePrice: input.salePrice, brokerCommissionPct: input.brokerCommissionPct ?? null },
+          {},
+        );
+        brokerCommissionAmt = computed ?? null;
+      }
+    }
+
+    // Deposit mirrors onto the flat Sale.depositAmt column too (not ONLY the SalePayment
+    // row below) — UnitHistoryService's sale timeline entry still reads that column
+    // directly, and duplicating one number here is cheaper than teaching it to sum
+    // payments for this one case.
+    const depositEntry = input.payments?.find((p) => p.label.trim().toLowerCase() === 'deposit');
+
+    let endedLeases: { id: string; tenantName: string }[] = [];
+    const sale = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.sale.create({
+        data: {
+          projectId,
+          unitId,
+          buildingId,
+          seller: input.seller ?? null,
+          buyer: input.buyer,
+          buyerType,
+          salePrice: input.salePrice,
+          depositAmt: depositEntry ? depositEntry.amount : null,
+          status: 'CLOSED',
+          contractDate,
+          closingDate,
+          notes: input.notes ?? null,
+          brokerId: input.brokerId ?? null,
+          brokerCommissionPct: input.brokerCommissionPct ?? null,
+          brokerCommissionAmt,
+          isHistorical: true,
+          lastActivityAt: new Date(),
+        },
+      });
+
+      for (const [i, p] of (input.payments ?? []).entries()) {
+        await tx.salePayment.create({
+          data: {
+            saleId: created.id,
+            label: p.label,
+            sequence: i + 1,
+            trigger: 'FIXED_DATE',
+            dueDate: p.paidAt ? new Date(p.paidAt) : closingDate,
+            amount: p.amount,
+            paidAmount: p.amount,
+            paidAt: p.paidAt ? new Date(p.paidAt) : closingDate,
+            status: 'PAID',
+            notes: 'Historical — entered during backfill',
+          },
+        });
+      }
+
+      if (unitId) {
+        const beforeUnit = await tx.unit.findUniqueOrThrow({ where: { id: unitId }, select: { status: true } });
+        await tx.unit.update({
+          where: { id: unitId },
+          data: { status: 'SOLD', availableSince: null },
+        });
+
+        // Same "which tenancies are IN OCCUPATION on the closing date" filter as close().
+        const live = await tx.lease.findMany({
+          where: {
+            unitId,
+            deletedAt: null,
+            terminationDate: null,
+            status: { notIn: ['EXPIRED', 'TERMINATED'] },
+          },
+          orderBy: { leaseStart: 'asc' },
+          select: { id: true, tenantName: true, leaseStart: true },
+        });
+        const closingDay = startOfUtcDay(closingDate);
+        const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
+
+        await this.statusEvents.recordIfChanged(
+          {
+            unitId,
+            fromStatus: beforeUnit.status,
+            toStatus: 'SOLD',
+            source: 'SALE_CLOSED',
+            saleId: created.id,
+            effectiveAt: closingDate,
+            isHistorical: true,
+            reason: this.saleClosedReason(tenancyTransfers, occupying.length)
+              ?? `Historical sale entered by hand — ${input.buyer}`,
+            recordedById: userId,
+          },
+          tx,
+        );
+
+        endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
+        for (const lease of occupying) {
+          await this.leases.endTenancyWithin(
+            tx,
+            lease.id,
+            {
+              terminationDate: closingDate,
+              terminationReason,
+              terminationNote: tenancyTransfers
+                ? 'Transferred to the buyer when the historical sale of this unit closed.'
+                : 'Ended automatically when the historical sale of this unit closed (backfill).',
+            },
+            userId,
+          );
+        }
+      }
+
+      return created;
+    });
+
+    // R7: mirror the stamped commission into the installment table — outside the write
+    // transaction, same "recoverable" reasoning as everywhere else this sync happens.
+    if (input.brokerId && brokerCommissionAmt != null) {
+      if (input.commissionInstallments?.length) {
+        for (const [i, c] of input.commissionInstallments.entries()) {
+          await this.commissionInstallments.add(
+            { saleId: sale.id },
+            { brokerId: input.brokerId, amount: c.amount, paidAt: c.paidAt ? new Date(c.paidAt) : null, sequence: i + 1 },
+          );
+        }
+      } else {
+        await this.commissionInstallments.syncStampedAmount({ saleId: sale.id }, input.brokerId, brokerCommissionAmt);
+      }
+    }
+
+    if (unitId) {
+      for (const lease of endedLeases) {
+        this.bus.emit({
+          type: 'lease.terminated',
+          leaseId: lease.id,
+          projectId,
+          tenantName: lease.tenantName,
+          reason: terminationReason,
+        });
+      }
+    }
+    this.bus.emit({ type: 'sale.statusChanged', saleId: sale.id, from: 'NEW', to: 'CLOSED' });
+    if (unitId) {
+      this.bus.emit({ type: 'unit.sold', unitId, saleId: sale.id, projectId });
+    }
+
+    await this.audit.log({
+      userId,
+      action: 'SALE_HISTORY_BACKFILLED',
+      entity: 'Sale',
+      entityId: sale.id,
+      newValues: { unitId, buildingId, buyer: input.buyer, salePrice: input.salePrice, closingDate },
+    });
+
+    return sale;
   }
 
   // ─────── Cancellation ledger (S1) ───────
@@ -907,12 +1172,87 @@ export class SalesService {
     return 5; // default until the org configures a threshold
   }
 
-  // Soft-delete — preserves the row (and the unit's history) instead of destroying it.
-  async delete(id: string, userRole: UserRole) {
+  /**
+   * Soft-delete a sale.
+   *
+   * A HISTORICAL sale (entered by hand via R4 backfill) needs the same Founder-approval
+   * gate a backfilled lease already has (R27, generalized by R6) — it carries a deal
+   * (price, deposit, commission) typed in from records nothing witnessed, so deleting it
+   * destroys data that cannot be regenerated. This gate takes precedence over the
+   * pre-existing role check below, which still governs LIVE closed sales — a different
+   * concern (protecting a real transaction from casual deletion, not protecting
+   * unregenerable history).
+   */
+  async delete(id: string, userId: string | undefined, userRole: UserRole, canApproveDeletion = false) {
     const sale = await this.findById(id);
-    if (sale.status === 'CLOSED' && !['FOUNDER', 'SUPER_ADMIN'].includes(userRole)) {
+    const historical = !!(sale as any).isHistorical;
+    let approvalId: string | null = null;
+    let selfApproved = false;
+
+    if (historical) {
+      const target = { saleId: id };
+      const approved = await this.historicalDeletions.findLatestApproved(target);
+      if (approved) {
+        approvalId = approved.id;
+      } else if (canApproveDeletion) {
+        selfApproved = true;
+        const record = await this.historicalDeletions.selfApprove(target, userId!);
+        approvalId = record.id;
+      } else {
+        const pending = await this.historicalDeletions.findPending(target);
+        throw new ForbiddenException(
+          pending
+            ? 'A deletion request for this historical record is still awaiting Founder approval.'
+            : 'Historical records cannot be deleted directly. Request deletion first — a Founder '
+              + 'has to approve it.',
+        );
+      }
+      await this.historicalDeletions.markCompleted(approvalId!);
+    } else if (sale.status === 'CLOSED' && !['FOUNDER', 'SUPER_ADMIN'].includes(userRole)) {
       throw new ForbiddenException('Closed sales can only be deleted by Founder or Super Admin');
     }
-    return this.prisma.sale.update({ where: { id }, data: { deletedAt: new Date() } });
+
+    const deleted = await this.prisma.sale.update({ where: { id }, data: { deletedAt: new Date() } });
+    await this.audit.log({
+      userId,
+      action: historical ? 'SALE_HISTORICAL_DELETED' : 'SALE_DELETED',
+      entity: 'Sale',
+      entityId: id,
+      oldValues: {
+        buyer: sale.buyer,
+        isHistorical: historical,
+        ...(historical ? { approvalId, selfApproved } : {}),
+      },
+    });
+    return deleted;
+  }
+
+  /** Ask a Founder to approve deleting a backfilled sale. Reason is mandatory. */
+  async requestHistoricalDeletion(saleId: string, reason: string, userId: string) {
+    const sale = await this.findById(saleId);
+    if (!(sale as any).isHistorical) {
+      throw new BadRequestException(
+        'This sale was recorded live, not backfilled — delete it directly.',
+      );
+    }
+    const request = await this.historicalDeletions.request({ saleId }, reason, userId);
+
+    await this.audit.log({
+      userId,
+      action: 'HISTORICAL_DELETION_REQUESTED',
+      entity: 'Sale',
+      entityId: saleId,
+      newValues: { requestId: request.id, reason: request.reason },
+    });
+    this.bus.emit({
+      type: 'history.deletionRequested',
+      requestId: request.id,
+      saleId,
+      projectId: sale.projectId ?? null,
+      label: sale.buyer ?? 'a sale',
+      reason: request.reason,
+      requestedById: userId,
+    });
+    return request;
   }
 }

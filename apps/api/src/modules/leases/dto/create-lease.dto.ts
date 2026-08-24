@@ -20,6 +20,10 @@ export class CreateLeaseDto {
   @IsOptional() @IsString() @MaxLength(200)
   tenantBrand?: string;
 
+  /** Free text — the owning LLC named on the lease, if it varies property to property. */
+  @IsOptional() @IsString() @MaxLength(200)
+  landlordEntity?: string;
+
   // tenantContact is the contact PERSON's name; email/phone are stored separately so they
   // can be validated and rendered as links. Contact data only — tenants are never emailed
   // by the platform (notifications only ever address internal User rows).
@@ -156,6 +160,10 @@ export class UpdateLeaseDto {
 
   @IsOptional() @IsString() @MaxLength(200)
   tenantBrand?: string;
+
+  /** Free text — the owning LLC named on the lease, if it varies property to property. */
+  @IsOptional() @IsString() @MaxLength(200)
+  landlordEntity?: string;
 
   // Contact PERSON's name + their email/phone. Contact data only — the platform never
   // emails tenants (notifications only ever address internal User rows).

@@ -90,6 +90,10 @@ model User {
   historicalDeletionsDecided   HistoricalRecordDeletion[]  @relation("HistoricalDeletionDecider")
   taskUpdates                  TaskUpdate[]                @relation("TaskUpdateAuthor")
   taskAssignments              TaskAssignment[]            @relation("TaskAssignmentUser")
+  // Unit construction checklist
+  constructionStageTemplatesCreated ConstructionStageTemplateItem[] @relation("ConstructionStageTemplateCreator")
+  constructionStagesOwned      UnitConstructionStage[]     @relation("UnitConstructionStageOwner")
+  constructionStagesCreated    UnitConstructionStage[]     @relation("UnitConstructionStageCreator")
   // Unit occupancy log
   unitStatusEvents             UnitStatusEvent[]           @relation("UnitStatusEventRecorder")
   // C3 — the PM review gate on a milestone slip cascade
@@ -300,6 +304,7 @@ model Building {
   actuals          Actual[]
   interiorProjects InteriorProject[]
   dailyLogs        DailyLog[]
+  constructionStageTemplateItems ConstructionStageTemplateItem[]
 
   @@index([projectId])
   @@index([projectId, sortOrder])
@@ -373,6 +378,7 @@ model Unit {
   leads            Lead[]
   interiorProjects InteriorProject[]
   interestedLeads  LeadUnitInterest[]
+  constructionStages UnitConstructionStage[]
   // S3 — unit swap mid-contract. Both sides, so a unit's page can show "a buyer moved
   // off this unit" and "this unit was taken over by an existing sale" alike.
   saleTransfersOut SaleUnitTransfer[] @relation("SaleUnitTransferFrom")
@@ -1045,6 +1051,15 @@ model Sale {
   brokerCommissionPct    Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
   brokerCommissionAmt    Decimal?    @db.Decimal(14, 2) // computed + stored on close
   brokerCommissionPaidAt DateTime? // set when commission is remitted to broker
+  // ---- Historical backfill (R4, 2026-08-22) ----
+  // Entered by hand after the fact, mirroring Lease.isHistorical. A sale that already
+  // closed years ago, typed in from records the system never witnessed — same reasoning,
+  // same eventual approval-gate on deletion (R6, not yet built) that Lease already has.
+  isHistorical           Boolean     @default(false)
+  // Free text — Prime Tracker has no structured owning-entity/LLC model for either side
+  // of a deal (buyer already exists; the historical sales sheet also names a seller).
+  // Not worth a real relation for v1 — see the import spec's Non-Goals.
+  seller                 String?
   createdAt              DateTime    @default(now())
   updatedAt              DateTime    @updatedAt
   deletedAt              DateTime? // soft-delete
@@ -1060,6 +1075,8 @@ model Sale {
   cancellation     SaleCancellation?
   // Every unit this sale has moved between (S3), oldest first.
   unitTransfers    SaleUnitTransfer[]
+  commissionInstallments CommissionInstallment[]
+  deletionRequests HistoricalRecordDeletion[]
 
   @@index([projectId])
   @@index([unitId])
@@ -1288,6 +1305,18 @@ model Lease {
   // it takes a whole settled ledger with it, and nothing in the system witnessed the
   // tenancy to reconstruct it from.
   isHistorical           Boolean   @default(false)
+  // R8 (2026-08-22): a historical deal that spanned more than one physical unit (e.g.
+  // "700 and 701" in Prime's own rent-roll sheet — a third of its real historical leases).
+  // Deliberately NOT a relation / not full Unit Groups (a separate, heavier roadmap item)
+  // — each unit still gets its OWN Lease row with its own correct rent/sqft share; this
+  // is purely a free-text link so Unit History can say "leased together with unit X".
+  // Never participates in the overlap constraint, rent math, or reporting aggregation.
+  combinedDealRef        String?
+  // Free text — Prime Tracker has no structured owning-entity/LLC model (mirrors
+  // Sale.seller for the same reason: the historical rent-roll sheet names a different
+  // landlord LLC per property, e.g. "Texas Hazelwood OP 2 LLC"). Not worth a real
+  // relation for v1 — see the import spec's Non-Goals.
+  landlordEntity         String?
   terminationDate        DateTime?
   // EXPIRED | NON_RENEWAL | EARLY_TERMINATION | EVICTION | MUTUAL |
   // LANDLORD_TERMINATED | RENEWED | RELOCATED | ASSIGNED | TENANT_BOUGHT
@@ -1326,19 +1355,21 @@ model Lease {
   updatedAt              DateTime  @updatedAt
   deletedAt              DateTime? // soft-delete
 
-  interiorProjects  InteriorProject[]
-  rentPeriods       LeaseRentPeriod[]
-  rentCorrections   LeaseRentPeriodCorrection[]
-  obligations       LeaseObligation[]
-  rentInvoices      LeaseRentInvoice[]
-  tenantAssignments LeaseTenantAssignment[]
-  deletionRequests  HistoricalRecordDeletion[]
+  interiorProjects      InteriorProject[]
+  rentPeriods           LeaseRentPeriod[]
+  rentCorrections       LeaseRentPeriodCorrection[]
+  obligations           LeaseObligation[]
+  rentInvoices          LeaseRentInvoice[]
+  tenantAssignments     LeaseTenantAssignment[]
+  deletionRequests      HistoricalRecordDeletion[]
+  commissionInstallments CommissionInstallment[]
 
   @@index([unitId])
   @@index([buildingId])
   @@index([status, leaseEnd])
   @@index([deletedAt])
   @@index([terminationDate])
+  @@index([combinedDealRef])
   @@map("leases")
 }
 
@@ -1357,9 +1388,14 @@ model Lease {
 // ============================================================================
 
 model HistoricalRecordDeletion {
-  id            String    @id @default(cuid())
-  leaseId       String
-  lease         Lease     @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  id      String  @id @default(cuid())
+  // Polymorphic (R6, 2026-08-22) — exactly one of (leaseId, saleId), enforced by a DB
+  // CHECK. Was lease-only; a backfilled Sale (R4) carries the same "typed in from
+  // records nothing can regenerate" risk and needs the same Founder gate.
+  leaseId String?
+  lease   Lease?  @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  saleId  String?
+  sale    Sale?   @relation(fields: [saleId], references: [id], onDelete: Cascade)
   /// PENDING | APPROVED | REJECTED | CANCELLED | COMPLETED
   status        String    @default("PENDING")
   /// Mandatory. Same rule as BudgetRevision: a destructive act with no stated reason is
@@ -1374,6 +1410,7 @@ model HistoricalRecordDeletion {
   decisionNote  String?
 
   @@index([leaseId, status])
+  @@index([saleId, status])
   @@index([status, requestedAt])
   @@map("historical_record_deletions")
 }
@@ -1451,11 +1488,15 @@ model LeaseRentPeriod {
   startDate     DateTime
   endDate       DateTime? // null = runs to lease end
   baseRent      Decimal   @db.Decimal(12, 2) // the rent portion — this is what escalates
-  // Invariant enforced in LeaseRentPeriodService: monthlyRent == baseRent.
-  //
-  // The two were separated by an `nnnAmount` column until 2026-08-12, when the client
-  // confirmed NNN is charged once at signing rather than monthly. Rent is now base rent
-  // and nothing else; NNN lives on LeaseObligation.
+  // NNN portion. Carried forward unchanged across every escalation (client rule,
+  // 2026-07-29: "escalation compounds, base rent only — NNN edited manually yearly").
+  // Removed 2026-08-12 in favor of a one-time LeaseObligation, then restored 2026-08-21
+  // when the client reversed that decision back to a monthly charge. Defaults from
+  // lease.nnnTotalAmount / 12 (the quoted $/sqft/yr rate against the unit's area,
+  // amortized monthly) when a schedule is generated without an explicit override — see
+  // LeaseRentPeriodService.toScheduleInput.
+  nnnAmount     Decimal   @default(0) @db.Decimal(12, 2)
+  // Invariant enforced in LeaseRentPeriodService: monthlyRent == baseRent + nnnAmount.
   monthlyRent   Decimal   @db.Decimal(12, 2)
   isFreeRent    Boolean   @default(false) // abatement month -> monthlyRent 0
   escalationPct Decimal?  @db.Decimal(5, 2) // pct applied vs the PREVIOUS period
@@ -2412,6 +2453,58 @@ model CustomOption {
   @@map("custom_options")
 }
 
+// ---- Unit Construction Checklist ----
+//
+// A FIXED, ORDERED stage list per unit (e.g. "01 - Contracts" .. "22 - Final Inspection"),
+// distinct from the Task/TaskUnit "Construction Updates Board": that board is ad-hoc work
+// items with day-wise updates (see model Task below); this is a template-driven progress
+// checklist, one row per stage per unit, with its own inspection tracking. Client-confirmed
+// 2026-08-21 as a NEW system rather than an extension of Task.
+//
+// `status` and `inspectionStatus` are CustomOption categories ("construction_stage_status",
+// "construction_inspection_status") — same pattern as task_status/task_priority, so orgs can
+// relabel or add values without a schema change.
+
+model ConstructionStageTemplateItem {
+  id         String   @id @default(cuid())
+  buildingId String
+  building   Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  sortOrder  Int
+  label      String
+  // Templates are append-only from the UI's perspective: adding a stage here only affects
+  // units CREATED AFTER the change (see UnitsService) — existing units' checklists are
+  // copied once and never retroactively resynced, same "past is immutable" rule used for
+  // BudgetRevision and LeaseRentPeriod elsewhere in this schema.
+  createdById String?
+  createdBy   User?    @relation("ConstructionStageTemplateCreator", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([buildingId, sortOrder])
+  @@map("construction_stage_template_items")
+}
+
+model UnitConstructionStage {
+  id     String @id @default(cuid())
+  unitId String
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  sortOrder        Int
+  label            String
+  status           String    @default("NOT_STARTED")
+  ownerId          String?
+  owner            User?     @relation("UnitConstructionStageOwner", fields: [ownerId], references: [id])
+  inspectionStatus String?
+  inspectionDate   DateTime?
+  notes            String?
+  createdById      String?
+  createdBy        User?     @relation("UnitConstructionStageCreator", fields: [createdById], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([unitId, sortOrder])
+  @@map("unit_construction_stages")
+}
+
 // ---- Tasks ----
 
 model Task {
@@ -2924,7 +3017,57 @@ model Broker {
   leads  Lead[]
   sales  Sale[]
   leases Lease[]
+  commissionInstallments CommissionInstallment[]
 
   @@index([isActive, deletedAt])
   @@map("brokers")
+}
+
+// ============================================================================
+// Broker commission paid in installments (R7, 2026-08-22).
+//
+// Lease.brokerCommissionAmt / Sale.brokerCommissionAmt + a single brokerCommissionPaidAt
+// modelled commission as ONE payment. Real deals split it — Prime's own historical rent
+// roll routinely shows a "1st Commission paid" and a separate "2nd Commission" per lease,
+// sometimes with only one of the two actually paid. This is a genuine gap in the LIVE
+// model, not just an import concern — the broker report (BrokersService.report) needs it
+// independent of the historical-import feature that surfaced it.
+//
+// brokerCommissionAmt keeps meaning the TOTAL contracted commission. Installments are how
+// much of it has actually moved and when — same relationship SalePayment already has to
+// Sale.salePrice, which this table deliberately mirrors rather than inventing a second
+// installment shape.
+// ============================================================================
+
+model CommissionInstallment {
+  id       String  @id @default(cuid())
+  // Polymorphic — exactly one of (leaseId, saleId) is set, enforced by a CHECK constraint
+  // (brand-new table, so unlike Sale's unit/building split there is no migration-era data
+  // that needs the DB to tolerate both null).
+  leaseId  String?
+  lease    Lease?  @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  saleId   String?
+  sale     Sale?   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  // Denormalized from the parent's brokerId at creation time (immutable after) so the
+  // broker report can group/sum directly on this table, the same way it already groups
+  // Lease/Sale rows by brokerId — a join-through-relation groupBy is not something Prisma
+  // supports cleanly, and this table exists partly to make that report query correct.
+  brokerId String
+  broker   Broker  @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  // 1st, 2nd, … in the order they were agreed. Not unique per parent — a corrected entry
+  // can reuse a sequence number; ordering for display is (sequence, createdAt).
+  sequence Int     @default(1)
+  amount   Decimal @db.Decimal(14, 2)
+  // Null = not yet paid. This is the field the broker report now sums instead of treating
+  // the whole commission as one paid/unpaid flag.
+  paidAt   DateTime?
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leaseId])
+  @@index([saleId])
+  @@index([brokerId, paidAt])
+  @@map("commission_installments")
 }

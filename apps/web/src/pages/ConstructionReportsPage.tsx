@@ -246,6 +246,12 @@ function DrawRequestsTab() {
 export default function ConstructionReportsPage() {
   const { user, hasPermission } = useAuthStore();
   const canViewFinancials = hasPermission('financial:view');
+  // DrawRequestsTab reads GET /loans (nested drawRequests per loan) — that endpoint is
+  // gated on loan:view, not draw:view, because it returns full loan fields (lender,
+  // principal, interest rate). CONSTRUCTION/PROJECT_MANAGER hold draw:view but not
+  // loan:view (financial data is deliberately Finance/Accounting-only — see
+  // ROLE_PERMISSIONS), so without this gate the tab would render for them and then 403.
+  const canViewLoans = hasPermission('loan:view');
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Construction Reports' });
 
@@ -277,9 +283,11 @@ export default function ConstructionReportsPage() {
           <Tab key="milestones" title="Milestone & Schedule">
             <MilestoneScheduleTab />
           </Tab>
-          <Tab key="draws" title="Draw Requests">
-            <DrawRequestsTab />
-          </Tab>
+          {canViewLoans && (
+            <Tab key="draws" title="Draw Requests">
+              <DrawRequestsTab />
+            </Tab>
+          )}
         </Tabs>
       </div>
     </div>

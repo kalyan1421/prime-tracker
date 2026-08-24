@@ -16,6 +16,8 @@ import {
     useUploadTaskAttachment, useDeleteTaskAttachment,
     useProjects, useBuildings, useUnits, useUsers, useAssignableUsers, useCustomOptions,
 } from '../hooks/useApi';
+import { usePagination } from '../hooks/usePagination';
+import { Pagination } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { apiAssetUrl } from '../lib/api';
 
@@ -55,6 +57,8 @@ function isOverdue(dueDate?: string | null, status?: string) {
     return new Date(dueDate) < new Date();
 }
 
+const PAGE_SIZE = 20;
+
 export default function TasksPage({ projectId: propProjectId }: { projectId?: string }) {
     return <TasksPageInner projectId={propProjectId} />;
 }
@@ -90,6 +94,10 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
     const selectedTask = selectedTaskId
         ? (tasks as any[]).find((t: any) => t.id === selectedTaskId)
         : null;
+
+    const { page, setPage, totalPages, paged: pagedTasks, total } = usePagination(
+        filteredTasks, PAGE_SIZE, [search, filterProject, filterStatus, filterPriority, filterAssignee],
+    );
 
     return (
         <div className="flex flex-col lg:flex-row gap-0 h-full min-h-[100dvh]" style={{ background: 'none' }}>
@@ -210,16 +218,27 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
                         </Button>
                     </div>
                 ) : (
-                    <div className="space-y-2">
-                        {filteredTasks.map((task: any) => (
-                            <TaskRow
-                                key={task.id}
-                                task={task}
-                                isSelected={selectedTaskId === task.id}
-                                onSelect={() => setSelectedTaskId(task.id === selectedTaskId ? null : task.id)}
-                            />
-                        ))}
-                    </div>
+                    <>
+                        <div className="space-y-2">
+                            {pagedTasks.map((task: any) => (
+                                <TaskRow
+                                    key={task.id}
+                                    task={task}
+                                    isSelected={selectedTaskId === task.id}
+                                    onSelect={() => setSelectedTaskId(task.id === selectedTaskId ? null : task.id)}
+                                />
+                            ))}
+                        </div>
+                        <Pagination
+                            page={page}
+                            totalPages={totalPages}
+                            total={total}
+                            pageSize={PAGE_SIZE}
+                            itemLabel="tasks"
+                            onPrev={() => setPage((p) => p - 1)}
+                            onNext={() => setPage((p) => p + 1)}
+                        />
+                    </>
                 )}
             </div>
 

@@ -9,12 +9,14 @@ import { useUpdateSale, useBrokers } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { SalePaymentPanel } from './SalePaymentPanel';
 import { FormError } from './FormError';
+import { HistoricalRecordControls } from './HistoricalRecordControls';
 
 interface SoldUnitPanelProps {
   sale: {
     id: string;
     projectId: string;
     buyer?: string | null;
+    seller?: string | null;
     salePrice?: number | null;
     depositAmt?: number | null;
     loiDate?: string | null;
@@ -25,6 +27,7 @@ interface SoldUnitPanelProps {
     broker?: { id: string; name: string } | null;
     brokerCommissionPct?: number | null;
     brokerCommissionAmt?: number | null;
+    isHistorical?: boolean;
   };
 }
 
@@ -110,6 +113,9 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
         </div>
         <div className="flex items-center gap-2">
           <Chip size="sm" color="success" variant="flat" className="font-medium">CLOSED</Chip>
+          {sale.isHistorical && (
+            <Chip size="sm" color="warning" variant="flat" className="font-medium">RECORDED</Chip>
+          )}
           {canEditSale && (
             <button
               onClick={openEdit}
@@ -128,6 +134,12 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
             label={<span className="flex items-center gap-1"><FiUser className="w-3 h-3" /> Buyer</span>}
             value={sale.buyer || '—'}
           />
+          {sale.seller && (
+            <DetailRow
+              label={<span className="flex items-center gap-1"><FiUser className="w-3 h-3" /> Seller</span>}
+              value={sale.seller}
+            />
+          )}
           <DetailRow
             label={<span className="flex items-center gap-1"><FiDollarSign className="w-3 h-3" /> Sale Price</span>}
             value={salePriceNum != null ? <span className="text-emerald-600 tabular-nums">{fmt(salePriceNum)}</span> : '—'}
@@ -167,6 +179,19 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
         <div className="border-t border-gray-100 pt-4">
           <SalePaymentPanel saleId={sale.id} salePrice={salePriceNum ?? undefined} />
         </div>
+
+        {/* Last, below the deal detail it governs — the approver should have scrolled
+            past what they are about to erase (R6, mirrors the lease side). */}
+        {sale.isHistorical && (
+          <div className="border-t border-gray-100 pt-4 mt-4">
+            <HistoricalRecordControls
+              record={{
+                kind: 'sale', id: sale.id, label: sale.buyer || 'This sale',
+                dateRangeLabel: sale.closingDate ? `Closed ${fmtDate(sale.closingDate)}` : 'Closed',
+              }}
+            />
+          </div>
+        )}
       </CardBody>
 
       {/* Edit modal — factual details of an already-closed sale. Changing the sale's

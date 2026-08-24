@@ -1,7 +1,14 @@
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import {
+  Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, UseInterceptors,
+  UploadedFile, BadRequestException, StreamableFile, Header,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { Prisma } from '@prisma/client';
 import { LeasesService } from './leases.service';
+import { LeaseImportService, ImportCommitRowInput } from './lease-import.service';
+import type { ConfirmedMapping } from '../../common/utils/xlsx-mapping';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -11,10 +18,7 @@ import { CreateLeaseDto, UpdateLeaseDto } from './dto/create-lease.dto';
 import { EndTenancyDto } from './dto/end-tenancy.dto';
 import { AssignTenantDto } from './dto/assign-tenant.dto';
 import { BackfillTenancyDto } from './dto/backfill-tenancy.dto';
-import {
-  DecideHistoricalDeletionDto,
-  RequestHistoricalDeletionDto,
-} from './dto/historical-deletion.dto';
+import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
 import { LeaseRentPeriodService } from './lease-rent-period.service';
 import { LeaseObligationService } from './lease-obligation.service';
 import { LeaseRentInvoiceService } from './lease-rent-invoice.service';
@@ -47,6 +51,7 @@ export class LeasesController {
     private rentPeriods: LeaseRentPeriodService,
     private obligations: LeaseObligationService,
     private rentInvoices: LeaseRentInvoiceService,
+    private importService: LeaseImportService,
   ) {}
 
   @Get()
@@ -187,20 +192,6 @@ export class LeasesController {
   })
   clearInvoiceReview(@Param('invoiceId') invoiceId: string) {
     return this.rentPeriods.clearInvoiceReview(invoiceId);
-  }
-
-  // Above `@Get(':id')` — Nest matches in declaration order and would otherwise read
-  // 'historical-deletions' as a lease id.
-  @Get('historical-deletions')
-  // The BACKFILL permission, not DELETE: whoever raised a request has to be able to see
-  // that it is pending, or they will raise it again. Founders hold both.
-  @RequirePermissions('unit:history:backfill')
-  @ApiOperation({
-    summary: 'Deletion requests awaiting a decision (the Founder queue)',
-    description: 'Pass ?status=APPROVED|REJECTED|COMPLETED to see decided ones.',
-  })
-  historicalDeletionRequests(@Query('status') status?: string) {
-    return this.service.listHistoricalDeletionRequests(status || 'PENDING');
   }
 
   @Get(':id')
@@ -361,6 +352,92 @@ export class LeasesController {
     return this.service.backfillTenancy(body, userId);
   }
 
+  // ─────── Bulk rent history import (R1/R2/R8) ───────
+  // Portfolio-wide, template-based — see docs/client-discovery/HISTORICAL_DATA_SHEET_IMPORT_SPEC.md.
+  // Deliberately three separate steps: nothing is written until the user has SEEN a
+  // preview and explicitly confirmed it (the safeguard that made reopening "no CSV" for
+  // bulk loads safe in the first place).
+
+  @Get('backfill/template')
+  @RequirePermissions('unit:history:backfill')
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @Header('Content-Disposition', 'attachment; filename="rent-history-import-template.xlsx"')
+  @ApiOperation({ summary: 'Download the rent-history import template (Tenancies / Ledger Exceptions / Commission Installments)' })
+  async downloadImportTemplate(): Promise<StreamableFile> {
+    const buffer = await this.importService.buildTemplate();
+    return new StreamableFile(buffer);
+  }
+
+  @Post('backfill/import/preview')
+  @RequirePermissions('unit:history:backfill')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Parse and validate an uploaded rent-history file — no writes' })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  async previewImport(@UploadedFile() file: Express.Multer.File, @Body('projectId') projectId: string) {
+    if (!file) throw new BadRequestException('No file was received');
+    if (!projectId) throw new BadRequestException('projectId is required');
+    return this.importService.previewImport(file.buffer, projectId);
+  }
+
+  @Post('backfill/import/commit')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({ summary: 'Commit previously-previewed rent-history rows — one backfillTenancy() per row' })
+  commitImport(@Body('rows') rows: ImportCommitRowInput[], @CurrentUser('sub') userId: string) {
+    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('No rows to import');
+    return this.importService.commitImport(rows, userId);
+  }
+
+  // ─────── Generic column-mapping import (R9) ───────
+  // For the client's OWN spreadsheet, any layout — no template required. Structural
+  // analysis first (no DB writes, no validation) so the frontend can show a mapping
+  // screen with suggested fields already filled in; the user confirms the mapping, then
+  // preview-mapped runs the SAME validation backfill/import/preview already runs.
+
+  @Post('backfill/import/analyze')
+  @RequirePermissions('unit:history:backfill')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Detect orientation and suggest a field mapping for an arbitrary uploaded spreadsheet — no writes, no validation' })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  async analyzeGenericImport(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file was received');
+    return this.importService.analyzeGenericFile(file.buffer);
+  }
+
+  @Post('backfill/import/preview-mapped')
+  @RequirePermissions('unit:history:backfill')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Parse and validate an arbitrary spreadsheet using a user-confirmed column mapping — no writes' })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  async previewMappedImport(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('projectId') projectId: string,
+    @Body('mapping') mappingRaw: string,
+    @Body('defaultBrokerId') defaultBrokerId?: string,
+    @Body('rowBrokerOverrides') rowBrokerOverridesRaw?: string,
+  ) {
+    if (!file) throw new BadRequestException('No file was received');
+    if (!projectId) throw new BadRequestException('projectId is required');
+    let mapping: ConfirmedMapping;
+    try {
+      mapping = typeof mappingRaw === 'string' ? JSON.parse(mappingRaw) : (mappingRaw as unknown as ConfirmedMapping);
+    } catch {
+      throw new BadRequestException('mapping must be valid JSON');
+    }
+    if (!mapping?.columns?.length) throw new BadRequestException('mapping.columns must be a non-empty array');
+    if (mapping.orientation !== 'rows' && mapping.orientation !== 'columns') {
+      throw new BadRequestException('mapping.orientation must be "rows" or "columns"');
+    }
+    let rowBrokerOverrides: Record<number, string> | undefined;
+    if (rowBrokerOverridesRaw) {
+      try {
+        rowBrokerOverrides = JSON.parse(rowBrokerOverridesRaw);
+      } catch {
+        throw new BadRequestException('rowBrokerOverrides must be valid JSON');
+      }
+    }
+    return this.importService.previewMappedImport(file.buffer, projectId, mapping, defaultBrokerId || undefined, rowBrokerOverrides);
+  }
+
   @Get(':id/assignments')
   @RequirePermissions('lease:view')
   @ApiOperation({ summary: 'The tenant-assignment chain for a lease, oldest first' })
@@ -400,32 +477,6 @@ export class LeasesController {
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.requestHistoricalDeletion(id, body.reason, userId);
-  }
-
-  @Post('historical-deletions/:requestId/decide')
-  @RequirePermissions('unit:history:delete')
-  @ApiOperation({
-    summary: 'Approve or reject a historical-deletion request',
-    description:
-      'Approving authorises the delete; it does not perform it. Deleting stays a separate '
-      + 'deliberate act, otherwise the approval is a formality rather than a decision.',
-  })
-  decideHistoricalDeletion(
-    @Param('requestId') requestId: string,
-    @Body() body: DecideHistoricalDeletionDto,
-    @CurrentUser('sub') userId: string,
-  ) {
-    return this.service.decideHistoricalDeletion(requestId, body.approve, userId, body.note);
-  }
-
-  @Post('historical-deletions/:requestId/cancel')
-  @RequirePermissions('unit:history:backfill')
-  @ApiOperation({ summary: 'Withdraw your own pending deletion request' })
-  cancelHistoricalDeletion(
-    @Param('requestId') requestId: string,
-    @CurrentUser('sub') userId: string,
-  ) {
-    return this.service.cancelHistoricalDeletion(requestId, userId);
   }
 
   @Delete(':id')

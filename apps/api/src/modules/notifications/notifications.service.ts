@@ -711,9 +711,8 @@ export class NotificationsService {
    */
   async notifyHistoryDeletionRequested(params: {
     requestId: string;
-    leaseId: string;
     projectId: string | null;
-    tenantName: string;
+    label: string; // tenant name for a lease, buyer for a sale
     unitLabel: string | null;
     reason: string;
     requestedByName: string | null;
@@ -723,10 +722,10 @@ export class NotificationsService {
       roles: [...LEADERSHIP_ROLES],
       projectId: null,
       type: NotificationType.HISTORY_DELETION_REQUESTED,
-      title: `Deletion requested — ${params.tenantName}`,
+      title: `Deletion requested — ${params.label}`,
       body:
-        `${params.requestedByName ?? 'Someone'} asked to delete the recorded tenancy for `
-        + `${params.tenantName}${params.unitLabel ? ` (${params.unitLabel})` : ''}. `
+        `${params.requestedByName ?? 'Someone'} asked to delete the recorded history for `
+        + `${params.label}${params.unitLabel ? ` (${params.unitLabel})` : ''}. `
         + `Reason: “${params.reason}”. This history was typed in from records, so it `
         + `cannot be rebuilt — approve or reject it on the unit.`,
       link: params.link ?? undefined,
@@ -736,7 +735,7 @@ export class NotificationsService {
   /** The answer, back to whoever asked. */
   async notifyHistoryDeletionDecided(params: {
     requestedById: string;
-    tenantName: string;
+    label: string;
     approved: boolean;
     note?: string | null;
     link: string | null;
@@ -745,8 +744,8 @@ export class NotificationsService {
       userIds: [params.requestedById],
       type: NotificationType.HISTORY_DELETION_DECIDED,
       title: params.approved
-        ? `Approved — you can delete ${params.tenantName}'s record`
-        : `Rejected — ${params.tenantName}'s record stays`,
+        ? `Approved — you can delete ${params.label}'s record`
+        : `Rejected — ${params.label}'s record stays`,
       body: params.approved
         ? `A Founder approved your deletion request. The record is still there; deleting `
           + `it is a separate step, so nothing has been removed yet.`

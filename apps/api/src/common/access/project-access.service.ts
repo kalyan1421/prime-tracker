@@ -113,6 +113,16 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
     });
     return i?.building?.projectId ?? i?.unit?.building?.projectId ?? i?.sale?.projectId;
   },
+  constructionStageTemplateItem: async (p, id) =>
+    (await p.constructionStageTemplateItem.findUnique({
+      where: { id },
+      select: { building: { select: { projectId: true } } },
+    }))?.building?.projectId,
+  unitConstructionStage: async (p, id) =>
+    (await p.unitConstructionStage.findUnique({
+      where: { id },
+      select: { unit: { select: { building: { select: { projectId: true } } } } },
+    }))?.unit?.building?.projectId,
   document: async (p, id) => {
     const d = await p.document.findUnique({
       where: { id },
@@ -166,6 +176,13 @@ const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
   // those ids to nothing — i.e. to no membership check at all.
   MilestonesController: {
     proposalId: 'milestoneSlipProposal',
+  },
+  // One controller, two id families — bare ":id" can't disambiguate them, so both are
+  // named explicitly rather than relying on CONTROLLER_ID_ENTITY (which assumes a
+  // controller's ":id" always means one entity type).
+  ConstructionChecklistController: {
+    templateItemId: 'constructionStageTemplateItem',
+    stageId: 'unitConstructionStage',
   },
 };
 

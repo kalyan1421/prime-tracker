@@ -1,5 +1,10 @@
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import {
+  Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, UseInterceptors,
+  UploadedFile, BadRequestException, StreamableFile, Header,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { SalesService } from './sales.service';
 import { SalesForecastService } from './sales-forecast.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -9,11 +14,14 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
+import { BackfillSaleDto } from './dto/backfill-sale.dto';
 import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
 import { TransferSaleUnitDto } from './dto/transfer-sale-unit.dto';
 import { UserRole, SalePaymentTrigger } from '@prisma/client';
 import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
 import { SaleUnitTransferService } from './sale-unit-transfer.service';
+import { SaleImportService } from './sale-import.service';
+import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
 
 @ApiTags('Sales')
 @ApiBearerAuth()
@@ -26,6 +34,7 @@ export class SalesController {
     private forecast: SalesForecastService,
     private salePayments: SalePaymentsService,
     private unitTransfers: SaleUnitTransferService,
+    private importService: SaleImportService,
   ) {}
 
   /** GET /api/sales/forecast?projectId=:id — probability-weighted pipeline forecast */
@@ -63,6 +72,52 @@ export class SalesController {
   @RequirePermissions('sales:edit')
   @ApiOperation({ summary: 'Create sale (validates unit belongs to project)' })
   create(@Body() body: CreateSaleDto) { return this.service.create(body as any); }
+
+  /**
+   * POST /api/sales/backfill — a sale that already closed, entered by hand (R4). The
+   * sale-side counterpart of POST /leases/backfill (H2) — same permission, same "this
+   * already happened" framing, no discount/document gates because those govern a deal
+   * that is about to happen, not one being typed in from records.
+   */
+  @Post('backfill')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({ summary: 'Enter a sale that has already closed (historical backfill)' })
+  backfillSale(@Body() body: BackfillSaleDto, @CurrentUser('sub') userId: string) {
+    return this.service.backfillSale(body, userId);
+  }
+
+  // ─────── Bulk sale history import (R5) ───────
+  // Same template/preview/commit shape as the rent-history importer (R1/R2) — see
+  // docs/client-discovery/HISTORICAL_DATA_SHEET_IMPORT_SPEC.md.
+
+  @Get('backfill/template')
+  @RequirePermissions('unit:history:backfill')
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @Header('Content-Disposition', 'attachment; filename="sale-history-import-template.xlsx"')
+  @ApiOperation({ summary: 'Download the sale-history import template (Sales / Commission Installments)' })
+  async downloadImportTemplate(): Promise<StreamableFile> {
+    const buffer = await this.importService.buildTemplate();
+    return new StreamableFile(buffer);
+  }
+
+  @Post('backfill/import/preview')
+  @RequirePermissions('unit:history:backfill')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Parse and validate an uploaded sale-history file — no writes' })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  async previewImport(@UploadedFile() file: Express.Multer.File, @Body('projectId') projectId: string) {
+    if (!file) throw new BadRequestException('No file was received');
+    if (!projectId) throw new BadRequestException('projectId is required');
+    return this.importService.previewImport(file.buffer, projectId);
+  }
+
+  @Post('backfill/import/commit')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({ summary: 'Commit previously-previewed sale-history rows — one backfillSale() per row' })
+  commitImport(@Body('rows') rows: any[], @CurrentUser('sub') userId: string) {
+    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('No rows to import');
+    return this.importService.commitImport(rows, userId);
+  }
 
   @Put(':id')
   @RequirePermissions('sales:edit')
@@ -122,9 +177,39 @@ export class SalesController {
 
   @Delete(':id')
   @RequirePermissions('sales:edit')
-  @ApiOperation({ summary: 'Delete sale (CLOSED sales require Founder/SuperAdmin role)' })
-  delete(@Param('id') id: string, @CurrentUser('role') userRole: UserRole) {
-    return this.service.delete(id, userRole);
+  @ApiOperation({
+    summary: 'Delete sale',
+    description:
+      'Live CLOSED sales require Founder/SuperAdmin role. A historical (backfilled) sale '
+      + 'additionally needs approval — a `unit:history:delete` holder IS the approver, so '
+      + 'they delete directly and it is recorded as self-approved; everyone else goes '
+      + 'through POST /sales/:id/request-deletion.',
+  })
+  delete(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') userRole: UserRole,
+    @CurrentUser('permissions') permissions: string[] = [],
+  ) {
+    return this.service.delete(id, userId, userRole, (permissions ?? []).includes('unit:history:delete'));
+  }
+
+  @Post(':id/request-deletion')
+  @RequirePermissions('unit:history:backfill')
+  @ApiOperation({
+    summary: 'Ask a Founder to approve deleting a backfilled sale',
+    description:
+      'Only for historical records. A backfilled sale carries a deal (price, deposit, '
+      + 'commission) somebody typed in from records the system never witnessed — deleting '
+      + 'it destroys data nothing can regenerate, so it takes a second person. A live sale '
+      + 'needs no request.',
+  })
+  requestHistoricalDeletion(
+    @Param('id') id: string,
+    @Body() body: RequestHistoricalDeletionDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.requestHistoricalDeletion(id, body.reason, userId);
   }
 
   // ─────── Unit swap mid-contract (S3) ───────

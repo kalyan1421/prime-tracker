@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardHeader, CardBody, Progress, Chip, Button } from '@heroui/react';
+import { Card, CardHeader, CardBody, Progress, Chip, Button, Select, SelectItem } from '@heroui/react';
 import {
   PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { FiTrendingUp } from 'react-icons/fi';
-import { useConstructionDashboard } from '../hooks/useApi';
+import { FiTrendingUp, FiArrowRight } from 'react-icons/fi';
+import { useConstructionDashboard, useUnits, useConstructionRollup } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
@@ -99,6 +99,95 @@ function OverdueMilestonesCard({ milestones, navigate }: { milestones: any[]; na
   );
 }
 
+/**
+ * "Update Unit Progress" — the fast path from dashboard to a specific unit's checklist.
+ * Project → unit → deep-link into Unit Detail's Construction Checklist section, instead of
+ * Projects → project → Units tab → unit detail. See CONSTRUCTION_DASHBOARD_AND_VISUAL_ROLLUP_SPEC.md.
+ */
+function UpdateUnitProgressCard({
+  projects, navigate,
+}: {
+  projects: { id: string; name: string }[];
+  navigate: (path: string) => void;
+}) {
+  const [projectId, setProjectId] = useState('');
+  const unitsQ = useUnits(projectId);
+  const rollupQ = useConstructionRollup(projectId || undefined);
+
+  const rollupByUnit = useMemo(() => {
+    const map = new Map<string, any>();
+    (Array.isArray(rollupQ.data) ? rollupQ.data : []).forEach((r: any) => map.set(r.unit.id, r));
+    return map;
+  }, [rollupQ.data]);
+
+  const units: any[] = Array.isArray(unitsQ.data) ? unitsQ.data : [];
+
+  return (
+    <Card shadow="sm" className="mb-6">
+      <CardHeader className="pb-2">
+        <p className="font-semibold text-sm text-gray-600">Update Unit Progress</p>
+      </CardHeader>
+      <CardBody className="pt-0">
+        <Select
+          size="sm"
+          label="Project"
+          placeholder="Choose a project"
+          className="max-w-xs mb-4"
+          selectedKeys={projectId ? [projectId] : []}
+          onSelectionChange={(keys) => setProjectId((Array.from(keys)[0] as string) || '')}
+        >
+          {projects.map((p) => (
+            <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>
+          ))}
+        </Select>
+
+        {!projectId && (
+          <p className="text-sm text-gray-400 py-4 text-center">Pick a project to see its units</p>
+        )}
+        {projectId && unitsQ.isLoading && <LoadingState message="Loading units..." />}
+        {projectId && !unitsQ.isLoading && units.length === 0 && (
+          <p className="text-sm text-gray-400 py-4 text-center">No units in this project</p>
+        )}
+        {projectId && units.length > 0 && (
+          <div className="max-h-[360px] overflow-y-auto space-y-1.5 pr-1">
+            {units.map((u: any) => {
+              const r = rollupByUnit.get(u.id);
+              const pct = r && r.totalStages > 0 ? Math.round((r.doneStages / r.totalStages) * 100) : null;
+              return (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => navigate(`/projects/${projectId}/units/${u.id}#construction-checklist`)}
+                  className="w-full flex items-center justify-between gap-3 rounded-lg border border-gray-100 px-3 py-2 text-left hover:border-gray-200 hover:bg-gray-50/60 transition-colors"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-800 truncate">
+                      Unit {u.unitNumber}
+                      <span className="text-xs text-gray-400 font-normal"> · {u.building?.name}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {r ? (r.nextStage ? `Next: ${r.nextStage.label}` : 'Checklist complete') : 'No checklist started'}
+                    </div>
+                  </div>
+                  {pct != null ? (
+                    <div className="w-20 shrink-0">
+                      <Progress size="sm" value={pct} color={pct === 100 ? 'success' : 'primary'} />
+                    </div>
+                  ) : (
+                    <Chip size="sm" variant="flat" className="shrink-0 text-xs" endContent={<FiArrowRight />}>
+                      Start
+                    </Chip>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 export default function ConstructionDashboardPage() {
   const { user, hasPermission } = useAuthStore();
   const navigate = useNavigate();
@@ -106,6 +195,7 @@ export default function ConstructionDashboardPage() {
   const role = user?.role || '';
   // Construction is blind to financials (no budget:view); the API omits the figures too.
   const canViewFinancials = hasPermission('budget:view');
+  const canViewChecklist = hasPermission('checklist:view');
 
   useEffect(() => {
     if (!user?.role) return;
@@ -198,6 +288,11 @@ export default function ConstructionDashboardPage() {
           </div>
         </CardBody>
       </Card>
+      )}
+
+      {/* Zone A3 — Update Unit Progress (checklist:view roles — CONSTRUCTION + PM) */}
+      {canViewChecklist && (
+        <UpdateUnitProgressCard projects={d.projectSummaries || []} navigate={navigate} />
       )}
 
       {/* Zone B — Project Status Board */}

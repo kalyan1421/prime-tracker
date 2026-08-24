@@ -66,16 +66,54 @@ export function fitOutDays(form: Record<string, string>): number {
 const toApiDate = (d: string) => new Date(`${d}T12:00:00.000Z`).toISOString();
 
 /** Shared by the LeasesTab modal and the UnitsTab "unit just became LEASED" prompt. */
-export function validateLeaseForm(form: Record<string, string>): Record<string, string> {
+export function validateLeaseForm(
+  form: Record<string, string>,
+  opts: { isHistorical?: boolean } = {},
+): Record<string, string> {
   const errs: Record<string, string> = {};
   if (!form.tenantName.trim()) errs.tenantName = 'Required';
   if (!form.monthlyRent) errs.monthlyRent = 'Required';
+  else if (Number(form.monthlyRent) < 0) errs.monthlyRent = 'Cannot be negative';
   if (!form.leaseStart) errs.leaseStart = 'Required';
   if (!form.leaseEnd) errs.leaseEnd = 'Required';
   // Rent cannot commence before the lease does — there is a CHECK constraint and a
   // service guard behind this; catching it here just saves a round-trip.
   if (form.rentStartDate && form.leaseStart && form.rentStartDate < form.leaseStart) {
     errs.rentStartDate = 'Cannot be before the lease start date';
+  }
+  // The term is derived FROM these two dates (see deriveTermMonths) — a term of zero
+  // or negative months means the dates are backwards, and every downstream figure
+  // (schedule, invoices, effective rent) would silently be built on nothing.
+  if (form.leaseEnd && (form.rentStartDate || form.leaseStart)) {
+    const origin = form.rentStartDate || form.leaseStart;
+    if (form.leaseEnd <= origin) {
+      errs.leaseEnd = 'Must be after the rent start date';
+    }
+  }
+  // The NNN fields are hidden entirely in historical mode (the backfill endpoint has
+  // nowhere to put them), so nothing is required there — see LeaseFormFields' own
+  // isHistorical gating on these inputs.
+  if (!opts.isHistorical && !form.nnnPerSqft && !form.nnnTotalAmount) {
+    errs.nnnPerSqft = 'Required — enter 0 if this lease has no NNN, or use the override total below';
+  }
+  if (form.rentPerSqft && Number(form.rentPerSqft) < 0) errs.rentPerSqft = 'Cannot be negative';
+  if (form.nnnPerSqft && Number(form.nnnPerSqft) < 0) errs.nnnPerSqft = 'Cannot be negative';
+  if (form.nnnTotalAmount && Number(form.nnnTotalAmount) < 0) errs.nnnTotalAmount = 'Cannot be negative';
+  if (form.escalationPct && Number(form.escalationPct) < 0) errs.escalationPct = 'Cannot be negative';
+  if (form.escalationFreq) {
+    const f = Number(form.escalationFreq);
+    if (!Number.isInteger(f) || f <= 0) errs.escalationFreq = 'Must be a whole number of months, greater than 0';
+  } else if (form.escalationPct && Number(form.escalationPct) > 0) {
+    // The server has no default for a blank interval — it stores null, and
+    // computeRentSchedule treats null as "never escalates". A % with no interval is
+    // therefore silently a no-op, not an annual step, however it reads on screen.
+    errs.escalationFreq = 'Required when an escalation % is set — blank means it never applies';
+  }
+  if (form.securityDeposit && Number(form.securityDeposit) < 0) errs.securityDeposit = 'Cannot be negative';
+  if (form.tiAllowance && Number(form.tiAllowance) < 0) errs.tiAllowance = 'Cannot be negative';
+  if (form.freeRentMonths) {
+    const m = Number(form.freeRentMonths);
+    if (!Number.isInteger(m) || m <= 0) errs.freeRentMonths = 'Must be a whole number of months, greater than 0';
   }
   if (form.holdoverRatePct) {
     const h = Number(form.holdoverRatePct);
@@ -222,14 +260,23 @@ export function LeaseFormFields({
 
   const term = deriveTermMonths(form);
   const gapDays = fitOutDays(form);
-  // The one-time NNN total shown live beside the rate, so the per-sqft figure is
-  // checkable against the sum that will actually be charged. Falls back to the unit's
-  // sqft from the option list; the server recomputes authoritatively on save.
+  // The annual NNN total shown live beside the rate, so the per-sqft figure is
+  // checkable against the sum the monthly charge (nnnTotalAmount / 12) is derived
+  // from. Falls back to the unit's sqft from the option list; the server recomputes
+  // authoritatively on save.
   const selectedUnit = unitOptions.find((u: any) => u.id === form.unitId);
   const unitSqft = Number(selectedUnit?.sqft) || 0;
   const nnnRate = parseFloat(form.nnnPerSqft);
   const derivedNnnTotal =
     Number.isFinite(nnnRate) && unitSqft > 0 ? Math.round(nnnRate * unitSqft * 100) / 100 : null;
+
+  /** rate x sqft, rounded to cents — same rounding rule the server uses. */
+  const deriveMonthlyRent = (rate: string, sqft: number): string | null => {
+    const parsed = parseFloat(rate);
+    if (!Number.isFinite(parsed) || sqft <= 0) return null;
+    return String(Math.round(parsed * sqft * 100) / 100);
+  };
+  const derivedMonthlyRent = deriveMonthlyRent(form.rentPerSqft, unitSqft);
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -242,7 +289,17 @@ export function LeaseFormFields({
         selectedKeys={form.unitId ? [form.unitId] : []}
         onSelectionChange={(keys) => {
           const val = Array.from(keys)[0] as string;
-          if (val) setForm((f) => ({ ...f, unitId: val }));
+          if (!val) return;
+          setForm((f) => {
+            const next: Record<string, string> = { ...f, unitId: val };
+            // A $/sqft rate already typed re-derives Monthly Rent against the NEWLY
+            // selected unit's area — otherwise switching units silently leaves the
+            // old unit's rent behind.
+            const newSqft = Number(unitOptions.find((u: any) => u.id === val)?.sqft) || 0;
+            const derived = deriveMonthlyRent(f.rentPerSqft, newSqft);
+            if (derived != null) next.monthlyRent = derived;
+            return next;
+          });
         }}
       >
         {unitOptions.map((u: any) => (
@@ -280,7 +337,7 @@ export function LeaseFormFields({
         onChange={set('monthlyRent')}
         isInvalid={!!errors.monthlyRent}
         errorMessage={errors.monthlyRent}
-        description="Total contracted rent incl. NNN"
+        description="Base rent only — NNN is quoted separately below. Auto-fills from the $/sqft rate; edit directly to override."
       />
       <Input
         size="sm"
@@ -331,26 +388,57 @@ export function LeaseFormFields({
       />
       {!isHistorical && (
         <>
-          <Input size="sm" label="Base Rent ($/sqft/month)" type="number" value={form.rentPerSqft} onChange={set('rentPerSqft')} />
           <Input
             size="sm"
-            label="NNN ($/sqft, one-time)"
+            label="Base Rent ($/sqft/month)"
             type="number"
-            value={form.nnnPerSqft}
-            onChange={set('nnnPerSqft')}
+            value={form.rentPerSqft}
+            isInvalid={!!errors.rentPerSqft}
+            errorMessage={errors.rentPerSqft}
+            onChange={(e) => {
+              const rate = e.target.value;
+              setForm((f) => {
+                const next: Record<string, string> = { ...f, rentPerSqft: rate };
+                const derived = deriveMonthlyRent(rate, unitSqft);
+                if (derived != null) next.monthlyRent = derived;
+                return next;
+              });
+              clearError?.('rentPerSqft');
+              clearError?.('monthlyRent');
+            }}
             description={
-              derivedNnnTotal != null
-                ? `= $${derivedNnnTotal.toLocaleString()} once, on ${unitSqft.toLocaleString()} sqft`
-                : 'Quoted rate. Charged once at signing — not monthly.'
+              derivedMonthlyRent != null
+                ? `= $${Number(derivedMonthlyRent).toLocaleString()}/mo on ${unitSqft.toLocaleString()} sqft — fills Monthly Rent above`
+                : unitSqft > 0
+                  ? 'Optional. Fills Monthly Rent above once a rate is entered.'
+                  : 'Optional. Select a unit first so a rate can fill Monthly Rent above.'
             }
           />
           <Input
             size="sm"
-            label="NNN total override ($)"
+            label="NNN ($/sqft/year)"
+            isRequired
+            type="number"
+            value={form.nnnPerSqft}
+            onChange={set('nnnPerSqft')}
+            isInvalid={!!errors.nnnPerSqft}
+            errorMessage={errors.nnnPerSqft}
+            description={
+              derivedNnnTotal != null
+                ? `= $${derivedNnnTotal.toLocaleString()}/yr on ${unitSqft.toLocaleString()} sqft ` +
+                  `($${Math.round((derivedNnnTotal / 12) * 100) / 100}/mo)`
+                : 'Quoted annual rate. Billed monthly (rate x sqft ÷ 12). Enter 0 if this lease has no NNN.'
+            }
+          />
+          <Input
+            size="sm"
+            label="NNN annual total override ($)"
             type="number"
             value={form.nnnTotalAmount}
             onChange={set('nnnTotalAmount')}
-            description="Only for leases quoted as a flat one-time sum"
+            isInvalid={!!errors.nnnTotalAmount}
+            errorMessage={errors.nnnTotalAmount}
+            description="Only for leases quoted as a flat annual sum rather than a rate"
           />
           <Input
             size="sm"
@@ -358,6 +446,8 @@ export function LeaseFormFields({
             type="number"
             value={form.escalationPct}
             onChange={set('escalationPct')}
+            isInvalid={!!errors.escalationPct}
+            errorMessage={errors.escalationPct}
             description="Compounds, and applies to base rent only — never to NNN"
           />
           <Input
@@ -366,20 +456,26 @@ export function LeaseFormFields({
             type="number"
             value={form.escalationFreq}
             onChange={set('escalationFreq')}
-            description="Blank = annual (12)"
+            isInvalid={!!errors.escalationFreq}
+            errorMessage={errors.escalationFreq}
+            description="Required if Escalation % is set — blank means the % never applies, not 'annual'"
           />
         </>
       )}
-      {/* The three agreed sums, together. Each seeds a matching obligation on save, so
-          the Deposits & Allowances panel is populated from the moment the lease exists
-          rather than needing a second trip to enter the same numbers again. Editing an
-          amount here follows through ONLY while nothing has been collected against it. */}
+      {/* The two agreed sums that seed a ledger obligation on save, so the Deposits &
+          Allowances panel is populated from the moment the lease exists rather than
+          needing a second trip to enter the same numbers again. Editing an amount here
+          follows through ONLY while nothing has been collected against it. NNN (above)
+          is deliberately NOT one of these — it bills monthly via the rent schedule,
+          not as a ledger obligation. */}
       <Input
         size="sm"
         label="Security Deposit ($ total)"
         type="number"
         value={form.securityDeposit}
         onChange={set('securityDeposit')}
+        isInvalid={!!errors.securityDeposit}
+        errorMessage={errors.securityDeposit}
         description="Tenant → Prime. Tracked in Deposits & Allowances."
       />
       {!isHistorical && (
@@ -389,6 +485,8 @@ export function LeaseFormFields({
           type="number"
           value={form.tiAllowance}
           onChange={set('tiAllowance')}
+          isInvalid={!!errors.tiAllowance}
+          errorMessage={errors.tiAllowance}
           description="Prime → Tenant. Disbursed in phases against this total."
         />
       )}
@@ -470,6 +568,8 @@ export function LeaseFormFields({
               min={1}
               value={form.freeRentMonths}
               onChange={set('freeRentMonths')}
+              isInvalid={!!errors.freeRentMonths}
+              errorMessage={errors.freeRentMonths}
               description="Billed at $0. Free months sit INSIDE the term — the rent end date does not move"
             />
             <Input

@@ -89,8 +89,65 @@ export class BrokersController {
   @Patch('sales/:saleId/mark-commission-paid')
   @RequirePermissions('broker:edit')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Mark broker commission as paid on a sale' })
+  @ApiOperation({ summary: 'Settle a sale\'s broker commission in full (pays off every outstanding installment)' })
   markCommissionPaid(@Param('saleId') saleId: string) {
     return this.service.markCommissionPaid(saleId);
+  }
+
+  // ─────── Commission installments (R7) ───────
+
+  @Get('sales/:saleId/commission-installments')
+  @RequirePermissions('broker:view')
+  @ApiOperation({ summary: "List a sale's broker commission installments" })
+  listSaleCommissionInstallments(@Param('saleId') saleId: string) {
+    return this.service.getCommissionInstallments({ saleId });
+  }
+
+  @Post('sales/:saleId/commission-installments')
+  @RequirePermissions('broker:edit')
+  @ApiOperation({ summary: "Record a new commission installment on a sale (e.g. a 2nd payment)" })
+  addSaleCommissionInstallment(
+    @Param('saleId') saleId: string,
+    @Body() body: { amount: number; paidAt?: string; notes?: string },
+  ) {
+    return this.service.addCommissionInstallment(
+      { saleId },
+      { amount: body.amount, paidAt: body.paidAt ? new Date(body.paidAt) : null, notes: body.notes },
+    );
+  }
+
+  @Get('leases/:leaseId/commission-installments')
+  @RequirePermissions('broker:view')
+  @ApiOperation({ summary: "List a lease's broker commission installments" })
+  listLeaseCommissionInstallments(@Param('leaseId') leaseId: string) {
+    return this.service.getCommissionInstallments({ leaseId });
+  }
+
+  @Post('leases/:leaseId/commission-installments')
+  @RequirePermissions('broker:edit')
+  @ApiOperation({ summary: "Record a new commission installment on a lease (e.g. a 2nd payment)" })
+  addLeaseCommissionInstallment(
+    @Param('leaseId') leaseId: string,
+    @Body() body: { amount: number; paidAt?: string; notes?: string },
+  ) {
+    return this.service.addCommissionInstallment(
+      { leaseId },
+      { amount: body.amount, paidAt: body.paidAt ? new Date(body.paidAt) : null, notes: body.notes },
+    );
+  }
+
+  @Patch('commission-installments/:id/mark-paid')
+  @RequirePermissions('broker:edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark a single commission installment as paid' })
+  markCommissionInstallmentPaid(@Param('id') id: string, @Body() body: { paidAt?: string }) {
+    return this.service.markCommissionInstallmentPaid(id, body?.paidAt ? new Date(body.paidAt) : undefined);
+  }
+
+  @Delete('commission-installments/:id')
+  @RequirePermissions('broker:edit')
+  @ApiOperation({ summary: 'Remove a commission installment (e.g. entered by mistake)' })
+  removeCommissionInstallment(@Param('id') id: string) {
+    return this.service.removeCommissionInstallment(id);
   }
 }
