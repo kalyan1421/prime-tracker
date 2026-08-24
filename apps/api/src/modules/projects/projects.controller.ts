@@ -54,6 +54,13 @@ export class ProjectsController {
     );
   }
 
+  @Get('options')
+  @RequirePermissions('project:view')
+  @ApiOperation({ summary: 'Unscoped {id, name} list for cross-project attribution (e.g. lead capture)' })
+  getOptions() {
+    return this.projectsService.options();
+  }
+
   @Get('slug/:slug')
   @RequirePermissions('project:view')
   @ApiOperation({ summary: 'Get project by slug' })

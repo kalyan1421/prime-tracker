@@ -29,7 +29,7 @@ export class AuthController {
 
   @Post('login')
   @SetMetadata('isPublic', true)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @HttpCode(200)
   @ApiOperation({ summary: 'Login with email and password' })
   async login(@Body() body: { email: string; password: string }) {
@@ -74,7 +74,7 @@ export class AuthController {
 
   @Post('refresh')
   @SetMetadata('isPublic', true)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @HttpCode(200)
   @ApiOperation({ summary: 'Refresh access token' })
   async refresh(@Body() body: { refreshToken: string }) {

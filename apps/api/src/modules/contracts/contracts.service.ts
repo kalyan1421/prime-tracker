@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChangeOrderStatus, ContractStatus } from '@prisma/client';
 
@@ -114,11 +114,16 @@ export class ContractsService {
   async addPayment(contractId: string, data: any) {
     const contract = await this.prisma.contract.findUnique({ where: { id: contractId } });
     if (!contract) throw new NotFoundException('Contract not found');
+    // The date input sends a plain yyyy-mm-dd string; parsing that directly reads as UTC
+    // midnight, which formats back as the prior day in any timezone behind UTC. Anchor to
+    // noon so the calendar date survives the round trip regardless of viewer timezone.
+    const paidDate = new Date(`${data.paidDate}T12:00:00`);
+    if (isNaN(paidDate.getTime())) throw new BadRequestException('Invalid payment date');
     return this.prisma.contractPayment.create({
       data: {
         contractId,
         amount: Number(data.amount),
-        paidDate: new Date(data.paidDate),
+        paidDate,
         notes: data.notes,
       },
     });

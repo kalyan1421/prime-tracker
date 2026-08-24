@@ -67,6 +67,18 @@ export class ProjectsService {
     private encryption: EncryptionService,
   ) {}
 
+  // Unscoped {id, name} list for cross-project attribution (e.g. lead capture by a
+  // project-scoped SALES/MARKETING user) — deliberately ignores project-member scoping,
+  // since capturing a lead for a project you don't belong to is legitimate; only
+  // dashboards and project lists stay scoped.
+  async options() {
+    return this.prisma.project.findMany({
+      where: { deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async findAll(params?: ListProjectsParams, viewer?: ProjectViewer) {
     const where: Prisma.ProjectWhereInput = {};
     // Exclude soft-deleted projects unless the caller explicitly requests archived view.

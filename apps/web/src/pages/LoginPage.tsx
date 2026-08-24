@@ -26,7 +26,16 @@ export default function LoginPage() {
       setAuth(data.user, data.accessToken, data.refreshToken);
       navigate('/', { replace: true });
     } catch (err: any) {
-      setError(err?.response?.data?.message || 'Invalid email or password');
+      const status = err?.response?.status;
+      if (!err?.response) {
+        setError('Network error — check your connection and try again.');
+      } else if (status === 429) {
+        setError('Too many login attempts. Please wait a minute and try again.');
+      } else if (status >= 500) {
+        setError('Server error — please try again in a moment.');
+      } else {
+        setError(err?.response?.data?.message || 'Invalid email or password');
+      }
     } finally {
       setLoading(false);
     }

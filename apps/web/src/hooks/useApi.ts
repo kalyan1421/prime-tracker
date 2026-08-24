@@ -49,6 +49,18 @@ export function useProjects(params?: {
   });
 }
 
+// Unscoped {id, name} list for cross-project attribution (e.g. the New Lead project
+// picker) — project-scoped roles like SALES/MARKETING can attribute a lead to any
+// project, not only ones they're a member of. Dashboards/lists stay scoped; this doesn't.
+export function useProjectOptions() {
+  const can = useCan('project:view');
+  return useQuery({
+    queryKey: ['projects', 'options'],
+    queryFn: () => api.get('/projects/options').then((r) => r.data as { id: string; name: string }[]),
+    enabled: can,
+  });
+}
+
 // Slice 2 — Project Health Scores (bulk for the projects list)
 export function useProjectHealthBulk(projectIds: string[]) {
   const idsCsv = [...projectIds].sort().join(',');

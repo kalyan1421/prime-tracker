@@ -10,7 +10,7 @@ import {
   FiHome, FiBarChart2, FiUser, FiUsers,
 } from 'react-icons/fi';
 import {
-  useLeads, useLeadActivities, useProjects, useUnits, useBuildings, useCampaigns, useUsers, useAssignableUsers,
+  useLeads, useLeadActivities, useProjectOptions, useUnits, useBuildings, useCampaigns, useUsers, useAssignableUsers,
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
   useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers, useCustomOptions,
 } from '../hooks/useApi';
@@ -434,7 +434,10 @@ function LeadFormModal({
   lead?: any;
   projectId?: string;
 }) {
-  const { data: projects } = useProjects();
+  // Unscoped: lead capture is cross-project work for SALES/MARKETING — they can
+  // attribute a lead to any project, not only ones they're a member of (dashboards
+  // and project lists stay scoped; this picker deliberately does not).
+  const { data: projects } = useProjectOptions();
   const { data: users } = useAssignableUsers();
   const { data: leadStatusOpts = [] } = useCustomOptions('lead_status');
   const createLead = useCreateLead();
