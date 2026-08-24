@@ -192,7 +192,7 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-gray-900 truncate">{brand}</p>
-              <p className="text-xs text-gray-400 truncate">
+              <p className="text-xs text-gray-500 truncate">
                 {lease.tenantLegalName || 'No legal entity on file'}
               </p>
             </div>
@@ -229,7 +229,7 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
 
         {parsed.designNotes && (
           <div className="rounded-lg border border-gray-100 bg-white p-2.5">
-            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide flex items-center gap-1 mb-1">
+            <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1 mb-1">
               <FiFileText size={10} /> Design / Fit-out Notes
             </p>
             <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">{parsed.designNotes}</p>
@@ -239,7 +239,7 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
         {isEmpty && (
           <button
             onClick={handleEdit}
-            className="w-full rounded-lg border border-dashed border-gray-200 py-3 text-xs text-gray-400 hover:border-blue-300 hover:text-blue-500 transition-colors"
+            className="w-full rounded-lg border border-dashed border-gray-200 py-3 text-xs text-gray-500 hover:border-blue-300 hover:text-blue-600 transition-colors"
           >
             No profile yet — add business type, trading hours, and design guidelines.
           </button>
@@ -297,7 +297,7 @@ export function TenantProfilePanel({ lease, unitNumber }: TenantProfilePanelProp
                       : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:bg-gray-50'
                   }`}
                 >
-                  <span className={`shrink-0 ${selected ? '' : 'text-gray-400'}`}>{bt.icon}</span>
+                  <span className={`shrink-0 ${selected ? '' : 'text-gray-500'}`}>{bt.icon}</span>
                   <span className="truncate leading-tight">{bt.label}</span>
                 </button>
               );

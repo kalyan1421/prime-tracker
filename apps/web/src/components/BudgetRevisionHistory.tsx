@@ -49,10 +49,10 @@ export function BudgetRevisionHistory({ budgetLineId }: { budgetLineId?: string 
 
   if (!budgetLineId) return null;
   if (isLoading) {
-    return <p className="text-xs text-gray-400">Loading history…</p>;
+    return <p className="text-xs text-gray-500">Loading history…</p>;
   }
   if (revisions.length === 0) {
-    return <p className="text-xs text-gray-400">No revisions yet.</p>;
+    return <p className="text-xs text-gray-500">No revisions yet.</p>;
   }
 
   return (
@@ -72,7 +72,7 @@ export function BudgetRevisionHistory({ budgetLineId }: { budgetLineId?: string 
                   </span>
                   <span className="font-semibold text-sm text-gray-800">{fmtMoney(r.amount)}</span>
                   {!isBaseline && delta !== 0 && (
-                    <span className={`text-xs font-medium ${delta > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    <span className={`text-xs font-medium ${delta > 0 ? 'text-red-700' : 'text-green-700'}`}>
                       {delta > 0 ? '+' : ''}{fmtMoney(delta)}
                     </span>
                   )}
@@ -80,12 +80,12 @@ export function BudgetRevisionHistory({ budgetLineId }: { budgetLineId?: string 
                     size="sm"
                     variant="flat"
                     color={CHANGE_REASON_COLORS[r.changeReason] ?? 'default'}
-                    className="text-[10px]"
+                    className="text-[11px]"
                   >
                     {CHANGE_REASON_LABELS[r.changeReason] ?? r.changeReason}
                   </Chip>
                 </div>
-                <span className="text-[11px] text-gray-400" title={new Date(r.createdAt).toLocaleString()}>
+                <span className="text-[11px] text-gray-500" title={new Date(r.createdAt).toLocaleString()}>
                   {fmtRelative(r.createdAt)}
                 </span>
               </div>
@@ -95,18 +95,18 @@ export function BudgetRevisionHistory({ budgetLineId }: { budgetLineId?: string 
               <div className="flex items-center gap-3 mt-2 flex-wrap text-[11px]">
                 {r.createdBy && (
                   <span className="flex items-center gap-1.5 text-gray-500">
-                    <Avatar size="sm" name={r.createdBy.name} className="w-4 h-4 text-[8px]" />
+                    <Avatar size="sm" name={r.createdBy.name} className="w-4 h-4 text-[11px]" />
                     {r.createdBy.name}
                   </span>
                 )}
                 {r.approvedBy ? (
                   <Tooltip content={`Approved ${fmtRelative(r.approvedAt)}`}>
-                    <span className="flex items-center gap-1.5 text-green-600 font-medium">
+                    <span className="flex items-center gap-1.5 text-green-700 font-medium">
                       ✓ approved by {r.approvedBy.name}
                     </span>
                   </Tooltip>
                 ) : !isBaseline ? (
-                  <span className="text-amber-600">awaiting approval</span>
+                  <span className="text-amber-700">awaiting approval</span>
                 ) : null}
               </div>
             </li>

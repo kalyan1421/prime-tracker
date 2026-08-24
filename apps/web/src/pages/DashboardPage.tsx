@@ -264,7 +264,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardBody className="pt-0">
               {(d.alerts || []).length === 0 ? (
-                <p className="text-sm text-gray-400 py-4 text-center">No active alerts</p>
+                <p className="text-sm text-gray-500 py-4 text-center">No active alerts</p>
               ) : (
                 <div className="max-h-[250px] overflow-auto">
                   {(d.alerts as any[]).map((a: any) => (
@@ -297,7 +297,7 @@ export default function DashboardPage() {
               </CardHeader>
               <CardBody className="pt-0">
                 {filteredMilestones.length === 0 ? (
-                  <p className="text-sm text-gray-400 py-4 text-center">No upcoming milestones</p>
+                  <p className="text-sm text-gray-500 py-4 text-center">No upcoming milestones</p>
                 ) : (
                   <div className="overflow-auto">
                     <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
@@ -388,11 +388,11 @@ export default function DashboardPage() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs font-semibold">{c.user?.name}</span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${TYPE_COLORS[t]}`}>{TYPE_LABELS[t]}</span>
-                              <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
+                              <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${TYPE_COLORS[t]}`}>{TYPE_LABELS[t]}</span>
+                              <span className="text-xs text-gray-500">{fmtDate(c.createdAt)}</span>
                             </div>
                             <p className="text-sm text-gray-700 break-words">{c.content}</p>
-                            <p className="text-xs text-gray-400 mt-0.5">
+                            <p className="text-xs text-gray-500 mt-0.5">
                               {c.source === 'project'
                                 ? c.project?.name
                                 : `${c.unit?.building?.project?.name} \u00b7 ${c.unit?.building?.name} \u00b7 Unit ${c.unit?.unitNumber}`}

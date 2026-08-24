@@ -13,6 +13,7 @@ import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { ListProjectsDto } from './dto/list-projects.dto';
 import { AddMemberDto } from './dto/add-member.dto';
+import { AddMembersBulkDto } from './dto/add-members-bulk.dto';
 
 @ApiTags('Projects')
 @ApiBearerAuth()
@@ -139,6 +140,13 @@ export class ProjectsController {
   @ApiOperation({ summary: 'Add a team member to a project' })
   addMember(@Param('id') id: string, @Body() body: AddMemberDto) {
     return this.projectsService.addMember(id, body.userId, body.role, body.roles);
+  }
+
+  @Post(':id/members/bulk')
+  @RequirePermissions('project:edit')
+  @ApiOperation({ summary: 'Add several team members to a project in one request' })
+  addMembers(@Param('id') id: string, @Body() body: AddMembersBulkDto) {
+    return this.projectsService.addMembers(id, body.members);
   }
 
   @Delete(':id/members/:userId')

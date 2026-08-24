@@ -117,11 +117,11 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
         </Button>
       </div>
 
-      {isLoading && <p className="text-sm text-gray-400">Loading…</p>}
+      {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
 
       {!isLoading && payments.length === 0 && (
         <div className="rounded-lg border border-dashed border-gray-200 p-3 text-center space-y-2">
-          <p className="text-sm text-gray-400">No schedule yet. Seed one from a template:</p>
+          <p className="text-sm text-gray-500">No schedule yet. Seed one from a template:</p>
           <FormError message={addErr} />
           <div className="flex justify-center gap-2">
             <Button size="sm" variant="flat" color="primary" onPress={() => seed('10-40-50')} isLoading={applyTemplate.isPending}>
@@ -145,7 +145,7 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <span className="font-medium">{p.label}</span>
-                    <span className="text-xs text-gray-400 ml-2">{dueLabel(p)}</span>
+                    <span className="text-xs text-gray-500 ml-2">{dueLabel(p)}</span>
                   </div>
                   <Chip size="sm" variant="flat" color={STATUS_COLOR[p.status] ?? 'default'}>{p.status}</Chip>
                 </div>
@@ -212,7 +212,7 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
               errorMessage="Enter a positive amount"
               autoFocus
             />
-            <p className="text-xs text-gray-400">Partial payments are supported; the installment flips to PAID when fully covered.</p>
+            <p className="text-xs text-gray-500">Partial payments are supported; the installment flips to PAID when fully covered.</p>
           </ModalBody>
           <ModalFooter>
             <Button variant="light" onPress={logModal.onClose}>Cancel</Button>

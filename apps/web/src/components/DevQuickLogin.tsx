@@ -123,7 +123,7 @@ export function DevQuickLogin() {
         <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
           Dev Quick Login
         </p>
-        <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+        <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
           Local only
         </span>
       </div>
@@ -151,7 +151,7 @@ export function DevQuickLogin() {
             <span className="block text-xs font-semibold text-gray-800">
               {busy === r.role ? 'Signing in…' : r.label}
             </span>
-            <span className="block text-[10px] text-gray-400 truncate">{r.hint}</span>
+            <span className="block text-[11px] text-gray-500 truncate">{r.hint}</span>
           </button>
         ))}
       </div>

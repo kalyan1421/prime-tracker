@@ -100,7 +100,7 @@ const KIND_META: Record<string, {
     direction: 'Tenant → Prime',
     flow: 'in',
     icon: <FiShield size={14} />,
-    tint: 'bg-emerald-50 text-emerald-600 border-emerald-100',
+    tint: 'bg-emerald-50 text-emerald-700 border-emerald-100',
     bar: 'bg-emerald-500',
   },
   TI_ALLOWANCE: {
@@ -108,7 +108,7 @@ const KIND_META: Record<string, {
     direction: 'Prime → Tenant',
     flow: 'out',
     icon: <FiTool size={14} />,
-    tint: 'bg-amber-50 text-amber-600 border-amber-100',
+    tint: 'bg-amber-50 text-amber-700 border-amber-100',
     bar: 'bg-amber-500',
   },
   OTHER: {
@@ -116,8 +116,8 @@ const KIND_META: Record<string, {
     direction: 'Mixed direction',
     flow: 'none',
     icon: <FiMoreHorizontal size={14} />,
-    tint: 'bg-slate-50 text-slate-500 border-slate-200',
-    bar: 'bg-slate-400',
+    tint: 'bg-gray-50 text-gray-500 border-gray-200',
+    bar: 'bg-gray-400',
   },
 };
 
@@ -207,7 +207,7 @@ function PaidOf({ t, className = '' }: { t: Totals; className?: string }) {
   return (
     <span className={`tabular-nums ${className}`}>
       <span className="font-semibold text-gray-900">{fmt(t.paid)}</span>
-      <span className="text-gray-400"> paid of </span>
+      <span className="text-gray-500"> paid of </span>
       <span className="font-medium text-gray-700">{fmt(t.agreed)}</span>
     </span>
   );
@@ -238,7 +238,7 @@ function KindBlock({
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-gray-800">{meta.label}</p>
-            <p className="flex items-center gap-1 text-[11px] text-gray-400">
+            <p className="flex items-center gap-1 text-[11px] text-gray-500">
               {meta.flow === 'in' && <FiArrowDownLeft size={10} className="text-emerald-500" aria-hidden />}
               {meta.flow === 'out' && <FiArrowUpRight size={10} className="text-amber-500" aria-hidden />}
               {meta.direction}
@@ -305,7 +305,7 @@ function Shell({ subtitle, children }: { subtitle: string; children: React.React
     <Card shadow="sm">
       <CardHeader className="flex-col items-start gap-0 pb-0">
         <p className="text-sm font-semibold text-gray-700">Deposits &amp; Allowances</p>
-        <p className="text-xs text-gray-400">{subtitle}</p>
+        <p className="text-xs text-gray-500">{subtitle}</p>
       </CardHeader>
       <CardBody>{children}</CardBody>
     </Card>
@@ -323,7 +323,7 @@ function Shell({ subtitle, children }: { subtitle: string; children: React.React
  */
 function EmptyBody({ scope }: { scope: Scope }) {
   return (
-    <div className="flex items-center gap-2.5 py-2 text-sm text-gray-400">
+    <div className="flex items-center gap-2.5 py-2 text-sm text-gray-500">
       <FiInbox size={16} className="shrink-0 text-gray-300" aria-hidden />
       <span>
         No security deposits or TI allowances recorded for this {scope}.
@@ -455,7 +455,7 @@ function BuildingBody({ data }: { data: unknown }) {
       })}
 
       {hasBuildingLevel && (
-        <p className="px-0.5 text-[11px] leading-relaxed text-gray-400">
+        <p className="px-0.5 text-[11px] leading-relaxed text-gray-500">
           A building-level deposit is held against the whole building and is never split across
           its units. The headline figures are the two rows added together, each obligation counted once.
         </p>
@@ -471,9 +471,9 @@ function BuildingBody({ data }: { data: unknown }) {
             <span className="flex items-center gap-2 text-xs font-semibold text-gray-600">
               {showUnits ? <FiChevronDown size={13} /> : <FiChevronRight size={13} />}
               By unit
-              <span className="font-normal text-gray-400">({units.length})</span>
+              <span className="font-normal text-gray-500">({units.length})</span>
             </span>
-            <span className="text-[11px] text-gray-400">unit leases only</span>
+            <span className="text-[11px] text-gray-500">unit leases only</span>
           </button>
 
           {showUnits && (

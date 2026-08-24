@@ -20,7 +20,7 @@ import {
 } from '../hooks/useApi';
 
 /** LOT is a real BuildingType (raw-land parcel sold by acreage, usually no units). */
-const BUILDING_TYPES = [
+export const BUILDING_TYPES = [
   'RESIDENTIAL', 'COMMERCIAL', 'MIXED_USE', 'INDUSTRIAL',
   'PARKING', 'AMENITY', 'RETAIL', 'OFFICE', 'LOT',
 ];
@@ -73,11 +73,11 @@ function BuildingCoverPhotoUploader({ storagePath, onChange }: {
             {previewSrc ? (
               <img src={previewSrc} alt="" className="w-full h-full object-cover" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Photo saved</div>
+              <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">Photo saved</div>
             )}
           </div>
         ) : (
-          <div className="w-32 h-20 rounded border border-dashed border-gray-300 flex items-center justify-center text-xs text-gray-400">
+          <div className="w-32 h-20 rounded border border-dashed border-gray-300 flex items-center justify-center text-xs text-gray-500">
             No photo
           </div>
         )}

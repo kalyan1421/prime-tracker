@@ -204,12 +204,12 @@ export function TasksPageInner({ projectId: propProjectId }: { projectId?: strin
 
                 {/* Task list */}
                 {loadingTasks ? (
-                    <div className="flex items-center justify-center py-20 text-gray-400">
+                    <div className="flex items-center justify-center py-20 text-gray-500">
                         <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
                         <p className="text-sm">Loading tasks…</p>
                     </div>
                 ) : filteredTasks.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                    <div className="flex flex-col items-center justify-center py-20 text-gray-500">
                         <FiCheckSquare className="text-5xl mb-3 opacity-30" />
                         <p className="font-medium">No tasks found</p>
                         <p className="text-sm mt-1">Create your first task to get started</p>
@@ -300,18 +300,18 @@ function TaskRow({
 
             {/* Title + meta */}
             <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium truncate ${task.status === 'DONE' ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                <p className={`text-sm font-medium truncate ${task.status === 'DONE' ? 'line-through text-gray-500' : 'text-gray-900'}`}>
                     {task.title}
                 </p>
                 <div className="flex items-center gap-2 sm:gap-3 mt-0.5 flex-wrap">
                     {task.project && (
-                        <span className="text-xs text-gray-400 truncate max-w-[120px]">{task.project.name}</span>
+                        <span className="text-xs text-gray-500 truncate max-w-[120px]">{task.project.name}</span>
                     )}
                     {task.building && (
-                        <span className="text-xs text-gray-400 truncate">{task.building.name}</span>
+                        <span className="text-xs text-gray-500 truncate">{task.building.name}</span>
                     )}
                     {task.unit && (
-                        <span className="text-xs text-gray-400 truncate">Unit {task.unit.unitNumber}</span>
+                        <span className="text-xs text-gray-500 truncate">Unit {task.unit.unitNumber}</span>
                     )}
                 </div>
             </div>
@@ -322,7 +322,7 @@ function TaskRow({
                 </Chip>
                 <div className="flex items-center gap-1 text-xs">
                     <FiCalendar className={overdue ? 'text-red-500' : 'text-gray-400'} />
-                    <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                    <span className={overdue ? 'text-red-700 font-medium' : 'text-gray-500'}>
                         {fmtDate(task.dueDate)}
                     </span>
                 </div>
@@ -335,7 +335,7 @@ function TaskRow({
                         <FiUser className="text-gray-400 text-xs" />
                     </div>
                 )}
-                <div className="flex items-center gap-2 text-xs text-gray-400">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
                     {task._count?.comments > 0 && (
                         <span className="flex items-center gap-0.5"><FiMessageSquare />{task._count.comments}</span>
                     )}
@@ -385,7 +385,7 @@ function TaskSidePanel({
 
     if (loadingTask) {
         return (
-            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
+            <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
                 Loading…
             </div>
         );
@@ -393,7 +393,7 @@ function TaskSidePanel({
 
     if (!task) {
         return (
-            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
+            <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
                 Task not found.
             </div>
         );
@@ -490,7 +490,7 @@ function TaskSidePanel({
                             id="edit-task-title"
                         />
                     ) : (
-                        <p className={`font-semibold text-gray-900 text-base leading-tight ${task.status === 'DONE' ? 'line-through text-gray-400' : ''}`}>
+                        <p className={`font-semibold text-gray-900 text-base leading-tight ${task.status === 'DONE' ? 'line-through text-gray-500' : ''}`}>
                             {task.title}
                         </p>
                     )}
@@ -594,49 +594,49 @@ function TaskSidePanel({
                         )}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                             <div className="flex flex-col gap-0.5">
-                                <span className="text-xs text-gray-400 uppercase tracking-wide">Priority</span>
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Priority</span>
                                 <Chip size="sm" color={priorityColor(task.priority) as any} variant="flat">
                                     {priorityIcon(task.priority)}{task.priority}
                                 </Chip>
                             </div>
                             <div className="flex flex-col gap-0.5">
-                                <span className="text-xs text-gray-400 uppercase tracking-wide">Due Date</span>
-                                <span className={`text-sm font-medium flex items-center gap-1 ${overdue ? 'text-red-600' : 'text-gray-700'}`}>
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Due Date</span>
+                                <span className={`text-sm font-medium flex items-center gap-1 ${overdue ? 'text-red-700' : 'text-gray-700'}`}>
                                     <FiCalendar />
                                     {fmtDate(task.dueDate)}
-                                    {overdue && <span className="text-xs text-red-500 ml-1">Overdue</span>}
+                                    {overdue && <span className="text-xs text-red-700 ml-1">Overdue</span>}
                                 </span>
                             </div>
                             <div className="flex flex-col gap-0.5">
-                                <span className="text-xs text-gray-400 uppercase tracking-wide">Assigned To</span>
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Assigned To</span>
                                 {task.assignedUser ? (
                                     <div className="flex items-center gap-1.5">
                                         <Avatar size="sm" name={task.assignedUser.name} src={task.assignedUser.avatarUrl} className="w-5 h-5 text-xs" />
                                         <span className="text-sm text-gray-700">{task.assignedUser.name}</span>
                                     </div>
                                 ) : (
-                                    <span className="text-sm text-gray-400">Unassigned</span>
+                                    <span className="text-sm text-gray-500">Unassigned</span>
                                 )}
                             </div>
                             <div className="flex flex-col gap-0.5">
-                                <span className="text-xs text-gray-400 uppercase tracking-wide">Created By</span>
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Created By</span>
                                 <span className="text-sm text-gray-700">{task.createdByUser?.name}</span>
                             </div>
                             {task.project && (
                                 <div className="flex flex-col gap-0.5">
-                                    <span className="text-xs text-gray-400 uppercase tracking-wide">Project</span>
+                                    <span className="text-xs text-gray-500 uppercase tracking-wide">Project</span>
                                     <span className="text-sm text-gray-700">{task.project.name}</span>
                                 </div>
                             )}
                             {task.building && (
                                 <div className="flex flex-col gap-0.5">
-                                    <span className="text-xs text-gray-400 uppercase tracking-wide">Building</span>
+                                    <span className="text-xs text-gray-500 uppercase tracking-wide">Building</span>
                                     <span className="text-sm text-gray-700">{task.building.name}</span>
                                 </div>
                             )}
                             {task.unit && (
                                 <div className="flex flex-col gap-0.5">
-                                    <span className="text-xs text-gray-400 uppercase tracking-wide">Unit</span>
+                                    <span className="text-xs text-gray-500 uppercase tracking-wide">Unit</span>
                                     <span className="text-sm text-gray-700">Unit {task.unit.unitNumber}</span>
                                 </div>
                             )}
@@ -672,20 +672,20 @@ function TaskSidePanel({
                                     <FiPaperclip className="text-gray-400 shrink-0" />
                                     <span className="text-sm text-gray-700 flex-1 truncate">{att.fileName}</span>
                                     {att.fileSize && (
-                                        <span className="text-xs text-gray-400">{(att.fileSize / 1024).toFixed(0)} KB</span>
+                                        <span className="text-xs text-gray-500">{(att.fileSize / 1024).toFixed(0)} KB</span>
                                     )}
                                     <a
                                         href={apiAssetUrl(att.fileUrl)}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="text-blue-500 hover:text-blue-700"
+                                        className="text-blue-600 hover:text-blue-700"
                                     >
                                         <FiDownload />
                                     </a>
                                     {(att.uploadedById === user?.id || ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER'].includes(user?.role ?? '')) && (
                                         <button
                                             onClick={() => deleteAttachment.mutate({ taskId, attachmentId: att.id })}
-                                            className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            className="text-red-400 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
                                         >
                                             <FiX />
                                         </button>
@@ -694,7 +694,7 @@ function TaskSidePanel({
                             ))}
                         </div>
                     ) : (
-                        <p className="text-xs text-gray-400 py-2">No attachments yet</p>
+                        <p className="text-xs text-gray-500 py-2">No attachments yet</p>
                     )}
                 </div>
 
@@ -706,9 +706,9 @@ function TaskSidePanel({
                         Comments {(comments as any[]).length > 0 && `(${(comments as any[]).length})`}
                     </span>
                     {loadingComments ? (
-                        <p className="text-xs text-gray-400">Loading…</p>
+                        <p className="text-xs text-gray-500">Loading…</p>
                     ) : (comments as any[]).length === 0 ? (
-                        <p className="text-xs text-gray-400 py-1">No comments yet. Be the first!</p>
+                        <p className="text-xs text-gray-500 py-1">No comments yet. Be the first!</p>
                     ) : (
                         <div className="space-y-3">
                             {(comments as any[]).map((c: any) => (
@@ -717,13 +717,13 @@ function TaskSidePanel({
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2">
                                             <span className="text-xs font-semibold text-gray-700">{c.user?.name}</span>
-                                            <span className="text-xs text-gray-400">
+                                            <span className="text-xs text-gray-500">
                                                 {new Date(c.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                                             </span>
                                             {(c.userId === user?.id || ['SUPER_ADMIN', 'FOUNDER'].includes(user?.role ?? '')) && (
                                                 <button
                                                     onClick={() => deleteComment.mutate({ taskId, commentId: c.id })}
-                                                    className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
+                                                    className="text-red-400 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
                                                 >
                                                     <FiX className="text-xs" />
                                                 </button>

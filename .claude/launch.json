@@ -4,15 +4,25 @@
     {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "web", "run", "dev"],
+      "runtimeArgs": [
+        "--filter",
+        "web",
+        "run",
+        "dev"
+      ],
       "autoPort": true
     },
     {
       "name": "api",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "api", "run", "dev"],
-      "port": 3031,
-      "autoPort": false
+      "runtimeArgs": [
+        "--filter",
+        "api",
+        "run",
+        "dev"
+      ],
+      "autoPort": false,
+      "port": 3041
     }
   ]
 }

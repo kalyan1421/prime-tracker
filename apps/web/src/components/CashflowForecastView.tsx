@@ -61,13 +61,13 @@ const CustomTooltip = ({ active, payload, label }: any) => {
       <p className="font-semibold text-gray-700 mb-2">{label}</p>
       <div className="space-y-1">
         <div className="flex justify-between gap-4">
-          <span className="flex items-center gap-1 text-emerald-600">
+          <span className="flex items-center gap-1 text-emerald-700">
             <span className="inline-block w-2 h-2 rounded-sm bg-emerald-500" /> Inflow
           </span>
           <span className="tabular-nums font-medium text-emerald-700">{fmt(inflow)}</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="flex items-center gap-1 text-rose-600">
+          <span className="flex items-center gap-1 text-rose-700">
             <span className="inline-block w-2 h-2 rounded-sm bg-rose-500" /> Outflow
           </span>
           <span className="tabular-nums font-medium text-rose-700">{fmt(outflow)}</span>
@@ -126,7 +126,7 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
     return (
       <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center">
         <FiBarChart2 className="mx-auto mb-2 text-2xl text-gray-300" />
-        <p className="text-sm text-gray-400">No cashflow data yet.</p>
+        <p className="text-sm text-gray-500">No cashflow data yet.</p>
         <p className="text-xs text-gray-300 mt-0.5">
           Data populates automatically from sale payments, leases, draw schedules, and commitments.
         </p>
@@ -139,19 +139,19 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
       {/* ── summary strip ── */}
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
-          <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+          <p className="text-xs text-emerald-700 font-medium flex items-center gap-1">
             <FiTrendingUp size={12} /> Total Inflow
           </p>
           <p className="text-lg font-bold text-emerald-700 mt-0.5 tabular-nums">{fmt(totalInflow)}</p>
         </div>
         <div className="rounded-xl bg-rose-50 border border-rose-100 p-3">
-          <p className="text-xs text-rose-600 font-medium flex items-center gap-1">
+          <p className="text-xs text-rose-700 font-medium flex items-center gap-1">
             <FiTrendingDown size={12} /> Total Outflow
           </p>
           <p className="text-lg font-bold text-rose-700 mt-0.5 tabular-nums">{fmt(totalOutflow)}</p>
         </div>
         <div className={`rounded-xl border p-3 ${totalNet >= 0 ? 'bg-indigo-50 border-indigo-100' : 'bg-rose-50 border-rose-100'}`}>
-          <p className={`text-xs font-medium flex items-center gap-1 ${totalNet >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>
+          <p className={`text-xs font-medium flex items-center gap-1 ${totalNet >= 0 ? 'text-indigo-600' : 'text-rose-700'}`}>
             <FiDollarSign size={12} /> Net Position
           </p>
           <p className={`text-lg font-bold mt-0.5 tabular-nums ${totalNet >= 0 ? 'text-indigo-700' : 'text-rose-700'}`}>
@@ -167,7 +167,7 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
             key={v}
             onClick={() => setView(v)}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
-              view === v ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'
+              view === v ? 'bg-white shadow-sm text-gray-800' : 'text-gray-600 hover:text-gray-900'
             }`}
           >
             {v === 'chart' ? <FiBarChart2 size={12} /> : <FiList size={12} />}
@@ -236,10 +236,10 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
         <div className="overflow-x-auto rounded-xl border border-gray-100">
           <table className="w-full text-xs">
             <thead>
-              <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[10px]">
+              <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[11px]">
                 <th className="text-left px-3 py-2 font-medium">Month</th>
-                <th className="text-right px-3 py-2 font-medium text-emerald-600">Inflow</th>
-                <th className="text-right px-3 py-2 font-medium text-rose-600">Outflow</th>
+                <th className="text-right px-3 py-2 font-medium text-emerald-700">Inflow</th>
+                <th className="text-right px-3 py-2 font-medium text-rose-700">Outflow</th>
                 <th className="text-right px-3 py-2 font-medium text-indigo-600">Net</th>
                 <th className="text-right px-3 py-2 font-medium">Running</th>
               </tr>
@@ -257,7 +257,7 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
                       <td className={`px-3 py-2 text-right tabular-nums font-semibold ${e.net >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {e.net >= 0 ? '+' : ''}{fmt(e.net)}
                       </td>
-                      <td className={`px-3 py-2 text-right tabular-nums ${running >= 0 ? 'text-gray-600' : 'text-rose-600 font-semibold'}`}>
+                      <td className={`px-3 py-2 text-right tabular-nums ${running >= 0 ? 'text-gray-600' : 'text-rose-700 font-semibold'}`}>
                         {running >= 0 ? '+' : ''}{fmt(running)}
                       </td>
                     </tr>
@@ -289,7 +289,7 @@ export function CashflowForecastView({ projectId }: { projectId: string }) {
           { label: 'Vendor commitments', color: 'bg-orange-100 text-orange-700' },
         ].map(({ label, color }) => (
           <Tooltip key={label} content={`Auto-populated from ${label.toLowerCase()}`}>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${color}`}>
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${color}`}>
               {label}
             </span>
           </Tooltip>

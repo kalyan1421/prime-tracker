@@ -116,23 +116,23 @@ export function ForecastProbabilitiesPanel({ orgId }: { orgId?: string }) {
       </CardHeader>
       <CardBody className="space-y-3">
         {isLoading ? (
-          <p className="text-xs text-gray-400">Loading…</p>
+          <p className="text-xs text-gray-500">Loading…</p>
         ) : !orgId ? (
-          <p className="text-xs text-gray-400">No organization available.</p>
+          <p className="text-xs text-gray-500">No organization available.</p>
         ) : (
           <>
             {STAGES.map((s) => (
               <div key={s.key} className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-700">{s.label}</p>
-                  <p className="text-[11px] text-gray-400 truncate">{s.hint}</p>
+                  <p className="text-[11px] text-gray-500 truncate">{s.hint}</p>
                 </div>
                 <Input
                   size="sm"
                   type="number"
                   className="w-28"
                   aria-label={`${s.label} probability, percent`}
-                  endContent={<span className="text-xs text-gray-400">%</span>}
+                  endContent={<span className="text-xs text-gray-600">%</span>}
                   value={form[s.key] ?? ''}
                   onChange={(e) => setForm((p) => ({ ...p, [s.key]: e.target.value }))}
                 />
@@ -141,18 +141,18 @@ export function ForecastProbabilitiesPanel({ orgId }: { orgId?: string }) {
 
             {/* Why the other two stages are not here. Without this the omission reads as a
                 bug rather than a deliberate constraint. */}
-            <p className="text-[11px] text-gray-400 border-t border-gray-100 pt-2">
+            <p className="text-[11px] text-gray-500 border-t border-gray-100 pt-2">
               Closed and Cancelled deals are excluded from the pipeline before it is weighted,
               so they have no probability to tune.
             </p>
 
             {rangeError && (
-              <p className="text-xs text-amber-600">
+              <p className="text-xs text-amber-700">
                 {rangeError.label} must be a percentage between 0 and 100.
               </p>
             )}
             {orderError && orderPrev && (
-              <p className="text-xs text-amber-600">
+              <p className="text-xs text-amber-700">
                 {orderError.label} ({orderError.pct}%) is lower than {orderPrev.label} ({orderPrev.pct}%).
                 A deal should not become less likely as it advances.
               </p>

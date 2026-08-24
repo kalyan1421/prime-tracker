@@ -187,7 +187,7 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
         {/* ── STEP 1: form ── */}
         {step === 'form' && (
           <>
-            <ModalHeader className="flex items-center gap-2 text-red-600">
+            <ModalHeader className="flex items-center gap-2 text-red-700">
               <FiAlertTriangle className="shrink-0" />
               Cancel Sale
             </ModalHeader>
@@ -230,7 +230,7 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
                 </p>
 
                 {paymentsLoading ? (
-                  <p className="text-xs text-gray-400">Checking what has been collected…</p>
+                  <p className="text-xs text-gray-500">Checking what has been collected…</p>
                 ) : nothingCollected ? (
                   // No money in, nothing to settle. Showing a disposition picker here would
                   // be asking a question with no answer.
@@ -262,7 +262,7 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
                         <SelectItem key={d.key} textValue={d.label}>{d.label}</SelectItem>
                       ))}
                     </Select>
-                    <p className="text-[11px] text-gray-400">
+                    <p className="text-[11px] text-gray-500">
                       {DISPOSITIONS.find((d) => d.key === form.disposition)?.hint}
                     </p>
 
@@ -281,7 +281,7 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
                             value={form.penaltyAmount} onChange={set('penaltyAmount')}
                           />
                         </div>
-                        <p className={`text-xs ${reconciles ? 'text-green-600' : 'text-amber-600'}`}>
+                        <p className={`text-xs ${reconciles ? 'text-green-700' : 'text-amber-700'}`}>
                           {reconciles
                             ? `Balances against ${fmt(totalCollected)} collected.`
                             : `${outBy > 0 ? 'Over' : 'Short'} by ${fmt(Math.abs(outBy))} — must total ${fmt(totalCollected)}.`}
@@ -312,7 +312,7 @@ export function CancelSaleModal({ isOpen, onClose, sale }: CancelSaleModalProps)
         {/* ── STEP 2: confirm ── */}
         {step === 'confirm' && (
           <>
-            <ModalHeader className="flex items-center gap-2 text-red-600">
+            <ModalHeader className="flex items-center gap-2 text-red-700">
               <FiAlertTriangle className="shrink-0" />
               Confirm Cancellation
             </ModalHeader>

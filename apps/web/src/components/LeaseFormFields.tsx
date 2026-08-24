@@ -650,7 +650,7 @@ export function LeaseFormFields({
               description="Only for a fee agreed outside the formula"
             />
           </div>
-          <p className="text-[11px] text-gray-400 mt-2">
+          <p className="text-[11px] text-gray-500 mt-2">
             The fee is calculated and stamped when the lease becomes ACTIVE, and
             recalculated if the broker, rate, basis, rent or term later changes.
           </p>

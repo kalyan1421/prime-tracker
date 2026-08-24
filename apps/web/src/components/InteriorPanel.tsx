@@ -138,9 +138,9 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
         )}
       </CardHeader>
       <CardBody className="pt-0 space-y-3">
-        {isLoading && <p className="text-sm text-gray-400">Loading…</p>}
+        {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
         {!isLoading && projects.length === 0 && (
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-gray-500">
             No interior project yet. Fit-out is optional and starts after the shell is complete.
           </p>
         )}
@@ -391,7 +391,7 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-medium text-sm">{project.name}</p>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-500">
             {project.contractType === 'PER_SQFT' && project.contractValue
               ? `${fmt(Number(project.contractValue))} · per sqft`
               : project.status}
@@ -399,7 +399,7 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
             {project.handoverAt && ` · handed over ${fmtDate(project.handoverAt)}`}
           </p>
           {(project.startDate || project.targetEnd) && (
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-gray-500">
               {project.startDate ? fmtDate(project.startDate) : '—'} → {project.targetEnd ? fmtDate(project.targetEnd) : '—'}
             </p>
           )}

@@ -105,7 +105,7 @@ export function DrawApprovalStepper({
             {/* Body */}
             <div className="flex-1 min-w-0 pb-5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-sm font-medium ${isComplete ? 'text-gray-800' : 'text-gray-400'}`}>
+                <span className={`text-sm font-medium ${isComplete ? 'text-gray-800' : 'text-gray-500'}`}>
                   {STEP_LABELS[step]}
                 </span>
                 {isComplete && action !== 'APPROVED' && (
@@ -118,15 +118,15 @@ export function DrawApprovalStepper({
                   {evt.actor && (
                     <Tooltip content={evt.actor.email || ''}>
                       <span className="flex items-center gap-1.5 text-xs text-gray-600">
-                        <Avatar size="sm" name={evt.actor.name} className="w-5 h-5 text-[10px]" />
+                        <Avatar size="sm" name={evt.actor.name} className="w-5 h-5 text-[11px]" />
                         <span>{evt.actor.name}</span>
                       </span>
                     </Tooltip>
                   )}
-                  <span className="text-xs text-gray-400">· {fmtRelative(evt.createdAt)}</span>
+                  <span className="text-xs text-gray-500">· {fmtRelative(evt.createdAt)}</span>
                 </div>
               ) : (
-                <p className="text-xs text-gray-400 mt-1">Pending</p>
+                <p className="text-xs text-gray-500 mt-1">Pending</p>
               )}
 
               {evt?.comment && (

@@ -36,7 +36,7 @@ function TemplateCard({
             <Chip size="sm" variant="flat" color="primary">{fmt(Number(t.defaultRatePerSqft))}/sqft</Chip>
           )}
           {t._count?.interiorProjects > 0 && (
-            <span className="text-[11px] text-gray-400">used by {t._count.interiorProjects} project{t._count.interiorProjects !== 1 ? 's' : ''}</span>
+            <span className="text-[11px] text-gray-500">used by {t._count.interiorProjects} project{t._count.interiorProjects !== 1 ? 's' : ''}</span>
           )}
         </div>
       </div>
@@ -160,9 +160,9 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
 
         <ModalBody className="space-y-4">
           {isLoading ? (
-            <p className="text-sm text-gray-400">Loading…</p>
+            <p className="text-sm text-gray-500">Loading…</p>
           ) : templates.length === 0 && !creating ? (
-            <p className="text-sm text-gray-400">No packages yet. Create 2–3 generic options clients can pick from.</p>
+            <p className="text-sm text-gray-500">No packages yet. Create 2–3 generic options clients can pick from.</p>
           ) : (
             <div className="space-y-2">
               {templates.map((t) =>
@@ -200,7 +200,7 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
                       value={editForm.description}
                       onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                     />
-                    <p className="text-[11px] text-gray-400">BOQ items are not changed — delete and recreate to update line items.</p>
+                    <p className="text-[11px] text-gray-500">BOQ items are not changed — delete and recreate to update line items.</p>
                     <div className="flex justify-end gap-2 pt-1">
                       <Button size="sm" variant="light" onPress={cancelEdit}>Cancel</Button>
                       <Button size="sm" color="primary" isLoading={updateTpl.isPending} onPress={handleUpdate}>

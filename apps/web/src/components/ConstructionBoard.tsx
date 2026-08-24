@@ -235,18 +235,18 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
               <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-700 uppercase tracking-wide">
                 {expanded ? <FiChevronDown className="shrink-0" /> : <FiChevronRight className="shrink-0" />}
                 {group.name}
-                <span className="ml-1 text-xs font-normal text-gray-400 normal-case">
+                <span className="ml-1 text-xs font-normal text-gray-500 normal-case">
                   · {group.items.length} item(s)
                 </span>
               </span>
               <span className="flex items-center gap-3 text-xs shrink-0">
                 {stats.attention > 0 && (
-                  <span className="flex items-center gap-1 text-red-600 font-medium normal-case">
+                  <span className="flex items-center gap-1 text-red-700 font-medium normal-case">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
                     {stats.attention} need{stats.attention === 1 ? 's' : ''} attention
                   </span>
                 )}
-                <span className="text-gray-400 normal-case">{donePct}% done</span>
+                <span className="text-gray-500 normal-case">{donePct}% done</span>
               </span>
             </button>
             {expanded && (
@@ -306,7 +306,7 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
                           {canEdit && (
                             <button
                               onClick={() => setEditing(t)}
-                              className="text-gray-400 hover:text-blue-600 p-1"
+                              className="text-gray-500 hover:text-blue-600 p-1"
                               title="Edit item"
                             >
                               <FiEdit2 className="w-3.5 h-3.5" />
@@ -674,7 +674,7 @@ function UpdatesDialog({
                 {/* Named files, so somebody can see they picked the wrong one before
                     posting rather than after. */}
                 {files.length > 0 && (
-                  <span className="truncate text-[11px] text-gray-400">
+                  <span className="truncate text-[11px] text-gray-500">
                     {files.map((f) => f.name).join(', ')}
                   </span>
                 )}
@@ -699,7 +699,7 @@ function UpdatesDialog({
             // Says what this space is FOR, not merely that it is empty.
             <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center">
               <p className="text-sm font-medium text-gray-600">No updates yet</p>
-              <p className="mt-0.5 text-xs text-gray-400">
+              <p className="mt-0.5 text-xs text-gray-500">
                 {canEdit
                   ? 'Post what happened on site, with photos. Each update is dated by the day it happened, not the day it was typed.'
                   : 'Site progress on this item will appear here.'}
@@ -719,7 +719,7 @@ function UpdatesDialog({
                     {i < list.length - 1 && <span className="mt-1 w-px flex-1 bg-gray-100" />}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                    <div className="flex items-center gap-2 text-[11px] text-gray-500">
                       <span className="font-medium text-gray-600">{fmtDate(u.updateDate)}</span>
                       <span className="text-gray-300">·</span>
                       <span>{u.author?.name ?? 'Unknown'}</span>
@@ -727,7 +727,7 @@ function UpdatesDialog({
                         <button
                           // Revealed on hover for pointers, always reachable by keyboard,
                           // and never hidden on touch — where there is no hover at all.
-                          className="ml-auto p-1 text-gray-300 opacity-100 transition-opacity hover:text-red-500 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                          className="ml-auto p-1 text-gray-300 opacity-100 transition-opacity hover:text-red-700 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
                           onClick={() => del.mutateAsync({ updateId: u.id, taskId: task.id })}
                           title="Delete update"
                           aria-label={`Delete the update from ${fmtDate(u.updateDate)}`}
@@ -799,7 +799,7 @@ export function UnitConstructionPanel({ unitId, canEdit }: { unitId: string; can
 
   if (isLoading) return <LoadingState />;
   if (items.length === 0) {
-    return <p className="text-sm text-gray-400 py-2">No construction items for this unit.</p>;
+    return <p className="text-sm text-gray-500 py-2">No construction items for this unit.</p>;
   }
 
   return (
@@ -815,7 +815,7 @@ export function UnitConstructionPanel({ unitId, canEdit }: { unitId: string; can
               <p className="text-xs text-gray-500">
                 {t.assignedUser?.name ?? 'Unassigned'}
                 {shared && (
-                  <span className="ml-2 text-gray-400">· shared with {unitLabel(t)}</span>
+                  <span className="ml-2 text-gray-500">· shared with {unitLabel(t)}</span>
                 )}
               </p>
             </div>

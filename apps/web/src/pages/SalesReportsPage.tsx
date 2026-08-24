@@ -89,7 +89,7 @@ function SalesPerformanceTab() {
                   </tr>
                 ))}
                 {(d.availableUnits as any[]).length === 0 && (
-                  <tr><td colSpan={5} className="text-center py-4 text-gray-400">No available units</td></tr>
+                  <tr><td colSpan={5} className="text-center py-4 text-gray-500">No available units</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -194,8 +194,8 @@ function UnitInventoryTab() {
                     <td className="py-2 px-2 text-center">{p.Total}</td>
                     <td className="py-2 px-2 text-center">{p.Available}</td>
                     <td className="py-2 px-2 text-center text-blue-600">{p['Under Contract']}</td>
-                    <td className="py-2 px-2 text-center text-teal-600">{p.Leased}</td>
-                    <td className="py-2 px-2 text-center text-green-600">{p.Sold}</td>
+                    <td className="py-2 px-2 text-center text-teal-700">{p.Leased}</td>
+                    <td className="py-2 px-2 text-center text-green-700">{p.Sold}</td>
                   </tr>
                 ))}
               </tbody>
@@ -275,7 +275,7 @@ function RevenueProjectionTab() {
                   </tr>
                 ))}
                 {(r.expiringLeases as any[]).length === 0 && (
-                  <tr><td colSpan={4} className="text-center py-4 text-gray-400">No leases expiring soon</td></tr>
+                  <tr><td colSpan={4} className="text-center py-4 text-gray-500">No leases expiring soon</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -347,7 +347,7 @@ function LeadMarketingTab() {
           </CardHeader>
           <CardBody>
             {sourceData.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No source data</p>
+              <p className="text-sm text-gray-500 py-10 text-center">No source data</p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={sourceData}>
@@ -385,11 +385,11 @@ function LeadMarketingTab() {
                     <td className="py-2 px-2 text-xs text-gray-500">{lead.project?.name || '—'}</td>
                     <td className="py-2 px-2 text-xs">{lead.source?.replace(/_/g, ' ') || '—'}</td>
                     <td className="py-2 px-2"><StatusBadge status={lead.status} /></td>
-                    <td className="py-2 px-2 text-xs text-gray-400">{fmtDate(lead.updatedAt)}</td>
+                    <td className="py-2 px-2 text-xs text-gray-500">{fmtDate(lead.updatedAt)}</td>
                   </tr>
                 ))}
                 {leads.length === 0 && (
-                  <tr><td colSpan={5} className="text-center py-4 text-gray-400">No leads</td></tr>
+                  <tr><td colSpan={5} className="text-center py-4 text-gray-500">No leads</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -446,7 +446,7 @@ function UnitSalesReportTab() {
         </CardHeader>
         <CardBody>
           {(d.chartData || []).length === 0 ? (
-            <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+            <p className="text-sm text-gray-500 py-10 text-center">No data</p>
           ) : (
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={d.chartData}>
@@ -487,11 +487,11 @@ function UnitSalesReportTab() {
                     <td className="py-2 px-2 font-semibold text-gray-800">{p.projectName}</td>
                     <td className="py-2 px-2 text-right text-gray-600">{p.totalUnits}</td>
                     <td className="py-2 px-2 text-right font-semibold">{fmt(p.totalValue)}</td>
-                    <td className="py-2 px-2 text-right text-green-600 font-medium">{fmt(p.soldValue)}</td>
+                    <td className="py-2 px-2 text-right text-green-700 font-medium">{fmt(p.soldValue)}</td>
                     <td className="py-2 px-2 text-right text-gray-500">{fmt(p.unsoldValue)}</td>
                     <td className="py-2 px-2 text-right text-blue-600">{fmt(p.underContractValue)}</td>
                     <td className="py-2 px-2 text-right">
-                      <span className={`text-xs font-semibold ${p.pctSold >= 80 ? 'text-green-600' : p.pctSold >= 50 ? 'text-blue-600' : 'text-gray-500'}`}>
+                      <span className={`text-xs font-semibold ${p.pctSold >= 80 ? 'text-green-700' : p.pctSold >= 50 ? 'text-blue-600' : 'text-gray-500'}`}>
                         {p.pctSold}%
                       </span>
                     </td>
@@ -499,12 +499,12 @@ function UnitSalesReportTab() {
                   ...(p.buildings as any[]).map((b: any) => (
                     <tr key={`bld-${b.buildingId}`} className="border-b border-gray-50">
                       <td className="py-2 px-2 pl-8 text-gray-500 text-xs">{b.buildingName}</td>
-                      <td className="py-2 px-2 text-right text-gray-400 text-xs">{b.totalUnits}</td>
+                      <td className="py-2 px-2 text-right text-gray-500 text-xs">{b.totalUnits}</td>
                       <td className="py-2 px-2 text-right text-gray-600 text-xs">{fmt(b.totalValue)}</td>
-                      <td className="py-2 px-2 text-right text-green-500 text-xs">{fmt(b.soldValue)}</td>
-                      <td className="py-2 px-2 text-right text-gray-400 text-xs">{fmt(b.unsoldValue)}</td>
-                      <td className="py-2 px-2 text-right text-blue-500 text-xs">{fmt(b.underContractValue)}</td>
-                      <td className="py-2 px-2 text-right text-xs text-gray-400">{b.pctSold}%</td>
+                      <td className="py-2 px-2 text-right text-green-700 text-xs">{fmt(b.soldValue)}</td>
+                      <td className="py-2 px-2 text-right text-gray-500 text-xs">{fmt(b.unsoldValue)}</td>
+                      <td className="py-2 px-2 text-right text-blue-600 text-xs">{fmt(b.underContractValue)}</td>
+                      <td className="py-2 px-2 text-right text-xs text-gray-500">{b.pctSold}%</td>
                     </tr>
                   )),
                 ])}
@@ -513,14 +513,14 @@ function UnitSalesReportTab() {
                     <td className="py-2 px-2 font-bold text-gray-800">Portfolio Total</td>
                     <td className="py-2 px-2 text-right font-bold">{d.kpis.totalUnits}</td>
                     <td className="py-2 px-2 text-right font-bold">{fmt(d.kpis.totalPortfolioValue)}</td>
-                    <td className="py-2 px-2 text-right text-green-600 font-bold">{fmt(d.kpis.totalSoldValue)}</td>
+                    <td className="py-2 px-2 text-right text-green-700 font-bold">{fmt(d.kpis.totalSoldValue)}</td>
                     <td className="py-2 px-2 text-right text-gray-500 font-bold">{fmt(d.kpis.totalUnsoldValue)}</td>
                     <td className="py-2 px-2 text-right text-blue-600 font-bold">{fmt(d.kpis.totalUnderContractValue)}</td>
                     <td className="py-2 px-2 text-right font-bold text-gray-700">{d.kpis.pctSold}%</td>
                   </tr>
                 )}
                 {(d.projects as any[]).length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-6 text-gray-400">No unit data available</td></tr>
+                  <tr><td colSpan={7} className="text-center py-6 text-gray-500">No unit data available</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -538,7 +538,7 @@ function BrokerSalesRows({ brokerId }: { brokerId: string }) {
   if (isLoading) {
     return (
       <tr>
-        <td colSpan={6} className="py-3 px-4 pl-10 text-xs text-gray-400">Loading sales…</td>
+        <td colSpan={6} className="py-3 px-4 pl-10 text-xs text-gray-500">Loading sales…</td>
       </tr>
     );
   }
@@ -547,7 +547,7 @@ function BrokerSalesRows({ brokerId }: { brokerId: string }) {
   if (sales.length === 0) {
     return (
       <tr>
-        <td colSpan={6} className="py-3 px-4 pl-10 text-xs text-gray-400">No sales for this broker</td>
+        <td colSpan={6} className="py-3 px-4 pl-10 text-xs text-gray-500">No sales for this broker</td>
       </tr>
     );
   }
@@ -568,7 +568,7 @@ function BrokerSalesRows({ brokerId }: { brokerId: string }) {
           <tr key={s.id} className="border-b border-gray-100 bg-white">
             <td className="py-2 px-4 pl-10 text-xs">
               <span className="font-medium text-gray-800">{s.unit?.unitNumber || s.building?.name || '—'}</span>
-              <span className="block text-gray-400">{s.project?.name || '—'}</span>
+              <span className="block text-gray-500">{s.project?.name || '—'}</span>
             </td>
             <td className="py-2 px-4 text-xs">
               <StatusBadge status={s.status} />
@@ -580,7 +580,7 @@ function BrokerSalesRows({ brokerId }: { brokerId: string }) {
             <td className="py-2 px-4 text-xs text-gray-500">{s.closedAt ? fmtDate(s.closedAt) : '—'}</td>
             <td className="py-2 px-4 text-center text-xs">
               {s.brokerCommissionPaidAt ? (
-                <span className="text-green-600 font-medium">{fmtDate(s.brokerCommissionPaidAt)}</span>
+                <span className="text-green-700 font-medium">{fmtDate(s.brokerCommissionPaidAt)}</span>
               ) : unpaid ? (
                 <Button
                   size="sm"
@@ -703,13 +703,13 @@ function BrokerCommissionsTab() {
                           className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
                           onClick={() => toggleRow(b.id)}
                         >
-                          <td className="py-2 px-3 text-gray-400">
+                          <td className="py-2 px-3 text-gray-500">
                             {isOpen ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
                           </td>
                           <td className="py-2 px-3">
                             <span className="font-medium text-gray-800">{b.name}</span>
                             {b.company && (
-                              <span className="block text-xs text-gray-400">{b.company}</span>
+                              <span className="block text-xs text-gray-500">{b.company}</span>
                             )}
                           </td>
                           <td className="py-2 px-3 text-center text-gray-600">{b.leadCount ?? 0}</td>
@@ -725,8 +725,8 @@ function BrokerCommissionsTab() {
                           </td>
                           <td className="py-2 px-3 text-right">{fmt(b.closedValue ?? 0)}</td>
                           <td className="py-2 px-3 text-right font-medium text-green-700">{fmt(b.commissionEarned ?? 0)}</td>
-                          <td className="py-2 px-3 text-right text-teal-600">{fmt(b.commissionPaid ?? 0)}</td>
-                          <td className={`py-2 px-3 text-right font-medium ${owed > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                          <td className="py-2 px-3 text-right text-teal-700">{fmt(b.commissionPaid ?? 0)}</td>
+                          <td className={`py-2 px-3 text-right font-medium ${owed > 0 ? 'text-red-700' : 'text-gray-500'}`}>
                             {fmt(owed)}
                           </td>
                           <td className="py-2 px-3 text-right text-blue-600">{fmt(b.pipelineEst ?? 0)}</td>
@@ -739,7 +739,7 @@ function BrokerCommissionsTab() {
                   })}
                   {brokers.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="text-center py-6 text-gray-400">
+                      <td colSpan={10} className="text-center py-6 text-gray-500">
                         No broker data available
                       </td>
                     </tr>

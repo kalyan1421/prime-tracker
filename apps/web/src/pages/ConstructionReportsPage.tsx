@@ -78,10 +78,10 @@ function BudgetCostTab() {
                       <td className="py-2 px-2"><StatusBadge status={p.phase} /></td>
                       <td className="py-2 px-2 text-right">{fmt(p.budget)}</td>
                       <td className="py-2 px-2 text-right">{fmt(p.actuals)}</td>
-                      <td className={`py-2 px-2 text-right ${p.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <td className={`py-2 px-2 text-right ${p.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                         {fmt(p.variance)}
                       </td>
-                      <td className={`py-2 px-2 text-right ${Number(variancePct) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <td className={`py-2 px-2 text-right ${Number(variancePct) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                         {variancePct}%
                       </td>
                       <td className="py-2 px-2"><StatusBadge status={p.status} /></td>
@@ -127,12 +127,12 @@ function MilestoneScheduleTab() {
             <div className="flex items-center gap-3">
               <p className="font-semibold text-sm text-gray-700">{project.name}</p>
               <StatusBadge status={project.phase} />
-              <span className="text-xs text-gray-400">{milestones.length} milestones</span>
+              <span className="text-xs text-gray-500">{milestones.length} milestones</span>
             </div>
           </CardHeader>
           <CardBody className="pt-0">
             {milestones.length === 0 ? (
-              <p className="text-sm text-gray-400 py-2">No milestones</p>
+              <p className="text-sm text-gray-500 py-2">No milestones</p>
             ) : (
               <div className="overflow-x-auto">
                 <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
@@ -159,7 +159,7 @@ function MilestoneScheduleTab() {
         </Card>
       ))}
       {projectMilestones.length === 0 && (
-        <p className="text-center text-gray-400 py-10">No active projects found</p>
+        <p className="text-center text-gray-500 py-10">No active projects found</p>
       )}
     </div>
   );
@@ -191,7 +191,7 @@ function DrawRequestsTab() {
 
   return (
     <div>
-      {!hasAny && <p className="text-center text-gray-400 py-10">No loans found for active projects</p>}
+      {!hasAny && <p className="text-center text-gray-500 py-10">No loans found for active projects</p>}
       {projectLoans.filter((pl) => pl.loans.length > 0).map(({ project, loans }) => (
         <Card key={project.id} shadow="sm" className="mb-6">
           <CardHeader className="pb-2">
@@ -209,16 +209,16 @@ function DrawRequestsTab() {
                   <span className="text-xs text-gray-500">— {fmt(loan.principalAmt)} @ {loan.interestRate}%</span>
                 </div>
                 {(loan.drawRequests || []).length === 0 ? (
-                  <p className="text-xs text-gray-400 ml-4">No draw requests</p>
+                  <p className="text-xs text-gray-500 ml-4">No draw requests</p>
                 ) : (
                   <div className="overflow-x-auto ml-4">
                     <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                       <thead>
                         <tr className="border-b border-gray-100">
-                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-400 uppercase">Amount</th>
-                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-400 uppercase">Purpose</th>
-                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-400 uppercase">Requested</th>
-                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-400 uppercase">Status</th>
+                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-500 uppercase">Purpose</th>
+                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-500 uppercase">Requested</th>
+                          <th className="text-left py-1 px-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
                         </tr>
                       </thead>
                       <tbody>

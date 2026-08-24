@@ -53,12 +53,12 @@ const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIE
 function Metric({ label, value, unit, accent, sub }: { label: string; value: string; unit?: string; accent?: string; sub?: string }) {
   return (
     <div className="p-4 sm:p-5">
-      <p className="text-[11px] uppercase tracking-wide text-gray-400 font-medium">{label}</p>
+      <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">{label}</p>
       <p className={`mt-1.5 text-xl sm:text-2xl font-bold tabular-nums ${accent ?? 'text-gray-900'}`}>
         {value}
-        {unit && <span className="text-sm font-medium text-gray-400 ml-1">{unit}</span>}
+        {unit && <span className="text-sm font-medium text-gray-500 ml-1">{unit}</span>}
       </p>
-      {sub && <p className="text-[11px] text-gray-400 mt-0.5">{sub}</p>}
+      {sub && <p className="text-[11px] text-gray-500 mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -96,11 +96,11 @@ function Section({
             {icon}
             <div>
               <h2 className="font-semibold text-sm text-gray-800">{title}</h2>
-              {subtitle && <p className="text-[11px] text-gray-400">{subtitle}</p>}
+              {subtitle && <p className="text-[11px] text-gray-500">{subtitle}</p>}
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-400">{empty}</span>
+            <span className="text-xs text-gray-500">{empty}</span>
             {action}
           </div>
         </div>
@@ -115,9 +115,9 @@ function Section({
           <div>
             <h2 className="font-semibold text-sm text-gray-800">
               {title}
-              {count != null && count > 0 && <span className="text-gray-400 font-normal ml-1">({count})</span>}
+              {count != null && count > 0 && <span className="text-gray-500 font-normal ml-1">({count})</span>}
             </h2>
-            {subtitle && <p className="text-[11px] text-gray-400">{subtitle}</p>}
+            {subtitle && <p className="text-[11px] text-gray-500">{subtitle}</p>}
           </div>
         </div>
         {action}
@@ -142,7 +142,7 @@ function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-6 text-gray-300">
       {icon}
-      <p className="text-sm text-gray-400">{text}</p>
+      <p className="text-sm text-gray-500">{text}</p>
     </div>
   );
 }
@@ -249,9 +249,9 @@ function UnitHistorySummary({ summary }: { summary: any }) {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {tiles.map((t) => (
           <div key={t.label} className="rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{t.label}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{t.label}</p>
             <p className={`text-sm font-semibold tabular-nums ${t.tone}`}>{t.value}</p>
-            {t.note && <p className="text-[10px] text-amber-600 mt-0.5">{t.note}</p>}
+            {t.note && <p className="text-[11px] text-amber-700 mt-0.5">{t.note}</p>}
           </div>
         ))}
       </div>
@@ -265,7 +265,7 @@ function UnitHistorySummary({ summary }: { summary: any }) {
         // Be honest about what the record can and cannot show. Everything this unit
         // has is the migration bootstrap row, so its timeline begins when tracking
         // began, not when the unit did.
-        <p className="text-xs text-gray-400 mt-2">
+        <p className="text-xs text-gray-500 mt-2">
           Tracked history begins {fmtDate(summary.firstEventAt)} — earlier activity was never recorded.
           {' '}Add it with a historical record.
         </p>
@@ -322,12 +322,12 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                 <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
                   {e.title}
                   {e.isOngoing && (
-                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                    <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
                       Current
                     </span>
                   )}
                   {e.isHistorical && (
-                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
                       Historical
                     </span>
                   )}
@@ -340,7 +340,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                 {/* R8 — a historical lease that spanned more than one physical unit
                     (e.g. two adjacent retail suites leased as one deal). */}
                 {e.data.combinedWithUnits?.length > 0 && (
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-500 mt-0.5">
                     Leased together with unit{e.data.combinedWithUnits.length > 1 ? 's' : ''} {e.data.combinedWithUnits.join(', ')}
                   </p>
                 )}
@@ -355,7 +355,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                   </p>
                 )}
                 {!e.isOngoing && (
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-500 mt-0.5">
                     Lease {String(e.data.status).toLowerCase()} · {durationLabel(e.startDate, e.endDate)}
                   </p>
                 )}
@@ -366,7 +366,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                 <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
                   {e.title}
                   {e.isHistorical && (
-                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
                       Historical
                     </span>
                   )}
@@ -376,14 +376,14 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                   {e.data.salePrice != null && ` · ${fmt(e.data.salePrice)}`}
                 </p>
                 {e.data.status === 'CANCELLED' && e.data.lostReason && (
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-500 mt-0.5">
                     Reason: {String(e.data.lostReason).replace(/_/g, ' ')}
                   </p>
                 )}
               </>
             )}
             {e.kind === 'vacancy' && (
-              <p className="text-sm text-gray-400 italic">
+              <p className="text-sm text-gray-500 italic">
                 {e.isOngoing ? (
                   <>Vacant since {fmtDate(e.startDate)} · {daysLabel(e.durationDays)} and counting</>
                 ) : (
@@ -394,7 +394,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
             {e.kind === 'status' && (
               <p className="text-sm text-gray-500">
                 {e.title}
-                <span className="text-xs text-gray-400">
+                <span className="text-xs text-gray-500">
                   {' · '}{fmtDate(e.startDate)}
                   {e.endDate ? ` – ${fmtDate(e.endDate)}` : ' – present'}
                 </span>
@@ -405,7 +405,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                 <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
                   {e.title}
                   <span
-                    className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${
+                    className={`text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${
                       e.data.isScheduled ? 'bg-gray-100 text-gray-500' : 'bg-teal-100 text-teal-700'
                     }`}
                   >
@@ -415,7 +415,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                       still ahead. Saying so keeps a "History" panel from asserting
                       future rent as though it had already been charged. */}
                   {e.isProjected && (
-                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                    <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
                       Upcoming
                     </span>
                   )}
@@ -423,13 +423,13 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                 <p className="text-xs text-gray-500 mt-0.5 tabular-nums">
                   {fmtDate(e.startDate)}
                   {' · '}{fmt(e.data.from)} → {fmt(e.data.to)}/mo
-                  <span className={e.data.delta >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                  <span className={e.data.delta >= 0 ? 'text-emerald-700' : 'text-red-700'}>
                     {' '}({e.data.delta >= 0 ? '+' : '−'}{fmt(Math.abs(e.data.delta))})
                   </span>
                   {e.data.escalationPct != null && ` · ${fmtPct(e.data.escalationPct)}`}
                 </p>
                 {e.data.reason && (
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-500 mt-0.5">
                     {e.data.reason}
                     {e.data.changedBy?.name && ` — ${e.data.changedBy.name}`}
                   </p>
@@ -445,7 +445,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                   {/* What changed, in the header — so the timeline is readable at a
                       glance without reading every row underneath it. */}
                   {summariseChanges(e.data.changes) && (
-                    <span className="text-gray-400"> · {summariseChanges(e.data.changes)}</span>
+                    <span className="text-gray-500"> · {summariseChanges(e.data.changes)}</span>
                   )}
                 </p>
                 {/* Field-by-field, because "the lease was edited" is not an answer to
@@ -458,12 +458,12 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                       <li key={i} className="text-xs leading-snug">
                         <span className="text-gray-600">{c.label}</span>
                         <span className="tabular-nums">
-                          <span className="text-gray-400"> {fmtChangeValue(c.from, c.type)}</span>
+                          <span className="text-gray-500"> {fmtChangeValue(c.from, c.type)}</span>
                           <span className="text-gray-300"> → </span>
                           <span className="text-gray-800 font-medium">{fmtChangeValue(c.to, c.type)}</span>
                         </span>
                         {delta && (
-                          <span className="ml-1.5 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 tabular-nums">
+                          <span className="ml-1.5 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500 tabular-nums">
                             {delta}
                           </span>
                         )}
@@ -610,25 +610,25 @@ function UnitRentHistory({
               className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${open ? 'border-b border-gray-100' : ''}`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <span className="text-gray-400 shrink-0">
+                <span className="text-gray-500 shrink-0">
                   {open ? <FiChevronDown className="w-4 h-4" /> : <FiChevronRight className="w-4 h-4" />}
                 </span>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
                     {l.tenantBrand || l.tenantName || 'Unnamed tenant'}
                     {ongoing ? (
-                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                      <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
                         Current
                       </span>
                     ) : (
-                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
                         {String(l.status).toLowerCase()}
                       </span>
                     )}
                     {/* Says the ledger below was typed in, not observed — which changes how
                         much you should trust it and what it takes to delete it. */}
                     {l.isHistorical && (
-                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                      <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
                         Recorded
                       </span>
                     )}
@@ -909,14 +909,24 @@ export default function UnitDetailPage() {
       await createSale.mutateAsync({
         projectId: projectId!,
         unitId: unitId!,
-        status: 'CLOSED',
+        // Recorded as UNDER_CONTRACT, not CLOSED. Closing is gated on the Deed, NOC and
+        // Possession Certificate being attached to the sale (S6/D1), and documents attach
+        // to a sale that exists — so a sale cannot be born closed. This records the deal;
+        // closing it is the second step, once the paperwork is on file.
+        status: 'UNDER_CONTRACT',
         buyer: saleForm.buyer.trim() || undefined,
         salePrice: parseFloat(saleForm.salePrice),
         depositAmt: saleForm.depositAmt ? parseFloat(saleForm.depositAmt) : undefined,
         closingDate: toDate(saleForm.closingDate),
         notes: saleForm.notes.trim() || undefined,
       });
-      addToast({ title: 'Sale recorded', color: 'success' });
+      addToast({
+        title: 'Sale recorded as Under Contract',
+        description: 'Attach the Deed, NOC and Possession Certificate to this sale in the project\'s '
+          + 'Revenue tab, then move it to Closed — that is what marks the unit sold.',
+        color: 'success',
+        timeout: 8000,
+      });
       await refreshUnit();
       setSaleModalOpen(false);
     } catch (e) {
@@ -1292,11 +1302,16 @@ export default function UnitDetailPage() {
         <ModalContent>
           <ModalHeader>Add Sale</ModalHeader>
           <ModalBody>
+            <p className="text-xs text-gray-500 mb-1">
+              This records the deal as <span className="font-medium text-gray-700">Under Contract</span>. The unit
+              is marked sold when the sale moves to Closed, which needs its Deed, NOC and Possession Certificate
+              attached first.
+            </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input label="Buyer" size="sm" value={saleForm.buyer} onChange={setSale('buyer')} className="sm:col-span-2" />
               <Input label="Sale Price ($)" size="sm" type="number" value={saleForm.salePrice} onChange={setSale('salePrice')} />
               <Input label="Deposit Amount ($)" size="sm" type="number" value={saleForm.depositAmt} onChange={setSale('depositAmt')} />
-              <Input label="Closing Date" size="sm" type="date" value={saleForm.closingDate} onChange={setSale('closingDate')} className="sm:col-span-2" />
+              <Input label="Expected Closing Date" size="sm" type="date" value={saleForm.closingDate} onChange={setSale('closingDate')} className="sm:col-span-2" />
               <Input label="Notes" size="sm" value={saleForm.notes} onChange={setSale('notes')} className="sm:col-span-2" />
             </div>
           </ModalBody>
@@ -1336,16 +1351,16 @@ export default function UnitDetailPage() {
           const soldPsf = sp && u.sqft ? (sp / u.sqft).toFixed(2) : null;
           return (
             <>
-              <Metric label="Sale Price" value={sp != null ? fmt(sp) : '\u2014'} accent="text-emerald-600" />
+              <Metric label="Sale Price" value={sp != null ? fmt(sp) : '\u2014'} accent="text-emerald-700" />
               <Metric label="Price PSF" value={soldPsf ? `$${soldPsf}` : '\u2014'} />
               <Metric label="Closed" value={fmtDate(closedSale?.closingDate)} />
             </>
           );
         })() : (
           <>
-            <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-600" />
+            <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-700" />
             <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
-            <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-600" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
+            <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-700" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
           </>
         )}
       </div>
@@ -1365,7 +1380,7 @@ export default function UnitDetailPage() {
             {canEditSale ? (
               <Button size="sm" color="primary" variant="flat" className="shrink-0" onPress={openAddSale}>+ Add Sale</Button>
             ) : (
-              <span className="text-xs text-gray-400 shrink-0">Ask someone with sales access to record it.</span>
+              <span className="text-xs text-gray-500 shrink-0">Ask someone with sales access to record it.</span>
             )}
           </div>
         );
@@ -1442,21 +1457,21 @@ export default function UnitDetailPage() {
                     ends up hand-typing a termination the server should be deriving. */}
                 <button
                   onClick={() => setAssignLease(activeLease)}
-                  className="text-gray-400 hover:text-violet-600 transition-colors p-1 rounded"
+                  className="text-gray-500 hover:text-violet-600 transition-colors p-1 rounded"
                   title="Assign lease to a new tenant (the lease itself continues)"
                 >
                   <FiRepeat className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => setEndLease(activeLease)}
-                  className="text-gray-400 hover:text-rose-600 transition-colors p-1 rounded"
+                  className="text-gray-500 hover:text-rose-700 transition-colors p-1 rounded"
                   title="End tenancy — records the move-out and releases the unit"
                 >
                   <FiLogOut className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => openEditLease(activeLease)}
-                  className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
+                  className="text-gray-500 hover:text-blue-600 transition-colors p-1 rounded"
                   title="Edit lease"
                 >
                   <FiEdit2 className="w-3.5 h-3.5" />
@@ -1503,7 +1518,7 @@ export default function UnitDetailPage() {
                     <p className="text-xs text-gray-500 truncate">{shownLease.tenantName}</p>
                   )}
                   {shownLease.tenantLegalName && shownLease.tenantLegalName !== shownLease.tenantName && (
-                    <p className="text-[11px] text-gray-400 italic truncate">{shownLease.tenantLegalName}</p>
+                    <p className="text-[11px] text-gray-500 italic truncate">{shownLease.tenantLegalName}</p>
                   )}
                   {shownLease.tenantContact && (
                     <p className="text-xs text-blue-600 mt-0.5 truncate">{shownLease.tenantContact}</p>
@@ -1512,7 +1527,7 @@ export default function UnitDetailPage() {
                 <div className="shrink-0">
                   {/* Derived, not `status`. A lease whose term ran out last month must
                       not wear a green "Active" chip just because nobody closed it. */}
-                  <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${tenancy!.chip}`}>
+                  <span className={`text-[11px] font-semibold uppercase px-2 py-0.5 rounded-full ${tenancy!.chip}`}>
                     {tenancy!.label}
                   </span>
                 </div>
@@ -1529,29 +1544,29 @@ export default function UnitDetailPage() {
                   keeps the figure legible but in neutral slate, so it never reads as a
                   live, currently-billing rent. */}
               <div className="grid grid-cols-2 gap-3">
-                <div className={`rounded-xl px-3 py-2.5 ${tenancy!.isPast ? 'bg-slate-50' : 'bg-emerald-50'}`}>
-                  <p className={`text-[10px] uppercase tracking-wide font-semibold ${
-                    tenancy!.isPast ? 'text-slate-500' : 'text-emerald-600'
+                <div className={`rounded-xl px-3 py-2.5 ${tenancy!.isPast ? 'bg-gray-50' : 'bg-emerald-50'}`}>
+                  <p className={`text-[11px] uppercase tracking-wide font-semibold ${
+                    tenancy!.isPast ? 'text-gray-500' : 'text-emerald-700'
                   }`}>
                     Monthly Rent
                   </p>
                   <p className={`text-lg font-bold tabular-nums mt-0.5 ${
-                    tenancy!.isPast ? 'text-slate-700' : 'text-emerald-700'
+                    tenancy!.isPast ? 'text-gray-700' : 'text-emerald-700'
                   }`}>
                     {fmt(shownLease.monthlyRent)}
                   </p>
                   {shownLease.rentPerSqft && (
-                    <p className={`text-[10px] ${tenancy!.isPast ? 'text-slate-500' : 'text-emerald-600'}`}>
+                    <p className={`text-[11px] ${tenancy!.isPast ? 'text-gray-500' : 'text-emerald-700'}`}>
                       ${Number(shownLease.rentPerSqft).toFixed(2)}/sqft/mo
                     </p>
                   )}
                 </div>
                 {shownLease.securityDeposit && (
-                  <div className="rounded-xl bg-slate-50 px-3 py-2.5">
-                    <p className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Deposit</p>
-                    <p className="text-lg font-bold text-slate-700 tabular-nums mt-0.5">{fmt(shownLease.securityDeposit)}</p>
+                  <div className="rounded-xl bg-gray-50 px-3 py-2.5">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Deposit</p>
+                    <p className="text-lg font-bold text-gray-700 tabular-nums mt-0.5">{fmt(shownLease.securityDeposit)}</p>
                     {depositAgreed > 0 && (
-                      <p className="text-[10px] text-slate-500">
+                      <p className="text-[11px] text-gray-500">
                         {depositPending > 0
                           ? `${fmt(depositPending)} outstanding`
                           : depositPending < 0 ? 'Overpaid — refund due' : 'Collected in full'}
@@ -1566,7 +1581,7 @@ export default function UnitDetailPage() {
               <dl className="text-sm divide-y divide-gray-100">
                 <Row label="Start"><span className="text-gray-700">{fmtDate(shownLease.leaseStart)}</span></Row>
                 <Row label="End">
-                  <span className={`${new Date(shownLease.leaseEnd) < new Date() ? 'text-red-600' : 'text-gray-700'}`}>
+                  <span className={`${new Date(shownLease.leaseEnd) < new Date() ? 'text-red-700' : 'text-gray-700'}`}>
                     {fmtDate(shownLease.leaseEnd)}
                   </span>
                 </Row>
@@ -1589,7 +1604,7 @@ export default function UnitDetailPage() {
                       {shownLease.freeRentStartDate ? ` from ${fmtDate(shownLease.freeRentStartDate)}` : ''}
                     </span>
                   ) : (
-                    <span className="text-gray-400">None</span>
+                    <span className="text-gray-500">None</span>
                   )}
                 </Row>
                 {/* TI flows Prime -> tenant, the opposite direction to the deposit, so it
@@ -1598,12 +1613,12 @@ export default function UnitDetailPage() {
                   {tiAgreed > 0 ? (
                     <span className="text-gray-700">
                       {fmt(tiAgreed)}
-                      <span className="text-gray-400">
+                      <span className="text-gray-500">
                         {tiPending > 0 ? ` · ${fmt(tiPending)} left to fund` : ' · fully funded'}
                       </span>
                     </span>
                   ) : (
-                    <span className="text-gray-400">None</span>
+                    <span className="text-gray-500">None</span>
                   )}
                 </Row>
               </dl>
@@ -1671,7 +1686,7 @@ export default function UnitDetailPage() {
               <Row label="Committed"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.committedTotal ?? 0))}</span></Row>
               <Row label="Actual"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.actualTotal ?? 0))}</span></Row>
               <Row label="Remaining">
-                <span className={`tabular-nums font-medium ${Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                <span className={`tabular-nums font-medium ${Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
                   {fmt(Number((budgetSummary as any)?.variance ?? 0))}
                 </span>
               </Row>
@@ -1683,7 +1698,7 @@ export default function UnitDetailPage() {
       {/* History — full lease + sale timeline, survives the unit changing status
           (e.g. a past tenant stays visible after the unit is later sold) */}
       <div className="mb-5 sm:mb-6">
-        <Section icon={<FiClock className="w-4 h-4 text-slate-600" />} title="History">
+        <Section icon={<FiClock className="w-4 h-4 text-gray-600" />} title="History">
           <UnitHistoryTimeline unitId={unitId} />
         </Section>
       </div>
@@ -1718,7 +1733,7 @@ export default function UnitDetailPage() {
               <h2 className="font-semibold text-sm text-gray-800">
                 Rent History
                 {(u.leases?.length ?? 0) > 1 && (
-                  <span className="text-gray-400 font-normal ml-1">({u.leases.length} leases)</span>
+                  <span className="text-gray-500 font-normal ml-1">({u.leases.length} leases)</span>
                 )}
               </h2>
             </div>
@@ -1751,7 +1766,7 @@ export default function UnitDetailPage() {
             action={canEditUnit && !editingNotes ? (
               <button
                 onClick={() => { setNotesDraft(u.notes ?? ''); setEditingNotes(true); }}
-                className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
+                className="text-gray-500 hover:text-blue-600 transition-colors p-1 rounded"
                 title="Edit notes"
               >
                 <FiEdit2 className="w-3.5 h-3.5" />
@@ -1779,7 +1794,7 @@ export default function UnitDetailPage() {
               </div>
             ) : (
               <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                {u.notes || <span className="text-gray-400 italic">No notes yet{canEditUnit ? ' — click edit to add' : ''}</span>}
+                {u.notes || <span className="text-gray-500 italic">No notes yet{canEditUnit ? ' — click edit to add' : ''}</span>}
               </p>
             )}
           </Section>
@@ -1862,7 +1877,7 @@ const DOC_CATEGORY_COLORS: Record<string, { bg: string; text: string }> = {
   CONSTRUCTION_DOCS:      { bg: 'bg-orange-50',   text: 'text-orange-700' },
   PERMITS:                { bg: 'bg-yellow-50',   text: 'text-yellow-700' },
   INSURANCE:              { bg: 'bg-teal-50',     text: 'text-teal-700' },
-  OTHER:                  { bg: 'bg-zinc-100',    text: 'text-zinc-700' },
+  OTHER:                  { bg: 'bg-gray-100',    text: 'text-gray-700' },
   GENERAL:                { bg: 'bg-gray-50',     text: 'text-gray-600' },
 };
 
@@ -2032,7 +2047,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
         </div>
       )}
 
-      {isLoading && <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>}
+      {isLoading && <div className="text-sm text-gray-500 py-4 text-center">Loading…</div>}
 
       {!isLoading && docs.length === 0 && !showUploadForm && (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
@@ -2041,8 +2056,8 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
           </div>
           <p className="text-sm font-medium text-gray-500">No documents yet</p>
           {canUpload
-            ? <p className="text-xs text-gray-400">Click <span className="font-medium text-gray-500">Upload</span> to attach a file directly to this unit.</p>
-            : <p className="text-xs text-gray-400">Upload from the project's Documents tab.</p>
+            ? <p className="text-xs text-gray-500">Click <span className="font-medium text-gray-500">Upload</span> to attach a file directly to this unit.</p>
+            : <p className="text-xs text-gray-500">Upload from the project's Documents tab.</p>
           }
         </div>
       )}
@@ -2104,7 +2119,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                       <Button size="sm" isIconOnly color="primary" onPress={handleSaveEdit} isLoading={saving} aria-label="Save"><FiCheck className="w-3.5 h-3.5" /></Button>
                     </div>
                   </div>
-                  {editErr && <p className="text-xs text-red-500">{editErr}</p>}
+                  {editErr && <p className="text-xs text-red-700">{editErr}</p>}
                   <Input
                     size="sm" label="File name" value={editName}
                     onChange={(e) => { setEditName(e.target.value); setEditErr(null); }}
@@ -2120,7 +2135,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                     </Button>
                     {editFile
                       ? <span className="text-xs text-gray-600 truncate max-w-[160px]">{editFile.name}</span>
-                      : <span className="text-xs text-gray-400">Current: {d.fileName}</span>
+                      : <span className="text-xs text-gray-500">Current: {d.fileName}</span>
                     }
                   </div>
                   <div className="flex justify-end gap-2 pt-1">
@@ -2141,14 +2156,14 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium text-gray-800 truncate">{d.fileName || d.name}</p>
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium ${color.bg} ${color.text}`}>
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium ${color.bg} ${color.text}`}>
                       {String(cat).replace(/_/g, ' ')}
                     </span>
                     {d.versionNumber > 1 && (
-                      <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">v{d.versionNumber}</span>
+                      <span className="text-[11px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">v{d.versionNumber}</span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-500 mt-0.5">
                     {d.uploadedBy?.name && <>by {d.uploadedBy.name} · </>}
                     {fmtDate(d.createdAt)}
                     {sizeKb && <> · {sizeKb < 1024 ? `${sizeKb} KB` : `${(sizeKb / 1024).toFixed(1)} MB`}</>}
@@ -2184,14 +2199,14 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                     <>
                       <button
                         onClick={() => openEdit(d)}
-                        className="p-1.5 text-gray-300 hover:text-blue-500 transition-colors rounded opacity-0 group-hover:opacity-100"
+                        className="p-1.5 text-gray-300 hover:text-blue-600 transition-colors rounded opacity-0 group-hover:opacity-100"
                         title="Edit"
                       >
                         <FiEdit2 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleDelete(d.id, d.fileName || d.name)}
-                        className="p-1.5 text-gray-300 hover:text-red-500 transition-colors rounded opacity-0 group-hover:opacity-100"
+                        className="p-1.5 text-gray-300 hover:text-red-700 transition-colors rounded opacity-0 group-hover:opacity-100"
                         title="Delete"
                       >
                         <FiTrash2 className="w-3.5 h-3.5" />
@@ -2225,15 +2240,15 @@ function UnitWaitlistPanel({ unitId }: { unitId: string }) {
           {rows.map((r) => (
             <div key={r.interestId} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
               <div className="flex items-center gap-2.5 min-w-0">
-                <span className="text-[11px] font-medium text-gray-400 w-5 tabular-nums text-center">#{r.position}</span>
-                <Avatar size="sm" name={r.lead?.name || 'Lead'} className="w-6 h-6 text-[9px] shrink-0" />
+                <span className="text-[11px] font-medium text-gray-500 w-5 tabular-nums text-center">#{r.position}</span>
+                <Avatar size="sm" name={r.lead?.name || 'Lead'} className="w-6 h-6 text-[11px] shrink-0" />
                 <span className="text-sm font-medium text-gray-800 truncate">{r.lead?.name || 'Unnamed lead'}</span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {r.lead?.budget != null && (
                   <span className="text-xs text-gray-500 tabular-nums">${Number(r.lead.budget).toLocaleString()}</span>
                 )}
-                <Chip size="sm" color={LEAD_STATUS_COLORS[r.lead?.status] || 'default'} variant="flat" className="text-[10px]">
+                <Chip size="sm" color={LEAD_STATUS_COLORS[r.lead?.status] || 'default'} variant="flat" className="text-[11px]">
                   {(r.lead?.status || '').replace('_', ' ')}
                 </Chip>
               </div>
@@ -2300,7 +2315,7 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
             key={t}
             onClick={() => setTab(t)}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-              tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              tab === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
             }`}
           >
             {t === 'leads' ? `Leads${leadsArr.length > 0 ? ` (${leadsArr.length})` : ''}` : 'Activity'}
@@ -2344,7 +2359,7 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
       title="Leads"
       action={tabToggle}
     >
-      {isLoading && <div className="text-sm text-gray-400 py-6 text-center">Loading…</div>}
+      {isLoading && <div className="text-sm text-gray-500 py-6 text-center">Loading…</div>}
 
       {!isLoading && leadsArr.length === 0 && (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
@@ -2352,7 +2367,7 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
             <FiTarget className="w-4 h-4 text-blue-400" />
           </div>
           <p className="text-sm font-medium text-gray-500">No leads linked</p>
-          <p className="text-xs text-gray-400">{canAddLead ? 'Click "Add Lead" to create one for this unit.' : 'Attach a lead from the Leads page or the project\'s Leads tab.'}</p>
+          <p className="text-xs text-gray-500">{canAddLead ? 'Click "Add Lead" to create one for this unit.' : 'Attach a lead from the Leads page or the project\'s Leads tab.'}</p>
         </div>
       )}
 
@@ -2364,18 +2379,18 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-sm font-semibold text-gray-900 truncate">
-                    {lead.name || <span className="text-gray-400 italic font-normal">Unnamed</span>}
+                    {lead.name || <span className="text-gray-500 italic font-normal">Unnamed</span>}
                   </p>
-                  <Chip size="sm" color={LEAD_STATUS_COLORS[lead.status] || 'default'} variant="flat" className="text-[10px] h-5">
+                  <Chip size="sm" color={LEAD_STATUS_COLORS[lead.status] || 'default'} variant="flat" className="text-[11px] h-5">
                     {String(lead.status).replace(/_/g, ' ')}
                   </Chip>
                   {lead.source && (
-                    <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                    <span className="text-[11px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
                       {String(lead.source).replace(/_/g, ' ')}
                     </span>
                   )}
                 </div>
-                <div className="flex gap-3 mt-1 text-xs text-gray-400 flex-wrap">
+                <div className="flex gap-3 mt-1 text-xs text-gray-500 flex-wrap">
                   {lead.email && <span className="flex items-center gap-1"><FiMail className="w-3 h-3" />{lead.email}</span>}
                   {lead.phone && <span className="flex items-center gap-1"><FiPhone className="w-3 h-3" />{lead.phone}</span>}
                   {lead.budget && <span className="text-gray-500 font-medium">${Number(lead.budget).toLocaleString()}</span>}
@@ -2384,7 +2399,7 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
                   ) : null}
                 </div>
               </div>
-              <div className="text-[11px] text-gray-400 shrink-0 flex items-center gap-1 mt-0.5">
+              <div className="text-[11px] text-gray-500 shrink-0 flex items-center gap-1 mt-0.5">
                 <FiClock className="w-3 h-3" />{fmtDate(lead.updatedAt)}
               </div>
             </div>
@@ -2394,17 +2409,17 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
 
       {!isLoading && leadsArr.length > 0 && tab === 'activity' && (
         activity.length === 0 ? (
-          <div className="text-sm text-gray-400 py-6 text-center">No activity logged yet across leads on this unit.</div>
+          <div className="text-sm text-gray-500 py-6 text-center">No activity logged yet across leads on this unit.</div>
         ) : (
           <div className="space-y-0.5">
             {activity.map((a: any) => (
               <div key={a.id} className="flex items-start gap-3 py-3 border-b border-gray-50 last:border-0">
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium shrink-0 mt-0.5 bg-gray-100 text-gray-600`}>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium shrink-0 mt-0.5 bg-gray-100 text-gray-600`}>
                   {ACTIVITY_TYPE_LABELS[a.type] || a.type}
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{a.note}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
+                  <p className="text-xs text-gray-500 mt-0.5">
                     <span className="font-medium text-gray-600">{a.leadName}</span>
                     {a.createdByUser?.name && <> · by {a.createdByUser.name}</>}
                     <> · {fmtDate(a.createdAt)}</>
@@ -2451,9 +2466,9 @@ function InlineComments({ unitId }: { unitId: string }) {
   return (
     <div>
       {isLoading ? (
-        <p className="text-xs text-gray-400">Loading...</p>
+        <p className="text-xs text-gray-500">Loading...</p>
       ) : comments.length === 0 ? (
-        <p className="text-xs text-gray-400 mb-3">No comments yet</p>
+        <p className="text-xs text-gray-500 mb-3">No comments yet</p>
       ) : (
         <div className="space-y-3 mb-4">
           {comments.map((c: any) => (
@@ -2463,7 +2478,7 @@ function InlineComments({ unitId }: { unitId: string }) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-semibold">{c.user?.name}</span>
                   <CommentChip type={c.commentType as CommentType} size="sm" />
-                  <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
+                  <span className="text-xs text-gray-500">{fmtDate(c.createdAt)}</span>
                   <Button
                     size="sm"
                     variant="light"
@@ -2472,7 +2487,7 @@ function InlineComments({ unitId }: { unitId: string }) {
                     className="ml-auto h-5 w-5 min-w-5"
                     onPress={() => deleteComment.mutate({ id: c.id, source: 'unit' })}
                   >
-                    <FiTrash2 className="text-[10px]" />
+                    <FiTrash2 className="text-[11px]" />
                   </Button>
                 </div>
                 <p className="text-sm text-gray-700 break-words">{c.content}</p>

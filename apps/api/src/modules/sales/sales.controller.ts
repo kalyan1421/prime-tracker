@@ -71,7 +71,11 @@ export class SalesController {
   @Post()
   @RequirePermissions('sales:edit')
   @ApiOperation({ summary: 'Create sale (validates unit belongs to project)' })
-  create(@Body() body: CreateSaleDto) { return this.service.create(body as any); }
+  // The user id is threaded through so a sale created already-CLOSED stamps its
+  // occupancy event with who did it, exactly as closing one through update() does.
+  create(@Body() body: CreateSaleDto, @CurrentUser('sub') userId: string) {
+    return this.service.create(body as any, userId);
+  }
 
   /**
    * POST /api/sales/backfill — a sale that already closed, entered by hand (R4). The

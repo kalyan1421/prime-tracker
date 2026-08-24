@@ -79,7 +79,7 @@ function PortfolioTab({ filterProject }: { filterProject?: string }) {
                     <td className="py-2 px-2"><StatusBadge status={p.phase} /></td>
                     <td className="py-2 px-2 text-right">{fmt(p.budget)}</td>
                     <td className="py-2 px-2 text-right">{fmt(p.actuals)}</td>
-                    <td className={`py-2 px-2 text-right ${p.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    <td className={`py-2 px-2 text-right ${p.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {fmt(p.variance)}
                     </td>
                     <td className="py-2 px-2 text-right">{p.soldUnits}</td>
@@ -183,7 +183,7 @@ function SalesTab({ filterProject }: { filterProject?: string }) {
                   </tr>
                 ))}
                 {(availableUnits as any[]).length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-4 text-gray-400">No available units</td></tr>
+                  <tr><td colSpan={7} className="text-center py-4 text-gray-500">No available units</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -261,7 +261,7 @@ function RevenueTab({ filterProject }: { filterProject?: string }) {
                   </tr>
                 ))}
                 {(expiringLeases as any[]).length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-4 text-gray-400">No leases expiring in the next 12 months</td></tr>
+                  <tr><td colSpan={7} className="text-center py-4 text-gray-500">No leases expiring in the next 12 months</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -339,7 +339,7 @@ function DebtTab({ filterProject }: { filterProject?: string }) {
                     </tr>
                   ))}
                   {(loans as any[]).length === 0 && (
-                    <tr><td colSpan={6} className="text-center py-4 text-gray-400">No loans</td></tr>
+                    <tr><td colSpan={6} className="text-center py-4 text-gray-500">No loans</td></tr>
                   )}
                 </tbody>
               </table></div>
@@ -370,13 +370,13 @@ function DebtTab({ filterProject }: { filterProject?: string }) {
                       <td className="py-2 px-2">{l.lender}</td>
                       <td className="py-2 px-2 text-right">{fmt(l.currentBalance)}</td>
                       <td className="py-2 px-2">{fmtDate(l.maturityDate)}</td>
-                      <td className={`py-2 px-2 text-right ${l.daysUntilMaturity <= 90 ? 'text-red-600' : ''}`}>
+                      <td className={`py-2 px-2 text-right ${l.daysUntilMaturity <= 90 ? 'text-red-700' : ''}`}>
                         {l.daysUntilMaturity}
                       </td>
                     </tr>
                   ))}
                   {(maturities as any[]).length === 0 && (
-                    <tr><td colSpan={5} className="text-center py-4 text-gray-400">No upcoming maturities</td></tr>
+                    <tr><td colSpan={5} className="text-center py-4 text-gray-500">No upcoming maturities</td></tr>
                   )}
                 </tbody>
               </table></div>
@@ -487,7 +487,7 @@ function InteriorTab({ projectId }: { projectId?: string }) {
         </CardHeader>
         <CardBody className="pt-0">
           {rows.length === 0 ? (
-            <p className="text-sm text-gray-400 py-4">No fit-out projects recorded.</p>
+            <p className="text-sm text-gray-500 py-4">No fit-out projects recorded.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -511,7 +511,7 @@ function InteriorTab({ projectId }: { projectId?: string }) {
                       <td className="py-2 px-2 text-right">{fmt(p.invoiced)}</td>
                       <td className="py-2 px-2 text-right">{fmt(p.unpaid)}</td>
                       <td className="py-2 px-2 text-right">{fmt(p.remaining)}</td>
-                      <td className={`py-2 px-2 text-right ${p.overrun > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+                      <td className={`py-2 px-2 text-right ${p.overrun > 0 ? 'text-red-700 font-semibold' : 'text-gray-500'}`}>
                         {p.overrun > 0 ? fmt(p.overrun) : '—'}
                       </td>
                     </tr>
@@ -529,7 +529,7 @@ function InteriorTab({ projectId }: { projectId?: string }) {
       <Card shadow="sm">
         <CardHeader className="pb-2">
           <p className="font-semibold text-sm text-gray-600">TI Billed to Buyers</p>
-          <span className="ml-2 text-[11px] text-gray-400">Separate from sub-contractor cost above</span>
+          <span className="ml-2 text-[11px] text-gray-500">Separate from sub-contractor cost above</span>
         </CardHeader>
         <CardBody className="pt-0">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -539,11 +539,11 @@ function InteriorTab({ projectId }: { projectId?: string }) {
             </div>
             <div>
               <p className="text-xs text-gray-500">Collected</p>
-              <p className="text-lg font-semibold text-green-600">{fmt(k.tiCollectedFromBuyers ?? 0)}</p>
+              <p className="text-lg font-semibold text-green-700">{fmt(k.tiCollectedFromBuyers ?? 0)}</p>
             </div>
             <div>
               <p className="text-xs text-gray-500">Outstanding</p>
-              <p className="text-lg font-semibold text-amber-600">{fmt(k.tiOutstandingFromBuyers ?? 0)}</p>
+              <p className="text-lg font-semibold text-amber-700">{fmt(k.tiOutstandingFromBuyers ?? 0)}</p>
             </div>
           </div>
         </CardBody>

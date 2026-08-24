@@ -151,21 +151,33 @@ export default function CampaignsPage() {
                       {(c.projects as any[])?.length > 0 ? (
                         <div className="flex flex-wrap gap-1">
                           {c.projects.map((p: any) => (
-                            <Chip key={p.id} size="sm" variant="flat" color="secondary" className="text-[10px]">{p.name}</Chip>
+                            <Chip key={p.id} size="sm" variant="flat" color="secondary" className="text-[11px]">{p.name}</Chip>
                           ))}
                         </div>
                       ) : (
-                        <Chip size="sm" variant="flat" className="text-[10px]">All Projects</Chip>
+                        <Chip size="sm" variant="flat" className="text-[11px]">All Projects</Chip>
                       )}
                     </td>
                     <td className="py-2 pr-3">
-                      <Chip size="sm" variant="flat" className="text-[10px]"
-                        style={{ backgroundColor: (CHANNEL_FILL[c.channel] || '#94a3b8') + '20', color: CHANNEL_FILL[c.channel] || '#475569' }}>
+                      {/* The channel colour tints the ground and fills the dot; the LABEL
+                          is neutral. CHANNEL_FILL is a chart palette, picked to read as
+                          areas on white, and using the same hex for text on a 12.5% tint
+                          of itself measured 2.25:1 for Google Ads. Same rule as the
+                          Recharts legends: the swatch carries the colour, the word does not. */}
+                      <Chip size="sm" variant="flat" className="text-[11px] text-gray-800"
+                        style={{ backgroundColor: (CHANNEL_FILL[c.channel] || '#94a3b8') + '20' }}
+                        startContent={
+                          <span
+                            className="ml-1 h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: CHANNEL_FILL[c.channel] || '#94a3b8' }}
+                            aria-hidden
+                          />
+                        }>
                         {String(c.channel).replace('_', ' ')}
                       </Chip>
                     </td>
                     <td className="py-2 pr-3">
-                      <Chip size="sm" color={STATUS_COLOR[c.status] || 'default'} variant="flat" className="text-[10px]">
+                      <Chip size="sm" color={STATUS_COLOR[c.status] || 'default'} variant="flat" className="text-[11px]">
                         {c.status}
                       </Chip>
                     </td>
@@ -176,7 +188,7 @@ export default function CampaignsPage() {
                     <td className="py-2 pr-3 text-right tabular-nums text-gray-600">{c.cpa != null ? fmt(c.cpa) : '—'}</td>
                     <td className="py-2 pr-3 text-right tabular-nums font-medium">
                       {c.roi != null ? (
-                        <span className={c.roi >= 1 ? 'text-emerald-600' : 'text-rose-600'}>
+                        <span className={c.roi >= 1 ? 'text-emerald-700' : 'text-rose-700'}>
                           {c.roi.toFixed(2)}x
                         </span>
                       ) : '—'}
@@ -216,7 +228,7 @@ export default function CampaignsPage() {
         </CardHeader>
         <CardBody className="pt-0">
           {byCampaign.length === 0 ? (
-            <div className="text-sm text-gray-400 text-center py-12">No campaigns yet.</div>
+            <div className="text-sm text-gray-500 text-center py-12">No campaigns yet.</div>
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(200, byCampaign.length * 36)}>
               <BarChart data={byCampaign} layout="vertical" margin={{ top: 8, right: 24, bottom: 0, left: 8 }}>

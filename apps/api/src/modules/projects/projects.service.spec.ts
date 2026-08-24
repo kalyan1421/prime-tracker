@@ -25,8 +25,10 @@ const mockPrisma = {
   projectComment: { findMany: jest.fn().mockResolvedValue([]) },
   unitComment: { findMany: jest.fn().mockResolvedValue([]) },
 };
-// interactive transaction — run the callback with the same mock as the tx client
-(mockPrisma as any).$transaction = jest.fn((cb: any) => cb(mockPrisma));
+// Prisma's $transaction has two shapes and the service uses both: the interactive form
+// ($transaction(cb)) and the array form ($transaction([...promises]), used by addMembers).
+(mockPrisma as any).$transaction = jest.fn((arg: any) =>
+  Array.isArray(arg) ? Promise.all(arg) : arg(mockPrisma));
 
 const mockAccess = {
   isScoped: (role: string) => ['PROJECT_MANAGER', 'CONSTRUCTION', 'SALES', 'MARKETING'].includes(role),
@@ -306,6 +308,92 @@ const mockEncryption = {
           update: { role: 'LEGAL', roles: ['LEGAL', 'FINANCE'] },
         }),
       );
+    });
+  });
+
+  /**
+   * The batch route exists because the per-person loop it replaced hit the global
+   * 10-req/sec throttle: 19 people in, 10 added, 9 rejected with a bare count. These cover
+   * the two properties that keep that from recurring — one round trip, and all-or-nothing.
+   */
+  describe('addMembers', () => {
+    const found = {
+      id: 'p1', name: 'Shops at Panther Creek',
+      buildings: [], milestones: [], budgetLines: [], commitments: [],
+      actuals: [], loans: [], sales: [], kpiSnapshots: [],
+    };
+    beforeEach(() => {
+      mockPrisma.project.findUnique.mockResolvedValue(found);
+      mockPrisma.projectMember.upsert.mockImplementation((args: any) => Promise.resolve(args));
+    });
+
+    it('adds a batch far larger than the 10/sec throttle in ONE transaction', async () => {
+      const members = Array.from({ length: 19 }, (_, i) => ({ userId: `u${i}`, roles: ['SALES'] }));
+
+      const result = await service.addMembers('p1', members);
+
+      expect(result).toHaveLength(19);
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledTimes(19);
+      expect((mockPrisma as any).$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes nothing when a single entry carries a bad role', async () => {
+      await expect(service.addMembers('p1', [
+        { userId: 'u1', roles: ['FINANCE'] },
+        { userId: 'u2', roles: ['LEGAAL'] },
+      ])).rejects.toBeInstanceOf(BadRequestException);
+
+      // The whole batch is rejected before any write — a half-added team is worse than
+      // none, because nobody can tell which half is missing.
+      expect(mockPrisma.projectMember.upsert).not.toHaveBeenCalled();
+      expect((mockPrisma as any).$transaction).not.toHaveBeenCalled();
+    });
+
+    it('names the offending user alongside the bad role', async () => {
+      await expect(service.addMembers('p1', [{ userId: 'u7', roles: ['MANAGER'] }]))
+        .rejects.toThrow(/Invalid project member role 'MANAGER' for user u7/);
+    });
+
+    it('rejects OWNER in a batch, same as the single-member route', async () => {
+      await expect(service.addMembers('p1', [{ userId: 'u1', roles: ['OWNER'] }]))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('collapses a duplicated userId to one upsert, last entry winning', async () => {
+      await service.addMembers('p1', [
+        { userId: 'u1', roles: ['VIEWER'] },
+        { userId: 'u1', roles: ['FINANCE', 'LEGAL'] },
+      ]);
+
+      // Two upserts on the same unique key inside one transaction would race.
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ update: { role: 'FINANCE', roles: ['FINANCE', 'LEGAL'] } }),
+      );
+    });
+
+    it('defaults to TEAM_MEMBER and dedupes roles, matching addMember', async () => {
+      await service.addMembers('p1', [
+        { userId: 'u1' },
+        { userId: 'u2', roles: ['LEGAL', 'FINANCE', 'LEGAL'] },
+      ]);
+
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: { projectId: 'p1', userId: 'u1', role: 'TEAM_MEMBER', roles: ['TEAM_MEMBER'] },
+        }),
+      );
+      expect(mockPrisma.projectMember.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ update: { role: 'LEGAL', roles: ['LEGAL', 'FINANCE'] } }),
+      );
+    });
+
+    it('404s on an unknown project before touching memberships', async () => {
+      mockPrisma.project.findUnique.mockResolvedValue(null);
+
+      await expect(service.addMembers('nope', [{ userId: 'u1', roles: ['SALES'] }]))
+        .rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.projectMember.upsert).not.toHaveBeenCalled();
     });
   });
 

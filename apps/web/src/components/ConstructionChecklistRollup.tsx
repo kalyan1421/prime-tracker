@@ -122,7 +122,7 @@ const UnitCard = memo(function UnitCard({
       </Tooltip>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-gray-800 truncate">Unit {r.unit.unitNumber ?? r.unit.id}</div>
-        <div className="text-xs text-gray-400 mb-0.5">{r.doneStages}/{r.totalStages} done</div>
+        <div className="text-xs text-gray-500 mb-0.5">{r.doneStages}/{r.totalStages} done</div>
         <div className="flex items-center gap-1.5 min-w-0">
           <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${DOT_FILL[r.color]}`} />
           <span className="text-xs text-gray-600 truncate">
@@ -167,16 +167,16 @@ const BuildingSection = memo(function BuildingSection({
         <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
           {expanded ? <FiChevronDown className="shrink-0" /> : <FiChevronRight className="shrink-0" />}
           {b.name}
-          <span className="font-normal text-gray-400 normal-case">· {b.units.length} unit{b.units.length === 1 ? '' : 's'}</span>
+          <span className="font-normal text-gray-500 normal-case">· {b.units.length} unit{b.units.length === 1 ? '' : 's'}</span>
         </span>
         <span className="flex items-center gap-3 text-xs shrink-0">
           {stats.blocked > 0 && (
-            <span className="flex items-center gap-1 text-red-600 font-medium">
+            <span className="flex items-center gap-1 text-red-700 font-medium">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
               {stats.blocked} blocked
             </span>
           )}
-          <span className="text-gray-400">{stats.avgPct}% avg</span>
+          <span className="text-gray-500">{stats.avgPct}% avg</span>
         </span>
       </button>
       {expanded && (

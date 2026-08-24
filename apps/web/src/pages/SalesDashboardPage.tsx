@@ -168,12 +168,12 @@ export default function SalesDashboardPage() {
                       <td className="py-2 px-2 font-medium">{p.projectName}</td>
                       <td className="py-2 px-2 text-center">{p.available}</td>
                       <td className="py-2 px-2 text-center text-blue-600">{p.underContract}</td>
-                      <td className="py-2 px-2 text-center text-teal-600">{p.leased}</td>
-                      <td className="py-2 px-2 text-center text-green-600">{p.sold}</td>
+                      <td className="py-2 px-2 text-center text-teal-700">{p.leased}</td>
+                      <td className="py-2 px-2 text-center text-green-700">{p.sold}</td>
                     </tr>
                   ))}
                   {(d.unitsByProject || []).length === 0 && (
-                    <tr><td colSpan={5} className="text-center py-4 text-gray-400">No projects</td></tr>
+                    <tr><td colSpan={5} className="text-center py-4 text-gray-500">No projects</td></tr>
                   )}
                 </tbody>
               </table></div>
@@ -187,7 +187,7 @@ export default function SalesDashboardPage() {
           </CardHeader>
           <CardBody>
             {inventoryByProject.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+              <p className="text-sm text-gray-500 py-10 text-center">No data</p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={inventoryByProject}>
@@ -213,7 +213,7 @@ export default function SalesDashboardPage() {
         </CardHeader>
         <CardBody className="pt-0">
           {(d.recentSalesActivity || []).length === 0 ? (
-            <p className="text-sm text-gray-400 py-4 text-center">No recent activity</p>
+            <p className="text-sm text-gray-500 py-4 text-center">No recent activity</p>
           ) : (
             <div className="overflow-auto">
               <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">

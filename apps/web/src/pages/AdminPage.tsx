@@ -88,7 +88,7 @@ const ROLE_CATEGORIES = [
   },
   {
     label: 'Support',
-    color: 'bg-slate-50 border-slate-200',
+    color: 'bg-gray-50 border-gray-200',
     chipColor: 'default' as const,
     roles: ['LEGAL', 'VIEWER'],
   },
@@ -120,7 +120,7 @@ function MultiRolePicker({
         if (!visibleRoles.length) return null;
         return (
           <div key={cat.label}>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">{cat.label}</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-gray-500 mb-1.5">{cat.label}</p>
             <div className="flex flex-wrap gap-1.5">
               {visibleRoles.map((role) => {
                 const active = selectedRoles.includes(role);
@@ -131,8 +131,8 @@ function MultiRolePicker({
                     onClick={() => toggle(role)}
                     className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all duration-150 ${
                       active
-                        ? 'bg-slate-800 text-white border-slate-800 shadow-sm'
-                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400 hover:text-slate-700'
+                        ? 'bg-gray-800 text-white border-gray-800 shadow-sm'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700'
                     }`}
                   >
                     {active && <FiCheck className="w-3 h-3" />}
@@ -326,7 +326,7 @@ function UsersPanel() {
                   {r.replace(/_/g, ' ')}
                 </Chip>
               ))}
-              <span className="ml-auto text-xs text-gray-400">{filtered.length} users</span>
+              <span className="ml-auto text-xs text-gray-500">{filtered.length} users</span>
             </div>
           </CardHeader>
           <CardBody className="pt-2">
@@ -405,7 +405,7 @@ function UsersPanel() {
                   ))}
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-sm text-gray-400">
+                      <td colSpan={6} className="py-8 text-center text-sm text-gray-500">
                         No users found
                       </td>
                     </tr>
@@ -479,7 +479,7 @@ function UsersPanel() {
                   onChange={handleRolesPendingChange}
                   availableRoles={availableRoles}
                 />
-                <p className="text-[10px] text-gray-400 mt-2">
+                <p className="text-[11px] text-gray-500 mt-2">
                   Click to toggle · First selected = primary role
                 </p>
               </div>
@@ -488,7 +488,7 @@ function UsersPanel() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase">Account Active</p>
-                  <p className="text-xs text-gray-400">{selectedUser.isActive ? 'User can log in' : 'Access blocked'}</p>
+                  <p className="text-xs text-gray-500">{selectedUser.isActive ? 'User can log in' : 'Access blocked'}</p>
                 </div>
                 <Switch
                   size="sm"
@@ -501,7 +501,7 @@ function UsersPanel() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase">MFA</p>
-                  <p className="text-xs text-gray-400">{selectedUser.mfaEnabled ? 'Enabled' : 'Not set up'}</p>
+                  <p className="text-xs text-gray-500">{selectedUser.mfaEnabled ? 'Enabled' : 'Not set up'}</p>
                 </div>
                 <FiShield className={selectedUser.mfaEnabled ? 'text-green-500' : 'text-gray-300'} />
               </div>
@@ -509,11 +509,11 @@ function UsersPanel() {
               {/* Dates */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
-                  <p className="text-gray-400 uppercase font-semibold">Last Login</p>
+                  <p className="text-gray-500 uppercase font-semibold">Last Login</p>
                   <p className="text-gray-700">{fmtDate(selectedUser.lastLoginAt) || '—'}</p>
                 </div>
                 <div>
-                  <p className="text-gray-400 uppercase font-semibold">Created</p>
+                  <p className="text-gray-500 uppercase font-semibold">Created</p>
                   <p className="text-gray-700">{fmtDate(selectedUser.createdAt) || '—'}</p>
                 </div>
               </div>
@@ -605,7 +605,7 @@ function UsersPanel() {
                       <button
                         type="button"
                         onClick={() => setShowCreatePassword((v) => !v)}
-                        className="text-gray-400 hover:text-gray-600"
+                        className="text-gray-500 hover:text-gray-600"
                         aria-label={showCreatePassword ? 'Hide password' : 'Show password'}
                       >
                         {showCreatePassword ? <FiEyeOff /> : <FiEye />}
@@ -623,7 +623,7 @@ function UsersPanel() {
                     errorMessage={createPasswordMismatch ? 'Passwords do not match' : undefined}
                   />
                 </div>
-                <p className="text-[11px] text-gray-400 mt-1.5">
+                <p className="text-[11px] text-gray-500 mt-1.5">
                   Leave blank to allow Google Sign-In only. Set a password to also enable email/password login.
                 </p>
               </div>
@@ -677,7 +677,7 @@ function UsersPanel() {
                 value={editForm.phone}
                 onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
               />
-              <p className="text-[11px] text-gray-400">
+              <p className="text-[11px] text-gray-500">
                 Role and account status are changed from the row actions, not here.
               </p>
             </div>
@@ -721,7 +721,7 @@ function UsersPanel() {
                 }
                 onChange={(e) => { setPwForm((f) => ({ ...f, newPassword: e.target.value })); setPwError(''); }}
                 endContent={
-                  <button type="button" className="text-gray-400" onClick={() => setShowPw((v) => !v)}>
+                  <button type="button" className="text-gray-500" onClick={() => setShowPw((v) => !v)}>
                     {showPw ? <FiEyeOff /> : <FiEye />}
                   </button>
                 }
@@ -744,7 +744,7 @@ function UsersPanel() {
                 This signs <strong>{selectedUser?.name}</strong> out of every device. Tell them the
                 new password over a channel they already trust — it is not emailed to them.
               </p>
-              {pwError && <p className="text-xs text-red-600">{pwError}</p>}
+              {pwError && <p className="text-xs text-red-700">{pwError}</p>}
             </div>
           </ModalBody>
           <ModalFooter>
@@ -854,9 +854,9 @@ function IntegrationsPanel() {
               <div>
                 <p className="text-xs text-gray-500">Status</p>
                 {qbSync.isSuccess ? (
-                  <p className="text-sm text-green-600 font-medium">Sync complete</p>
+                  <p className="text-sm text-green-700 font-medium">Sync complete</p>
                 ) : qbSync.isError ? (
-                  <p className="text-sm text-red-600 font-medium">Sync failed</p>
+                  <p className="text-sm text-red-700 font-medium">Sync failed</p>
                 ) : (
                   <p className="text-sm text-gray-500">Ready</p>
                 )}
@@ -879,8 +879,8 @@ const AUDIT_ACTION_STYLE: Record<string, string> = {
   UPDATE: 'bg-blue-50 text-blue-700 border-blue-200',
   DELETE: 'bg-red-50 text-red-700 border-red-200',
   ROLE_CHANGE: 'bg-amber-50 text-amber-700 border-amber-200',
-  LOGIN: 'bg-slate-50 text-slate-500 border-slate-200',
-  LOGOUT: 'bg-slate-50 text-slate-500 border-slate-200',
+  LOGIN: 'bg-gray-50 text-gray-500 border-gray-200',
+  LOGOUT: 'bg-gray-50 text-gray-500 border-gray-200',
 };
 
 /** Relative-day heading, so a long log reads as "when" before "what". */
@@ -1002,8 +1002,8 @@ function AuditPanel() {
                   onClick={() => setFilter(() => setDays(p.key))}
                   className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
                     days === p.key
-                      ? 'bg-slate-800 text-white border-slate-800'
-                      : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'
+                      ? 'bg-gray-800 text-white border-gray-800'
+                      : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
                   }`}
                 >
                   {p.label}
@@ -1035,7 +1035,7 @@ function AuditPanel() {
       <Card shadow="sm">
         <CardBody className="p-0">
           {events.length === 0 ? (
-            <div className="py-12 text-center text-sm text-gray-400">
+            <div className="py-12 text-center text-sm text-gray-500">
               No audit events match these filters.
             </div>
           ) : (
@@ -1055,7 +1055,7 @@ function AuditPanel() {
                   {groups.map((g) => (
                     <React.Fragment key={g.day}>
                       <tr className="bg-gray-50/70">
-                        <td colSpan={6} className="py-1.5 px-3 text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                        <td colSpan={6} className="py-1.5 px-3 text-[11px] font-bold uppercase tracking-widest text-gray-500">
                           {g.day}
                         </td>
                       </tr>
@@ -1066,17 +1066,17 @@ function AuditPanel() {
                           </td>
                           <td className="py-2 px-3">
                             <span className="text-gray-800">{e.user?.name || '\u2014'}</span>
-                            {e.user?.email && <span className="block text-[11px] text-gray-400">{e.user.email}</span>}
+                            {e.user?.email && <span className="block text-[11px] text-gray-500">{e.user.email}</span>}
                           </td>
                           <td className="py-2 px-3">
-                            <span className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-bold tracking-wide ${AUDIT_ACTION_STYLE[e.action] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+                            <span className={`inline-block px-2 py-0.5 rounded-md border text-[11px] font-bold tracking-wide ${AUDIT_ACTION_STYLE[e.action] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
                               {e.action.replace(/_/g, ' ')}
                             </span>
                           </td>
                           <td className="py-2 px-3">
                             <span className="text-gray-700">{e.entity || '\u2014'}</span>
                             {e.entityId && (
-                              <span className="block font-mono text-[10px] text-gray-400" title={e.entityId}>
+                              <span className="block font-mono text-[11px] text-gray-500" title={e.entityId}>
                                 {e.entityId.substring(0, 8)}…
                               </span>
                             )}
@@ -1086,7 +1086,7 @@ function AuditPanel() {
                           <td className="py-2 px-3 text-xs text-gray-500 max-w-[280px]">
                             <AuditDetails event={e} />
                           </td>
-                          <td className="py-2 px-3 text-xs text-gray-400">{e.ipAddress || '\u2014'}</td>
+                          <td className="py-2 px-3 text-xs text-gray-500">{e.ipAddress || '\u2014'}</td>
                         </tr>
                       ))}
                     </React.Fragment>
@@ -1133,7 +1133,7 @@ function AuditDetails({ event }: { event: any }) {
       return (
         <span className="flex flex-wrap gap-1">
           {entries.slice(0, 3).map(([k, v]) => (
-            <span key={k} className="inline-block bg-gray-100 rounded px-1.5 py-0.5 text-[10px] text-gray-600">
+            <span key={k} className="inline-block bg-gray-100 rounded px-1.5 py-0.5 text-[11px] text-gray-600">
               {k === 'event' ? String(v).replace(/_/g, ' ').toLowerCase() : `${k}: ${String(v)}`}
             </span>
           ))}
@@ -1146,7 +1146,7 @@ function AuditDetails({ event }: { event: any }) {
     : [];
   if (changed.length) {
     return (
-      <span className="text-[11px] text-gray-400">
+      <span className="text-[11px] text-gray-500">
         {changed.slice(0, 4).join(', ')}{changed.length > 4 ? ` +${changed.length - 4}` : ''}
       </span>
     );
@@ -1211,7 +1211,7 @@ function RolesPanel() {
         >
           Permission Matrix
         </Button>
-        <span className="ml-auto text-xs text-gray-400">{roles.length} roles defined</span>
+        <span className="ml-auto text-xs text-gray-500">{roles.length} roles defined</span>
       </div>
 
       {viewMode === 'cards' ? (
@@ -1240,7 +1240,7 @@ function RolesPanel() {
                             <Chip size="sm" variant="flat" color={ROLE_CHIP_COLOR[r.role] || 'default'}>
                               {r.label}
                             </Chip>
-                            <span className="text-xs text-gray-400 font-medium">
+                            <span className="text-xs text-gray-500 font-medium">
                               {roleCounts[r.role] || 0} user{(roleCounts[r.role] || 0) !== 1 ? 's' : ''}
                             </span>
                           </div>
@@ -1314,7 +1314,7 @@ function RolesPanel() {
                       Users ({selectedRoleUsers.length})
                     </p>
                     {selectedRoleUsers.length === 0 ? (
-                      <p className="text-xs text-gray-400">No users with this role</p>
+                      <p className="text-xs text-gray-500">No users with this role</p>
                     ) : (
                       <div className="space-y-2 max-h-[200px] overflow-y-auto">
                         {selectedRoleUsers.map((u: any) => (
@@ -1322,7 +1322,7 @@ function RolesPanel() {
                             <Avatar size="sm" name={u.name} src={u.avatarUrl} className="w-6 h-6 flex-shrink-0" />
                             <div className="min-w-0">
                               <p className="text-xs font-medium text-gray-700 truncate">{u.name}</p>
-                              <p className="text-xs text-gray-400 truncate">{u.email}</p>
+                              <p className="text-xs text-gray-500 truncate">{u.email}</p>
                             </div>
                           </div>
                         ))}
@@ -1350,7 +1350,7 @@ function RolesPanel() {
                         key={r.role}
                         className="py-2 px-1 text-center font-semibold min-w-[60px]"
                       >
-                        <Chip size="sm" variant="flat" color={ROLE_CHIP_COLOR[r.role] || 'default'} className="text-[10px]">
+                        <Chip size="sm" variant="flat" color={ROLE_CHIP_COLOR[r.role] || 'default'} className="text-[11px]">
                           {r.label.length > 8 ? r.label.substring(0, 7) + '\u2026' : r.label}
                         </Chip>
                       </th>
@@ -1363,7 +1363,7 @@ function RolesPanel() {
                       <tr className="bg-gray-50">
                         <td
                           colSpan={roles.length + 1}
-                          className="py-1.5 px-3 font-semibold text-gray-600 uppercase text-[10px] tracking-wider sticky left-0 bg-gray-50"
+                          className="py-1.5 px-3 font-semibold text-gray-600 uppercase text-[11px] tracking-wider sticky left-0 bg-gray-50"
                         >
                           {pc.label}
                         </td>
@@ -1457,7 +1457,7 @@ function CategoryOptions({ category }: { category: string }) {
     }
   };
 
-  if (isLoading) return <div className="py-6 text-center text-gray-400">Loading…</div>;
+  if (isLoading) return <div className="py-6 text-center text-gray-500">Loading…</div>;
 
   return (
     <div className="space-y-2">
@@ -1474,9 +1474,9 @@ function CategoryOptions({ category }: { category: string }) {
             >
               {opt.label}
             </Chip>
-            <span className="text-xs text-gray-400 font-mono">{opt.value}</span>
+            <span className="text-xs text-gray-500 font-mono">{opt.value}</span>
             {opt.isSystem && (
-              <Chip size="sm" variant="flat" color="default" className="text-[10px]">system</Chip>
+              <Chip size="sm" variant="flat" color="default" className="text-[11px]">system</Chip>
             )}
           </div>
           {!opt.isSystem && (
@@ -1550,7 +1550,7 @@ function OptionsPanel() {
       {/* Left sidebar — category list */}
       <Card className="sm:w-56 shrink-0">
         <CardBody className="p-2">
-          <p className="text-xs text-gray-400 font-medium px-2 py-1 uppercase tracking-wide">Categories</p>
+          <p className="text-xs text-gray-500 font-medium px-2 py-1 uppercase tracking-wide">Categories</p>
           <div className="space-y-0.5">
             {categories.map((cat) => (
               <button
@@ -1575,7 +1575,7 @@ function OptionsPanel() {
           <CardHeader className="flex flex-col items-start gap-0.5 pb-2">
             <h3 className="font-semibold text-base">{CATEGORY_META[selected]?.label}</h3>
             <p className="text-xs text-gray-500">{CATEGORY_META[selected]?.description}</p>
-            <p className="text-xs text-gray-400 mt-1">System options (gray) are always present. Custom options can be added and removed.</p>
+            <p className="text-xs text-gray-500 mt-1">System options (gray) are always present. Custom options can be added and removed.</p>
           </CardHeader>
           <CardBody className="pt-0">
             <CategoryOptions category={selected} />

@@ -534,7 +534,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900">Rent Collection</p>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-500">
             One row per month, generated from the rent schedule — months are never added by hand
           </p>
           {/* What the ledger actually covers. Nothing said this before, so there was no
@@ -607,7 +607,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
                         : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
-                  {f.label} <span className={active ? 'text-gray-300' : 'text-gray-400'}>{counts[f.key]}</span>
+                  {f.label} <span className={active ? 'text-gray-300' : 'text-gray-500'}>{counts[f.key]}</span>
                 </button>
               );
             })}
@@ -621,7 +621,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
                 <div key={g.year} className="space-y-2">
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] font-bold uppercase tracking-wide text-gray-500">{g.year}</span>
-                    <span className="text-[11px] text-gray-400">
+                    <span className="text-[11px] text-gray-500">
                       {fmt(g.collected)} collected of {fmt(g.billed)} billed
                     </span>
                     <div className="h-px flex-1 bg-gray-100" />
@@ -656,13 +656,13 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
                   {/* A hidden month somebody is chasing is the one thing collapsing must
                       never bury, so it is named on the control that would hide it. */}
                   {!showAll && shown.hiddenNeedingAttention > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                    <span className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
                       <FiAlertTriangle size={9} />
                       {shown.hiddenNeedingAttention} earlier need
                       {shown.hiddenNeedingAttention === 1 ? 's' : ''} attention
                     </span>
                   )}
-                  <span className="ml-auto text-[11px] text-gray-400">
+                  <span className="ml-auto text-[11px] text-gray-500">
                     {showAll ? 'Collapse' : `${shown.hidden} earlier hidden`}
                   </span>
                 </button>
@@ -748,7 +748,7 @@ export function RentCollectionPanel({ leaseId, canCollect, unitId }: RentCollect
               type="number"
               label="Total collected this month"
               placeholder="0.00"
-              startContent={<span className="text-sm text-gray-400">$</span>}
+              startContent={<span className="text-sm text-gray-500">$</span>}
               value={payForm.amountPaid}
               onChange={setPay('amountPaid')}
               description={
@@ -909,7 +909,7 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, onRe
       <Button
         size="sm"
         variant="light"
-        className="h-6 min-w-0 px-1.5 text-[11px] text-gray-400 data-[hover=true]:text-gray-900"
+        className="h-6 min-w-0 px-1.5 text-[11px] text-gray-500 data-[hover=true]:text-gray-900"
         onPress={onRecord}
       >
         Correct
@@ -936,19 +936,19 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, onRe
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <p className="text-sm font-semibold text-gray-900">{monthLabel(inv.periodMonth)}</p>
-            <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${m.chip}`}>
+            <span className={`rounded border px-1.5 py-0.5 text-[11px] font-semibold ${m.chip}`}>
               {free && !waived && <FiGift size={9} className="mr-1 inline align-[-1px]" />}
               {m.label}
             </span>
             {overdue && (
-              <span className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
+              <span className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-700">
                 <FiAlertTriangle size={9} /> OVERDUE
               </span>
             )}
             {/* Amber, not red: this month is not being chased, it is being questioned.
                 Reading as overdue would send somebody after a tenant who may owe nothing. */}
             {inv.needsReview && (
-              <span className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+              <span className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-800">
                 <FiAlertTriangle size={9} /> CHECK AMOUNT
               </span>
             )}
@@ -958,7 +958,7 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, onRe
                 size="sm"
                 content={`Part month — billed ${inv.billedDays ?? '—'} of ${inv.monthDays ?? '—'} days at the monthly rate.`}
               >
-                <span className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">
+                <span className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700">
                   <FiClock size={9} /> {inv.billedDays ?? '—'}/{inv.monthDays ?? '—'} days
                 </span>
               </Tooltip>
@@ -975,16 +975,16 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, onRe
           {paid > 0 && (
             <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
               <span>Collected {fmtDate(inv.paidAt)}</span>
-              {inv.method && <Chip size="sm" variant="flat" className="h-4 px-1 text-[10px]">{inv.method}</Chip>}
-              {inv.reference && <span className="truncate text-gray-400">ref {inv.reference}</span>}
-              {inv.recordedBy?.name && <span className="text-gray-400">by {inv.recordedBy.name}</span>}
+              {inv.method && <Chip size="sm" variant="flat" className="h-4 px-1 text-[11px]">{inv.method}</Chip>}
+              {inv.reference && <span className="truncate text-gray-500">ref {inv.reference}</span>}
+              {inv.recordedBy?.name && <span className="text-gray-500">by {inv.recordedBy.name}</span>}
             </p>
           )}
 
           {inv.needsReview && (
             <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-900">
               <p>{inv.reviewReason ?? 'The rent period this was billed from has since been corrected.'}</p>
-              <p className="mt-1 text-amber-800/80">
+              <p className="mt-1 text-amber-800">
                 Nothing has been changed here — an invoice records what was actually billed.
                 Re-issue, credit or leave it, then mark it reviewed.
               </p>
@@ -992,7 +992,7 @@ function InvoiceRow({ invoice: inv, canCollect, onRecord, onClear, onWaive, onRe
                 <Button
                   size="sm"
                   variant="flat"
-                  className="mt-1.5 h-6 text-[10px]"
+                  className="mt-1.5 h-6 text-[11px]"
                   isDisabled={busy}
                   onPress={onReviewed}
                 >

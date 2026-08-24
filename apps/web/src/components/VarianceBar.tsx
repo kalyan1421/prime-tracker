@@ -41,9 +41,9 @@ export function VarianceBar({ budget, actuals, committed, className = '' }: Vari
     <Tooltip
       content={
         <div className="text-xs space-y-0.5">
-          <div><span className="text-gray-400">Budget:</span> {fmt(budget)}</div>
-          <div><span className="text-gray-400">Actuals:</span> {fmt(actuals)}</div>
-          <div><span className="text-gray-400">Commitments:</span> {fmt(committed)}</div>
+          <div><span className="text-gray-500">Budget:</span> {fmt(budget)}</div>
+          <div><span className="text-gray-500">Actuals:</span> {fmt(actuals)}</div>
+          <div><span className="text-gray-500">Commitments:</span> {fmt(committed)}</div>
           <div className={`font-semibold mt-0.5 ${SEVERITY[severity].text}`}>
             {(utilization * 100).toFixed(0)}% utilized
             {overage > 0 && ` · ${fmt(overage)} over`}

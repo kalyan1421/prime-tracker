@@ -194,7 +194,7 @@ export default function InventoryPage() {
       ) : units.length === 0 ? (
         <Card shadow="sm">
           <CardBody>
-            <div className="text-center py-10 text-gray-400">
+            <div className="text-center py-10 text-gray-500">
               <FiFilter className="mx-auto text-3xl mb-2" />
               <p>No units match the selected filters.</p>
             </div>
@@ -257,7 +257,7 @@ export default function InventoryPage() {
                             {canEdit && (
                               <button
                                 onClick={(e) => openStatusEdit(e, u)}
-                                className="text-gray-400 hover:text-gray-600 transition-colors"
+                                className="text-gray-500 hover:text-gray-600 transition-colors"
                                 title="Update status"
                               >
                                 <FiEdit2 className="w-3 h-3" />
@@ -274,12 +274,12 @@ export default function InventoryPage() {
                         {activeLease ? (
                           <div>
                             <div className="font-medium">{activeLease.tenantName}</div>
-                            <div className="text-gray-400">until {fmtDate(activeLease.leaseEnd)}</div>
+                            <div className="text-gray-500">until {fmtDate(activeLease.leaseEnd)}</div>
                           </div>
                         ) : activeSale ? (
                           <div>
                             <div className="font-medium">{activeSale.buyer || '—'}</div>
-                            <div className="text-gray-400">{activeSale.status.replace(/_/g, ' ')}</div>
+                            <div className="text-gray-500">{activeSale.status.replace(/_/g, ' ')}</div>
                           </div>
                         ) : '—'}
                       </td>
@@ -354,7 +354,7 @@ export default function InventoryPage() {
                     <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
                   ))}
                 </Select>
-                <p className="text-xs text-gray-400">To update tenant or buyer details, open the unit and edit the Lease or Sale.</p>
+                <p className="text-xs text-gray-500">To update tenant or buyer details, open the unit and edit the Lease or Sale.</p>
               </div>
             )}
           </ModalBody>

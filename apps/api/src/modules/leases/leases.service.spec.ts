@@ -145,6 +145,14 @@ describe('LeasesService.create — lease overlap on a unit', () => {
 
   /** The overlap probe is the only findFirst on the create path. */
   const overlapProbe = () => mockPrisma.lease.findFirst.mock.calls[0][0];
+  /**
+   * The occupied-range branch of the probe. It sits inside `where.AND` alongside the
+   * SPACE filter (this unit, plus the building containing it — a lease may be attached
+   * to either). Both are OR-shaped, so they cannot both be top-level `OR` keys: the
+   * second would overwrite the first and the probe would match leases anywhere.
+   */
+  const occupiedRangeOr = () =>
+    (overlapProbe().where.AND as any[]).find((c) => Array.isArray(c.OR) && 'terminationDate' in c.OR[0]).OR;
 
   it('allows a new lease when the only overlapping row for the unit was soft-deleted', async () => {
     // findFirst is called with deletedAt: null — simulate the DB correctly excluding
@@ -156,8 +164,11 @@ describe('LeasesService.create — lease overlap on a unit', () => {
 
     const result = await service.create(validData);
 
-    expect(mockPrisma.lease.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ unitId: 'u1', deletedAt: null }) }),
+    // deletedAt stays top-level; the unit itself is now one arm of `where.AND` — the
+    // space filter, which also covers a lease attached to the whole building.
+    expect(overlapProbe().where.deletedAt).toBeNull();
+    expect(overlapProbe().where.AND).toContainEqual(
+      expect.objectContaining({ unitId: 'u1' }),
     );
     expect(result.id).toBe('l2');
   });
@@ -191,10 +202,38 @@ describe('LeasesService.create — lease overlap on a unit', () => {
     expect(overlapProbe().where.leaseStart).toEqual({ lt: new Date('2027-01-01') });
     // The end of the occupied range is COALESCE(terminationDate, leaseEnd), which Prisma
     // cannot express as a filter — so it is spelled out as two disjoint cases.
-    expect(overlapProbe().where.OR).toEqual([
+    expect(occupiedRangeOr()).toEqual([
       { terminationDate: null, leaseEnd: { gt: new Date('2026-01-01') } },
       { terminationDate: { gt: new Date('2026-01-01') } },
     ]);
+  });
+
+  /**
+   * A lease is polymorphic, and the two levels occupy the same physical space. Until
+   * 2026-08-25 the probe only ever looked at the unit, so a building-level lease was
+   * checked against nothing — two tenants could hold one building over identical dates,
+   * and a building could be let whole while its units were let separately.
+   */
+  it('checks a unit lease against leases on the building containing it', async () => {
+    mockPrisma.unit.findUnique.mockResolvedValue({ buildingId: 'b1' });
+    mockPrisma.lease.findFirst.mockResolvedValue(null);
+    mockPrisma.lease.create.mockResolvedValue({ id: 'l9', ...validData });
+
+    await service.create(validData);
+
+    const space = (overlapProbe().where.AND as any[])[0];
+    expect(space.OR).toEqual([{ unitId: 'u1' }, { buildingId: 'b1' }]);
+  });
+
+  it('checks a building lease against leases on the units inside it', async () => {
+    mockPrisma.lease.findFirst.mockResolvedValue(null);
+    mockPrisma.lease.create.mockResolvedValue({ id: 'l10' });
+
+    const { unitId, ...withoutUnit } = validData as any;
+    await service.create({ ...withoutUnit, buildingId: 'b1' });
+
+    const space = (overlapProbe().where.AND as any[])[0];
+    expect(space.OR).toEqual([{ buildingId: 'b1' }, { unit: { buildingId: 'b1' } }]);
   });
 
   it('judges a terminated neighbour on its move-out date, not its contracted end', async () => {
@@ -206,7 +245,7 @@ describe('LeasesService.create — lease overlap on a unit', () => {
 
     await service.create(validData);
 
-    const or = overlapProbe().where.OR;
+    const or = occupiedRangeOr();
     // A live lease is judged on leaseEnd; a terminated one on terminationDate. `{ gt }`
     // never matches NULL, so the two branches cannot both claim the same row.
     expect(or[0]).toHaveProperty('terminationDate', null);

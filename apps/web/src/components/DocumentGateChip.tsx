@@ -101,7 +101,7 @@ export function DocumentGateChip({
   const colors = allDone
     ? 'bg-green-50 text-green-700 border-green-100'
     : noneDone
-    ? 'bg-red-50 text-red-600 border-red-100'
+    ? 'bg-red-50 text-red-700 border-red-100'
     : 'bg-amber-50 text-amber-700 border-amber-100';
 
   if (compact) {
@@ -116,7 +116,7 @@ export function DocumentGateChip({
 
   return (
     <Tooltip content={tooltipContent}>
-      <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full border cursor-default ${colors}`}>
+      <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full border cursor-default ${colors}`}>
         {icon}
         {allDone
           ? 'Docs ✓'
@@ -153,7 +153,7 @@ export function DocumentGateBanner({
         <p className="font-semibold text-amber-800">
           Required documents missing for {stageName}
         </p>
-        <p className="text-amber-600 mt-0.5">
+        <p className="text-amber-700 mt-0.5">
           Upload: {missing.map((m) => CAT_LABEL[m] ?? m).join(', ')}
         </p>
       </div>

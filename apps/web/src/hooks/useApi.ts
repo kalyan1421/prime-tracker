@@ -108,6 +108,25 @@ export function useAddProjectMember() {
   });
 }
 
+/**
+ * Add a whole batch of members in ONE request.
+ *
+ * Deliberately not a Promise.all over useAddProjectMember: the API throttles at 10
+ * requests/second, so a parallel loop silently dropped everyone past the tenth — picking 19
+ * people added 10 and failed 9. One request also means the batch is all-or-nothing server
+ * side, so the roster can never end up half-populated.
+ */
+export function useAddProjectMembers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, members }: {
+      projectId: string;
+      members: { userId: string; roles: string[] }[];
+    }) => api.post(`/projects/${projectId}/members/bulk`, { members }).then((r) => r.data),
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['project-members', v.projectId] }),
+  });
+}
+
 export function useRemoveProjectMember() {
   const qc = useQueryClient();
   return useMutation({
@@ -540,10 +559,19 @@ export function useDownloadImportTemplate() {
 /** Parses and validates an uploaded file — no writes. Returns the row-by-row preview. */
 export function usePreviewLeaseImport() {
   return useMutation({
-    mutationFn: ({ file, projectId }: { file: File; projectId: string }) => {
+    mutationFn: ({ file, projectId, defaultBrokerId, rowOverrides }: {
+      file: File; projectId: string;
+      defaultBrokerId?: string;
+      /** Values typed into the preview to fix a row, keyed by sheet row number. */
+      rowOverrides?: Record<number, Record<string, unknown>>;
+    }) => {
       const form = new FormData();
       form.append('file', file);
       form.append('projectId', projectId);
+      if (defaultBrokerId) form.append('defaultBrokerId', defaultBrokerId);
+      if (rowOverrides && Object.keys(rowOverrides).length) {
+        form.append('rowOverrides', JSON.stringify(rowOverrides));
+      }
       // Content-Type deliberately NOT set — see usePresignedUpload's note on why.
       return api.post('/leases/backfill/import/preview', form).then((r) => r.data);
     },
@@ -576,11 +604,12 @@ export function useAnalyzeGenericLeaseImport() {
 /** Same output shape as usePreviewLeaseImport, but parsed via a user-confirmed column mapping. */
 export function usePreviewMappedLeaseImport() {
   return useMutation({
-    mutationFn: ({ file, projectId, mapping, defaultBrokerId, rowBrokerOverrides }: {
+    mutationFn: ({ file, projectId, mapping, defaultBrokerId, rowBrokerOverrides, rowOverrides }: {
       file: File; projectId: string;
       mapping: { orientation: 'rows' | 'columns'; columns: Array<{ columnIndex: number; field: string; splitPart?: 'psf' | 'total' }> };
       defaultBrokerId?: string;
       rowBrokerOverrides?: Record<number, string>;
+      rowOverrides?: Record<number, Record<string, unknown>>;
     }) => {
       const form = new FormData();
       form.append('file', file);
@@ -589,6 +618,9 @@ export function usePreviewMappedLeaseImport() {
       if (defaultBrokerId) form.append('defaultBrokerId', defaultBrokerId);
       if (rowBrokerOverrides && Object.keys(rowBrokerOverrides).length) {
         form.append('rowBrokerOverrides', JSON.stringify(rowBrokerOverrides));
+      }
+      if (rowOverrides && Object.keys(rowOverrides).length) {
+        form.append('rowOverrides', JSON.stringify(rowOverrides));
       }
       return api.post('/leases/backfill/import/preview-mapped', form).then((r) => r.data);
     },
@@ -2654,6 +2686,15 @@ export function useDeleteMilestonePhoto() {
   });
 }
 
+export type DrawScheduleOption = {
+  id: string;
+  drawNumber: number;
+  plannedAmount: number;
+  plannedDate: string;
+  loanId: string;
+  loanLabel: string;
+};
+
 /**
  * Aggregate draw schedule across every loan on a project — for the milestone
  * "Linked Draw" picker. Returns a flat list of { id, label, loanId } per
@@ -2663,26 +2704,14 @@ export function useProjectDrawSchedules(projectId: string | undefined) {
   const can = useCan('loan:view');
   return useQuery({
     queryKey: ['project-draw-schedules', projectId],
-    queryFn: async () => {
-      // 1. Fetch loans for the project
-      const { data: loans } = await api.get('/loans', { params: { projectId } });
-      const loanList = (loans as any[]) || [];
-      // 2. Fetch each loan's schedule in parallel
-      const schedules = await Promise.all(
-        loanList.map(async (l: any) => {
-          const { data } = await api.get(`/loans/${l.id}/schedule`);
-          return ((data as any[]) || []).map((s) => ({
-            id: s.id,
-            drawNumber: s.drawNumber,
-            plannedAmount: Number(s.plannedAmount),
-            plannedDate: s.plannedDate,
-            loanId: l.id,
-            loanLabel: l.lender || l.loanType,
-          }));
-        }),
-      );
-      return schedules.flat();
-    },
+    // One aggregate request. This used to read /loans and then fan out one
+    // GET /loans/:id/schedule per loan through Promise.all — every call landing on the
+    // same route handler, which the throttler caps at 10/sec. A project with 11+ loans
+    // would start 429ing, and Promise.all rejects on the first failure, so the picker
+    // emptied itself entirely rather than losing one loan's lines.
+    queryFn: () =>
+      api.get<DrawScheduleOption[]>('/loans/draw-schedules', { params: { projectId } })
+        .then((r) => r.data),
     enabled: can && (!!projectId),
   });
 }

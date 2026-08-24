@@ -10,7 +10,7 @@ const CATS: { key: string; label: string; dot: string; chip: string }[] = [
   { key: 'subcontractorAP', label: 'Sub-contractor AP', dot: 'bg-orange-500', chip: 'bg-orange-50 text-orange-700 border-orange-100' },
   { key: 'interiorTI', label: 'TI / Interior', dot: 'bg-teal-500', chip: 'bg-teal-50 text-teal-700 border-teal-100' },
   { key: 'commissions', label: 'Commissions', dot: 'bg-purple-500', chip: 'bg-purple-50 text-purple-700 border-purple-100' },
-  { key: 'misc', label: 'Miscellaneous', dot: 'bg-slate-400', chip: 'bg-slate-50 text-slate-600 border-slate-200' },
+  { key: 'misc', label: 'Miscellaneous', dot: 'bg-gray-400', chip: 'bg-gray-50 text-gray-600 border-gray-200' },
 ];
 
 const GRANULARITIES = [
@@ -36,7 +36,7 @@ export function ObligationsPanel({ projectId }: { projectId?: string }) {
       <CardHeader className="pb-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <p className="font-semibold text-sm text-gray-700">Budget — Cash Needs</p>
-          <p className="text-xs text-gray-400">Upcoming obligations by category. Outflow projection, not actuals.</p>
+          <p className="text-xs text-gray-500">Upcoming obligations by category. Outflow projection, not actuals.</p>
         </div>
         <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 w-fit">
           {GRANULARITIES.map((g) => (
@@ -44,7 +44,7 @@ export function ObligationsPanel({ projectId }: { projectId?: string }) {
               key={g.key}
               onClick={() => setGranularity(g.key)}
               className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
-                granularity === g.key ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'
+                granularity === g.key ? 'bg-white shadow-sm text-gray-800' : 'text-gray-600 hover:text-gray-900'
               }`}
             >
               {g.label}
@@ -56,7 +56,7 @@ export function ObligationsPanel({ projectId }: { projectId?: string }) {
         {isLoading ? (
           <div className="h-40 animate-pulse bg-gray-50 rounded-xl" />
         ) : !hasData ? (
-          <p className="text-sm text-gray-400 py-8 text-center">No upcoming obligations in this horizon.</p>
+          <p className="text-sm text-gray-500 py-8 text-center">No upcoming obligations in this horizon.</p>
         ) : (
           <div className="space-y-4">
             {/* headline: budget needed now + total outstanding */}
@@ -90,7 +90,7 @@ export function ObligationsPanel({ projectId }: { projectId?: string }) {
             <div className="overflow-x-auto rounded-xl border border-gray-100">
               <table className="w-full text-xs min-w-[480px]">
                 <thead>
-                  <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[10px]">
+                  <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[11px]">
                     <th className="text-left px-3 py-2 font-medium sticky left-0 bg-gray-50">Category</th>
                     {periods.map((p) => (
                       <th key={p.key} className="text-right px-3 py-2 font-medium whitespace-nowrap">{p.label}</th>

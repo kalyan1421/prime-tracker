@@ -492,6 +492,48 @@ describe('SalesService — stage document gate (S6/D1)', () => {
   });
 });
 
+describe('SalesService.create — a sale born CLOSED (2026-08-25)', () => {
+  let service: SalesService;
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.document.findMany.mockResolvedValue([]);
+    // create() checks the unit belongs to the project before anything else.
+    mockPrisma.unit.findUnique.mockResolvedValue({
+      id: 'u1', askingPrice: null, building: { projectId: 'pr1' },
+    });
+    mockPrisma.sale.create.mockImplementation((args: any) =>
+      Promise.resolve({ id: 'new', ...args.data }));
+  });
+
+  /**
+   * Creating straight into CLOSED skips every stage, and the gate is cumulative over the
+   * rungs crossed precisely so skipping cannot buy a discount on the paperwork. Since
+   * documents attach by saleId and the sale does not exist yet, a closed-on-arrival sale
+   * is simply not a thing that can exist — the message has to say so.
+   */
+  it('is refused, naming every document the skipped stages owe', async () => {
+    await expect(
+      service.create({ projectId: 'pr1', unitId: 'u1', buyer: 'B', salePrice: 100, status: 'CLOSED' } as any),
+    ).rejects.toThrow(/cannot be created already closed: LOI, Booking Agreement, Deed, NOC and Possession Certificate/);
+    expect(mockPrisma.sale.create).not.toHaveBeenCalled();
+  });
+
+  it('says how to actually get there', async () => {
+    await expect(
+      service.create({ projectId: 'pr1', unitId: 'u1', buyer: 'B', salePrice: 100, status: 'CLOSED' } as any),
+    ).rejects.toThrow(/Create the sale at its current stage, upload the paperwork, then move it to Closed/);
+  });
+
+  it('leaves a sale created at an earlier stage alone', async () => {
+    const created: any = await service.create(
+      { projectId: 'pr1', unitId: 'u1', buyer: 'B', salePrice: 100, status: 'UNDER_CONTRACT' } as any,
+    );
+    expect(created.status).toBe('UNDER_CONTRACT');
+    expect(mockPrisma.sale.create).toHaveBeenCalled();
+  });
+});
+
 describe('sale-document-gates — the map, in isolation', () => {
   it('gates only the stages the client asked about', () => {
     expect(Object.keys(SALE_STAGE_DOCS).sort()).toEqual(

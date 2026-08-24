@@ -84,7 +84,7 @@ export function ProjectHealthHeader({ project }: { project: any }) {
         {canViewBudget && (
         <div className="px-5 pt-4 pb-4">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold flex items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold flex items-center gap-1.5">
               <FiDollarSign className="w-3.5 h-3.5" /> Budget
             </span>
             <ProjectPhasePopover project={project} canEdit={canEdit} />
@@ -95,10 +95,10 @@ export function ProjectHealthHeader({ project }: { project: any }) {
               {fmtMoney(summary.budget)}
             </span>
             <div className="flex items-center gap-4 text-xs tabular-nums pb-0.5">
-              <span className="text-gray-400">
+              <span className="text-gray-500">
                 Spent <span className="font-semibold text-gray-700">{fmtMoney(summary.actual)}</span>
               </span>
-              <span className={`font-semibold inline-flex items-center gap-1 ${summary.overrun ? 'text-rose-600' : 'text-emerald-600'}`}>
+              <span className={`font-semibold inline-flex items-center gap-1 ${summary.overrun ? 'text-rose-700' : 'text-emerald-700'}`}>
                 {summary.overrun ? <FiTrendingDown className="w-3.5 h-3.5" /> : <FiTrendingUp className="w-3.5 h-3.5" />}
                 {summary.overrun ? 'Over by ' : 'Left '}{fmtMoney(Math.abs(summary.remaining))}
               </span>
@@ -156,11 +156,11 @@ export function ProjectHealthHeader({ project }: { project: any }) {
 function Stat({ icon, label, value, help }: { icon: React.ReactNode; label: string; value: string; help?: string }) {
   return (
     <div className="px-4 py-3 min-w-0">
-      <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold flex items-center gap-1">
+      <span className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold flex items-center gap-1">
         {icon} {label}
       </span>
       <div className="mt-1.5 text-lg leading-none font-bold text-gray-900 tabular-nums truncate">{value}</div>
-      {help && <div className="text-[11px] text-gray-400 truncate mt-1">{help}</div>}
+      {help && <div className="text-[11px] text-gray-500 truncate mt-1">{help}</div>}
     </div>
   );
 }
@@ -220,22 +220,22 @@ function ProjectPhasePopover({ project, canEdit }: { project: any; canEdit: bool
                   onClick={() => handlePick(p.key)}
                   className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors text-left ${
                     isCurrent ? 'bg-blue-50 text-blue-700 font-medium'
-                    : isPast ? 'text-gray-400 hover:bg-gray-50'
+                    : isPast ? 'text-gray-500 hover:bg-gray-50'
                     : 'text-gray-700 hover:bg-gray-50'
                   }`}
                   aria-current={isCurrent ? 'step' : undefined}
                 >
-                  <span className={`w-5 h-5 inline-flex items-center justify-center rounded-full text-[10px] font-medium ${
+                  <span className={`w-5 h-5 inline-flex items-center justify-center rounded-full text-[11px] font-medium ${
                     isCurrent ? 'bg-blue-600 text-white'
                     : isPast ? 'bg-gray-200 text-gray-500'
-                    : 'bg-gray-100 text-gray-400'
+                    : 'bg-gray-100 text-gray-500'
                   }`}>
                     {isCurrent ? <FiCheck className="w-3 h-3" /> : i + 1}
                   </span>
                   <span className="flex-1">{p.label}</span>
-                  {isCurrent && <span className="text-[10px] text-blue-600">current</span>}
-                  {isFuture && <span className="text-[10px] text-gray-400">advance →</span>}
-                  {isPast && !isCurrent && <span className="text-[10px] text-amber-600">↩ rollback</span>}
+                  {isCurrent && <span className="text-[11px] text-blue-600">current</span>}
+                  {isFuture && <span className="text-[11px] text-gray-500">advance →</span>}
+                  {isPast && !isCurrent && <span className="text-[11px] text-amber-700">↩ rollback</span>}
                 </button>
               );
             })}

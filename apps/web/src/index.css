@@ -3,6 +3,37 @@
 @source '../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}';
 @custom-variant dark (&:is(.dark *));
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   PRIME TRACKER DESIGN SYSTEM
+
+   Three scales, one ramp each. Every value below was measured against WCAG 2.1 AA
+   on the two grounds this app actually uses: white cards and the gray-50 page.
+
+   NEUTRAL — one ramp: `gray`. slate, stone and zinc were drift and are gone.
+     gray-400  2.60:1  icons, dividers, disabled marks. NEVER text.
+     gray-500  4.84:1  secondary text — the floor for anything readable.
+     gray-600  7.56:1  secondary text on a TINTED ground (gray-100, *-50 cards),
+                       where gray-500 drops to 4.39 and fails.
+     gray-700  captions, labels, chart legends.
+     gray-800/900  primary text.
+
+   SEMANTIC — meaning-bearing colour. Text uses -700, full stop.
+     Measured at -600: emerald 3.65, amber 3.20, green 3.22, orange 3.58,
+     teal 3.67, cyan 3.62, rose 4.53(white)/4.12(tint), red 4.77/4.36. All fail
+     somewhere. At -700 every one clears 4.7:1 on every ground.
+     -50/-100 remain the tint backgrounds; -500/-600 remain fills and borders.
+
+   BRAND — blue. Links and accents are blue-600 (5.25:1). blue-500 is 3.76 and is
+     not a text colour. The brand tone is NOT bumped to -700; it passes as it is.
+
+   TYPE — three tiers, nothing between them.
+     text-[11px]  labels, chips, metadata          (the only arbitrary size)
+     text-xs      12px body — the workhorse
+     text-sm      14px emphasis
+     text-lg+     headings
+     8px, 9px and 10px are gone. Do not reintroduce them.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @theme {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --color-brand-50: #e6f2ff;
@@ -54,4 +85,19 @@ body {
 }
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Recharts legend labels.
+
+   Recharts paints the legend LABEL with its series colour, not just the swatch.
+   On a light ground that puts real text at the contrast of the series fill:
+   measured 2.54:1 for "Inflow" (emerald) and 3.67:1 for "Outflow" against a 4.5
+   requirement. The swatch already carries the colour, so the word does not need to.
+
+   Done here rather than per chart because there are 25 <Legend> usages across 12
+   files, and a formatter prop on each is 25 places for the next one to be forgotten.
+   --------------------------------------------------------------------------- */
+.recharts-legend-item-text {
+  color: var(--color-gray-700, #364153) !important;
 }

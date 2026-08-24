@@ -91,6 +91,23 @@ describe('SaleImportService.previewImport', () => {
     expect(preview.sales[0].errors[0]).toMatch(/was not found in this project/);
   });
 
+  it('names the unit\'s real building when the row\'s Building label does not match', async () => {
+    // Unit 300 exists, but under "Building A" — a row claiming a different label (e.g. a
+    // project-qualified name like "Project X - Building A") should not read as "not found",
+    // since the unit is right there and RentHistoryImportPage's "create missing units" flow
+    // keys off that exact phrase to decide what to offer creating.
+    const file = await buildFile({
+      sales: [{
+        'Unit Number': '300', Building: 'Some Other Building', Buyer: 'Buyer',
+        'Purchase Price': 1000, 'Closing Date': new Date('2022-01-01'),
+      }],
+    });
+    const preview = await service.previewImport(file, 'p1');
+    expect(preview.sales[0].status).toBe('error');
+    expect(preview.sales[0].errors[0]).toMatch(/exists in this project, but under building "Building A"/);
+    expect(preview.sales[0].errors[0]).not.toMatch(/was not found in this project/);
+  });
+
   it('refuses a future closing date', async () => {
     const future = new Date();
     future.setFullYear(future.getFullYear() + 1);

@@ -133,10 +133,10 @@ export function MentionTextarea({
                 i === highlight ? 'bg-blue-50' : 'hover:bg-gray-50'
               }`}
             >
-              <Avatar size="sm" name={u.name || u.email} className="w-5 h-5 shrink-0 text-[10px]" />
+              <Avatar size="sm" name={u.name || u.email} className="w-5 h-5 shrink-0 text-[11px]" />
               <span className="min-w-0">
                 <span className="block text-xs font-medium text-gray-800 truncate">{u.name || u.email}</span>
-                <span className="block text-[10px] text-gray-400 truncate">{u.email}</span>
+                <span className="block text-[11px] text-gray-500 truncate">{u.email}</span>
               </span>
             </button>
           ))}

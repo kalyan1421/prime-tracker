@@ -203,7 +203,7 @@ export default function ReceivablesPage() {
       <Card shadow="sm" className="border border-gray-100">
         <CardBody className="p-0">
           {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
               <FiInbox className="text-3xl mb-3" />
               <p className="text-sm font-medium text-gray-500">No receivables in the selected window.</p>
             </div>
@@ -247,7 +247,7 @@ export default function ReceivablesPage() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 text-gray-600">
                             <FiCalendar size={12} className="shrink-0" />
-                            <span className={isOverdue ? 'text-red-600 font-medium' : ''}>{fmtDate(r.due)}</span>
+                            <span className={isOverdue ? 'text-red-700 font-medium' : ''}>{fmtDate(r.due)}</span>
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -264,7 +264,7 @@ export default function ReceivablesPage() {
                   })}
                 </tbody>
               </table>
-              <div className="px-4 py-3 border-t border-gray-100 text-xs text-gray-400 flex items-center gap-1">
+              <div className="px-4 py-3 border-t border-gray-100 text-xs text-gray-500 flex items-center gap-1">
                 <FiClock size={11} />
                 <span>Showing {filtered.length} installment{filtered.length !== 1 ? 's' : ''} in next {weeks} weeks</span>
               </div>

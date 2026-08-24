@@ -39,16 +39,16 @@ function extractErr(err: any, fallback: string): string {
 }
 
 function BudgetHealthBar({ budget, actuals }: { budget: number; actuals: number }) {
-  if (!budget) return <p className="text-xs text-gray-400">No budget set</p>;
+  if (!budget) return <p className="text-xs text-gray-500">No budget set</p>;
   const pct = Math.min((actuals / budget) * 100, 100);
   const color = pct >= 100 ? 'danger' : pct >= 80 ? 'warning' : 'success';
   return (
     <div className="mt-2">
       <div className="flex justify-between mb-0.5">
-        <span className="text-[10px] text-gray-500">Spent</span>
-        <span className="text-[10px] font-medium text-gray-600">
+        <span className="text-[11px] text-gray-500">Spent</span>
+        <span className="text-[11px] font-medium text-gray-600">
           {fmt(actuals)} / {fmt(budget)}
-          <span className="ml-1 text-gray-400">({pct.toFixed(0)}%)</span>
+          <span className="ml-1 text-gray-500">({pct.toFixed(0)}%)</span>
         </span>
       </div>
       <Progress size="sm" value={pct} color={color} aria-label="Budget health" />
@@ -68,10 +68,10 @@ function ProjectStat({ label, value, hint, emphasis }: {
 }) {
   return (
     <div className="min-w-0">
-      <p className="text-[10px] text-gray-400 truncate">{label}</p>
+      <p className="text-[11px] text-gray-500 truncate">{label}</p>
       <p className="text-xs font-semibold tabular-nums truncate">
         <span className={emphasis ?? 'text-gray-700'}>{value}</span>
-        {hint && <span className="ml-1 font-normal text-[10px] text-gray-400">{hint}</span>}
+        {hint && <span className="ml-1 font-normal text-[11px] text-gray-500">{hint}</span>}
       </p>
     </div>
   );
@@ -129,7 +129,7 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
             — the bar's fill never encoded anything the label did not already say. */}
         <div className="flex items-center gap-1.5 mb-2 flex-wrap">
           {p.projectType && (
-            <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="text-[10px]">
+            <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="text-[11px]">
               {p.projectType.replace(/_/g, ' ')}
             </Chip>
           )}
@@ -173,7 +173,7 @@ function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete }: {
 }) {
   const navigate = useNavigate();
   const pct = p.budgetTotal ? Math.min(((p.actualsTotal ?? 0) / p.budgetTotal) * 100, 100) : 0;
-  const pctColor = pct >= 100 ? 'text-red-600' : pct >= 80 ? 'text-amber-600' : 'text-green-600';
+  const pctColor = pct >= 100 ? 'text-red-700' : pct >= 80 ? 'text-amber-700' : 'text-green-700';
   return (
     <tr
       className="border-b border-gray-100 hover:bg-gray-50 transition-colors cursor-pointer text-sm"
@@ -182,20 +182,20 @@ function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete }: {
       <td className="py-3 px-4">
         <p className="font-medium text-gray-900">{p.name}</p>
         <div className="flex items-center gap-1 mt-0.5">
-          <FiMapPin className="text-gray-400 text-[10px]" />
+          <FiMapPin className="text-gray-400 text-[11px]" />
           <span className="text-[11px] text-gray-500">{p.location}</span>
         </div>
       </td>
       <td className="py-3 px-4">
         {p.projectType ? (
-          <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="text-[10px]">
+          <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="text-[11px]">
             {p.projectType.replace(/_/g, ' ')}
           </Chip>
         ) : <span className="text-gray-300">—</span>}
       </td>
       <td className="py-3 px-4">
         <div className="w-32">
-          <p className="text-[10px] text-gray-500 mb-0.5">{(p.phase || '').replace(/_/g, ' ')}</p>
+          <p className="text-[11px] text-gray-500 mb-0.5">{(p.phase || '').replace(/_/g, ' ')}</p>
           <PhaseProgress current={p.phase || 'PRE_DEVELOPMENT'} />
         </div>
       </td>
@@ -550,7 +550,7 @@ export default function ProjectsPage() {
           {hasFilters ? (
             <>
               <p className="text-sm font-medium text-gray-600">No projects match your filters</p>
-              <p className="text-xs text-gray-400 mt-1">Try clearing filters or adjusting your search.</p>
+              <p className="text-xs text-gray-500 mt-1">Try clearing filters or adjusting your search.</p>
               <Button
                 size="sm"
                 variant="light"
@@ -566,7 +566,7 @@ export default function ProjectsPage() {
           ) : (
             <>
               <p className="text-sm font-medium text-gray-600">No projects yet</p>
-              <p className="text-xs text-gray-400 mt-1">Create your first project to get started.</p>
+              <p className="text-xs text-gray-500 mt-1">Create your first project to get started.</p>
               {canCreate && (
                 <Button size="sm" color="primary" startContent={<FiPlus />} className="mt-3" onPress={openCreate}>
                   New Project
@@ -723,7 +723,7 @@ export default function ProjectsPage() {
               This project will be removed from the project list. All buildings, units, financials, and
               historical data are preserved — it will no longer appear in dashboards or reports.
             </p>
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-xs text-gray-500 mt-2">
               Founders and admins can view removed projects via the "Show Archived" toggle.
             </p>
           </ModalBody>

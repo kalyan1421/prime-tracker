@@ -57,7 +57,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
               <p className="text-sm text-red-700 mt-1">
                 {this.state.error.message || 'An unexpected error occurred.'}
               </p>
-              <p className="text-xs text-red-600 mt-2">
+              <p className="text-xs text-red-700 mt-2">
                 The rest of the app should still work — try refreshing this section.
               </p>
               <Button

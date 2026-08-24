@@ -1515,8 +1515,24 @@ export class LeasesService {
    * This is the friendly fast path; the exclusion constraint is the real enforcement
    * and catches races this check cannot.
    */
+  /**
+   * Refuses a tenancy that would double-book space someone else already holds.
+   *
+   * Takes the SPACE, not a unit id, because a lease is polymorphic and the two levels
+   * overlap each other. Until 2026-08-25 this only ever knew about units, so a
+   * building-level lease was checked against nothing at all: two tenants could be given
+   * the same building over identical dates, and a building could be let whole while its
+   * individual units were let separately. The rent roll then reported all of them —
+   * 12,900/mo of "income" against a single 1,000 sqft building.
+   *
+   * Both directions are checked, since either can be written first:
+   *   - a UNIT lease clashes with other leases on that unit, and with any lease on the
+   *     building containing it;
+   *   - a BUILDING lease clashes with other leases on that building, and with any lease
+   *     on any unit inside it.
+   */
   private async assertNoOverlappingLease(
-    unitId: string,
+    target: { unitId?: string | null; buildingId?: string | null },
     leaseStart: Date,
     leaseEnd: Date,
     excludeLeaseId?: string,
@@ -1546,19 +1562,43 @@ export class LeasesService {
         ? terminationDate
         : leaseEnd;
 
+    // The set of leases that occupy the same physical space as `target`.
+    let space: Prisma.LeaseWhereInput;
+    if (target.unitId) {
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: target.unitId }, select: { buildingId: true },
+      });
+      space = unit?.buildingId
+        ? { OR: [{ unitId: target.unitId }, { buildingId: unit.buildingId }] }
+        : { unitId: target.unitId };
+    } else if (target.buildingId) {
+      space = { OR: [{ buildingId: target.buildingId }, { unit: { buildingId: target.buildingId } }] };
+    } else {
+      return; // nothing to check against
+    }
+
     const clash = await this.prisma.lease.findFirst({
       where: {
-        unitId,
         deletedAt: null,
         ...(excludeLeaseId ? { id: { not: excludeLeaseId } } : {}),
         // Overlap iff existing.start < new.effectiveEnd AND new.start < existing.effectiveEnd.
         leaseStart: { lt: effectiveEnd },
-        // Prisma cannot express COALESCE in a filter, so the two cases are spelled out.
-        // They are exhaustive and disjoint: `{ gt }` never matches NULL, so a terminated
-        // lease is judged on its move-out date and a live one on its contracted end.
-        OR: [
-          { terminationDate: null, leaseEnd: { gt: leaseStart } },
-          { terminationDate: { gt: leaseStart } },
+        // Both conditions are OR-shaped, so they go in an AND array. Spreading `space`
+        // alongside a literal `OR:` key silently DROPS it — the later key wins in an
+        // object literal — and the query then matches overlapping leases anywhere in the
+        // database, refusing a lease on an empty new building because some unrelated unit
+        // in another project was let on those dates.
+        AND: [
+          space,
+          // Prisma cannot express COALESCE in a filter, so the two cases are spelled out.
+          // They are exhaustive and disjoint: `{ gt }` never matches NULL, so a terminated
+          // lease is judged on its move-out date and a live one on its contracted end.
+          {
+            OR: [
+              { terminationDate: null, leaseEnd: { gt: leaseStart } },
+              { terminationDate: { gt: leaseStart } },
+            ],
+          },
         ],
       },
       select: {
@@ -1569,6 +1609,10 @@ export class LeasesService {
         leaseEnd: true,
         terminationDate: true,
         status: true,
+        unitId: true,
+        buildingId: true,
+        unit: { select: { unitNumber: true } },
+        building: { select: { name: true } },
       },
     });
 
@@ -1581,8 +1625,14 @@ export class LeasesService {
       // Report the range that actually conflicts, so an early-terminated lease does not
       // claim to run to a contracted end it no longer occupies.
       const when = `${day(clash.leaseStart)} to ${day(clash.terminationDate ?? clash.leaseEnd)}`;
+      // Say WHICH space the clash is on. When the two are at different levels — a unit
+      // lease against the lease of its whole building — "on this unit" is actively
+      // misleading, and the reader has no way to find what they are colliding with.
+      const where = clash.buildingId
+        ? `the whole of ${clash.building?.name ?? 'this building'}`
+        : `unit ${clash.unit?.unitNumber ?? 'in this building'}`;
       throw new BadRequestException(
-        `These dates overlap an existing lease on this unit: ${who} ` +
+        `These dates overlap an existing lease on ${where}: ${who} ` +
         `(${when}${clash.status ? `, ${String(clash.status).toLowerCase()}` : ''}). ` +
         `Adjust the dates so the tenancies do not overlap — a lease may start on the day another ends.`,
       );
@@ -1596,7 +1646,7 @@ export class LeasesService {
    */
   private translateOverlapError(e: any): any {
     const message = String(e?.message ?? '');
-    if (message.includes('lease_unit_no_overlap')) {
+    if (message.includes('lease_unit_no_overlap') || message.includes('lease_building_no_overlap')) {
       return new BadRequestException(
         'These dates overlap an existing lease on this unit. Adjust the dates so the ' +
         'tenancies do not overlap — a lease may start on the day another ends.',
@@ -1649,9 +1699,11 @@ export class LeasesService {
       if (amt != null) (data as Record<string, any>).brokerCommissionAmt = amt;
     }
 
-    if (unitId) {
+    // Both levels, not just units: a building-level lease used to be created against no
+    // check whatsoever.
+    if (unitId || buildingId) {
       await this.assertNoOverlappingLease(
-        unitId,
+        { unitId, buildingId },
         data.leaseStart as Date,
         data.leaseEnd as Date,
         undefined,
@@ -1785,9 +1837,9 @@ export class LeasesService {
       data.leaseStart !== undefined ||
       data.leaseEnd !== undefined ||
       data.terminationDate !== undefined;
-    if (datesMoved && before.unitId) {
+    if (datesMoved && (before.unitId || before.buildingId)) {
       await this.assertNoOverlappingLease(
-        before.unitId,
+        { unitId: before.unitId, buildingId: before.buildingId },
         (data.leaseStart as Date) ?? before.leaseStart,
         (data.leaseEnd as Date) ?? before.leaseEnd,
         id,

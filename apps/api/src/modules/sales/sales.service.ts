@@ -10,6 +10,7 @@ import { CommissionInstallmentService } from '../../common/utils/commission-inst
 import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 import { AuditService } from '../../common/utils/audit.service';
 import {
+  SALE_STAGE_ORDER,
   docCategoryLabel,
   requiredDocsForTransition,
   saleStageLabel,
@@ -208,7 +209,7 @@ export class SalesService {
     return s;
   }
 
-  async create(data: Prisma.SaleUncheckedCreateInput) {
+  async create(data: Prisma.SaleUncheckedCreateInput, createdById?: string) {
     // Sprint 1: Sales can attach to either a Unit (typical) or a Building (e.g.
     // Leander Bldg 1 sold as one asset). Exactly one of (unitId, buildingId)
     // must be set, and the chosen asset must live under data.projectId.
@@ -251,6 +252,30 @@ export class SalesService {
     // the same rules, or "create as CLOSED" becomes a way around both.
     const createdClosed = data.status === 'CLOSED';
     if (createdClosed) {
+      // The document gate (S6/D1) applies to a sale BORN closed exactly as it applies to
+      // one moved there. Creating straight into CLOSED skips every stage, and
+      // requiredDocsForTransition is cumulative over the rungs crossed precisely so that
+      // skipping cannot buy a discount on the paperwork — "a gate that can be walked
+      // around by skipping a stage is not a gate".
+      //
+      // Checked here, against the ORIGIN stage a new sale starts at, rather than by
+      // reusing assertStageDocumentsAttached: that reads documents by saleId, and this
+      // sale does not exist yet. Which is the whole point of the message below — there is
+      // nothing to attach paperwork TO until the sale is created, so a closed-on-arrival
+      // sale with documents outstanding is not a thing that can exist.
+      // 'PROSPECT' is the column default, so it is the rung every new sale starts on.
+      const required = requiredDocsForTransition(SALE_STAGE_ORDER[0], 'CLOSED');
+      if (required.length > 0) {
+        const names = required.map(docCategoryLabel);
+        const list = names.length === 1
+          ? names[0]
+          : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+        throw new ForbiddenException(
+          `A sale cannot be created already closed: ${list} must be attached to it first, and `
+          + 'documents attach to a sale that exists. Create the sale at its current stage, upload '
+          + 'the paperwork, then move it to Closed.',
+        );
+      }
       await this.assertDiscountApproved({
         projectId: data.projectId as string,
         unitId: (data.unitId as string | undefined) ?? null,
@@ -268,9 +293,30 @@ export class SalesService {
       if (commission != null) (data as any).brokerCommissionAmt = commission;
     }
 
+    // A sale born CLOSED against real space is written UNDER_CONTRACT and then closed
+    // through update(), so it goes through the ONE closing path rather than a partial
+    // copy of it.
+    //
+    // The copy was the bug. create() applied the discount gate and stamped the
+    // commission, then emitted `unit.sold` — but never flipped the unit or ended the
+    // tenancy, because that work lives in update(). Verified 2026-08-25: a CLOSED sale
+    // created on a let unit left the unit unsold and the sitting tenant's lease ACTIVE
+    // with no move-out date, still billing, while Finance was told the unit had sold.
+    const closeAfterCreate = createdClosed && !!(data.unitId || data.buildingId);
+
     const created = await this.prisma.sale.create({
-      data: { ...data, lastActivityAt: new Date() },
+      data: {
+        ...data,
+        ...(closeAfterCreate ? { status: 'UNDER_CONTRACT' } : {}),
+        lastActivityAt: new Date(),
+      },
     });
+
+    if (closeAfterCreate) {
+      // update() re-runs the discount gate and re-stamps commission — both idempotent on
+      // the values create() just computed — and then does the half create() never did.
+      return this.update(created.id, { status: 'CLOSED' }, createdById);
+    }
 
     // R7: mirror a commission stamped at creation into the installment table.
     if (createdClosed) {
@@ -279,20 +325,9 @@ export class SalesService {
         created.brokerId,
         created.brokerCommissionAmt != null ? Number(created.brokerCommissionAmt) : null,
       );
-    }
-
-    // Emit for the same reason: a sale born CLOSED is still a sale that closed, and
-    // Finance/Accounting learn about it through these events.
-    if (createdClosed) {
+      // A sale attached to no unit or building has nothing to close against, so it keeps
+      // the direct path — and Finance still needs to hear about it.
       this.bus.emit({ type: 'sale.statusChanged', saleId: created.id, from: 'NEW', to: 'CLOSED' });
-      if (created.unitId && created.projectId) {
-        this.bus.emit({
-          type: 'unit.sold',
-          unitId: created.unitId,
-          saleId: created.id,
-          projectId: created.projectId,
-        });
-      }
     }
     return created;
   }
@@ -524,6 +559,89 @@ export class SalesService {
           );
         }
 
+        return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
+      });
+      result = outcome.sale;
+      applied = outcome.applied;
+    } else if (data.status === 'CLOSED' && sale.buildingId) {
+      // Selling a WHOLE BUILDING did nothing to anything inside it. Verified 2026-08-25:
+      // the sale closed, every unit stayed AVAILABLE/LEASED, and their tenancies kept
+      // billing rent on a building Prime no longer owned.
+      //
+      // Deliberately a sibling of the unit branch rather than a generalisation of it.
+      // That branch carries the optimistic lock, the buyerType split and the ledger
+      // preservation rules, all of it well covered; reshaping it to loop was the larger
+      // risk. The rules applied here are the same ones, read from the same buyerType.
+      const outcome = await this.prisma.$transaction(async (tx) => {
+        const guard = await tx.sale.updateMany({
+          where: { id, status: { not: 'CLOSED' } },
+          data: dataWithActivity,
+        });
+        if (guard.count === 0) {
+          return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false };
+        }
+        const closingDate = this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate);
+        const closingDay = startOfUtcDay(closingDate);
+        const buildingId = sale.buildingId!;
+
+        const units = await tx.unit.findMany({
+          where: { buildingId, deletedAt: null },
+          select: { id: true, status: true },
+          orderBy: { unitNumber: 'asc' },
+        });
+        for (const unit of units) {
+          if (unit.status !== 'SOLD') {
+            await tx.unit.update({
+              where: { id: unit.id },
+              data: { status: 'SOLD', availableSince: null },
+            });
+            await this.statusEvents.recordIfChanged(
+              {
+                unitId: unit.id,
+                fromStatus: unit.status,
+                toStatus: 'SOLD',
+                source: 'SALE_CLOSED',
+                saleId: id,
+                effectiveAt: closingDate,
+                reason: this.saleClosedReason(tenancyTransfers, 0),
+                recordedById: updatedById,
+              },
+              tx,
+            );
+          }
+        }
+
+        // Every tenancy the building carries, at either level: the leases of its units
+        // AND any lease of the building as a whole. Both are occupancy the sale ends.
+        const live = await tx.lease.findMany({
+          where: {
+            deletedAt: null,
+            terminationDate: null,
+            status: { notIn: ['EXPIRED', 'TERMINATED'] },
+            OR: [{ buildingId }, { unit: { buildingId, deletedAt: null } }],
+          },
+          orderBy: { leaseStart: 'asc' },
+          select: { id: true, tenantName: true, leaseStart: true },
+        });
+        // Same rule as the unit branch: only tenancies already in occupation on the
+        // closing date are ended. One drafted to start later has nothing to end.
+        const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
+        endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
+        for (const lease of occupying) {
+          await this.leases.endTenancyWithin(
+            tx,
+            lease.id,
+            {
+              terminationDate: closingDate,
+              terminationReason,
+              terminationNote: tenancyTransfers
+                ? 'Transferred to the buyer when the sale of this building closed. The tenant '
+                  + 'remains in occupation; Prime no longer manages or bills this tenancy.'
+                : 'Ended automatically when the sale of this building closed.',
+            },
+            updatedById,
+          );
+        }
         return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
       });
       result = outcome.sale;

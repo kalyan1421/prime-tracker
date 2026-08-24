@@ -78,14 +78,14 @@ export function BackfillTenancyDialog({
     <Modal isOpen={isOpen} onClose={close} size="3xl" scrollBehavior="inside">
       <ModalContent>
         <ModalHeader className="flex items-center gap-2">
-          <FiArchive className="text-slate-500" />
+          <FiArchive className="text-gray-500" />
           Record a past tenancy{unitNumber ? ` — Unit ${unitNumber}` : ''}
         </ModalHeader>
         <ModalBody className="gap-4">
           {/* The two things that surprise people, stated before they type anything. */}
-          <div className="rounded-md bg-slate-50 border border-slate-200 p-3 text-sm text-slate-700">
+          <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm text-gray-700">
             <p className="font-medium">This is for a tenancy that has already ended.</p>
-            <ul className="mt-1 list-disc pl-5 space-y-0.5 text-slate-600">
+            <ul className="mt-1 list-disc pl-5 space-y-0.5 text-gray-600">
               <li>The unit's <strong>current</strong> status will not change.</li>
               <li>
                 Every month is recorded as <strong>paid in full</strong> unless you say

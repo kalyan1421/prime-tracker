@@ -66,7 +66,7 @@ function PortfolioPLTab() {
                     <td className="py-2 px-2"><StatusBadge status={p.phase} /></td>
                     <td className="py-2 px-2 text-right">{fmt(p.budget)}</td>
                     <td className="py-2 px-2 text-right">{fmt(p.actuals)}</td>
-                    <td className={`py-2 px-2 text-right ${p.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    <td className={`py-2 px-2 text-right ${p.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {fmt(p.variance)}
                     </td>
                     <td className="py-2 px-2 text-center">{p.occupancy}%</td>
@@ -139,7 +139,7 @@ function DebtFinancingTab() {
                     </tr>
                   ))}
                   {(d.loans as any[]).length === 0 && (
-                    <tr><td colSpan={4} className="text-center py-4 text-gray-400">No loans</td></tr>
+                    <tr><td colSpan={4} className="text-center py-4 text-gray-500">No loans</td></tr>
                   )}
                 </tbody>
               </table></div>
@@ -167,13 +167,13 @@ function DebtFinancingTab() {
                       <td className="py-2 px-2">{l.projectName}</td>
                       <td className="py-2 px-2 text-right">{fmt(l.currentBalance)}</td>
                       <td className="py-2 px-2">{fmtDate(l.maturityDate)}</td>
-                      <td className={`py-2 px-2 text-right ${l.daysUntilMaturity <= 90 ? 'text-red-600' : ''}`}>
+                      <td className={`py-2 px-2 text-right ${l.daysUntilMaturity <= 90 ? 'text-red-700' : ''}`}>
                         {l.daysUntilMaturity}
                       </td>
                     </tr>
                   ))}
                   {(d.maturities as any[]).length === 0 && (
-                    <tr><td colSpan={4} className="text-center py-4 text-gray-400">No upcoming maturities</td></tr>
+                    <tr><td colSpan={4} className="text-center py-4 text-gray-500">No upcoming maturities</td></tr>
                   )}
                 </tbody>
               </table></div>
@@ -287,7 +287,7 @@ function RevenueCashFlowTab() {
                   </tr>
                 ))}
                 {(d.expiringLeases as any[]).length === 0 && (
-                  <tr><td colSpan={6} className="text-center py-4 text-gray-400">No leases expiring in the next 12 months</td></tr>
+                  <tr><td colSpan={6} className="text-center py-4 text-gray-500">No leases expiring in the next 12 months</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -344,7 +344,7 @@ function UnitSalesReportTab() {
         </CardHeader>
         <CardBody>
           {(d.chartData || []).length === 0 ? (
-            <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+            <p className="text-sm text-gray-500 py-10 text-center">No data</p>
           ) : (
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={d.chartData}>
@@ -385,11 +385,11 @@ function UnitSalesReportTab() {
                     <td className="py-2 px-2 font-semibold text-gray-800">{p.projectName}</td>
                     <td className="py-2 px-2 text-right text-gray-600">{p.totalUnits}</td>
                     <td className="py-2 px-2 text-right font-semibold">{fmt(p.totalValue)}</td>
-                    <td className="py-2 px-2 text-right text-green-600 font-medium">{fmt(p.soldValue)}</td>
+                    <td className="py-2 px-2 text-right text-green-700 font-medium">{fmt(p.soldValue)}</td>
                     <td className="py-2 px-2 text-right text-gray-500">{fmt(p.unsoldValue)}</td>
                     <td className="py-2 px-2 text-right text-blue-600">{fmt(p.underContractValue)}</td>
                     <td className="py-2 px-2 text-right">
-                      <span className={`text-xs font-semibold ${p.pctSold >= 80 ? 'text-green-600' : p.pctSold >= 50 ? 'text-blue-600' : 'text-gray-500'}`}>
+                      <span className={`text-xs font-semibold ${p.pctSold >= 80 ? 'text-green-700' : p.pctSold >= 50 ? 'text-blue-600' : 'text-gray-500'}`}>
                         {p.pctSold}%
                       </span>
                     </td>
@@ -397,12 +397,12 @@ function UnitSalesReportTab() {
                   ...(p.buildings as any[]).map((b: any) => (
                     <tr key={`bld-${b.buildingId}`} className="border-b border-gray-50">
                       <td className="py-2 px-2 pl-8 text-gray-500 text-xs">{b.buildingName}</td>
-                      <td className="py-2 px-2 text-right text-gray-400 text-xs">{b.totalUnits}</td>
+                      <td className="py-2 px-2 text-right text-gray-500 text-xs">{b.totalUnits}</td>
                       <td className="py-2 px-2 text-right text-gray-600 text-xs">{fmt(b.totalValue)}</td>
-                      <td className="py-2 px-2 text-right text-green-500 text-xs">{fmt(b.soldValue)}</td>
-                      <td className="py-2 px-2 text-right text-gray-400 text-xs">{fmt(b.unsoldValue)}</td>
-                      <td className="py-2 px-2 text-right text-blue-500 text-xs">{fmt(b.underContractValue)}</td>
-                      <td className="py-2 px-2 text-right text-xs text-gray-400">{b.pctSold}%</td>
+                      <td className="py-2 px-2 text-right text-green-700 text-xs">{fmt(b.soldValue)}</td>
+                      <td className="py-2 px-2 text-right text-gray-500 text-xs">{fmt(b.unsoldValue)}</td>
+                      <td className="py-2 px-2 text-right text-blue-600 text-xs">{fmt(b.underContractValue)}</td>
+                      <td className="py-2 px-2 text-right text-xs text-gray-500">{b.pctSold}%</td>
                     </tr>
                   )),
                 ])}
@@ -411,14 +411,14 @@ function UnitSalesReportTab() {
                     <td className="py-2 px-2 font-bold text-gray-800">Portfolio Total</td>
                     <td className="py-2 px-2 text-right font-bold">{d.kpis.totalUnits}</td>
                     <td className="py-2 px-2 text-right font-bold">{fmt(d.kpis.totalPortfolioValue)}</td>
-                    <td className="py-2 px-2 text-right text-green-600 font-bold">{fmt(d.kpis.totalSoldValue)}</td>
+                    <td className="py-2 px-2 text-right text-green-700 font-bold">{fmt(d.kpis.totalSoldValue)}</td>
                     <td className="py-2 px-2 text-right text-gray-500 font-bold">{fmt(d.kpis.totalUnsoldValue)}</td>
                     <td className="py-2 px-2 text-right text-blue-600 font-bold">{fmt(d.kpis.totalUnderContractValue)}</td>
                     <td className="py-2 px-2 text-right font-bold text-gray-700">{d.kpis.pctSold}%</td>
                   </tr>
                 )}
                 {(d.projects as any[]).length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-6 text-gray-400">No unit data available</td></tr>
+                  <tr><td colSpan={7} className="text-center py-6 text-gray-500">No unit data available</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -522,11 +522,11 @@ function CashFlowTab() {
                     {monthly.map((m: any) => (
                       <tr key={m.month} className="border-b last:border-0 hover:bg-gray-50">
                         <td className="px-4 py-2 font-mono text-sm">{m.month}</td>
-                        <td className="px-4 py-2 font-mono text-green-600">{fmt(m.inflows)}</td>
-                        <td className="px-4 py-2 font-mono text-red-500">{fmt(m.outflows)}</td>
-                        <td className={`px-4 py-2 font-mono font-medium ${m.net >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(m.net)}</td>
-                        <td className={`px-4 py-2 font-mono ${m.cumulative >= 0 ? 'text-gray-800' : 'text-red-500'}`}>{fmt(m.cumulative)}</td>
-                        <td className="px-4 py-2 text-xs text-gray-400">{m.isActual ? 'Actual' : 'Forecast'}</td>
+                        <td className="px-4 py-2 font-mono text-green-700">{fmt(m.inflows)}</td>
+                        <td className="px-4 py-2 font-mono text-red-700">{fmt(m.outflows)}</td>
+                        <td className={`px-4 py-2 font-mono font-medium ${m.net >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmt(m.net)}</td>
+                        <td className={`px-4 py-2 font-mono ${m.cumulative >= 0 ? 'text-gray-800' : 'text-red-700'}`}>{fmt(m.cumulative)}</td>
+                        <td className="px-4 py-2 text-xs text-gray-500">{m.isActual ? 'Actual' : 'Forecast'}</td>
                       </tr>
                     ))}
                   </tbody>

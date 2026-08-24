@@ -115,7 +115,7 @@ export default function FinanceDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {(d.loansNearMaturity || []).length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">No loans maturing soon</p>
+              <p className="text-sm text-gray-500 py-4 text-center">No loans maturing soon</p>
             ) : (
               <div className="space-y-2 max-h-[120px] overflow-auto">
                 {(d.loansNearMaturity as any[]).map((loan: any) => (
@@ -126,11 +126,11 @@ export default function FinanceDashboardPage() {
                   >
                     <div>
                       <p className="text-sm font-medium text-red-800">{loan.lender}</p>
-                      <p className="text-xs text-red-600">{loan.projectName} · {loan.daysToMaturity}d left</p>
+                      <p className="text-xs text-red-700">{loan.projectName} · {loan.daysToMaturity}d left</p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-semibold text-red-700">{fmt(loan.principal)}</p>
-                      <p className="text-xs text-red-500">{fmtDate(loan.maturityDate)}</p>
+                      <p className="text-xs text-red-700">{fmtDate(loan.maturityDate)}</p>
                     </div>
                   </div>
                 ))}
@@ -147,7 +147,7 @@ export default function FinanceDashboardPage() {
         </CardHeader>
         <CardBody>
           {(d.budgetCategoryChart || []).length === 0 ? (
-            <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+            <p className="text-sm text-gray-500 py-10 text-center">No data</p>
           ) : (
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={d.budgetCategoryChart} margin={{ left: 10 }}>
@@ -198,12 +198,12 @@ export default function FinanceDashboardPage() {
                     <td className="py-2.5 px-3"><StatusBadge status={p.phase} /></td>
                     <td className="py-2.5 px-3 text-right text-gray-700">{fmt(p.budget)}</td>
                     <td className="py-2.5 px-3 text-right text-gray-700">{fmt(p.actuals)}</td>
-                    <td className={`py-2.5 px-3 text-right font-semibold ${p.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    <td className={`py-2.5 px-3 text-right font-semibold ${p.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {p.variance >= 0 ? '+' : ''}{fmt(p.variance)}
                     </td>
                     <td className="py-2.5 px-3">
                       <div>
-                        <div className="text-xs text-gray-400 mb-1">{(p.budgetSpentPct * 100).toFixed(0)}%</div>
+                        <div className="text-xs text-gray-500 mb-1">{(p.budgetSpentPct * 100).toFixed(0)}%</div>
                         <Progress
                           value={p.budgetSpentPct * 100}
                           size="sm"
@@ -223,7 +223,7 @@ export default function FinanceDashboardPage() {
                   </tr>
                 ))}
                 {(d.projectSummaries || []).length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-6 text-gray-400">No projects</td></tr>
+                  <tr><td colSpan={7} className="text-center py-6 text-gray-500">No projects</td></tr>
                 )}
               </tbody>
             </table></div>

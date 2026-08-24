@@ -41,7 +41,7 @@ const STATUS_COLORS: Record<string, 'default' | 'primary' | 'secondary' | 'succe
 // + darker text (~700) instead of saturated solid fills. Pairs all meet 4.5:1 contrast
 // on white (WCAG AA — Quick Reference §1 color-contrast).
 const STATUS_TOKEN: Record<string, { bg: string; text: string; dot: string; rail: string }> = {
-  NEW:           { bg: 'bg-slate-100',   text: 'text-slate-700',   dot: 'bg-slate-400',   rail: 'bg-slate-300' },
+  NEW:           { bg: 'bg-gray-100',   text: 'text-gray-700',   dot: 'bg-gray-400',   rail: 'bg-gray-300' },
   CONTACTED:     { bg: 'bg-blue-50',     text: 'text-blue-700',    dot: 'bg-blue-500',    rail: 'bg-blue-500' },
   POTENTIAL:     { bg: 'bg-sky-50',      text: 'text-sky-700',     dot: 'bg-sky-500',     rail: 'bg-sky-500' },
   QUALIFIED:     { bg: 'bg-indigo-50',   text: 'text-indigo-700',  dot: 'bg-indigo-500',  rail: 'bg-indigo-500' },
@@ -50,7 +50,7 @@ const STATUS_TOKEN: Record<string, { bg: string; text: string; dot: string; rail
   NEGOTIATING:   { bg: 'bg-amber-50',    text: 'text-amber-700',   dot: 'bg-amber-500',   rail: 'bg-amber-500' },
   CONVERTED:     { bg: 'bg-emerald-50',  text: 'text-emerald-700', dot: 'bg-emerald-500', rail: 'bg-emerald-500' },
   LOST:          { bg: 'bg-rose-50',     text: 'text-rose-700',    dot: 'bg-rose-500',    rail: 'bg-rose-500' },
-  DEAD:          { bg: 'bg-zinc-100',    text: 'text-zinc-600',    dot: 'bg-zinc-400',    rail: 'bg-zinc-400' },
+  DEAD:          { bg: 'bg-gray-100',    text: 'text-gray-600',    dot: 'bg-gray-400',    rail: 'bg-gray-400' },
 };
 
 // "Stale" = no activity in 14+ days, and not in a terminal status (CONVERTED/LOST/DEAD).
@@ -146,9 +146,9 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
         </Card>
       )}
 
-      {isLoading && <p className="text-sm text-gray-400 text-center py-4">Loading...</p>}
+      {isLoading && <p className="text-sm text-gray-500 text-center py-4">Loading...</p>}
       {!isLoading && (!activities || activities.length === 0) && (
-        <p className="text-sm text-gray-400 text-center py-4">No activities yet</p>
+        <p className="text-sm text-gray-500 text-center py-4">No activities yet</p>
       )}
       <div className="space-y-2">
         {(activities || []).map((act: any) => (
@@ -159,9 +159,9 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <p className="text-xs font-medium text-gray-700">{act.type.replace('_', ' ')}</p>
-                <span className="text-[10px] text-gray-400">{fmtDate(act.createdAt)}</span>
+                <span className="text-[11px] text-gray-500">{fmtDate(act.createdAt)}</span>
                 {act.createdByUser && (
-                  <span className="text-[10px] text-gray-400">· {act.createdByUser.name}</span>
+                  <span className="text-[11px] text-gray-500">· {act.createdByUser.name}</span>
                 )}
               </div>
               <p className="text-xs text-gray-600 mt-0.5">{act.note}</p>
@@ -394,7 +394,7 @@ function LeadInterests({ leadId, projectId }: { leadId: string; projectId: strin
         <Button size="sm" variant="light" onPress={() => setAdding((v) => !v)}>+ Add</Button>
       </div>
       {interests.length === 0 && !adding && (
-        <p className="text-xs text-gray-400">Not on any unit waitlist yet.</p>
+        <p className="text-xs text-gray-500">Not on any unit waitlist yet.</p>
       )}
       <div className="flex flex-wrap gap-1.5">
         {interests.map((i) => (
@@ -628,7 +628,7 @@ function LeadFormModal({
               ))}
             </Select>
             {(form.buildingId || form.unitId) && (
-              <p className="text-xs text-gray-400 sm:col-span-2 -mt-1">
+              <p className="text-xs text-gray-500 sm:col-span-2 -mt-1">
                 {form.buildingId && !form.unitId && 'Lead linked to building. Selecting a unit will switch the link.'}
                 {form.unitId && !form.buildingId && 'Lead linked to unit. Selecting a building will switch the link.'}
               </p>
@@ -784,10 +784,10 @@ export default function LeadsPage() {
           <div className="flex items-center gap-2.5">
             <FiTarget className="text-xl text-blue-600" />
             <h1 className="text-lg font-semibold text-gray-900">Leads</h1>
-            <span className="text-sm text-gray-400 tabular-nums">{totalCount}</span>
+            <span className="text-sm text-gray-500 tabular-nums">{totalCount}</span>
             {staleCount > 0 && (
               <Tooltip content={`${staleCount} lead${staleCount === 1 ? '' : 's'} with no activity in 14+ days`}>
-                <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700">
+                <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700">
                   <FiClock className="w-3 h-3" />
                   <span className="tabular-nums">{staleCount}</span> stale
                 </span>
@@ -939,38 +939,38 @@ export default function LeadsPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-medium text-gray-900 truncate max-w-[16rem]">
-                        {lead.name || <span className="text-gray-400 italic font-normal">Unnamed lead</span>}
+                        {lead.name || <span className="text-gray-500 italic font-normal">Unnamed lead</span>}
                       </p>
-                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${t.bg} ${t.text}`}>
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${t.bg} ${t.text}`}>
                         <span className={`inline-block w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />
                         {lead.status.replace('_', ' ')}
                       </span>
                       {lead.unit && (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-50 text-sky-700">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-sky-50 text-sky-700">
                           <FiHome className="w-2.5 h-2.5" />
                           Unit {lead.unit.unitNumber}
                         </span>
                       )}
                       {lead.building && !lead.unit && (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-purple-50 text-purple-700">
                           <FiHome className="w-2.5 h-2.5" />
                           {lead.building.name}
                         </span>
                       )}
                       {lead.campaign && (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700">
                           <FiBarChart2 className="w-2.5 h-2.5" />
                           {lead.campaign.name}
                         </span>
                       )}
                       {lead.broker && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
                           <FiUsers size={9} /> {lead.broker.name}
                         </span>
                       )}
                       {stale != null && (
                         <Tooltip content={`No activity in ${stale} days`}>
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${
                             stale >= 30 ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
                           }`}>
                             <FiClock className="w-2.5 h-2.5" />
@@ -1014,7 +1014,7 @@ export default function LeadsPage() {
 
                   {/* Row 2: metadata — contact, source, project, budget, activity, assignee */}
                   <div className="flex items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 flex-wrap">
-                    <span className="text-gray-400">{SOURCE_LABELS[lead.source] || lead.source}</span>
+                    <span className="text-gray-500">{SOURCE_LABELS[lead.source] || lead.source}</span>
                     {lead.email && (
                       <span className="flex items-center gap-1 max-w-[14rem] truncate">
                         <FiMail className="w-3 h-3 shrink-0" />
@@ -1039,7 +1039,7 @@ export default function LeadsPage() {
                     )}
                     {lead.assignedUser && (
                       <span className="ml-auto flex items-center gap-1.5">
-                        <Avatar size="sm" name={lead.assignedUser.name} src={lead.assignedUser.avatarUrl} className="w-4 h-4 text-[8px]" />
+                        <Avatar size="sm" name={lead.assignedUser.name} src={lead.assignedUser.avatarUrl} className="w-4 h-4 text-[11px]" />
                         <span className="text-gray-500">{lead.assignedUser.name}</span>
                       </span>
                     )}

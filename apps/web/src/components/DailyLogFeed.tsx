@@ -129,7 +129,7 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
                 <button
                   type="button"
                   onClick={() => photoInputRef.current?.click()}
-                  className="w-16 h-16 rounded-lg border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-0.5 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition-colors shrink-0"
+                  className="w-16 h-16 rounded-lg border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-0.5 text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors shrink-0"
                   aria-label="Add more photos"
                 >
                   <FiPlus className="w-4 h-4" />
@@ -186,9 +186,9 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
           </div>
         </PermissionGate>
 
-        {isLoading && <p className="text-sm text-gray-400">Loading…</p>}
+        {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
         {!isLoading && logs.length === 0 && (
-          <p className="text-sm text-gray-400">No daily logs yet. Field crews can post progress + photos from their phone.</p>
+          <p className="text-sm text-gray-500">No daily logs yet. Field crews can post progress + photos from their phone.</p>
         )}
 
         <div className="space-y-3">
@@ -226,10 +226,10 @@ function DailyLogCard({ log }: { log: any }) {
     <div className="rounded-lg border border-gray-100 p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Avatar size="sm" name={log.author?.name} src={log.author?.avatarUrl} className="w-6 h-6 text-[10px]" />
+          <Avatar size="sm" name={log.author?.name} src={log.author?.avatarUrl} className="w-6 h-6 text-[11px]" />
           <div>
             <p className="text-sm font-medium">{fmtDate(log.logDate)}</p>
-            <p className="text-xs text-gray-400">{log.author?.name}</p>
+            <p className="text-xs text-gray-500">{log.author?.name}</p>
           </div>
         </div>
         <PermissionGate permission="dailylog:edit">
@@ -265,7 +265,7 @@ function DailyLogCard({ log }: { log: any }) {
                 type="button" aria-label="Remove photo" onClick={() => removePhoto.mutate(p.id)}
                 className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
               >
-                <FiTrash2 className="text-[10px] text-red-600" />
+                <FiTrash2 className="text-[11px] text-red-600" />
               </button>
             </PermissionGate>
           </div>
@@ -277,7 +277,7 @@ function DailyLogCard({ log }: { log: any }) {
             isLoading={presigned.isPending || addPhoto.isPending}
           >
             <FiCamera />
-            <span className="text-[10px]">Photo</span>
+            <span className="text-[11px]">Photo</span>
           </Button>
           <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         </PermissionGate>

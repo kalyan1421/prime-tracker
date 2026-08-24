@@ -319,12 +319,16 @@ export class UnitHistoryService {
         orderBy: [{ effectiveAt: 'asc' }, { recordedAt: 'asc' }],
         include: { recordedBy: { select: { id: true, name: true, email: true } } },
       }),
+      // A lease or sale covering this unit can be attached to the unit OR to the whole
+      // BUILDING it sits in — the models are polymorphic. Reading only unit-scoped rows
+      // meant a unit inside a let or sold building showed an empty life story: no
+      // tenancy, no sale, one open vacancy window that claimed it had never been used.
       this.prisma.lease.findMany({
-        where: { unitId, deletedAt: null },
+        where: { deletedAt: null, OR: [{ unitId }, { building: { units: { some: { id: unitId } } } }] },
         orderBy: { leaseStart: 'desc' },
       }),
       this.prisma.sale.findMany({
-        where: { unitId, deletedAt: null },
+        where: { deletedAt: null, OR: [{ unitId }, { building: { units: { some: { id: unitId } } } }] },
         orderBy: { createdAt: 'desc' },
         include: { broker: { select: { id: true, name: true } } },
       }),

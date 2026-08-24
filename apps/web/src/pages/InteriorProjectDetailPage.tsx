@@ -144,7 +144,7 @@ export default function InteriorProjectDetailPage() {
         <CardBody className="p-5 space-y-5">
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-amber-600 font-semibold">
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-amber-700 font-semibold">
                 <FiHome className="w-3.5 h-3.5" /> Interior / Fit-Out
               </div>
               <h1 className="text-xl sm:text-2xl font-bold break-words mt-1">{p.name}</h1>
@@ -224,10 +224,10 @@ export default function InteriorProjectDetailPage() {
                 </Button>
               )}
               {next === 'HANDOVER' && !isTerminal && (
-                <span className="text-xs text-gray-400">Handover marks the project complete and triggers the client's TI payment.</span>
+                <span className="text-xs text-gray-500">Handover marks the project complete and triggers the client's TI payment.</span>
               )}
               {p.status === 'COMPLETED' && p.handoverAt && (
-                <span className="inline-flex items-center gap-1 text-sm text-green-600">
+                <span className="inline-flex items-center gap-1 text-sm text-green-700">
                   <FiCheckCircle /> Handed over {fmtDate(p.handoverAt)}{p.handoverSignedBy ? ` · signed by ${p.handoverSignedBy}` : ''}
                 </span>
               )}
@@ -242,11 +242,11 @@ export default function InteriorProjectDetailPage() {
         <Card shadow="none" className="border border-gray-200/80 rounded-xl lg:col-span-2">
           <CardBody className="p-5">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold flex items-center gap-1.5">
+              <span className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold flex items-center gap-1.5">
                 <FiDollarSign className="w-3.5 h-3.5" /> TI Budget
               </span>
               <Tooltip content="Interior spend is tracked separately and excluded from the main project budget.">
-                <span className="text-[10px] text-gray-400 border border-gray-200 rounded-full px-2 py-0.5 cursor-default">
+                <span className="text-[11px] text-gray-500 border border-gray-200 rounded-full px-2 py-0.5 cursor-default">
                   isolated from project budget
                 </span>
               </Tooltip>
@@ -261,7 +261,7 @@ export default function InteriorProjectDetailPage() {
               color={fin.remaining < 0 ? 'danger' : fin.usedPct > 0.9 ? 'warning' : 'success'}
             />
             {p.contractType === 'PER_SQFT' && p.ratePerSqft && (
-              <p className="text-xs text-gray-400 mt-2">
+              <p className="text-xs text-gray-500 mt-2">
                 {fmt(Number(p.ratePerSqft))}/sqft × {p.area ? Number(p.area).toLocaleString() : '—'} sqft
               </p>
             )}
@@ -271,7 +271,7 @@ export default function InteriorProjectDetailPage() {
         {/* Approvals + dates */}
         <Card shadow="none" className="border border-gray-200/80 rounded-xl">
           <CardBody className="p-5 space-y-3">
-            <span className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">Approvals & dates</span>
+            <span className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold">Approvals & dates</span>
             <ApprovalRow
               label="Client approval" at={p.clientApprovedAt}
               canRecord={canApprove && phase === 'CLIENT_APPROVAL' && !p.clientApprovedAt}
@@ -344,7 +344,7 @@ export default function InteriorProjectDetailPage() {
               value={signoff.handoverNotes}
               onChange={(e) => setSignoff((s) => ({ ...s, handoverNotes: e.target.value }))}
             />
-            <p className="text-[11px] text-gray-400">
+            <p className="text-[11px] text-gray-500">
               Tip: upload the signed handover certificate and site photos in the Documents tab.
             </p>
           </ModalBody>
@@ -397,8 +397,8 @@ export default function InteriorProjectDetailPage() {
 function Metric({ label, value, tone }: { label: string; value: string; tone?: 'rose' | 'emerald' }) {
   return (
     <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">{label}</div>
-      <div className={`mt-1 text-lg font-bold tabular-nums truncate ${tone === 'rose' ? 'text-rose-600' : tone === 'emerald' ? 'text-emerald-600' : 'text-gray-900'}`}>
+      <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold">{label}</div>
+      <div className={`mt-1 text-lg font-bold tabular-nums truncate ${tone === 'rose' ? 'text-rose-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-gray-900'}`}>
         {value}
       </div>
     </div>
@@ -412,7 +412,7 @@ function ApprovalRow({ label, at, canRecord, onRecord, loading }: {
     <div className="flex items-center justify-between gap-2">
       <span className="text-sm text-gray-600">{label}</span>
       {at ? (
-        <span className="inline-flex items-center gap-1 text-xs text-green-600"><FiCheckCircle size={13} /> {fmtDate(at)}</span>
+        <span className="inline-flex items-center gap-1 text-xs text-green-700"><FiCheckCircle size={13} /> {fmtDate(at)}</span>
       ) : canRecord ? (
         <Button size="sm" variant="flat" startContent={<FiCheckCircle size={13} />} isLoading={loading} onPress={onRecord}>Record</Button>
       ) : (
@@ -493,18 +493,18 @@ function InvoicesPanel({ projectId, invoices, spend, canFinance }: {
       )}
 
       {invoices.length === 0 ? (
-        <p className="text-sm text-gray-400 italic py-4 text-center">No sub-contractor invoices yet.</p>
+        <p className="text-sm text-gray-500 italic py-4 text-center">No sub-contractor invoices yet.</p>
       ) : (
         <div className="space-y-1.5">
           {invoices.map((inv) => (
             <div key={inv.id} className="flex items-center justify-between gap-3 text-sm border-b border-gray-50 py-1.5">
               <div className="min-w-0">
                 <span className="text-gray-700 font-medium">{inv.vendor?.name ?? 'Vendor'}</span>
-                {inv.invoiceNo && <span className="text-gray-400 text-xs ml-2">#{inv.invoiceNo}</span>}
-                {inv.invoiceDate && <span className="text-gray-400 text-xs ml-2">{fmtDate(inv.invoiceDate)}</span>}
+                {inv.invoiceNo && <span className="text-gray-500 text-xs ml-2">#{inv.invoiceNo}</span>}
+                {inv.invoiceDate && <span className="text-gray-500 text-xs ml-2">{fmtDate(inv.invoiceDate)}</span>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <Chip size="sm" variant="flat" color={STATUS_COLOR_INV[inv.status] ?? 'default'} className="text-[10px]">{inv.status}</Chip>
+                <Chip size="sm" variant="flat" color={STATUS_COLOR_INV[inv.status] ?? 'default'} className="text-[11px]">{inv.status}</Chip>
                 <span className="tabular-nums font-semibold">{fmt(Number(inv.amount))}</span>
               </div>
             </div>

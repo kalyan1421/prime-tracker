@@ -373,10 +373,37 @@ export class LeasesController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Parse and validate an uploaded rent-history file — no writes' })
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
-  async previewImport(@UploadedFile() file: Express.Multer.File, @Body('projectId') projectId: string) {
+  async previewImport(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('projectId') projectId: string,
+    // Preview-entered fixes, re-sent on every re-check. JSON-encoded because this is a
+    // multipart request — the same shape previewMappedImport already takes.
+    @Body('defaultBrokerId') defaultBrokerId?: string,
+    @Body('rowBrokerOverrides') rowBrokerOverrides?: string,
+    @Body('rowOverrides') rowOverrides?: string,
+  ) {
     if (!file) throw new BadRequestException('No file was received');
     if (!projectId) throw new BadRequestException('projectId is required');
-    return this.importService.previewImport(file.buffer, projectId);
+    const parse = (raw: string | undefined, field: string) => {
+      if (!raw) return undefined;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new BadRequestException(`${field} must be an object keyed by row number`);
+        }
+        return parsed;
+      } catch (e) {
+        if (e instanceof BadRequestException) throw e;
+        throw new BadRequestException(`${field} is not valid JSON`);
+      }
+    };
+    // projectId alone decides where the rows land — the project the import was launched
+    // from. A "Project" column in the sheet only filters other projects' rows out.
+    return this.importService.previewImport(file.buffer, projectId, {
+      defaultBrokerId: defaultBrokerId || undefined,
+      rowBrokerOverrides: parse(rowBrokerOverrides, 'rowBrokerOverrides'),
+      rowOverrides: parse(rowOverrides, 'rowOverrides'),
+    });
   }
 
   @Post('backfill/import/commit')
@@ -414,6 +441,7 @@ export class LeasesController {
     @Body('mapping') mappingRaw: string,
     @Body('defaultBrokerId') defaultBrokerId?: string,
     @Body('rowBrokerOverrides') rowBrokerOverridesRaw?: string,
+    @Body('rowOverrides') rowOverridesRaw?: string,
   ) {
     if (!file) throw new BadRequestException('No file was received');
     if (!projectId) throw new BadRequestException('projectId is required');
@@ -435,7 +463,17 @@ export class LeasesController {
         throw new BadRequestException('rowBrokerOverrides must be valid JSON');
       }
     }
-    return this.importService.previewMappedImport(file.buffer, projectId, mapping, defaultBrokerId || undefined, rowBrokerOverrides);
+    let rowOverrides: Record<number, any> | undefined;
+    if (rowOverridesRaw) {
+      try {
+        rowOverrides = JSON.parse(rowOverridesRaw);
+      } catch {
+        throw new BadRequestException('rowOverrides must be valid JSON');
+      }
+    }
+    return this.importService.previewMappedImport(
+      file.buffer, projectId, mapping, defaultBrokerId || undefined, rowBrokerOverrides, rowOverrides,
+    );
   }
 
   @Get(':id/assignments')

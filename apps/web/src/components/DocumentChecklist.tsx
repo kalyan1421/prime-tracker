@@ -135,9 +135,9 @@ export function DocumentChecklist({
                   {DOC_LABELS[item.type]}
                 </span>
                 {item.required && (
-                  <Chip size="sm" variant="flat" className="bg-gray-100 text-gray-600 text-[10px]">Required</Chip>
+                  <Chip size="sm" variant="flat" className="bg-gray-100 text-gray-600 text-[11px]">Required</Chip>
                 )}
-                <Chip size="sm" variant="flat" className="text-[10px]">
+                <Chip size="sm" variant="flat" className="text-[11px]">
                   {item.uploaded} {item.uploaded === 1 ? 'file' : 'files'}
                 </Chip>
               </div>
@@ -190,7 +190,7 @@ export function DocumentChecklist({
                           <span className="truncate">{doc.filename}</span>
                           {doc.uploadedBy && (
                             <Tooltip content={`Uploaded by ${doc.uploadedBy.name}`}>
-                              <span className="text-gray-400 shrink-0">· {doc.uploadedBy.name}</span>
+                              <span className="text-gray-500 shrink-0">· {doc.uploadedBy.name}</span>
                             </Tooltip>
                           )}
                         </span>

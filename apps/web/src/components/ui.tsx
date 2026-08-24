@@ -16,16 +16,19 @@ export function StatCard({
   /** When provided, the card becomes clickable and navigates/acts on press. */
   onClick?: () => void;
 }) {
+  // -700 rather than -600: these sit on the tinted variant backgrounds below
+  // (bg-blue-50 / bg-amber-50 / bg-purple-50), where the -600 shades measured 2.96:1
+  // against a 3.0 requirement. Same hue, same meaning, one step darker.
   const colorMap: Record<string, string> = {
-    brand: 'text-blue-600',
-    blue: 'text-blue-600',
-    green: 'text-green-600',
-    orange: 'text-orange-600',
-    purple: 'text-purple-600',
-    red: 'text-red-600',
-    gray: 'text-gray-600',
-    cyan: 'text-cyan-600',
-    teal: 'text-teal-600',
+    brand: 'text-blue-700',
+    blue: 'text-blue-700',
+    green: 'text-green-700',
+    orange: 'text-orange-700',
+    purple: 'text-purple-700',
+    red: 'text-red-700',
+    gray: 'text-gray-700',
+    cyan: 'text-cyan-700',
+    teal: 'text-teal-700',
   };
 
   const variantClass = variant === 'construction'
@@ -46,14 +49,16 @@ export function StatCard({
     >
       <CardBody className="p-5">
         <div className="flex items-start justify-between gap-2">
-          <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
+          <p className="text-xs uppercase tracking-wide text-gray-600">{label}</p>
           {clickable && <FiArrowRight className="text-gray-300 shrink-0 mt-0.5" aria-hidden />}
         </div>
-        <p className={`text-2xl font-semibold ${colorMap[colorScheme] || 'text-gray-600'}`}>{value}</p>
+        <p className={`text-2xl font-semibold ${colorMap[colorScheme] || 'text-gray-700'}`}>{value}</p>
         {helpText && (
-          <p className="text-sm text-gray-500 mt-1">
-            {trend === 'increase' && <span className="text-green-500">&#9650; </span>}
-            {trend === 'decrease' && <span className="text-red-500">&#9660; </span>}
+          <p className="text-sm text-gray-600 mt-1">
+            {/* -700, not -500. These glyphs are text, and they are the only thing
+                distinguishing "up" from "down" — at -500 they measured 2.04:1. */}
+            {trend === 'increase' && <span className="text-green-700">&#9650; </span>}
+            {trend === 'decrease' && <span className="text-red-700">&#9660; </span>}
             {helpText}
           </p>
         )}
@@ -150,7 +155,7 @@ export function EmptyState({ title, message, action }: { title?: string; message
     <div className="flex justify-center py-16">
       <div className="flex flex-col items-center gap-2">
         {title && <p className="font-semibold text-gray-500">{title}</p>}
-        {message && <p className="text-sm text-gray-400">{message}</p>}
+        {message && <p className="text-sm text-gray-500">{message}</p>}
         {action && <div className="mt-2">{action}</div>}
       </div>
     </div>

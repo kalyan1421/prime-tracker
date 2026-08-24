@@ -181,13 +181,13 @@ export function SnagPanel({
               Punch List
             </span>
             <div className="flex items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 text-xs text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+              <span className="inline-flex items-center gap-1 text-xs text-red-700 bg-red-50 px-2 py-0.5 rounded-full">
                 <FiAlertCircle size={11} /> {openCount} open
               </span>
-              <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+              <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
                 <FiClock size={11} /> {wipCount} in progress
               </span>
-              <span className="inline-flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+              <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
                 <FiCheckCircle size={11} /> {doneCount} resolved
               </span>
             </div>
@@ -287,7 +287,7 @@ export function SnagPanel({
       {total === 0 && !adding && (
         <div className="rounded-xl border border-dashed border-gray-200 py-8 text-center">
           <FiCheckCircle className="mx-auto mb-2 text-2xl text-gray-300" />
-          <p className="text-sm text-gray-400">No snags logged yet.</p>
+          <p className="text-sm text-gray-500">No snags logged yet.</p>
           <p className="text-xs text-gray-300 mt-0.5">Add items during site walk-through.</p>
         </div>
       )}
@@ -310,17 +310,17 @@ export function SnagPanel({
                 <div className="flex items-start gap-2 min-w-0">
                   <span className="mt-0.5 shrink-0">{meta.icon}</span>
                   <div className="min-w-0">
-                    <p className={`text-sm font-medium leading-snug ${snag.status === 'RESOLVED' ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                    <p className={`text-sm font-medium leading-snug ${snag.status === 'RESOLVED' ? 'line-through text-gray-500' : 'text-gray-800'}`}>
                       {snag.description}
                     </p>
                     <div className="flex items-center gap-3 mt-1 flex-wrap">
                       {snag.room && (
-                        <span className="flex items-center gap-1 text-xs text-gray-400">
+                        <span className="flex items-center gap-1 text-xs text-gray-500">
                           <FiMapPin size={10} /> {snag.room}
                         </span>
                       )}
                       {snag.assignee && (
-                        <span className="flex items-center gap-1 text-xs text-gray-400">
+                        <span className="flex items-center gap-1 text-xs text-gray-500">
                           <FiUser size={10} /> {snag.assignee}
                         </span>
                       )}
@@ -329,7 +329,7 @@ export function SnagPanel({
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <Chip size="sm" color={meta.color} variant="flat" className="text-[10px]">
+                  <Chip size="sm" color={meta.color} variant="flat" className="text-[11px]">
                     {meta.label}
                   </Chip>
 

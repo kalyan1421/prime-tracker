@@ -43,8 +43,8 @@ function ChartTooltip({ active, payload, label }: any) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-lg p-3 min-w-[180px] text-xs">
       <p className="font-semibold text-gray-700 mb-2">{label}</p>
-      <Row color="text-emerald-600" dot="bg-emerald-500" label="Inflow" value={row.inflow} />
-      <Row color="text-rose-600" dot="bg-rose-500" label="Outflow" value={row.outflow} />
+      <Row color="text-emerald-700" dot="bg-emerald-500" label="Inflow" value={row.inflow} />
+      <Row color="text-rose-700" dot="bg-rose-500" label="Outflow" value={row.outflow} />
       <div className="border-t border-gray-100 mt-1 pt-1">
         <Row color="text-indigo-600" dot="bg-indigo-500" label="Net" value={row.net} signed />
         <Row color="text-gray-600" dot="bg-gray-400" label="Cumulative" value={row.cumulative} signed />
@@ -114,7 +114,7 @@ export default function CashflowPage() {
               key={h.months}
               onClick={() => setMonths(h.months)}
               className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
-                months === h.months ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'
+                months === h.months ? 'bg-white shadow-sm text-gray-800' : 'text-gray-600 hover:text-gray-900'
               }`}
             >
               {h.label}
@@ -144,7 +144,7 @@ export default function CashflowPage() {
             <CardHeader className="pb-0">
               <div>
                 <p className="font-semibold text-sm text-gray-700">Money In vs Out</p>
-                <p className="text-xs text-gray-400">Net bars with cumulative cash position over {months} months</p>
+                <p className="text-xs text-gray-500">Net bars with cumulative cash position over {months} months</p>
               </div>
             </CardHeader>
             <CardBody>
@@ -169,7 +169,7 @@ export default function CashflowPage() {
               <CardHeader className="pb-0">
                 <div>
                   <p className="font-semibold text-sm text-gray-700">Where the money goes</p>
-                  <p className="text-xs text-gray-400">Outflows by category — the five budget lines</p>
+                  <p className="text-xs text-gray-500">Outflows by category — the five budget lines</p>
                 </div>
               </CardHeader>
               <CardBody>
@@ -198,10 +198,10 @@ export default function CashflowPage() {
               <div className="overflow-x-auto rounded-xl border border-gray-100">
                 <table className="w-full text-xs min-w-[520px]">
                   <thead>
-                    <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[10px]">
+                    <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[11px]">
                       <th className="text-left px-3 py-2 font-medium">Month</th>
-                      <th className="text-right px-3 py-2 font-medium text-emerald-600">Inflow</th>
-                      <th className="text-right px-3 py-2 font-medium text-rose-600">Outflow</th>
+                      <th className="text-right px-3 py-2 font-medium text-emerald-700">Inflow</th>
+                      <th className="text-right px-3 py-2 font-medium text-rose-700">Outflow</th>
                       <th className="text-right px-3 py-2 font-medium text-indigo-600">Net</th>
                       <th className="text-right px-3 py-2 font-medium">Cumulative</th>
                     </tr>
@@ -213,7 +213,7 @@ export default function CashflowPage() {
                         <td className="px-3 py-2 text-right tabular-nums text-emerald-700">{r.inflow > 0 ? fmt(r.inflow) : '—'}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-rose-700">{r.outflow > 0 ? fmt(r.outflow) : '—'}</td>
                         <td className={`px-3 py-2 text-right tabular-nums font-semibold ${r.net >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
-                        <td className={`px-3 py-2 text-right tabular-nums ${r.cumulative >= 0 ? 'text-gray-600' : 'text-rose-600 font-semibold'}`}>{r.cumulative >= 0 ? '+' : ''}{fmt(r.cumulative)}</td>
+                        <td className={`px-3 py-2 text-right tabular-nums ${r.cumulative >= 0 ? 'text-gray-600' : 'text-rose-700 font-semibold'}`}>{r.cumulative >= 0 ? '+' : ''}{fmt(r.cumulative)}</td>
                       </tr>
                     ))}
                   </tbody>

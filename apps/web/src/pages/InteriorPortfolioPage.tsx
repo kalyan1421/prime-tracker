@@ -92,7 +92,7 @@ export default function InteriorPortfolioPage() {
                     <td className="px-4 py-3 text-right">{fmt(r.spend ?? 0)}</td>
                     <td className="px-4 py-3 text-right">
                       {r.daysToHandover == null ? '—' : (
-                        <span className={r.daysToHandover < 0 ? 'text-red-600' : r.daysToHandover <= 30 ? 'text-orange-600' : ''}>
+                        <span className={r.daysToHandover < 0 ? 'text-red-700' : r.daysToHandover <= 30 ? 'text-orange-700' : ''}>
                           {r.daysToHandover}
                         </span>
                       )}

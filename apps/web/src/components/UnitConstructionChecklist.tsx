@@ -151,7 +151,7 @@ export function UnitConstructionChecklist({
       <div className="overflow-x-auto rounded-lg border border-gray-100">
         <table className="w-full text-xs min-w-[720px]">
           <thead>
-            <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[10px]">
+            <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[11px]">
               <th className="text-left px-3 py-2 font-medium w-8">#</th>
               <th className="text-left px-3 py-2 font-medium">Subitem</th>
               <th className="text-left px-3 py-2 font-medium">Owner</th>
@@ -164,7 +164,7 @@ export function UnitConstructionChecklist({
           <tbody>
             {stages.map((s) => (
               <tr key={s.id} className="border-t border-gray-100">
-                <td className="px-3 py-2 tabular-nums text-gray-400">{s.sortOrder + 1}</td>
+                <td className="px-3 py-2 tabular-nums text-gray-500">{s.sortOrder + 1}</td>
                 <td className="px-3 py-2 font-medium text-gray-800">{s.label}</td>
                 <td className="px-3 py-2">
                   {canEdit ? (
@@ -223,7 +223,7 @@ export function UnitConstructionChecklist({
                       <Chip size="sm" variant="flat" color={chipColor(inspectionOptions.find((o) => o.value === s.inspectionStatus)?.color)}>
                         {inspectionOptions.find((o) => o.value === s.inspectionStatus)?.label ?? s.inspectionStatus}
                       </Chip>
-                    ) : <span className="text-gray-400">—</span>
+                    ) : <span className="text-gray-500">—</span>
                   )}
                 </td>
                 <td className="px-3 py-2">
@@ -243,7 +243,7 @@ export function UnitConstructionChecklist({
                       <button
                         type="button"
                         onClick={() => deleteStage.mutate({ stageId: s.id, unitId })}
-                        className="text-gray-300 hover:text-red-600 transition-colors"
+                        className="text-gray-300 hover:text-red-700 transition-colors"
                       >
                         <FiTrash2 size={13} />
                       </button>

@@ -131,7 +131,7 @@ export function UserProfileCard({ user, mode, visibleProjects }: Props) {
           <p className="font-semibold text-sm text-gray-700">Access</p>
         </CardHeader>
         <CardBody className="pt-1">
-          <p className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold mb-1.5">
+          <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold mb-1.5">
             {roles.length > 1 ? 'Roles' : 'Role'}
           </p>
           <div className="flex flex-wrap gap-1.5 mb-3">
@@ -140,10 +140,10 @@ export function UserProfileCard({ user, mode, visibleProjects }: Props) {
                 {r.replace(/_/g, ' ')}
               </Chip>
             ))}
-            {roles.length === 0 && <span className="text-xs text-gray-400">No role assigned</span>}
+            {roles.length === 0 && <span className="text-xs text-gray-500">No role assigned</span>}
           </div>
           {mode === 'admin' && (
-            <p className="text-[11px] text-gray-400 mb-3">
+            <p className="text-[11px] text-gray-500 mb-3">
               Roles and account status are changed in the Users table, not here.
             </p>
           )}
@@ -167,7 +167,7 @@ export function UserProfileCard({ user, mode, visibleProjects }: Props) {
                     : `${visibleProjects.length} project${visibleProjects.length === 1 ? '' : 's'}: ${visibleProjects.map((p: any) => p.name).join(', ')}`}
                 </p>
               )}
-              <p className="text-[11px] text-gray-400 mt-1">
+              <p className="text-[11px] text-gray-500 mt-1">
                 {permissions.length} permission{permissions.length === 1 ? '' : 's'} across{' '}
                 {roles.length} role{roles.length === 1 ? '' : 's'}
               </p>
@@ -274,8 +274,8 @@ function ChangePasswordForm({ changePassword }: { changePassword: ReturnType<typ
         <Input size="sm" type="password" label="Confirm new password" value={confirm}
           onChange={(e) => { setConfirm(e.target.value); setErr(null); }} autoComplete="new-password" />
       </div>
-      {err && <p className="text-xs text-red-600 mt-2">{err}</p>}
-      <p className="text-[11px] text-gray-400 mt-2">
+      {err && <p className="text-xs text-red-700 mt-2">{err}</p>}
+      <p className="text-[11px] text-gray-500 mt-2">
         Changing your password signs you out everywhere else. This device stays signed in.
       </p>
       <div className="flex justify-end mt-3">

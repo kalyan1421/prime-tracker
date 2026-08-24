@@ -288,12 +288,23 @@ export class UnitsService {
     // Surface the composite-unique-constraint failure with a friendly message.
     // The DB constraint is a partial index (WHERE "deletedAt" IS NULL) so a soft-deleted
     // unit with this number must not block reuse — filter it out here too.
+    // Case-insensitive, matching the index. Comparing exactly let "E2" and "e2" both
+    // exist in one building — two records for one physical space, reachable from the
+    // rent-history import, which offered to create the unit it had failed to match.
     const existing = await this.prisma.unit.findFirst({
-      where: { buildingId: input.buildingId, unitNumber, deletedAt: null },
+      where: {
+        buildingId: input.buildingId,
+        unitNumber: { equals: unitNumber, mode: 'insensitive' },
+        deletedAt: null,
+      },
+      select: { unitNumber: true },
     });
     if (existing) {
       throw new ConflictException(
-        `Unit '${unitNumber}' already exists in this building`,
+        existing.unitNumber === unitNumber
+          ? `Unit '${unitNumber}' already exists in this building`
+          : `Unit '${existing.unitNumber}' already exists in this building — '${unitNumber}' differs only in `
+            + 'capitalisation, and would be a second record for the same space.',
       );
     }
 

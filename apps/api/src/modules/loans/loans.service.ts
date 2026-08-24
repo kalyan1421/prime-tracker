@@ -326,6 +326,54 @@ export class LoansService {
     });
   }
 
+  /**
+   * Every draw schedule line across a project's loans, in one query.
+   *
+   * The milestone "Linked Draw" picker used to fetch /loans, then fan out one
+   * GET /loans/:id/schedule per loan in a Promise.all. Each of those hits the same route
+   * handler, and the throttler allows 10 per second per handler — so a project with 11+
+   * loans would 429, and because it was a Promise.all a single rejection emptied the whole
+   * picker rather than dropping one loan. One query cannot be rate-limited into a partial
+   * answer.
+   *
+   * The loan label is joined here so the caller does not need the separate /loans read
+   * either.
+   */
+  async findProjectDrawSchedules(projectId: string) {
+    const lines = await this.prisma.drawSchedule.findMany({
+      where: {
+        // Mirrors findByProject exactly, and must keep mirroring it. Loans attach at
+        // project OR building level, and legacy building-level rows can have a null
+        // projectId of their own (create() only started deriving it later), so matching
+        // on loan.projectId alone silently drops them. Soft-deleted loans stay out.
+        loan: {
+          deletedAt: null,
+          OR: [
+            { projectId },
+            { building: { projectId } },
+          ],
+        },
+      },
+      orderBy: [{ loanId: 'asc' }, { drawNumber: 'asc' }],
+      // encryptedFields is required, per SENSITIVE_LOAN_FIELDS at the top of this file:
+      // `lender` is one of the encrypted columns, so the column itself is null and reading
+      // it raw silently labels every line with its loanType instead of the bank's name.
+      // Same shape findDrawsByProject uses.
+      include: { loan: { select: { id: true, lender: true, loanType: true, encryptedFields: true } } },
+    });
+    return lines.map((s) => {
+      const loan = this.decryptLoan(s.loan);
+      return {
+        id: s.id,
+        drawNumber: s.drawNumber,
+        plannedAmount: Number(s.plannedAmount),
+        plannedDate: s.plannedDate,
+        loanId: s.loanId,
+        loanLabel: loan.lender || loan.loanType,
+      };
+    });
+  }
+
   async upsertDrawScheduleLine(loanId: string, data: {
     drawNumber: number;
     plannedAmount: number;

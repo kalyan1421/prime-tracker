@@ -47,7 +47,7 @@ function OverdueMilestonesCard({ milestones, navigate }: { milestones: any[]; na
       </CardHeader>
       <CardBody className="pt-0">
         {milestones.length === 0 ? (
-          <p className="text-sm text-gray-400 py-4 text-center">No overdue milestones</p>
+          <p className="text-sm text-gray-500 py-4 text-center">No overdue milestones</p>
         ) : (
           <>
             <div className="overflow-auto">
@@ -142,11 +142,11 @@ function UpdateUnitProgressCard({
         </Select>
 
         {!projectId && (
-          <p className="text-sm text-gray-400 py-4 text-center">Pick a project to see its units</p>
+          <p className="text-sm text-gray-500 py-4 text-center">Pick a project to see its units</p>
         )}
         {projectId && unitsQ.isLoading && <LoadingState message="Loading units..." />}
         {projectId && !unitsQ.isLoading && units.length === 0 && (
-          <p className="text-sm text-gray-400 py-4 text-center">No units in this project</p>
+          <p className="text-sm text-gray-500 py-4 text-center">No units in this project</p>
         )}
         {projectId && units.length > 0 && (
           <div className="max-h-[360px] overflow-y-auto space-y-1.5 pr-1">
@@ -163,7 +163,7 @@ function UpdateUnitProgressCard({
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-gray-800 truncate">
                       Unit {u.unitNumber}
-                      <span className="text-xs text-gray-400 font-normal"> · {u.building?.name}</span>
+                      <span className="text-xs text-gray-500 font-normal"> · {u.building?.name}</span>
                     </div>
                     <div className="text-xs text-gray-500 truncate">
                       {r ? (r.nextStage ? `Next: ${r.nextStage.label}` : 'Checklist complete') : 'No checklist started'}
@@ -339,16 +339,16 @@ export default function ConstructionDashboardPage() {
                     </td>
                     )}
                     <td className="py-2 px-2 text-center">
-                      <span className={p.milestoneCounts.overdue > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}>
+                      <span className={p.milestoneCounts.overdue > 0 ? 'text-red-700 font-semibold' : 'text-gray-500'}>
                         {p.milestoneCounts.overdue}
                       </span>
                     </td>
                     <td className="py-2 px-2 text-center text-blue-600">{p.milestoneCounts.inProgress}</td>
-                    <td className="py-2 px-2 text-center text-green-600">{p.milestoneCounts.completed}</td>
+                    <td className="py-2 px-2 text-center text-green-700">{p.milestoneCounts.completed}</td>
                   </tr>
                 ))}
                 {(d.projectSummaries || []).length === 0 && (
-                  <tr><td colSpan={6} className="text-center py-6 text-gray-400">No active projects</td></tr>
+                  <tr><td colSpan={6} className="text-center py-6 text-gray-500">No active projects</td></tr>
                 )}
               </tbody>
             </table></div>
@@ -383,7 +383,7 @@ export default function ConstructionDashboardPage() {
               />
             </div>
             {d.drawRequestStats?.pendingCount === 0 && (
-              <p className="text-sm text-gray-400 text-center py-2">No pending draw requests</p>
+              <p className="text-sm text-gray-500 text-center py-2">No pending draw requests</p>
             )}
           </CardBody>
         </Card>
@@ -397,7 +397,7 @@ export default function ConstructionDashboardPage() {
           </CardHeader>
           <CardBody>
             {phaseChartData.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+              <p className="text-sm text-gray-500 py-10 text-center">No data</p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
@@ -421,7 +421,7 @@ export default function ConstructionDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {(d.recentMilestones || []).length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">No recent activity</p>
+              <p className="text-sm text-gray-500 py-4 text-center">No recent activity</p>
             ) : (
               <div className="overflow-auto max-h-[200px]">
                 <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">

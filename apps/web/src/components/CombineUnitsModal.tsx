@@ -83,12 +83,12 @@ export function CombineUnitsModal({
 
           {buildingId && (
             <div className="rounded-lg border border-gray-100 p-2 max-h-56 overflow-y-auto space-y-1">
-              {candidates.length === 0 && <p className="text-xs text-gray-400">No units in this building.</p>}
+              {candidates.length === 0 && <p className="text-xs text-gray-500">No units in this building.</p>}
               {candidates.map((u) => (
                 <label key={u.id} className="flex items-center gap-2 text-sm py-1 cursor-pointer">
                   <Checkbox isSelected={!!selected[u.id]} onValueChange={() => toggle(u.id)} />
                   <span className="font-medium">Unit {u.unitNumber}</span>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-gray-500">
                     {u.unitType}{u.sqft ? ` · ${u.sqft} sqft` : ''} · {u.status}
                   </span>
                 </label>

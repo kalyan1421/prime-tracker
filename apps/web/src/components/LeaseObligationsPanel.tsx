@@ -422,7 +422,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900">Deposits &amp; Allowances</p>
-          <p className="text-xs text-gray-400">Money owed in both directions on this lease</p>
+          <p className="text-xs text-gray-500">Money owed in both directions on this lease</p>
         </div>
         {canEdit && (
           <Button size="sm" color="primary" startContent={<FiPlus size={14} />} onPress={openCreate}>
@@ -497,7 +497,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
                     <Icon size={11} />
                     {meta.heading}
                   </span>
-                  <span className="text-[11px] text-gray-400">{meta.parties}</span>
+                  <span className="text-[11px] text-gray-500">{meta.parties}</span>
                   <div className="h-px flex-1 bg-gray-100" />
                 </div>
 
@@ -560,7 +560,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
                 </Select>
 
                 {hasDeposit && (
-                  <p className="-mt-1 text-[11px] text-gray-400">
+                  <p className="-mt-1 text-[11px] text-gray-500">
                     This lease already has a security deposit — edit the existing one instead.
                   </p>
                 )}
@@ -593,7 +593,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
               type="number"
               label="Agreed amount"
               placeholder="0.00"
-              startContent={<span className="text-sm text-gray-400">$</span>}
+              startContent={<span className="text-sm text-gray-500">$</span>}
               value={obForm.totalAmount}
               onChange={setOb('totalAmount')}
               description={
@@ -659,7 +659,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
               type="number"
               label="Amount"
               placeholder="0.00"
-              startContent={<span className="text-sm text-gray-400">$</span>}
+              startContent={<span className="text-sm text-gray-500">$</span>}
               value={payForm.amount}
               onChange={setPay('amount')}
             />
@@ -689,7 +689,7 @@ export function LeaseObligationsPanel({ leaseId, canEdit, unitId, buildingId }: 
             />
             <Textarea size="sm" label="Notes" minRows={2} value={payForm.notes} onChange={setPay('notes')} />
 
-            <p className="text-[11px] text-gray-400">
+            <p className="text-[11px] text-gray-500">
               A payment above the agreed total needs confirming — it is usually a typo.
             </p>
           </ModalBody>
@@ -780,7 +780,7 @@ function ReadOnlyKind({ kind, direction }: { kind: string; direction: string }) 
           <p className={`text-[11px] font-medium ${meta.text}`}>{meta.parties}</p>
         </div>
       </div>
-      <p className="mt-1.5 text-[11px] text-gray-400">
+      <p className="mt-1.5 text-[11px] text-gray-500">
         Kind and direction can&apos;t be changed — delete and re-create if this was mis-filed.
       </p>
     </div>
@@ -844,11 +844,11 @@ function ObligationRow({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
                 <p className="text-sm font-semibold text-gray-900">{KIND_LABELS[o.kind] ?? o.kind}</p>
-                <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_CHIP[o.status] ?? STATUS_CHIP.PENDING}`}>
+                <span className={`rounded border px-1.5 py-0.5 text-[11px] font-semibold ${STATUS_CHIP[o.status] ?? STATUS_CHIP.PENDING}`}>
                   {o.status}
                 </span>
                 {overdue && (
-                  <span className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">
+                  <span className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-semibold text-red-700">
                     <FiAlertTriangle size={9} /> OVERDUE
                   </span>
                 )}
@@ -862,7 +862,7 @@ function ObligationRow({
                 {o.dueDate && (
                   <>
                     <span className="text-gray-300">·</span>
-                    <span className="flex items-center gap-1 text-gray-400">
+                    <span className="flex items-center gap-1 text-gray-500">
                       <FiCalendar size={10} /> Due {fmtDate(o.dueDate)}
                     </span>
                   </>
@@ -891,7 +891,7 @@ function ObligationRow({
             {/* The bar IS the percentage. Printing "69% collected" beside it, above a
                 third line giving the same fact in money, is one idea said three ways —
                 and money is the one somebody acts on. */}
-            <span className="text-gray-400">
+            <span className="text-gray-500">
               {waived ? 'Waived — no balance owed' : ''}
             </span>
             {/* Overpayment is legal, so a negative pending is a REFUND, not an error. */}
@@ -964,7 +964,7 @@ function ObligationRow({
       {expanded && (
         <div className="border-t border-gray-100 bg-gray-50/60 px-3.5 py-2.5">
           {payments.length === 0 ? (
-            <p className="py-2 text-center text-[11px] text-gray-400">
+            <p className="py-2 text-center text-[11px] text-gray-500">
               Nothing recorded yet.
               {o.kind === 'TI_ALLOWANCE' && ' A TI allowance is normally disbursed across several phases.'}
             </p>
@@ -977,13 +977,13 @@ function ObligationRow({
                       <span className="text-xs font-semibold text-gray-900">{fmt(num(p.amount))}</span>
                       <span className="text-[11px] text-gray-500">{fmtDate(p.paidAt)}</span>
                       {p.method && (
-                        <Chip size="sm" variant="flat" className="h-4 px-1 text-[10px]">{p.method}</Chip>
+                        <Chip size="sm" variant="flat" className="h-4 px-1 text-[11px]">{p.method}</Chip>
                       )}
                       {p.reference && (
-                        <span className="truncate text-[10px] text-gray-400">ref {p.reference}</span>
+                        <span className="truncate text-[11px] text-gray-500">ref {p.reference}</span>
                       )}
                     </div>
-                    {p.notes && <p className="truncate text-[10px] text-gray-400">{p.notes}</p>}
+                    {p.notes && <p className="truncate text-[11px] text-gray-500">{p.notes}</p>}
                   </div>
                   {canEdit && (
                     <Button

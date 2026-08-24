@@ -143,6 +143,14 @@ describe('UnitsService.create', () => {
     expect(mockPrisma.unit.create).not.toHaveBeenCalled();
   });
 
+  it('refuses a unit number that differs from an existing one only in capitalisation', async () => {
+    mockPrisma.building.findUnique.mockResolvedValue({ id: 'b1', project: { status: 'ACTIVE' } });
+    mockPrisma.unit.findFirst.mockResolvedValue({ unitNumber: 'E2' });
+    await expect(
+      service.create({ buildingId: 'b1', unitNumber: 'e2', unitType: 'RETAIL' } as any),
+    ).rejects.toThrow(/differs only in capitalisation/);
+  });
+
   it('allows reusing a unit number that only exists on a soft-deleted (e.g. merged-away) unit', async () => {
     // The uniqueness lookup filters deletedAt: null, so an archived '504' must not surface here.
     mockPrisma.unit.findFirst.mockResolvedValue(null);
@@ -151,8 +159,16 @@ describe('UnitsService.create', () => {
     const res: any = await service.create({ buildingId: 'b1', unitNumber: '504', unitType: 'RETAIL' });
 
     expect(res.id).toBe('new');
+    // Case-insensitive since 2026-08-25: "E2" and "e2" were two units for one space.
+    // The soft-delete filter is what this test is actually about and is unchanged.
     expect(mockPrisma.unit.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { buildingId: 'b1', unitNumber: '504', deletedAt: null } }),
+      expect.objectContaining({
+        where: {
+          buildingId: 'b1',
+          unitNumber: { equals: '504', mode: 'insensitive' },
+          deletedAt: null,
+        },
+      }),
     );
   });
 });

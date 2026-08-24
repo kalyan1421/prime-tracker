@@ -116,7 +116,7 @@ export function HistoricalRecordControls({ record, onDeleted }: {
           <FiArchive className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
           <div className="min-w-0">
             <p className="text-xs font-semibold text-amber-900">Entered from records</p>
-            <p className="text-[11px] text-amber-800/80 mt-0.5">
+            <p className="text-[11px] text-amber-800 mt-0.5">
               This {kind === 'lease' ? 'tenancy' : 'sale'} was typed in after the fact, so its
               {kind === 'lease' ? ' ledger' : ' deal'} cannot be rebuilt. Deleting it needs a
               Founder's approval.

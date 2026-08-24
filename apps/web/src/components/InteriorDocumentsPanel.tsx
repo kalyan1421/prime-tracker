@@ -211,7 +211,7 @@ export function InteriorDocumentsPanel({
       {!isLoading && filtered.length === 0 && (
         <div className="rounded-xl border border-dashed border-gray-200 py-10 text-center">
           <FiFile className="mx-auto mb-2 text-xl text-gray-300" />
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-gray-500">
             {filterCat === 'ALL' ? 'No documents uploaded yet.' : `No ${CAT_META[filterCat as InteriorDocCategory]?.label} documents.`}
           </p>
           <Button
@@ -235,17 +235,17 @@ export function InteriorDocumentsPanel({
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.fileName}</p>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     {catMeta && (
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${catMeta.color}`}>
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${catMeta.color}`}>
                         {catMeta.label}
                       </span>
                     )}
                     {doc.fileSize && (
-                      <span className="text-[10px] text-gray-400">
+                      <span className="text-[11px] text-gray-500">
                         {(doc.fileSize / 1024).toFixed(0)} KB
                       </span>
                     )}
                   </div>
-                  <p className="text-[10px] text-gray-400 mt-1">
+                  <p className="text-[11px] text-gray-500 mt-1">
                     {doc.uploadedBy?.name} · {fmtDate(doc.createdAt)}
                   </p>
                   <div className="flex gap-1.5 mt-2">

@@ -36,7 +36,7 @@ export function ConstructionTemplateEditor({ buildingId, canEdit }: { buildingId
   return (
     <div className="space-y-2">
       {items.length === 0 ? (
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-gray-500">
           No template stages yet. Units under this building will start with an empty
           checklist until stages are added here.
         </p>

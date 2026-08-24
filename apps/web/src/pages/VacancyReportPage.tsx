@@ -121,7 +121,7 @@ export default function VacancyReportPage() {
                   return (
                     <tr key={r.unitId} className="border-b border-gray-50 hover:bg-gray-50">
                       <td className="py-2 pr-3">
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${s.bg} ${s.text}`}>
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${s.bg} ${s.text}`}>
                           <span className={`inline-block w-1.5 h-1.5 rounded-full ${s.dot}`} aria-hidden="true" />
                           {s.label}
                         </span>
@@ -140,7 +140,7 @@ export default function VacancyReportPage() {
                         {new Date(r.availableSince).toLocaleDateString()}
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums font-medium">
-                        <span className={r.severity === 'critical' ? 'text-rose-600' : r.severity === 'warning' ? 'text-amber-600' : 'text-gray-700'}>
+                        <span className={r.severity === 'critical' ? 'text-rose-700' : r.severity === 'warning' ? 'text-amber-700' : 'text-gray-700'}>
                           {r.daysOnMarket}d
                         </span>
                       </td>

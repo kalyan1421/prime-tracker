@@ -126,7 +126,7 @@ export default function BrokersPage() {
                           {b.name}
                           {!b.isActive && <Chip size="sm" variant="flat" color="default">inactive</Chip>}
                         </div>
-                        <div className="text-xs text-gray-400">{b.company || b.email || b.phone || ''}</div>
+                        <div className="text-xs text-gray-500">{b.company || b.email || b.phone || ''}</div>
                       </td>
                       <td className="px-4 py-3 text-gray-600">{rate}</td>
                       <td className="px-4 py-3 text-right">{r.leads ?? 0}</td>

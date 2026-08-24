@@ -251,7 +251,7 @@ export default function BuildingDetailPage() {
                 </Button>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-gray-500">
+            <div className="flex items-center gap-2 text-[11px] text-gray-500">
               {['AVAILABLE', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'].map((s) => (
                 <span key={s} className="inline-flex items-center gap-1">
                   <span className={`inline-block w-2 h-2 rounded-sm ${STATUS_FILL[s]?.split(' ')[0] ?? 'bg-gray-200'}`} />
@@ -263,7 +263,7 @@ export default function BuildingDetailPage() {
           <CardBody className="pt-0">
             {units.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-sm text-gray-400">No units in this building yet.</p>
+                <p className="text-sm text-gray-500">No units in this building yet.</p>
                 {canEditUnits && (
                   <Button size="sm" variant="flat" color="primary" className="mt-3"
                     startContent={<FiPlus className="text-xs" />} onPress={addUnit.onOpen}>
@@ -279,7 +279,7 @@ export default function BuildingDetailPage() {
                     <Tooltip key={u.id} content={`Unit ${u.unitNumber} · ${u.status.replace('_', ' ')}${u.sqft ? ` · ${u.sqft} sqft` : ''}`}>
                       <Link
                         to={`/projects/${projectId}/units/${u.id}`}
-                        className={`block aspect-square rounded text-[10px] font-medium flex items-center justify-center transition-colors ${klass}`}
+                        className={`block aspect-square rounded text-[11px] font-medium flex items-center justify-center transition-colors ${klass}`}
                         aria-label={`Unit ${u.unitNumber}, ${u.status}`}
                       >
                         {u.unitNumber}
@@ -301,7 +301,7 @@ export default function BuildingDetailPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {activeLeases.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-8">No active leases.</div>
+              <div className="text-sm text-gray-500 text-center py-8">No active leases.</div>
             ) : (
               <div className="space-y-1">
                 {buckets.map((bucket, i) => (
@@ -347,7 +347,7 @@ export default function BuildingDetailPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {loans.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-6">No loans attached to this building.</div>
+              <div className="text-sm text-gray-500 text-center py-6">No loans attached to this building.</div>
             ) : (
               <div className="space-y-2">
                 {loans.map((l: any) => (
@@ -358,7 +358,7 @@ export default function BuildingDetailPage() {
                     </div>
                     <div className="text-right shrink-0">
                       <p className="text-sm font-semibold text-gray-900 tabular-nums">{fmtMoney(Number(l.currentBalance ?? l.principalAmt ?? 0))}</p>
-                      {l.maturityDate && <p className="text-[10px] text-gray-500">Matures {fmtDate(l.maturityDate)}</p>}
+                      {l.maturityDate && <p className="text-[11px] text-gray-500">Matures {fmtDate(l.maturityDate)}</p>}
                     </div>
                   </div>
                 ))}
@@ -374,7 +374,7 @@ export default function BuildingDetailPage() {
               <p className="font-semibold text-sm text-gray-700">Documents</p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400 tabular-nums">{((docs as any[]) || []).length}</span>
+              <span className="text-xs text-gray-500 tabular-nums">{((docs as any[]) || []).length}</span>
               {canUploadDocs && (
                 <>
                   {/* Category is chosen BEFORE the file picker opens, because the picker
@@ -407,7 +407,7 @@ export default function BuildingDetailPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {!docs || (docs as any[]).length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-6">No documents attached to this building.</div>
+              <div className="text-sm text-gray-500 text-center py-6">No documents attached to this building.</div>
             ) : (
               <div className="space-y-1">
                 {(docs as any[]).slice(0, 8).map((d: any) => (
@@ -416,7 +416,7 @@ export default function BuildingDetailPage() {
                       <FiFileText className="text-gray-400 shrink-0 w-3.5 h-3.5" />
                       <span className="text-sm text-gray-800 truncate">{d.fileName || d.name}</span>
                     </div>
-                    <span className="text-[10px] text-gray-400 shrink-0">{fmtDate(d.createdAt)}</span>
+                    <span className="text-[11px] text-gray-500 shrink-0">{fmtDate(d.createdAt)}</span>
                   </div>
                 ))}
               </div>

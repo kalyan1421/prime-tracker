@@ -72,6 +72,19 @@ export class LoansController {
     return this.service.findDrawsByProject(projectId, canViewFinancial);
   }
 
+  // Must stay ABOVE @Get(':id') — Express matches in declaration order, so a later
+  // literal path is swallowed by the earlier parameterised one.
+  @Get('draw-schedules')
+  // Both, because this replaces a two-call sequence that needed both: GET /loans
+  // (loan:view) followed by GET /loans/:id/schedule (draw:view). The response carries the
+  // decrypted lender name, so loan:view is the one that actually matters here — dropping
+  // it would hand lender names to draw:view-only roles like CONSTRUCTION.
+  @RequirePermissions('loan:view', 'draw:view')
+  @ApiOperation({ summary: 'Every draw schedule line across a project\'s loans' })
+  findProjectDrawSchedules(@Query('projectId') projectId: string) {
+    return this.service.findProjectDrawSchedules(projectId);
+  }
+
   @Get(':id')
   @RequirePermissions('loan:view')
   @ApiOperation({ summary: 'Get loan by ID (decrypted)' })

@@ -20,7 +20,7 @@ export interface HealthScoreRingProps {
 }
 
 const SIZE: Record<NonNullable<HealthScoreRingProps['size']>, { dim: number; stroke: number; fontSize: string }> = {
-  sm: { dim: 36, stroke: 4, fontSize: 'text-[10px]' },
+  sm: { dim: 36, stroke: 4, fontSize: 'text-[11px]' },
   md: { dim: 56, stroke: 6, fontSize: 'text-xs' },
   lg: { dim: 96, stroke: 8, fontSize: 'text-base' },
 };
@@ -85,7 +85,7 @@ export function HealthScoreRing({ score, size = 'md', breakdown, severityOverrid
           <p className="font-semibold mb-1">{SEVERITY[sev].label} · {clamped}/100</p>
           {breakdown.map((b) => (
             <p key={b.label} className="text-gray-600">
-              <span className="text-gray-400">{b.label}:</span> {b.value}
+              <span className="text-gray-500">{b.label}:</span> {b.value}
             </p>
           ))}
         </div>

@@ -114,7 +114,7 @@ export function InteriorBOQPanel({
           <FiFileText className="text-blue-500" size={14} />
           <span className="text-sm font-semibold text-gray-700">Bill of Quantities</span>
           {items.length > 0 && (
-            <span className="text-xs text-gray-400">({items.length} items)</span>
+            <span className="text-xs text-gray-500">({items.length} items)</span>
           )}
         </div>
         <Button
@@ -196,7 +196,7 @@ export function InteriorBOQPanel({
       {items.length === 0 && !adding && (
         <div className="rounded-xl border border-dashed border-gray-200 py-6 text-center">
           <FiFileText className="mx-auto mb-2 text-xl text-gray-300" />
-          <p className="text-sm text-gray-400">No scope items yet.</p>
+          <p className="text-sm text-gray-500">No scope items yet.</p>
           <p className="text-xs text-gray-300 mt-0.5">Add line items to track quantities and costs.</p>
         </div>
       )}
@@ -206,7 +206,7 @@ export function InteriorBOQPanel({
         <div className="overflow-x-auto rounded-xl border border-gray-100">
           <table className="w-full text-xs">
             <thead>
-              <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[10px]">
+              <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[11px]">
                 <th className="text-left px-3 py-2 font-medium">Description</th>
                 <th className="text-left px-3 py-2 font-medium">Category</th>
                 <th className="text-right px-3 py-2 font-medium">Qty</th>
@@ -223,9 +223,9 @@ export function InteriorBOQPanel({
                   className={`border-t border-gray-100 hover:bg-gray-50 transition-colors ${i % 2 === 1 ? 'bg-gray-50/40' : ''}`}
                 >
                   <td className="px-3 py-2 text-gray-800 font-medium">{item.description}</td>
-                  <td className="px-3 py-2 text-gray-400">{item.category || '—'}</td>
+                  <td className="px-3 py-2 text-gray-500">{item.category || '—'}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{item.quantity}</td>
-                  <td className="px-2 py-2 text-gray-400">{item.unit}</td>
+                  <td className="px-2 py-2 text-gray-500">{item.unit}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmt(item.unitPrice)}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-semibold text-gray-800">{fmt(item.total)}</td>
                   <td className="px-2 py-2">
@@ -252,7 +252,7 @@ export function InteriorBOQPanel({
               </tr>
               {contractValue !== undefined && (
                 <tr className="border-t border-gray-100 bg-white">
-                  <td colSpan={5} className="px-3 py-1.5 text-right text-xs text-gray-400">
+                  <td colSpan={5} className="px-3 py-1.5 text-right text-xs text-gray-500">
                     Contract value
                   </td>
                   <td className="px-3 py-1.5 text-right text-xs text-gray-500 tabular-nums">
@@ -263,11 +263,11 @@ export function InteriorBOQPanel({
               )}
               {variance !== undefined && (
                 <tr className="border-t border-gray-100 bg-white">
-                  <td colSpan={5} className="px-3 py-1.5 text-right text-xs text-gray-400">
+                  <td colSpan={5} className="px-3 py-1.5 text-right text-xs text-gray-500">
                     Variance
                   </td>
                   <td className={`px-3 py-1.5 text-right text-xs font-semibold tabular-nums ${
-                    variance > 0 ? 'text-red-600' : variance < 0 ? 'text-green-600' : 'text-gray-500'
+                    variance > 0 ? 'text-red-700' : variance < 0 ? 'text-green-700' : 'text-gray-500'
                   }`}>
                     {variance > 0 ? '+' : ''}{fmt(variance)}
                   </td>

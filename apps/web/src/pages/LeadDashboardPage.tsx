@@ -121,7 +121,7 @@ export default function LeadDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {attribution.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-8">No leads yet</div>
+              <div className="text-sm text-gray-500 text-center py-8">No leads yet</div>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
@@ -139,7 +139,7 @@ export default function LeadDashboardPage() {
               <div className="flex justify-between"><span>Linked to a unit</span><span className="font-medium text-gray-700">{d.attribution.withUnit}</span></div>
               <div className="flex justify-between"><span>Linked to a building</span><span className="font-medium text-gray-700">{d.attribution.withBuilding}</span></div>
               <div className="flex justify-between"><span>Linked to a campaign</span><span className="font-medium text-gray-700">{d.attribution.withCampaign}</span></div>
-              <div className="flex justify-between"><span>No asset link</span><span className="font-medium text-rose-600">{Math.max(0, d.attribution.unattached)}</span></div>
+              <div className="flex justify-between"><span>No asset link</span><span className="font-medium text-rose-700">{Math.max(0, d.attribution.unattached)}</span></div>
             </div>
           </CardBody>
         </Card>
@@ -153,7 +153,7 @@ export default function LeadDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {d.bySource.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-8">No source data</div>
+              <div className="text-sm text-gray-500 text-center py-8">No source data</div>
             ) : (
               <div className="space-y-2">
                 {d.bySource.slice(0, 7).map((row: any, idx: number) => {
@@ -185,7 +185,7 @@ export default function LeadDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {d.staleLeads.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-8">Nothing stale — clean pipeline.</div>
+              <div className="text-sm text-gray-500 text-center py-8">Nothing stale — clean pipeline.</div>
             ) : (
               <div className="space-y-1">
                 {d.staleLeads.map((l: any) => {
@@ -194,13 +194,13 @@ export default function LeadDashboardPage() {
                     <Link key={l.id} to="/leads" className="block">
                       <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 -mx-2 px-2 rounded">
                         <div className="flex items-center gap-2 min-w-0">
-                          <p className="text-sm text-gray-800 truncate">{l.name || <span className="italic text-gray-400">Unnamed</span>}</p>
-                          <Chip size="sm" variant="flat" className="text-[10px]" style={{ backgroundColor: STATUS_FILL[l.status] + '20', color: STATUS_FILL[l.status] }}>
+                          <p className="text-sm text-gray-800 truncate">{l.name || <span className="italic text-gray-500">Unnamed</span>}</p>
+                          <Chip size="sm" variant="flat" className="text-[11px]" style={{ backgroundColor: STATUS_FILL[l.status] + '20', color: STATUS_FILL[l.status] }}>
                             {l.status.replace('_', ' ')}
                           </Chip>
                           {l.project?.name && <span className="text-xs text-blue-600 truncate">{l.project.name}</span>}
                         </div>
-                        <span className="text-xs text-rose-600 shrink-0 ml-2">{daysSince}d</span>
+                        <span className="text-xs text-rose-700 shrink-0 ml-2">{daysSince}d</span>
                       </div>
                     </Link>
                   );
@@ -221,15 +221,15 @@ export default function LeadDashboardPage() {
         </CardHeader>
         <CardBody className="pt-0">
           {d.recentActivity.length === 0 ? (
-            <div className="text-sm text-gray-400 text-center py-8">No activity logged yet.</div>
+            <div className="text-sm text-gray-500 text-center py-8">No activity logged yet.</div>
           ) : (
             <div className="space-y-1">
               {d.recentActivity.map((a: any) => (
                 <div key={a.id} className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-b-0">
-                  <Chip size="sm" variant="flat" className="text-[10px] shrink-0">{ACTIVITY_LABELS[a.type] || a.type}</Chip>
+                  <Chip size="sm" variant="flat" className="text-[11px] shrink-0">{ACTIVITY_LABELS[a.type] || a.type}</Chip>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-800 truncate">{a.note}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-xs text-gray-500 mt-0.5">
                       <Link to="/leads" className="text-blue-600 hover:underline">{a.lead?.name || 'Unnamed'}</Link>
                       {a.createdByUser?.name && <> · by {a.createdByUser.name}</>}
                       <> · {fmtDate(a.createdAt)}</>

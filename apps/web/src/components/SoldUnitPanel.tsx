@@ -34,7 +34,7 @@ interface SoldUnitPanelProps {
 function DetailRow({ label, value }: { label: React.ReactNode; value: React.ReactNode }) {
   return (
     <div className="flex items-start gap-2 py-2 border-b border-gray-50 last:border-0">
-      <dt className="text-sm text-gray-400 w-36 shrink-0">{label}</dt>
+      <dt className="text-sm text-gray-500 w-36 shrink-0">{label}</dt>
       <dd className="text-sm font-medium text-gray-900">{value ?? '—'}</dd>
     </div>
   );
@@ -119,7 +119,7 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
           {canEditSale && (
             <button
               onClick={openEdit}
-              className="text-gray-400 hover:text-blue-600 transition-colors p-1 rounded"
+              className="text-gray-500 hover:text-blue-600 transition-colors p-1 rounded"
               title="Edit sale details"
               aria-label="Edit sale details"
             >
@@ -142,7 +142,7 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
           )}
           <DetailRow
             label={<span className="flex items-center gap-1"><FiDollarSign className="w-3 h-3" /> Sale Price</span>}
-            value={salePriceNum != null ? <span className="text-emerald-600 tabular-nums">{fmt(salePriceNum)}</span> : '—'}
+            value={salePriceNum != null ? <span className="text-emerald-700 tabular-nums">{fmt(salePriceNum)}</span> : '—'}
           />
           <DetailRow
             label={<span className="flex items-center gap-1"><FiDollarSign className="w-3 h-3" /> Deposit</span>}
@@ -170,7 +170,7 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
           />
           {sale.notes && (
             <div className="sm:col-span-2 py-2 border-t border-gray-50 mt-1">
-              <dt className="text-sm text-gray-400 mb-1">Notes</dt>
+              <dt className="text-sm text-gray-500 mb-1">Notes</dt>
               <dd className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{sale.notes}</dd>
             </div>
           )}

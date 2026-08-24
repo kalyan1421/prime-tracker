@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { MentionTextarea } from '../components/MentionTextarea';
 import { BuildingFormModal } from '../components/BuildingFormModal';
@@ -48,7 +48,7 @@ import {
   useVendors, useCreateVendor, useUpdateVendor, useContracts, useContractSummary, useCreateContract, useUpdateContract, useDeleteContract,
   useAddChangeOrder, useApproveChangeOrder, useAddContractPayment,
   useDocuments, useUploadDocument, useDeleteDocument, useRenameDocument, useReplaceDocument,
-  useUsers, useAssignableUsers, useProjectMembers, useAddProjectMember, useRemoveProjectMember,
+  useUsers, useAssignableUsers, useProjectMembers, useAddProjectMember, useAddProjectMembers, useRemoveProjectMember,
   useProjectHealth, useSalesForecast, useExceptions, useProjectActivity,
   useSetMilestoneDependency, useMilestonePhotos, useAttachMilestonePhoto, useDeleteMilestonePhoto,
   usePresignedUpload, useProjectDrawSchedules, useCustomOptions,
@@ -126,7 +126,7 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
       </div>
       {list.length === 0 ? (
-        <p className="text-xs text-gray-400">No photos yet — useful for inspector / lender packages.</p>
+        <p className="text-xs text-gray-500">No photos yet — useful for inspector / lender packages.</p>
       ) : (
         <div className="flex gap-2 flex-wrap">
           {list.map((p) => (
@@ -228,6 +228,20 @@ export default function ProjectDetailPage() {
   const { data: project, isLoading, error } = useProject(id!);
   const { data: health } = useProjectHealth(id ?? '');
 
+  // Whether the header has scrolled out from under the sticky tab bar. Driven by an
+  // IntersectionObserver on a 1px sentinel rather than a scroll handler, so it costs one
+  // re-render per crossing instead of one per scroll frame.
+  const heroSentinel = useRef<HTMLDivElement | null>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const el = heroSentinel.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([e]) => setStuck(!e.isIntersecting), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+    // Re-attached when the project changes: the sentinel unmounts with the loading state.
+  }, [project]);
+
   if (isLoading) return <LoadingState />;
   if (error || !project) return <ErrorState />;
 
@@ -248,32 +262,35 @@ export default function ProjectDetailPage() {
 
   return (
     <div>
-      <button
-        className="flex items-center gap-1 text-blue-600 text-sm font-medium mb-4 cursor-pointer hover:underline"
-        onClick={() => navigate('/projects')}
-      >
-        <FiArrowLeft />
-        All Projects
-      </button>
-
       {/* Unified project header — identity (left zone) + financial/occupancy summary
-          (right zone) live in ONE card, split by a hairline. Stacks on mobile. */}
-      <Card shadow="none" className="border border-gray-200/80 rounded-xl overflow-hidden mb-4 sm:mb-6">
+          (right zone) live in ONE card, split by a hairline. Stacks on mobile.
+
+          "All Projects" sits INSIDE this card. As its own row above the card it spent a
+          full 36px of every tab's vertical space to hold one link, and the header stack
+          was already consuming half the viewport before any tab rendered a row. */}
+      <Card shadow="none" className="border border-gray-200/80 rounded-xl overflow-hidden mb-3">
         <CardBody className="p-0">
           <div className="flex flex-col lg:flex-row">
             {/* Left zone — project identity */}
-            <div className="lg:flex-1 min-w-0 p-5">
+            <div className="lg:flex-1 min-w-0 p-4">
+              <button
+                className="flex items-center gap-1 text-blue-600 text-xs font-medium mb-2 cursor-pointer hover:underline"
+                onClick={() => navigate('/projects')}
+              >
+                <FiArrowLeft className="text-[11px]" />
+                All Projects
+              </button>
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
                 <div className="flex items-start gap-3 min-w-0">
                   {/* Slice 2: project health ring next to title */}
                   {health && (
-                    <div className="shrink-0 mt-1">
+                    <div className="shrink-0">
                       <HealthScoreRing score={health.score} size="lg" breakdown={healthBreakdown} />
                     </div>
                   )}
                   <div className="min-w-0">
-                    <h1 className="text-xl sm:text-2xl font-bold break-words">{p.name}</h1>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
+                    <h1 className="text-xl sm:text-2xl font-bold break-words leading-tight">{p.name}</h1>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-0.5">
                       {p.location?.trim() && (
                         <div className="flex items-center gap-1 min-w-0">
                           <FiMapPin className="text-gray-400 text-xs shrink-0" />
@@ -290,7 +307,7 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
 
-              <div className="mt-4 max-w-full sm:max-w-[400px]">
+              <div className="mt-3 max-w-full sm:max-w-[400px]">
                 <PhaseProgress current={p.phase} />
               </div>
             </div>
@@ -304,24 +321,41 @@ export default function ProjectDetailPage() {
         </CardBody>
       </Card>
 
-      {/* Scrollable tab bar — extends to screen edges on mobile */}
-      <div className="relative -mx-4 sm:mx-0 mb-4">
-        <div className="flex overflow-x-auto scrollbar-none border-b border-gray-200 px-4 sm:px-0">
-          {visibleTabs.map((tabKey) => (
-            <button
-              key={tabKey}
-              onClick={() => navigate(`/projects/${id}/${tabKey}`, { replace: true })}
-              className={`shrink-0 px-3 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${activeTab === tabKey
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-            >
-              {TAB_TITLE_MAP[tabKey]}
-            </button>
-          ))}
+      {/* Sentinel for the sticky tab bar below. An IntersectionObserver on this element
+          tells us when the header has scrolled away, WITHOUT a scroll listener — those
+          fire on every frame and re-render the whole page. */}
+      <div ref={heroSentinel} aria-hidden className="h-px" />
+
+      {/* Tab bar. Sticky so the header scrolls away but navigation stays reachable:
+          the dense tabs (Units renders ~950 text nodes) previously forced a scroll all
+          the way back up to change tab. Once stuck it also carries the project name, so
+          you never lose track of which project you are deep inside. */}
+      <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 bg-gray-50 mb-4">
+        <div className={`relative transition-shadow ${stuck ? 'shadow-[0_4px_12px_-8px_rgba(0,0,0,0.35)]' : ''}`}>
+          <div className="flex items-center gap-3 border-b border-gray-200">
+            {stuck && (
+              <span className="shrink-0 text-sm font-semibold text-gray-900 truncate max-w-[190px] hidden sm:block">
+                {p.name}
+              </span>
+            )}
+            <div className="flex overflow-x-auto scrollbar-none min-w-0">
+              {visibleTabs.map((tabKey) => (
+                <button
+                  key={tabKey}
+                  onClick={() => navigate(`/projects/${id}/${tabKey}`, { replace: true })}
+                  className={`shrink-0 px-3 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${activeTab === tabKey
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                  {TAB_TITLE_MAP[tabKey]}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Fade hint that more tabs exist to the right */}
+          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-gray-50 to-transparent sm:hidden" />
         </div>
-        {/* Fade hint that more tabs exist to the right */}
-        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent sm:hidden" />
       </div>
 
       {/* Tab content */}
@@ -421,6 +455,20 @@ const defaultProjectRole = (systemRole?: string) =>
 const memberRoles = (m: any): string[] =>
   (m?.roles?.length ? m.roles : [m?.role || 'TEAM_MEMBER']) as string[];
 
+/**
+ * Sticky divider between the two halves of the member picker. Sticky because the groups can
+ * be long: without it, scrolling far enough into "already on this project" leaves no clue
+ * why those rows stopped being clickable.
+ */
+function GroupHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 bg-gray-100 px-3 py-1.5 border-y border-gray-200 first:border-t-0">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">{label}</span>
+      <span className="text-[11px] text-gray-500">{count}</span>
+    </div>
+  );
+}
+
 function TeamMembersCard({ projectId }: { projectId: string }) {
   const { user: currentUser, hasPermission } = useAuthStore();
   // Gate on the permission the API actually enforces (project:edit) rather than a
@@ -432,7 +480,10 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
   // /users requires user:manage — only fetched when the viewer can actually add
   // someone, otherwise every role without it 403s just by rendering this card.
   const { data: allUsers = [] } = useUsers(canEdit);
+  // Two mutations on purpose: the single-member route is an upsert used to CHANGE roles on
+  // the roster below, the bulk route is for adding people from the picker.
   const addMember = useAddProjectMember();
+  const addMembers = useAddProjectMembers();
   const removeMember = useRemoveProjectMember();
   const { isOpen, onOpen, onClose } = useDisclosure();
 
@@ -450,10 +501,21 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
   const candidates = (allUsers as any[]).filter((u: any) => !memberIds.has(u.id) && u.isActive !== false);
 
   const q = search.trim().toLowerCase();
-  const visible = q
-    ? candidates.filter((u: any) =>
-        [u.name, u.email, u.role].some((f: string) => (f || '').toLowerCase().includes(q)))
-    : candidates;
+  const matches = (name?: string, email?: string, role?: string) =>
+    !q || [name, email, role].some((f) => (f || '').toLowerCase().includes(q));
+
+  const visible = candidates.filter((u: any) => matches(u.name, u.email, u.role));
+
+  /**
+   * People already on the project, shown in the picker rather than filtered out of it.
+   *
+   * Silently dropping them made the list look incomplete: someone searching for a colleague
+   * found nothing and could not tell whether that person was already a member or simply
+   * missing from the system. They are rendered read-only in their own group instead, so
+   * "already here" and "can be added" are two visible states rather than one absence.
+   */
+  const existingVisible = memberList.filter((m: any) =>
+    matches(m.user?.name, m.user?.email, m.user?.role));
 
   const pickedIds = Object.keys(picked);
 
@@ -465,25 +527,46 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
       return next;
     });
 
+  // Select-all acts on what the search is currently showing, not the whole directory —
+  // selecting 60 hidden people off a filtered list of 4 is never what anyone means.
+  const allVisiblePicked = visible.length > 0 && visible.every((u: any) => picked[u.id]);
+
+  const toggleAllVisible = () =>
+    setPicked((p) => {
+      const next = { ...p };
+      if (allVisiblePicked) {
+        for (const u of visible) delete next[u.id];
+      } else {
+        for (const u of visible) if (!next[u.id]) next[u.id] = [defaultProjectRole(u.role)];
+      }
+      return next;
+    });
+
   const closeAdd = () => { setPicked({}); setSearch(''); onClose(); };
 
+  /**
+   * One request for the whole batch.
+   *
+   * This used to fire a POST per person in parallel. The API throttles at 10 requests per
+   * second, so adding 19 people landed the first 10 and 429'd the other 9 — the modal closed
+   * on "9 could not be added" with no way to tell who was missing. The batch endpoint is
+   * atomic, so the outcome is now the whole team or a real error message.
+   */
   const handleAdd = async () => {
     if (pickedIds.length === 0) return;
-    // Added one call per person so a single failure cannot silently drop the rest —
-    // the toast reports exactly how many landed.
-    const results = await Promise.allSettled(
-      pickedIds.map((userId) =>
-        addMember.mutateAsync({ projectId, data: { userId, roles: picked[userId] } })),
-    );
-    const ok = results.filter((r) => r.status === 'fulfilled').length;
-    const failed = results.length - ok;
-    if (ok > 0) {
-      addToast({ title: `${ok} member${ok === 1 ? '' : 's'} added`, color: 'success' });
+    const n = pickedIds.length;
+    try {
+      await addMembers.mutateAsync({
+        projectId,
+        members: pickedIds.map((userId) => ({ userId, roles: picked[userId] })),
+      });
+      addToast({ title: `${n} member${n === 1 ? '' : 's'} added`, color: 'success' });
+      closeAdd();
+    } catch (e) {
+      // Left open on failure: closing would discard a selection that can be large, and the
+      // batch is all-or-nothing, so retrying the same selection is the correct next action.
+      addToast({ title: errMsg(e, 'Failed to add members'), color: 'danger' });
     }
-    if (failed > 0) {
-      addToast({ title: `${failed} could not be added`, color: 'danger' });
-    }
-    closeAdd();
   };
 
   /** POST /members is an upsert, so re-posting with new roles changes them in place. */
@@ -516,7 +599,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
       <CardHeader className="pb-0 flex justify-between items-center">
         <p className="font-semibold text-sm text-gray-700">
           Team Members
-          <span className="ml-2 text-xs font-normal text-gray-400">{memberList.length}</span>
+          <span className="ml-2 text-xs font-normal text-gray-500">{memberList.length}</span>
         </p>
         {canEdit && (
           <Button size="sm" variant="light" color="primary" startContent={<FiPlus className="text-xs" />} onPress={onOpen}>
@@ -528,9 +611,9 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
         {memberList.length === 0 ? (
           <div className="py-4 text-center">
             <FiUsers className="mx-auto text-gray-300 w-6 h-6 mb-1.5" />
-            <p className="text-xs text-gray-400">No team members assigned yet.</p>
+            <p className="text-xs text-gray-500">No team members assigned yet.</p>
             {canEdit && (
-              <p className="text-[11px] text-gray-400 mt-1">
+              <p className="text-[11px] text-gray-500 mt-1">
                 Project-scoped roles only see projects they are a member of.
               </p>
             )}
@@ -544,9 +627,9 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
                   <div className="min-w-0">
                     <p className="text-xs font-medium text-gray-800 truncate">
                       {m.user?.name}
-                      {m.userId === currentUser?.id && <span className="text-gray-400 font-normal">{' (you)'}</span>}
+                      {m.userId === currentUser?.id && <span className="text-gray-500 font-normal">{' (you)'}</span>}
                     </p>
-                    <p className="text-[11px] text-gray-400 truncate">{m.user?.email}</p>
+                    <p className="text-[11px] text-gray-500 truncate">{m.user?.email}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -577,7 +660,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
                         <Chip
                           key={r} size="sm" variant="flat"
                           color={r === 'OWNER' ? 'primary' : 'default'}
-                          className="text-[10px]"
+                          className="text-[11px]"
                         >
                           {memberRoleLabel(r)}
                         </Chip>
@@ -605,7 +688,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader className="border-b border-gray-100 text-sm flex-col items-start gap-0.5">
             <span>Add Team Members</span>
-            <span className="text-[11px] font-normal text-gray-400">
+            <span className="text-[11px] font-normal text-gray-500">
               Members are what project-scoped roles are allowed to see — a PM or Sales user
               only sees projects they are on.
             </span>
@@ -622,85 +705,152 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
               onClear={() => setSearch('')}
             />
 
-            {pickedIds.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-3">
-                {pickedIds.map((id) => {
-                  const u = (allUsers as any[]).find((x: any) => x.id === id);
-                  return (
-                    <Chip key={id} size="sm" variant="flat" color="primary" onClose={() => toggle({ id })}>
-                      {u?.name || id}
-                    </Chip>
-                  );
-                })}
+            {/* Selection toolbar. This replaced a wall of one chip per picked person, which
+                at 19 people ran four rows deep and pushed the list it described off-screen.
+                The count says the same thing in one line, and the rows below already show
+                who is picked. */}
+            <div className="flex items-center justify-between gap-3 mt-3 min-h-8">
+              <p className="text-xs text-gray-600">
+                {pickedIds.length > 0 ? (
+                  <>
+                    <span className="font-semibold text-gray-900">{pickedIds.length}</span>
+                    {' selected'}
+                  </>
+                ) : (
+                  <span className="text-gray-500">
+                    {visible.length} {visible.length === 1 ? 'person' : 'people'} available
+                  </span>
+                )}
+              </p>
+              <div className="flex items-center gap-1">
+                {visible.length > 0 && (
+                  <Button size="sm" variant="light" color="primary" onPress={toggleAllVisible}>
+                    {allVisiblePicked ? 'Deselect all' : q ? `Select all ${visible.length}` : 'Select all'}
+                  </Button>
+                )}
+                {pickedIds.length > 0 && (
+                  <Button size="sm" variant="light" onPress={() => setPicked({})}>Clear</Button>
+                )}
               </div>
-            )}
+            </div>
 
-            <div className="mt-3 border border-gray-100 rounded-xl divide-y divide-gray-50 max-h-[340px] overflow-y-auto">
-              {visible.length === 0 ? (
-                <div className="py-8 text-center">
-                  <FiUsers className="mx-auto text-gray-300 w-6 h-6 mb-1.5" />
-                  <p className="text-xs text-gray-400">
-                    {candidates.length === 0
-                      ? 'Everyone is already on this project.'
-                      : 'No one matches that search.'}
-                  </p>
+            <div className="mt-2 border border-gray-200 rounded-xl max-h-[340px] overflow-y-auto">
+              {visible.length === 0 && existingVisible.length === 0 ? (
+                <div className="py-10 text-center">
+                  <FiUsers className="mx-auto text-gray-300 w-6 h-6 mb-2" />
+                  <p className="text-xs text-gray-600">No one matches that search.</p>
                 </div>
               ) : (
-                visible.map((u: any) => {
-                  const isPicked = !!picked[u.id];
-                  return (
-                    <div
-                      key={u.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => toggle(u)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(u); } }}
-                      className={`flex items-center justify-between gap-3 px-3 py-2 cursor-pointer transition-colors ${
-                        isPicked ? 'bg-blue-50/60' : 'hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Avatar size="sm" name={u.name} src={u.avatarUrl} className="shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-gray-800 truncate">
-                            {u.name}
-                            {u.id === currentUser?.id && <span className="text-gray-400 font-normal">{' (you)'}</span>}
-                          </p>
-                          <p className="text-[11px] text-gray-400 truncate">{u.email}</p>
-                        </div>
-                        <Chip size="sm" variant="flat" className="text-[10px] shrink-0">
-                          {(u.role || '').replace(/_/g, ' ')}
-                        </Chip>
-                      </div>
+                <>
+                  {/* ── Available ─────────────────────────────────────────────── */}
+                  {visible.length > 0 && (
+                    <>
+                      <GroupHeader label="Available to add" count={visible.length} />
+                      <div className="divide-y divide-gray-100">
+                        {visible.map((u: any) => {
+                          const isPicked = !!picked[u.id];
+                          return (
+                            <div
+                              key={u.id}
+                              role="checkbox"
+                              aria-checked={isPicked}
+                              tabIndex={0}
+                              onClick={() => toggle(u)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(u); } }}
+                              className={`flex items-center justify-between gap-3 px-3 py-2.5 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
+                                isPicked ? 'bg-blue-50' : 'hover:bg-gray-50'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <Avatar size="sm" name={u.name} src={u.avatarUrl} className="shrink-0" />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-medium text-gray-900 truncate">
+                                    {u.name}
+                                    {u.id === currentUser?.id && <span className="text-gray-500 font-normal">{' (you)'}</span>}
+                                  </p>
+                                  <p className="text-[11px] text-gray-500 truncate">{u.email}</p>
+                                </div>
+                                <Chip size="sm" variant="flat" className="text-[11px] text-gray-600 shrink-0">
+                                  {(u.role || '').replace(/_/g, ' ')}
+                                </Chip>
+                              </div>
 
-                      <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        {isPicked && (
-                          <Select
-                            size="sm"
-                            selectionMode="multiple"
-                            aria-label={`Project roles for ${u.name}`}
-                            className="w-[190px]"
-                            selectedKeys={new Set(picked[u.id])}
-                            onSelectionChange={(keys) => {
-                              const next = Array.from(keys as Set<string>);
-                              // Never leave someone staged with zero roles.
-                              setPicked((p) => ({ ...p, [u.id]: next.length ? next : [defaultProjectRole(u.role)] }));
-                            }}
-                          >
-                            {MEMBER_ROLES.map((r) => (
-                              <SelectItem key={r} textValue={memberRoleLabel(r)}>{memberRoleLabel(r)}</SelectItem>
-                            ))}
-                          </Select>
-                        )}
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${
-                          isPicked ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
-                        }`}>
-                          {isPicked && <FiCheck className="text-white text-[10px]" />}
-                        </div>
+                              {/* Fixed-width slot so a row does not resize when it is picked
+                                  and the role Select appears. */}
+                              <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                <div className="w-[190px]">
+                                  {isPicked && (
+                                    <Select
+                                      size="sm"
+                                      selectionMode="multiple"
+                                      aria-label={`Project roles for ${u.name}`}
+                                      selectedKeys={new Set(picked[u.id])}
+                                      onSelectionChange={(keys) => {
+                                        const next = Array.from(keys as Set<string>);
+                                        // Never leave someone staged with zero roles.
+                                        setPicked((p) => ({ ...p, [u.id]: next.length ? next : [defaultProjectRole(u.role)] }));
+                                      }}
+                                    >
+                                      {MEMBER_ROLES.map((r) => (
+                                        <SelectItem key={r} textValue={memberRoleLabel(r)}>{memberRoleLabel(r)}</SelectItem>
+                                      ))}
+                                    </Select>
+                                  )}
+                                </div>
+                                <div className={`w-[18px] h-[18px] rounded border flex items-center justify-center shrink-0 ${
+                                  isPicked ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'
+                                }`}>
+                                  {isPicked && <FiCheck className="text-white text-[11px]" />}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    </div>
-                  );
-                })
+                    </>
+                  )}
+
+                  {/* ── Already on the project ────────────────────────────────── */}
+                  {existingVisible.length > 0 && (
+                    <>
+                      <GroupHeader label="Already on this project" count={existingVisible.length} />
+                      <div className="divide-y divide-gray-100">
+                        {existingVisible.map((m: any) => (
+                          <div
+                            key={m.id}
+                            aria-disabled
+                            className="flex items-center justify-between gap-3 px-3 py-2.5 bg-gray-50/60"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <Avatar size="sm" name={m.user?.name} src={m.user?.avatarUrl} className="shrink-0 opacity-60" />
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium text-gray-600 truncate">
+                                  {m.user?.name}
+                                  {m.userId === currentUser?.id && <span className="font-normal">{' (you)'}</span>}
+                                </p>
+                                <p className="text-[11px] text-gray-500 truncate">{m.user?.email}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex flex-wrap gap-1 justify-end max-w-[190px]">
+                                {memberRoles(m).map((r: string) => (
+                                  <Chip key={r} size="sm" variant="flat" className="text-[11px] text-gray-600">
+                                    {memberRoleLabel(r)}
+                                  </Chip>
+                                ))}
+                              </div>
+                              {/* Filled check, not an empty box: this row is a settled state,
+                                  not a checkbox someone can act on. */}
+                              <div className="w-[18px] h-[18px] rounded-full bg-gray-300 flex items-center justify-center shrink-0">
+                                <FiCheck className="text-white text-[11px]" />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
               )}
             </div>
           </ModalBody>
@@ -711,7 +861,7 @@ function TeamMembersCard({ projectId }: { projectId: string }) {
               color="primary"
               onPress={handleAdd}
               isDisabled={pickedIds.length === 0}
-              isLoading={addMember.isPending}
+              isLoading={addMembers.isPending}
             >
               {pickedIds.length > 1 ? `Add ${pickedIds.length} members` : 'Add to Project'}
             </Button>
@@ -751,7 +901,7 @@ function CardNavLink({ label, onPress }: { label: string; onPress: () => void })
       className="text-xs text-blue-600 hover:text-blue-700 hover:underline font-medium flex items-center gap-0.5 shrink-0"
     >
       {label}
-      <FiChevronRight className="text-[10px]" />
+      <FiChevronRight className="text-[11px]" />
     </button>
   );
 }
@@ -779,7 +929,7 @@ const UNIT_STATUS_BAR: Record<string, { bar: string; dot: string }> = {
   LEASED:             { bar: 'bg-blue-500',    dot: 'bg-blue-500' },
   OCCUPIED:           { bar: 'bg-indigo-500',  dot: 'bg-indigo-500' },
   SOLD:               { bar: 'bg-violet-500',  dot: 'bg-violet-500' },
-  UNDER_CONSTRUCTION: { bar: 'bg-slate-400',   dot: 'bg-slate-400' },
+  UNDER_CONSTRUCTION: { bar: 'bg-gray-400',   dot: 'bg-gray-400' },
 };
 
 /**
@@ -820,12 +970,12 @@ function UnitStatusMix({ counts, total, buildingCount }: {
             <span className={`h-2 w-2 shrink-0 rounded-full ${UNIT_STATUS_BAR[s]?.dot ?? 'bg-gray-300'}`} />
             <span className="flex-1 truncate text-gray-600">{s.replace(/_/g, ' ').toLowerCase()}</span>
             <span className="font-semibold tabular-nums text-gray-800">{counts[s]}</span>
-            <span className="w-10 text-right tabular-nums text-gray-400">{Math.round(pct(counts[s]))}%</span>
+            <span className="w-10 text-right tabular-nums text-gray-500">{Math.round(pct(counts[s]))}%</span>
           </li>
         ))}
       </ul>
 
-      <p className="mt-auto pt-3 text-[11px] text-gray-400">
+      <p className="mt-auto pt-3 text-[11px] text-gray-500">
         {total} unit{total === 1 ? '' : 's'} across {buildingCount} building{buildingCount === 1 ? '' : 's'}
       </p>
     </div>
@@ -954,12 +1104,16 @@ function OverviewTab({ project: p }: { project: any }) {
 
   return (
     <div className="space-y-5 mt-4">
-      {/* Row 0: KPI strip \u2014 quick-glance numbers for the whole project */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      {/* Row 0: KPI strip \u2014 one card per domain, and each domain appears exactly once.
+          Total Units / Available / Sold used to sit here too, which put unit inventory on
+          this screen THREE times: the page header reads "Units 54/107 \u00b7 53 available"
+          directly above, and the Unit Status Mix card below breaks every status out with
+          both a count and a percentage. Six equal-weight cards competing for the eye, half
+          of them restating a number already on screen twice. Inventory now lives in the
+          card that says the most about it; these three are distinct domains with nowhere
+          else to appear, and Unit Status Mix keeps its own "View Units" link. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatCard label="Buildings" value={String(buildings.length)} colorScheme="brand" onClick={() => goTab('construction')} />
-        <StatCard label="Total Units" value={String(unitCount)} colorScheme="brand" onClick={() => goTab('units')} />
-        <StatCard label="Available" value={String(unitStatusCounts.AVAILABLE || 0)} colorScheme="green" onClick={() => goTab('units')} />
-        <StatCard label="Sold" value={String(unitStatusCounts.SOLD || 0)} colorScheme="gray" onClick={() => goTab('units')} />
         <StatCard label="Active Leads" value={String(leadsActive)} colorScheme="purple" onClick={() => goTab('leads')} />
         {/* Same reasoning as the header Loan tile: $0 would read as "no debt". */}
         {canSeeLoans && (
@@ -996,8 +1150,8 @@ function OverviewTab({ project: p }: { project: any }) {
                 const isMeta = label === 'Last Updated';
                 return (
                   <div key={label}>
-                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">{label}</p>
-                    <p className={`text-sm mt-0.5 ${isMeta ? 'font-normal text-gray-400' : 'font-medium text-gray-800'}`}>{value}</p>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">{label}</p>
+                    <p className={`text-sm mt-0.5 ${isMeta ? 'font-normal text-gray-500' : 'font-medium text-gray-800'}`}>{value}</p>
                   </div>
                 );
               })}
@@ -1015,26 +1169,26 @@ function OverviewTab({ project: p }: { project: any }) {
           <CardBody>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Budget</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Total Budget</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(totalBudget)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Committed</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Committed</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(totalCommitted)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Spent</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Total Spent</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(totalActuals)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">% Spent</p>
-                <p className={`text-lg font-semibold mt-0.5 ${pctSpent >= 100 ? 'text-red-600' : pctSpent >= 80 ? 'text-amber-600' : 'text-gray-900'}`}>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">% Spent</p>
+                <p className={`text-lg font-semibold mt-0.5 ${pctSpent >= 100 ? 'text-red-700' : pctSpent >= 80 ? 'text-amber-700' : 'text-gray-900'}`}>
                   {pctSpent > 0 ? `${pctSpent.toFixed(1)}%` : '\u2014'}
                 </p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Remaining</p>
-                <p className={`text-lg font-semibold mt-0.5 ${budgetRemaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Remaining</p>
+                <p className={`text-lg font-semibold mt-0.5 ${budgetRemaining >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                   {totalBudget > 0 ? fmt(budgetRemaining) : '\u2014'}
                 </p>
               </div>
@@ -1071,11 +1225,11 @@ function OverviewTab({ project: p }: { project: any }) {
                     <div key={b.id} className="flex items-center justify-between border-b border-gray-50 last:border-0 pb-3 last:pb-0">
                       <div>
                         <p className="text-sm font-medium text-gray-800">{b.name}</p>
-                        <p className="text-[11px] text-gray-400">{b.buildingType?.replace(/_/g, ' ') || '\u2014'}{' \u00b7 '}{bUnits.length} unit{bUnits.length === 1 ? '' : 's'}</p>
+                        <p className="text-[11px] text-gray-500">{b.buildingType?.replace(/_/g, ' ') || '\u2014'}{' \u00b7 '}{bUnits.length} unit{bUnits.length === 1 ? '' : 's'}</p>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        {available > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.AVAILABLE} className="text-[10px]">{available} available</Chip>}
-                        {sold > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.SOLD} className="text-[10px]">{sold} sold</Chip>}
+                        {available > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.AVAILABLE} className="text-[11px]">{available} available</Chip>}
+                        {sold > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.SOLD} className="text-[11px]">{sold} sold</Chip>}
                       </div>
                     </div>
                   );
@@ -1112,16 +1266,16 @@ function OverviewTab({ project: p }: { project: any }) {
           {milestonesArr.length > 0 ? (
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Total</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{milestonesArr.length}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Completed</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Completed</p>
                 <p className="text-lg font-semibold text-green-700 mt-0.5">{milestonesCompleted}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Overdue</p>
-                <p className={`text-lg font-semibold mt-0.5 ${milestonesOverdue > 0 ? 'text-red-600' : 'text-gray-900'}`}>{milestonesOverdue}</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Overdue</p>
+                <p className={`text-lg font-semibold mt-0.5 ${milestonesOverdue > 0 ? 'text-red-700' : 'text-gray-900'}`}>{milestonesOverdue}</p>
               </div>
             </div>
           ) : (
@@ -1141,19 +1295,19 @@ function OverviewTab({ project: p }: { project: any }) {
           <CardBody>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Closed Sales</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Closed Sales</p>
                 <p className="text-lg font-semibold text-green-700 mt-0.5">{fmt(pip.closedRevenue)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Pipeline Value</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Pipeline Value</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(pip.totalPipelineValue)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Monthly Lease Income</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Monthly Lease Income</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(li.total)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Annual Projection</p>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Annual Projection</p>
                 <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(li.annualProjection)}</p>
               </div>
             </div>
@@ -1169,15 +1323,15 @@ function OverviewTab({ project: p }: { project: any }) {
             {leadsArr.length > 0 ? (
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Active</p>
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Active</p>
                   <p className="text-lg font-semibold text-blue-700 mt-0.5">{leadsActive}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Converted</p>
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Converted</p>
                   <p className="text-lg font-semibold text-green-700 mt-0.5">{leadsConverted}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Lost</p>
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Lost</p>
                   <p className="text-lg font-semibold text-gray-500 mt-0.5">{leadsLost}</p>
                 </div>
               </div>
@@ -1201,16 +1355,16 @@ function OverviewTab({ project: p }: { project: any }) {
             {drawsArr.length > 0 ? (
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Total Draws</p>
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Total Draws</p>
                   <p className="text-lg font-semibold text-gray-900 mt-0.5">{drawsArr.length}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Funded</p>
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Funded</p>
                   <p className="text-lg font-semibold text-green-700 mt-0.5">{fmt(drawsFunded)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Pending</p>
-                  <p className="text-lg font-semibold text-amber-600 mt-0.5">{fmt(drawsPending)}</p>
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Pending</p>
+                  <p className="text-lg font-semibold text-amber-700 mt-0.5">{fmt(drawsPending)}</p>
                 </div>
               </div>
             ) : (
@@ -1229,11 +1383,11 @@ function OverviewTab({ project: p }: { project: any }) {
               <>
                 <div className="grid grid-cols-2 gap-4 mb-3 pb-3 border-b border-gray-100">
                   <div>
-                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Monthly Debt Service</p>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Monthly Debt Service</p>
                     <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(mp.total)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium">Annual Debt Service</p>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Annual Debt Service</p>
                     <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(mp.annualTotal)}</p>
                   </div>
                 </div>
@@ -1351,7 +1505,7 @@ function BuildingUnitBudgetReport({ report, canViewFinancial, onSelectBuilding, 
   const unassigned = report?.unassigned;
 
   const varianceCell = (v: number) => (
-    <td className={`py-2 px-2 text-right tabular-nums ${v >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(v)}</td>
+    <td className={`py-2 px-2 text-right tabular-nums ${v >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmt(v)}</td>
   );
 
   const row = (opts: { key: string; label: string; sub?: string; indent?: boolean; bold?: boolean; row: any; onToggle?: () => void; isExpanded?: boolean; hasChildren?: boolean; onSelect?: () => void }) => (
@@ -1359,7 +1513,7 @@ function BuildingUnitBudgetReport({ report, canViewFinancial, onSelectBuilding, 
       <td className={`py-2 px-2 ${opts.indent ? 'pl-8' : ''}`}>
         <div className="flex items-center gap-1.5">
           {opts.hasChildren ? (
-            <button type="button" onClick={opts.onToggle} className="text-gray-400 hover:text-gray-600" aria-label={opts.isExpanded ? 'Collapse' : 'Expand'}>
+            <button type="button" onClick={opts.onToggle} className="text-gray-500 hover:text-gray-600" aria-label={opts.isExpanded ? 'Collapse' : 'Expand'}>
               {opts.isExpanded ? <FiChevronDown className="w-3.5 h-3.5" /> : <FiChevronRight className="w-3.5 h-3.5" />}
             </button>
           ) : opts.indent ? <span className="w-3.5" /> : null}
@@ -1375,7 +1529,7 @@ function BuildingUnitBudgetReport({ report, canViewFinancial, onSelectBuilding, 
           ) : (
             <span className={opts.bold ? 'font-semibold text-gray-700' : 'text-gray-600'}>{opts.label}</span>
           )}
-          {opts.sub && <span className="text-xs text-gray-400">{opts.sub}</span>}
+          {opts.sub && <span className="text-xs text-gray-500">{opts.sub}</span>}
         </div>
       </td>
       <td className="py-2 px-2 text-right tabular-nums">{fmt(opts.row.budgetTotal)}</td>
@@ -1810,7 +1964,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         <CardHeader className="pb-0 flex justify-between items-center">
           <div>
             <p className="font-semibold text-sm text-gray-600">Budget Lines</p>
-            <p className="text-xs text-gray-400 mt-0.5">{budgetLines.length} line{budgetLines.length !== 1 ? 's' : ''}{!canEditBudget && ' \u00b7 read-only'}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{budgetLines.length} line{budgetLines.length !== 1 ? 's' : ''}{!canEditBudget && ' \u00b7 read-only'}</p>
           </div>
           {canEditBudget && (
             <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openBudgetCreate}>
@@ -1822,7 +1976,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
           {budgetLines.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-sm font-medium text-gray-600">No budget lines yet</p>
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-xs text-gray-500 mt-1">
                 {canEditBudget
                   ? 'Add the first budget line by category to start tracking spend.'
                   : 'No budget lines have been added for this project.'}
@@ -1914,7 +2068,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                       <td className="py-2 px-2 text-right">{fmt(c.actual)}</td>
                       <td className="py-2 px-2 text-right">{fmt(c.committed)}</td>
                       <td className="py-2 px-2 text-right">{fmt(c.forecast)}</td>
-                      <td className={`py-2 px-2 text-right ${c.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <td className={`py-2 px-2 text-right ${c.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                         {fmt(c.variance)}
                       </td>
                       <td className="py-2 px-2 w-[120px]">
@@ -1940,7 +2094,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         <CardHeader className="pb-0">
           <div>
             <p className="font-semibold text-sm text-gray-600">Budget Tracking by Building/Unit</p>
-            <p className="text-xs text-gray-400 mt-0.5">Budget, committed, and actual costs for every building and unit — click the chevron to expand units, click a name to filter this whole page to it.</p>
+            <p className="text-xs text-gray-500 mt-0.5">Budget, committed, and actual costs for every building and unit — click the chevron to expand units, click a name to filter this whole page to it.</p>
           </div>
         </CardHeader>
         <CardBody>
@@ -2040,7 +2194,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         </CardHeader>
         <CardBody>
           {commitmentList.length === 0 ? (
-            <div className="flex items-center gap-2 py-4 px-1 text-sm text-gray-400">
+            <div className="flex items-center gap-2 py-4 px-1 text-sm text-gray-500">
               <FiPlus className="text-gray-300 shrink-0" />
               <span>No commitments yet — add the first vendor contract above.</span>
             </div>
@@ -2222,9 +2376,9 @@ function FinancialsTab({ projectId }: { projectId: string }) {
               <>
                 <p className="text-sm text-gray-700 mb-2">Delete this budget line?</p>
                 <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 text-xs">
-                  <p><strong className="text-gray-500 uppercase tracking-wide text-[10px]">Category:</strong> {budgetDeleteTarget.category}</p>
-                  <p className="mt-1"><strong className="text-gray-500 uppercase tracking-wide text-[10px]">Description:</strong> {budgetDeleteTarget.description}</p>
-                  <p className="mt-1"><strong className="text-gray-500 uppercase tracking-wide text-[10px]">Amount:</strong> {fmt(budgetDeleteTarget.amount)}</p>
+                  <p><strong className="text-gray-500 uppercase tracking-wide text-[11px]">Category:</strong> {budgetDeleteTarget.category}</p>
+                  <p className="mt-1"><strong className="text-gray-500 uppercase tracking-wide text-[11px]">Description:</strong> {budgetDeleteTarget.description}</p>
+                  <p className="mt-1"><strong className="text-gray-500 uppercase tracking-wide text-[11px]">Amount:</strong> {fmt(budgetDeleteTarget.amount)}</p>
                 </div>
                 <p className="text-xs text-amber-700 mt-3">
                   Actuals already booked against this category will keep their records, but the planned amount will be lost.
@@ -2358,9 +2512,9 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
     <div>
       <p className="text-sm text-gray-500 mb-3">Comments for {unitLabel}</p>
       {isLoading ? (
-        <p className="text-xs text-gray-400">Loading...</p>
+        <p className="text-xs text-gray-500">Loading...</p>
       ) : comments.length === 0 ? (
-        <p className="text-xs text-gray-400 mb-3">No comments yet</p>
+        <p className="text-xs text-gray-500 mb-3">No comments yet</p>
       ) : (
         <div className="max-h-[300px] overflow-auto mb-3 space-y-3">
           {comments.map((c: any) => (
@@ -2370,7 +2524,7 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-semibold">{c.user?.name}</span>
                   <CommentChip type={c.commentType as CommentType} size="sm" />
-                  <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
+                  <span className="text-xs text-gray-500">{fmtDate(c.createdAt)}</span>
                   <Button
                     size="sm"
                     variant="light"
@@ -2379,7 +2533,7 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
                     className="ml-auto h-5 w-5 min-w-5"
                     onPress={() => deleteComment.mutate({ id: c.id, source: 'unit' })}
                   >
-                    <FiTrash2 className="text-[10px]" />
+                    <FiTrash2 className="text-[11px]" />
                   </Button>
                 </div>
                 <p className="text-sm text-gray-700 break-words">{c.content}</p>
@@ -2632,10 +2786,15 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         });
         return;
       }
+      // Opens on UNDER_CONTRACT, not CLOSED. Closing is gated on the Deed, NOC and
+      // Possession Certificate being attached to the sale (S6/D1), and documents attach to
+      // a sale that exists — so a sale cannot be born closed. The Status picker in this
+      // form still offers Closed; choosing it before the paperwork is on file is refused
+      // by the server with the list of what is missing.
       setDealForm({
         ...EMPTY_SALE,
         unitId: unitBefore.id,
-        status: 'CLOSED',
+        status: 'UNDER_CONTRACT',
         salePrice: unitBefore.askingPrice != null ? String(unitBefore.askingPrice) : '',
       });
       setDealErrors({});
@@ -2882,7 +3041,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
               <div className="relative">
                 <FiMessageSquare className="text-xs" />
                 {u._count?.comments > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[8px] rounded-full w-3 h-3 flex items-center justify-center">
+                  <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[11px] rounded-full w-3 h-3 flex items-center justify-center">
                     {u._count.comments}
                   </span>
                 )}
@@ -2917,7 +3076,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
     UNDER_CONTRACT: 'bg-blue-100 border-blue-300 text-blue-800',
     LEASED: 'bg-teal-100 border-teal-300 text-teal-800',
     OCCUPIED: 'bg-purple-100 border-purple-300 text-purple-800',
-    SOLD: 'bg-gray-100 border-gray-300 text-gray-500',
+    // -800 like every other status here. This was the one pill using -500, which measured
+    // 4.39:1 on its own gray-100 ground and made SOLD read as disabled rather than as a
+    // peer of the other five filters.
+    SOLD: 'bg-gray-100 border-gray-300 text-gray-800',
     UNDER_CONSTRUCTION: 'bg-orange-100 border-orange-300 text-orange-800',
   };
 
@@ -2978,7 +3140,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
           <p className="font-semibold text-sm text-gray-600">
             {filteredUnits.length} unit{filteredUnits.length === 1 ? '' : 's'}
             {filteredUnits.length !== allUnits.length && (
-              <span className="text-gray-400 font-normal"> of {allUnits.length}</span>
+              <span className="text-gray-500 font-normal"> of {allUnits.length}</span>
             )}
           </p>
           {allUnits.length > 0 && (
@@ -3029,7 +3191,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
               return (
                 <>
                   <p className="text-sm font-medium text-gray-600">No units yet</p>
-                  <p className="text-xs text-gray-400 mt-1">Add the first unit to start tracking availability and revenue.</p>
+                  <p className="text-xs text-gray-500 mt-1">Add the first unit to start tracking availability and revenue.</p>
                 </>
               );
             }
@@ -3075,7 +3237,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                   >
                     <span className="flex items-center gap-1.5 font-semibold text-sm text-gray-600">
                       {expanded ? <FiChevronDown className="shrink-0" /> : <FiChevronRight className="shrink-0" />}
-                      {name} <span className="font-normal text-gray-400">({bUnits.length} units)</span>
+                      {name} <span className="font-normal text-gray-500">({bUnits.length} units)</span>
                     </span>
                     {availableCount > 0 && (
                       <span className="flex items-center gap-1 text-xs text-green-700 font-medium shrink-0">
@@ -3250,7 +3412,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                   ))}
                 </Select>
                 {!isOverrideRole && (
-                  <p className="text-xs text-gray-400">Only valid status transitions are shown.</p>
+                  <p className="text-xs text-gray-500">Only valid status transitions are shown.</p>
                 )}
                 <Textarea
                   size="sm"
@@ -3292,6 +3454,12 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
               The status change is already saved. Filling this in is optional — press
               <strong> Skip for now</strong> and add the {dealPrompt?.kind === 'SALE' ? 'sale' : 'lease'} later
               from the Revenue tab. The unit will stay {dealPrompt?.kind === 'SALE' ? 'SOLD' : 'LEASED'} either way.
+              {dealPrompt?.kind === 'SALE' && (
+                <>
+                  {' '}The sale record itself starts at <strong>Under Contract</strong>: moving it to Closed needs
+                  its Deed, NOC and Possession Certificate attached, which can only happen once the sale exists.
+                </>
+              )}
             </div>
             <FormError message={dealError} />
             {dealPrompt?.kind === 'SALE' ? (
@@ -3612,12 +3780,12 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span>{m.title}</span>
                       {blockedBy && (
-                        <Chip size="sm" variant="flat" className="bg-orange-100 text-orange-700 text-[10px]">
+                        <Chip size="sm" variant="flat" className="bg-orange-100 text-orange-700 text-[11px]">
                           ⛔ blocked by "{blockedBy.title}"
                         </Chip>
                       )}
                       {(m._count?.photos ?? 0) > 0 && (
-                        <Chip size="sm" variant="flat" className="bg-blue-50 text-blue-600 text-[10px]">
+                        <Chip size="sm" variant="flat" className="bg-blue-50 text-blue-600 text-[11px]">
                           📷 {m._count.photos}
                         </Chip>
                       )}
@@ -3629,7 +3797,7 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                         <Avatar src={m.owner.avatarUrl} name={m.owner.name} size="sm" className="w-5 h-5 text-xs" />
                         <span className="text-xs text-gray-600">{m.owner.name}</span>
                       </div>
-                    ) : <span className="text-xs text-gray-400">—</span>}
+                    ) : <span className="text-xs text-gray-500">—</span>}
                   </td>
                   <td className="py-2 px-2"><StatusBadge status={m.phase} /></td>
                   <td className="py-2 px-2">
@@ -3637,7 +3805,7 @@ function MilestonesTab({ projectId }: { projectId: string }) {
                       <FiCalendar className="text-gray-400 text-xs" />
                       <span>{fmtDate(m.dueDate)}</span>
                       {daysLate > 0 && (
-                        <Chip size="sm" variant="flat" className="bg-red-100 text-red-700 text-[10px]">
+                        <Chip size="sm" variant="flat" className="bg-red-100 text-red-700 text-[11px]">
                           +{daysLate}d
                         </Chip>
                       )}
@@ -3749,11 +3917,13 @@ function MilestonesTab({ projectId }: { projectId: string }) {
               >
                 <>
                   <SelectItem key="">— None —</SelectItem>
-                  {drawSchedules.map((s) => (
-                    <SelectItem key={s.id}>
-                      {s.loanLabel} #{s.drawNumber} — ${Number(s.plannedAmount).toLocaleString()}
-                    </SelectItem>
-                  ))}
+                  {drawSchedules.map((s) => {
+                    // textValue is required: HeroUI can only derive a trigger label from a
+                    // SINGLE string child, and these children are several expressions. Without
+                    // it the picker renders blank once a line is chosen.
+                    const label = `${s.loanLabel} #${s.drawNumber} - $${Number(s.plannedAmount).toLocaleString()}`;
+                    return <SelectItem key={s.id} textValue={label}>{label}</SelectItem>;
+                  })}
                 </>
               </Select>
             </div>
@@ -3965,7 +4135,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
                       <div>
                         <span>{l.tenantBrand || l.tenantName}</span>
                         {l.tenantBrand && l.tenantName !== l.tenantBrand && (
-                          <span className="text-xs text-gray-400 ml-1">({l.tenantName})</span>
+                          <span className="text-xs text-gray-500 ml-1">({l.tenantName})</span>
                         )}
                       </div>
                       {/* Contact links live inside the Tenant cell rather than as two extra
@@ -4085,7 +4255,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
           <div className="flex items-center gap-2.5 px-5 pt-4 pb-3 border-b border-gray-100">
             <FiUsers className="w-4 h-4 text-blue-600" />
             <h2 className="font-semibold text-sm text-gray-800">
-              Tenant Profiles <span className="text-gray-400 font-normal">({leaseList.length})</span>
+              Tenant Profiles <span className="text-gray-500 font-normal">({leaseList.length})</span>
             </h2>
           </div>
           <div className="p-4 sm:p-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -4447,7 +4617,7 @@ function SalesTab({ projectId }: { projectId: string }) {
                 {/* Column header */}
                 <div className="flex items-center justify-between gap-1 p-3 pb-2">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <button type="button" onClick={() => toggleStage(stage)} title="Collapse column" className="shrink-0 text-gray-400 hover:text-gray-600">
+                    <button type="button" onClick={() => toggleStage(stage)} title="Collapse column" className="shrink-0 text-gray-500 hover:text-gray-600">
                       <FiChevronLeft />
                     </button>
                     <StatusBadge status={stage} />
@@ -4484,11 +4654,11 @@ function SalesTab({ projectId }: { projectId: string }) {
                             </p>
                             {discountPct != null && (
                               s.discountApprovedAt ? (
-                                <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-green-600">
+                                <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-green-700">
                                   <FiCheck className="shrink-0" /> {discountPct.toFixed(0)}% discount approved
                                 </span>
                               ) : (
-                                <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                                <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
                                   <FiAlertTriangle className="shrink-0" /> {discountPct.toFixed(0)}% discount
                                 </span>
                               )
@@ -4500,10 +4670,10 @@ function SalesTab({ projectId }: { projectId: string }) {
                         {isOpen && (
                           <div className="space-y-1.5 border-t border-gray-100 px-2.5 py-2">
                             {s.closingDate && (
-                              <div className="flex justify-between text-xs"><span className="text-gray-400">Closes</span><span className="text-gray-600">{fmtDate(s.closingDate)}</span></div>
+                              <div className="flex justify-between text-xs"><span className="text-gray-500">Closes</span><span className="text-gray-600">{fmtDate(s.closingDate)}</span></div>
                             )}
                             {s.depositAmt && (
-                              <div className="flex justify-between text-xs"><span className="text-gray-400">Deposit</span><span className="text-gray-600">{fmt(Number(s.depositAmt))}</span></div>
+                              <div className="flex justify-between text-xs"><span className="text-gray-500">Deposit</span><span className="text-gray-600">{fmt(Number(s.depositAmt))}</span></div>
                             )}
                             {discountPct != null && !s.discountApprovedAt && (
                               <PermissionGate permission="sales:approve-discount">
@@ -4534,7 +4704,7 @@ function SalesTab({ projectId }: { projectId: string }) {
                     );
                   })}
                   {sales.length === 0 && (
-                    <p className="py-6 text-center text-xs italic text-gray-400">Empty</p>
+                    <p className="py-6 text-center text-xs italic text-gray-600">Empty</p>
                   )}
                 </div>
               </div>
@@ -4625,7 +4795,7 @@ const BUILDING_COVER_TINT: Record<string, string> = {
   INDUSTRIAL:  'from-amber-50 to-amber-100 text-amber-300',
   RETAIL:      'from-teal-50 to-teal-100 text-teal-300',
   OFFICE:      'from-indigo-50 to-indigo-100 text-indigo-300',
-  PARKING:     'from-slate-100 to-slate-200 text-slate-400',
+  PARKING:     'from-gray-100 to-gray-200 text-gray-500',
   AMENITY:     'from-pink-50 to-pink-100 text-pink-300',
   LOT:         'from-lime-50 to-lime-100 text-lime-400',
 };
@@ -4768,7 +4938,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
             <p className="font-semibold text-sm text-gray-600">
               {buildings.length} building{buildings.length !== 1 ? '' : ''}
               {buildings.length !== allBuildings.length && (
-                <span className="text-gray-400 font-normal"> of {allBuildings.length}</span>
+                <span className="text-gray-500 font-normal"> of {allBuildings.length}</span>
               )}
             </p>
           )}
@@ -4870,7 +5040,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       {!isReorderMode && !isLoading && !error && buildings.length === 0 && allBuildings.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-sm font-medium text-gray-600">No buildings yet</p>
-          <p className="text-xs text-gray-400 mt-1">Add the first building to start tracking units.</p>
+          <p className="text-xs text-gray-500 mt-1">Add the first building to start tracking units.</p>
           {canEdit && (
             <Button size="sm" color="primary" startContent={<FiPlus />} className="mt-3" onPress={openCreate}>
               Add Building
@@ -4915,11 +5085,11 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                     {b.name}
                   </Link>
                   {b.llcName && (
-                    <p className="text-xs text-gray-400 truncate mt-0.5" title={b.llcName}>{b.llcName}</p>
+                    <p className="text-xs text-gray-500 truncate mt-0.5" title={b.llcName}>{b.llcName}</p>
                   )}
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                     {b.buildingType && (
-                      <span className="text-xs text-gray-400 truncate">{b.buildingType}</span>
+                      <span className="text-xs text-gray-500 truncate">{b.buildingType}</span>
                     )}
                     {/* Slice 3: building-level phase chip */}
                     {b.phase && <PhaseChip phase={b.phase} size="sm" />}
@@ -4939,18 +5109,18 @@ function BuildingsTab({ projectId }: { projectId: string }) {
               <CardBody className="pt-2">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm">
                   <div>
-                    <p className="text-xs text-gray-400">Units</p>
+                    <p className="text-xs text-gray-500">Units</p>
                     <p className="font-medium">{b._count?.units ?? b.units?.length ?? 0}</p>
                   </div>
                   {b.totalSqft && (
                     <div>
-                      <p className="text-xs text-gray-400">Total sqft</p>
+                      <p className="text-xs text-gray-500">Total sqft</p>
                       <p className="font-medium">{Number(b.totalSqft).toLocaleString()}</p>
                     </div>
                   )}
                   {b.stories && (
                     <div>
-                      <p className="text-xs text-gray-400">Stories</p>
+                      <p className="text-xs text-gray-500">Stories</p>
                       <p className="font-medium">{b.stories}</p>
                     </div>
                   )}
@@ -5050,7 +5220,7 @@ function ReorderableBuildingRow({ building, onDragEnd }: { building: any; onDrag
         <CardBody className="flex flex-row items-center gap-3 py-2.5">
           <div
             onPointerDown={(e) => controls.start(e)}
-            className="cursor-grab active:cursor-grabbing shrink-0 text-gray-400 touch-none p-1"
+            className="cursor-grab active:cursor-grabbing shrink-0 text-gray-500 touch-none p-1"
             aria-label="Drag to reorder"
           >
             <FiMove />
@@ -5058,9 +5228,9 @@ function ReorderableBuildingRow({ building, onDragEnd }: { building: any; onDrag
           <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm text-gray-900 truncate">{building.name}</span>
             {building.buildingType && (
-              <span className="text-xs text-gray-400">{building.buildingType}</span>
+              <span className="text-xs text-gray-500">{building.buildingType}</span>
             )}
-            <span className="text-xs text-gray-400 ml-auto">
+            <span className="text-xs text-gray-500 ml-auto">
               {building._count?.units ?? building.units?.length ?? 0} unit{(building._count?.units ?? building.units?.length ?? 0) === 1 ? '' : 's'}
             </span>
           </div>
@@ -5071,19 +5241,72 @@ function ReorderableBuildingRow({ building, onDragEnd }: { building: any; onDrag
 }
 
 // ---- Construction Tab (Checklist rollup is the main content; Buildings is secondary) ----
+/**
+ * Switch between the modules a composed tab contains, instead of stacking them.
+ *
+ * Revenue and Construction each hold two full modules. Stacked vertically the second one
+ * always started below the fold: on Revenue the first rent-roll row sat at y=1702, two
+ * viewports down, so the tab opened on summary cards and nothing else. Both halves now
+ * start at the same scroll position.
+ *
+ * Sections the viewer lacks permission for are dropped rather than rendered disabled, and
+ * the switch hides itself when only one survives — a one-option control is just noise.
+ */
+function SectionSwitch({ sections, value, onChange }: {
+  sections: { key: string; label: string }[];
+  value: string;
+  onChange: (k: string) => void;
+}) {
+  if (sections.length < 2) return null;
+  return (
+    <div role="tablist" aria-label="Section" className="inline-flex items-center gap-1 p-1 bg-gray-100 rounded-lg mb-4">
+      {sections.map((s) => (
+        <button
+          key={s.key}
+          role="tab"
+          aria-selected={value === s.key}
+          onClick={() => onChange(s.key)}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            value === s.key
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The sections of a composed tab the current role may actually see, plus the one that
+ * should be active. Kept as a hook so the "default to the first permitted section" rule
+ * lives in one place: hardcoding a default meant a lease-only role opened Revenue on a
+ * Sales section it could not load, and got a 403 instead of a rent roll.
+ */
+function usePermittedSections(all: { key: string; label: string; permission?: string }[]) {
+  const { hasAnyPermission } = useAuthStore();
+  const sections = all.filter((s) => !s.permission || hasAnyPermission(s.permission));
+  const [active, setActive] = useState<string>(sections[0]?.key ?? '');
+  const current = sections.some((s) => s.key === active) ? active : (sections[0]?.key ?? '');
+  return { sections, active: current, setActive };
+}
+
+const CONSTRUCTION_SECTIONS = [
+  { key: 'checklist', label: 'Checklist', permission: 'checklist:view' },
+  { key: 'buildings', label: 'Buildings' },
+];
+
 function ConstructionTab({ projectId }: { projectId: string }) {
+  const { sections, active, setActive } = usePermittedSections(CONSTRUCTION_SECTIONS);
   return (
     <div className="mt-4">
-      <PermissionGate permission="checklist:view">
-        <div className="flex items-center gap-2 mb-3">
-          <span aria-hidden="true">✅</span>
-          <h2 className="text-base font-semibold text-gray-800">Construction Checklist</h2>
-        </div>
-        <ConstructionChecklistRollup projectId={projectId} />
-      </PermissionGate>
-
-      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 mt-10 mb-0">🏗️ Buildings</p>
-      <BuildingsTab projectId={projectId} />
+      {/* Switched, not stacked — see SectionSwitch. Buildings previously sat below the
+          full checklist rollup, so on a project with many units it opened off-screen. */}
+      <SectionSwitch sections={sections} value={active} onChange={setActive} />
+      {active === 'checklist' && <ConstructionChecklistRollup projectId={projectId} />}
+      {active === 'buildings' && <BuildingsTab projectId={projectId} />}
       {/* Budget & Costs now lives in its own top-level Budget tab. */}
     </div>
   );
@@ -5161,7 +5384,7 @@ function BudgetTab({ projectId }: { projectId: string }) {
             </div>
             <p className="text-3xl font-bold text-gray-900 tabular-nums">{fmt(baseTotal)}</p>
             {approvedBudget == null && (
-              <p className="text-[11px] text-amber-700/80 mt-1">No approved total set — showing the sum of budget lines. {canEditBudget ? 'Set an approved budget to track plan-vs-approved.' : ''}</p>
+              <p className="text-[11px] text-amber-700 mt-1">No approved total set — showing the sum of budget lines. {canEditBudget ? 'Set an approved budget to track plan-vs-approved.' : ''}</p>
             )}
             <Progress aria-label="Budget used" value={usedPct} size="sm" className="mt-3" color={usedPct > 100 ? 'danger' : 'warning'} />
             {/* Reconciliation: Approved → Planned → Committed → Actual */}
@@ -5176,11 +5399,11 @@ function BudgetTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Actuals</p>
-                <p className="text-sm font-semibold text-orange-600 tabular-nums">{fmt(totalActuals)}</p>
+                <p className="text-sm font-semibold text-orange-700 tabular-nums">{fmt(totalActuals)}</p>
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Remaining</p>
-                <p className={`text-sm font-semibold tabular-nums ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmt(remaining)}</p>
+                <p className={`text-sm font-semibold tabular-nums ${remaining >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmt(remaining)}</p>
               </div>
             </div>
             {/* Plan-vs-approved signal — the headline number for planning discipline. */}
@@ -5191,7 +5414,7 @@ function BudgetTab({ projectId }: { projectId: string }) {
                   : `✓ Planned lines are within the approved budget (${fmt(Math.abs(planVsApproved))} headroom).`}
               </div>
             )}
-            <p className="text-[11px] text-amber-700/80 mt-3">
+            <p className="text-[11px] text-amber-700 mt-3">
               {canEditBudget
                 ? 'Approved budget is the top-down control total. The budget lines below are tracked against it — each line change is logged.'
                 : 'Approved budget editing is limited to Admin, Finance and Founder.'}
@@ -5223,7 +5446,7 @@ function BudgetTab({ projectId }: { projectId: string }) {
                         <p className="text-sm font-medium text-gray-800 truncate">
                           {r.budgetLine?.description || 'Budget line'}
                           {r.budgetLine?.category && (
-                            <span className="ml-2 text-[11px] text-gray-400">{(r.budgetLine.category as string).replace(/_/g, ' ')}</span>
+                            <span className="ml-2 text-[11px] text-gray-500">{(r.budgetLine.category as string).replace(/_/g, ' ')}</span>
                           )}
                         </p>
                         <span className="text-sm font-semibold tabular-nums text-gray-900 shrink-0">{fmt(Number(r.amount))}</span>
@@ -5232,7 +5455,7 @@ function BudgetTab({ projectId }: { projectId: string }) {
                         <span className="capitalize">{reasonLabel(r.changeReason)}</span>
                         {r.reason ? ` — ${r.reason}` : ''}
                       </p>
-                      <p className="text-[11px] text-gray-400 mt-0.5">
+                      <p className="text-[11px] text-gray-500 mt-0.5">
                         {r.createdBy?.name || 'Someone'} · {fmtDate(r.createdAt)}
                         {r.approvedAt ? ` · approved ${fmtDate(r.approvedAt)}` : ' · pending approval'}
                       </p>
@@ -5256,7 +5479,7 @@ function BudgetTab({ projectId }: { projectId: string }) {
               placeholder="e.g. 18300000"
               value={approvedInput}
               onChange={(e) => setApprovedInput(e.target.value)}
-              startContent={<span className="text-gray-400 text-sm">$</span>}
+              startContent={<span className="text-gray-500 text-sm">$</span>}
               description="The top-down control total approved by Finance/Founder. Leave blank to clear."
             />
             {planned > 0 && (
@@ -5274,9 +5497,15 @@ function BudgetTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Revenue Tab (Sales Pipeline + Leases / Ren t Roll) ----
+const REVENUE_SECTIONS = [
+  { key: 'pipeline', label: 'Sales Pipeline', permission: 'sales:view' },
+  { key: 'leases', label: 'Leases / Rent Roll', permission: 'lease:view' },
+];
+
 function RevenueTab({ projectId }: { projectId: string }) {
   const { data: pipeline } = useSalesPipeline(projectId);
   const { data: leaseIncome } = useMonthlyLeaseIncome(projectId);
+  const { sections, active, setActive } = usePermittedSections(REVENUE_SECTIONS);
 
   const pip = pipeline as any;
   const li = leaseIncome as any;
@@ -5301,16 +5530,12 @@ function RevenueTab({ projectId }: { projectId: string }) {
             Leases rent roll below ("Next 12 Months"). */}
         <StatCard label="Annual Run-Rate" value={fmt(monthlyLease * 12)} variant="revenue" colorScheme="blue" helpText="Current monthly x 12" />
       </div>
-      {/* Gated per section: the tab opens with sales:view OR lease:view, so without
-          these a role holding only one of them would load the other half and 403. */}
-      <PermissionGate permission="sales:view">
-        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mb-0">Sales Pipeline</p>
-        <SalesTab projectId={projectId} />
-      </PermissionGate>
-      <PermissionGate permission="lease:view">
-        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 mt-8 mb-0">Leases / Rent Roll</p>
-        <LeasesTab projectId={projectId} />
-      </PermissionGate>
+      {/* Two full modules, switched rather than stacked. The tab opens with sales:view OR
+          lease:view, so the section list is filtered by permission — a role holding only
+          one of them must never land on the half it would 403 on. */}
+      <SectionSwitch sections={sections} value={active} onChange={setActive} />
+      {active === 'pipeline' && <SalesTab projectId={projectId} />}
+      {active === 'leases' && <LeasesTab projectId={projectId} />}
     </div>
   );
 }
@@ -5351,7 +5576,7 @@ function LeadUnitsOfInterest({ leadId, primaryUnitId }: { leadId: string; primar
 
   return (
     <div className="mt-2.5">
-      <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-1">
+      <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-gray-600 mb-1">
         Units of interest ({interests.length})
       </p>
       <div className="flex flex-wrap gap-1">
@@ -5361,8 +5586,8 @@ function LeadUnitsOfInterest({ leadId, primaryUnitId }: { leadId: string; primar
             <span
               key={i.id}
               title={isPrimary ? 'Primary unit on this lead' : undefined}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                isPrimary ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-600'
+              className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${
+                isPrimary ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'
               }`}
             >
               {i.unit?.unitNumber ?? '—'}
@@ -5532,16 +5757,16 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
     usePagination(filtered, LEADS_PAGE_SIZE, [filterGroup, search]);
 
   const STATUS_BAR: Record<string, string> = {
-    NEW: 'bg-slate-400', CONTACTED: 'bg-blue-400', POTENTIAL: 'bg-blue-500',
+    NEW: 'bg-gray-400', CONTACTED: 'bg-blue-400', POTENTIAL: 'bg-blue-500',
     QUALIFIED: 'bg-violet-500', SITE_VISIT: 'bg-indigo-500',
     PROPOSAL_SENT: 'bg-amber-500', NEGOTIATING: 'bg-orange-500',
-    CONVERTED: 'bg-emerald-500', LOST: 'bg-rose-400', DEAD: 'bg-stone-300',
+    CONVERTED: 'bg-emerald-500', LOST: 'bg-rose-400', DEAD: 'bg-gray-300',
   };
   const STATUS_BORDER: Record<string, string> = {
-    NEW: 'border-l-slate-300', CONTACTED: 'border-l-blue-400', POTENTIAL: 'border-l-blue-500',
+    NEW: 'border-l-gray-300', CONTACTED: 'border-l-blue-400', POTENTIAL: 'border-l-blue-500',
     QUALIFIED: 'border-l-violet-500', SITE_VISIT: 'border-l-indigo-500',
     PROPOSAL_SENT: 'border-l-amber-500', NEGOTIATING: 'border-l-orange-500',
-    CONVERTED: 'border-l-emerald-500', LOST: 'border-l-rose-400', DEAD: 'border-l-stone-400',
+    CONVERTED: 'border-l-emerald-500', LOST: 'border-l-rose-400', DEAD: 'border-l-gray-400',
   };
   const STATUS_LABEL: Record<string, string> = {
     NEW: 'New', CONTACTED: 'Contacted', POTENTIAL: 'Potential', QUALIFIED: 'Qualified',
@@ -5549,10 +5774,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
     CONVERTED: 'Converted', LOST: 'Lost', DEAD: 'Dead',
   };
   const STATUS_TEXT: Record<string, string> = {
-    NEW: 'text-slate-500', CONTACTED: 'text-blue-600', POTENTIAL: 'text-blue-700',
+    NEW: 'text-gray-500', CONTACTED: 'text-blue-600', POTENTIAL: 'text-blue-700',
     QUALIFIED: 'text-violet-600', SITE_VISIT: 'text-indigo-600',
-    PROPOSAL_SENT: 'text-amber-600', NEGOTIATING: 'text-orange-600',
-    CONVERTED: 'text-emerald-600', LOST: 'text-rose-500', DEAD: 'text-stone-400',
+    PROPOSAL_SENT: 'text-amber-700', NEGOTIATING: 'text-orange-700',
+    CONVERTED: 'text-emerald-700', LOST: 'text-rose-700', DEAD: 'text-gray-600',
   };
   const ACT_ICON: Record<string, React.ReactNode> = {
     CALL: <FiPhone size={11} />, EMAIL: <FiMail size={11} />, MEETING: <FiUsers size={11} />,
@@ -5561,8 +5786,8 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   };
   const ACT_BG: Record<string, string> = {
     CALL: 'bg-blue-100 text-blue-600', EMAIL: 'bg-violet-100 text-violet-600',
-    MEETING: 'bg-emerald-100 text-emerald-600', SITE_VISIT: 'bg-amber-100 text-amber-600',
-    FOLLOW_UP: 'bg-orange-100 text-orange-600', NOTE: 'bg-stone-100 text-stone-600',
+    MEETING: 'bg-emerald-100 text-emerald-700', SITE_VISIT: 'bg-amber-100 text-amber-700',
+    FOLLOW_UP: 'bg-orange-100 text-orange-700', NOTE: 'bg-gray-100 text-gray-600',
     STATUS_CHANGE: 'bg-indigo-100 text-indigo-600',
   };
   const daysSince = (lead: any) => {
@@ -5574,10 +5799,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   return (
     <div className="mt-2">
       {/* Pipeline Funnel Bar */}
-      <div className="mb-4 rounded-xl border border-stone-200 bg-stone-50 p-4">
+      <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
         <div className="flex items-center justify-between mb-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-stone-400">Pipeline</p>
-          <div className="flex items-center gap-3 text-[11px] text-stone-400">
+          <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-gray-600">Pipeline</p>
+          <div className="flex items-center gap-3 text-[11px] text-gray-600">
             <span className="flex items-center gap-1.5">
               <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
               {convertedCount} converted
@@ -5590,14 +5815,14 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
         </div>
         <div className="flex gap-0.5 h-5 rounded-md overflow-hidden">
           {pipelineTotal === 0 ? (
-            <div className="flex-1 bg-stone-200 flex items-center justify-center">
-              <span className="text-[10px] text-stone-400">No active leads</span>
+            <div className="flex-1 bg-gray-200 flex items-center justify-center">
+              <span className="text-[11px] text-gray-600">No active leads</span>
             </div>
           ) : (
             pipelineCounts.map(({ status, count }) => count > 0 ? (
               <div
                 key={status}
-                className={`${STATUS_BAR[status]} flex items-center justify-center text-white text-[9px] font-bold`}
+                className={`${STATUS_BAR[status]} flex items-center justify-center text-white text-[11px] font-bold`}
                 style={{ flex: count }}
                 title={`${STATUS_LABEL[status]}: ${count}`}
               >
@@ -5608,7 +5833,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
         </div>
         <div className="flex gap-3 mt-2 flex-wrap">
           {pipelineCounts.filter(p => p.count > 0).map(({ status, count }) => (
-            <span key={status} className="flex items-center gap-1 text-[10px] text-stone-500">
+            <span key={status} className="flex items-center gap-1 text-[11px] text-gray-600">
               <span className={`inline-block w-1.5 h-1.5 rounded-full ${STATUS_BAR[status]}`} />
               {STATUS_LABEL[status]} ({count})
             </span>
@@ -5618,7 +5843,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
 
       {/* Controls */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <div className="flex items-center gap-0.5 bg-stone-100 rounded-lg p-0.5">
+        <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
           {(['all', 'active', 'converted', 'lost'] as const).map((g) => {
             const counts: Record<string, number> = {
               all: leadsArr.length,
@@ -5630,7 +5855,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               <button
                 key={g}
                 onClick={() => setFilterGroup(g)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all capitalize ${filterGroup === g ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all capitalize ${filterGroup === g ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-600 hover:text-gray-700'}`}
               >
                 {g} <span className="opacity-50">{counts[g]}</span>
               </button>
@@ -5638,13 +5863,13 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
           })}
         </div>
         <div className="flex-1 relative min-w-[140px]">
-          <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" size={12} />
+          <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={12} />
           <input
             type="text"
             placeholder="Search leads…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-7 pr-3 py-1.5 text-[11px] border border-stone-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-stone-300 text-stone-700 placeholder-stone-400"
+            className="w-full pl-7 pr-3 py-1.5 text-[11px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-gray-300 text-gray-700 placeholder-gray-400"
           />
         </div>
         <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNewForm} className="shrink-0">
@@ -5659,15 +5884,15 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
           {isLoading && (
             <div className="space-y-2">
               {[1, 2, 3].map(i => (
-                <div key={i} className="h-14 rounded-lg bg-stone-100 animate-pulse border-l-4 border-l-stone-200" />
+                <div key={i} className="h-14 rounded-lg bg-gray-100 animate-pulse border-l-4 border-l-gray-200" />
               ))}
             </div>
           )}
 
           {!isLoading && filtered.length === 0 && (
             <div className="py-12 text-center">
-              <FiTarget className="mx-auto text-stone-300 mb-2" size={28} />
-              <p className="text-sm text-stone-400">
+              <FiTarget className="mx-auto text-gray-300 mb-2" size={28} />
+              <p className="text-sm text-gray-600">
                 {search ? 'No leads match your search' : leadsArr.length === 0 ? 'No leads yet — add your first' : 'No leads in this group'}
               </p>
               {leadsArr.length === 0 && (
@@ -5683,40 +5908,40 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               <div
                 key={lead.id}
                 onClick={() => { setSelectedLead(isSelected ? null : lead); setPopoverLeadId(null); }}
-                className={`group relative flex items-center gap-3 rounded-lg border border-l-[3px] bg-white px-3.5 py-2.5 cursor-pointer transition-all ${STATUS_BORDER[lead.status] || 'border-l-stone-300'} ${isSelected ? 'border-stone-300 shadow-md ring-1 ring-stone-200' : 'border-stone-200 hover:border-stone-300 hover:shadow-sm'}`}
+                className={`group relative flex items-center gap-3 rounded-lg border border-l-[3px] bg-white px-3.5 py-2.5 cursor-pointer transition-all ${STATUS_BORDER[lead.status] || 'border-l-gray-300'} ${isSelected ? 'border-gray-300 shadow-md ring-1 ring-gray-200' : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'}`}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-stone-800 truncate">
-                      {lead.name || <span className="text-stone-400 font-normal italic text-xs">Unnamed</span>}
+                    <span className="text-sm font-semibold text-gray-800 truncate">
+                      {lead.name || <span className="text-gray-600 font-normal italic text-xs">Unnamed</span>}
                     </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); setPopoverLeadId(popoverLeadId === lead.id ? null : lead.id); }}
-                      className={`text-[9px] font-bold uppercase tracking-[0.08em] hover:opacity-70 transition-opacity ${STATUS_TEXT[lead.status] || 'text-stone-500'}`}
+                      className={`text-[11px] font-bold uppercase tracking-[0.08em] hover:opacity-70 transition-opacity ${STATUS_TEXT[lead.status] || 'text-gray-600'}`}
                     >
                       {STATUS_LABEL[lead.status] || lead.status} ▾
                     </button>
                     {popoverLeadId === lead.id && (
-                      <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-stone-200 rounded-xl shadow-lg py-1.5 min-w-[172px]">
-                        <p className="px-3 pb-1 text-[9px] font-bold uppercase tracking-widest text-stone-400">Set Stage</p>
+                      <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-xl shadow-lg py-1.5 min-w-[172px]">
+                        <p className="px-3 pb-1 text-[11px] font-bold uppercase tracking-widest text-gray-600">Set Stage</p>
                         {STAGE_ORDER.map(s => {
                           const isCurrent = s === lead.status;
                           const isBack = STAGE_ORDER.indexOf(s) < STAGE_ORDER.indexOf(lead.status);
                           return (
                             <button key={s} onClick={(e) => { e.stopPropagation(); if (!isCurrent) handleStatusChange(lead.id, s); else setPopoverLeadId(null); }}
-                              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${isCurrent ? 'bg-stone-50 text-stone-800 font-semibold cursor-default' : isBack ? 'text-stone-500 hover:bg-stone-50' : 'text-stone-700 hover:bg-stone-50'}`}>
+                              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${isCurrent ? 'bg-gray-50 text-gray-800 font-semibold cursor-default' : isBack ? 'text-gray-600 hover:bg-gray-50' : 'text-gray-700 hover:bg-gray-50'}`}>
                               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_BAR[s]}`} />
                               <span className="flex-1">{STATUS_LABEL[s]}</span>
-                              {isCurrent && <FiCheck size={10} className="text-stone-500 shrink-0" />}
-                              {isBack && !isCurrent && <span className="text-[9px] text-stone-300">↩</span>}
+                              {isCurrent && <FiCheck size={10} className="text-gray-500 shrink-0" />}
+                              {isBack && !isCurrent && <span className="text-[11px] text-gray-300">↩</span>}
                             </button>
                           );
                         })}
                         {!['LOST', 'DEAD'].includes(lead.status) && (
                           <>
-                            <div className="my-1 border-t border-stone-100" />
+                            <div className="my-1 border-t border-gray-100" />
                             <button onClick={(e) => { e.stopPropagation(); handleStatusChange(lead.id, 'LOST'); }}
-                              className="w-full text-left px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2">
+                              className="w-full text-left px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 flex items-center gap-2">
                               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-rose-400" />
                               Mark as Lost
                             </button>
@@ -5724,10 +5949,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                         )}
                         {['LOST', 'DEAD'].includes(lead.status) && (
                           <>
-                            <div className="my-1 border-t border-stone-100" />
+                            <div className="my-1 border-t border-gray-100" />
                             <button onClick={(e) => { e.stopPropagation(); handleStatusChange(lead.id, 'NEW'); }}
-                              className="w-full text-left px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 flex items-center gap-2">
-                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-slate-400" />
+                              className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-gray-400" />
                               Reopen as New
                             </button>
                           </>
@@ -5736,15 +5961,15 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                     )}
                   </div>
                   <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                    <span className="text-[11px] text-stone-400">{SOURCE_LABELS_TAB[lead.source] || lead.source}</span>
-                    {lead.email && <span className="text-[11px] text-stone-400 truncate max-w-[140px]">{lead.email}</span>}
+                    <span className="text-[11px] text-gray-600">{SOURCE_LABELS_TAB[lead.source] || lead.source}</span>
+                    {lead.email && <span className="text-[11px] text-gray-600 truncate max-w-[140px]">{lead.email}</span>}
                     {lead.unit?.unitNumber && (
-                      <span className="text-[11px] text-stone-500 flex items-center gap-0.5">
+                      <span className="text-[11px] text-gray-600 flex items-center gap-0.5">
                         <FiHome size={9} /> {lead.unit.unitNumber}
                       </span>
                     )}
                     {days !== null && days > 3 && (
-                      <span className={`text-[10px] ${days > 14 ? 'text-rose-500' : days > 7 ? 'text-amber-500' : 'text-stone-400'}`}>
+                      <span className={`text-[11px] ${days > 14 ? 'text-rose-700' : days > 7 ? 'text-amber-700' : 'text-gray-600'}`}>
                         {days}d idle
                       </span>
                     )}
@@ -5752,18 +5977,18 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {lead.budget && (
-                    <span className="text-xs font-semibold text-stone-600 tabular-nums">${Number(lead.budget).toLocaleString()}</span>
+                    <span className="text-xs font-semibold text-gray-600 tabular-nums">${Number(lead.budget).toLocaleString()}</span>
                   )}
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       onClick={(e) => { e.stopPropagation(); openEditForm(lead); }}
-                      className="p-1 rounded text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+                      className="p-1 rounded text-gray-600 hover:text-gray-700 hover:bg-gray-100"
                     >
                       <FiEdit2 size={12} />
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
-                      className="p-1 rounded text-stone-400 hover:text-rose-600 hover:bg-rose-50"
+                      className="p-1 rounded text-gray-600 hover:text-rose-700 hover:bg-rose-50"
                     >
                       <FiTrash2 size={12} />
                     </button>
@@ -5787,29 +6012,29 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
         {/* Activity Panel */}
         {selectedLead && (
           <div className="w-full lg:w-[288px] lg:shrink-0">
-            <div className="rounded-xl border border-stone-200 bg-white overflow-hidden">
+            <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
               {/* Header */}
-              <div className={`px-4 pt-4 pb-3 border-b border-stone-100 border-l-4 ${STATUS_BORDER[selectedLead.status] || 'border-l-stone-300'}`}>
+              <div className={`px-4 pt-4 pb-3 border-b border-gray-100 border-l-4 ${STATUS_BORDER[selectedLead.status] || 'border-l-gray-300'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="font-semibold text-stone-800 text-sm truncate">{selectedLead.name || 'Unnamed Lead'}</p>
-                    <p className={`text-[9px] font-bold uppercase tracking-[0.1em] mt-0.5 ${STATUS_TEXT[selectedLead.status] || 'text-stone-500'}`}>
+                    <p className="font-semibold text-gray-800 text-sm truncate">{selectedLead.name || 'Unnamed Lead'}</p>
+                    <p className={`text-[11px] font-bold uppercase tracking-[0.1em] mt-0.5 ${STATUS_TEXT[selectedLead.status] || 'text-gray-600'}`}>
                       {STATUS_LABEL[selectedLead.status] || selectedLead.status}
                     </p>
                   </div>
-                  <button onClick={() => setSelectedLead(null)} className="text-stone-400 hover:text-stone-600 mt-0.5 shrink-0">
+                  <button onClick={() => setSelectedLead(null)} className="text-gray-600 hover:text-gray-600 mt-0.5 shrink-0">
                     <FiX size={14} />
                   </button>
                 </div>
                 <div className="mt-2 space-y-0.5">
-                  {selectedLead.email && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiMail size={9} />{selectedLead.email}</p>}
-                  {selectedLead.phone && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiPhone size={9} />{selectedLead.phone}</p>}
-                  {selectedLead.budget && <p className="text-[11px] font-semibold text-stone-600 mt-1">${Number(selectedLead.budget).toLocaleString()} budget</p>}
-                  {selectedLead.unit?.unitNumber && <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />Unit {selectedLead.unit.unitNumber}</p>}
+                  {selectedLead.email && <p className="text-[11px] text-gray-600 flex items-center gap-1.5"><FiMail size={9} />{selectedLead.email}</p>}
+                  {selectedLead.phone && <p className="text-[11px] text-gray-600 flex items-center gap-1.5"><FiPhone size={9} />{selectedLead.phone}</p>}
+                  {selectedLead.budget && <p className="text-[11px] font-semibold text-gray-600 mt-1">${Number(selectedLead.budget).toLocaleString()} budget</p>}
+                  {selectedLead.unit?.unitNumber && <p className="text-[11px] text-gray-600 flex items-center gap-1.5"><FiHome size={9} />Unit {selectedLead.unit.unitNumber}</p>}
                   {/* A building-linked lead showed nothing here — the panel only ever
                       rendered the unit, so half the polymorphic link was invisible. */}
                   {!selectedLead.unit && selectedLead.building?.name && (
-                    <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><FiHome size={9} />{selectedLead.building.name}</p>
+                    <p className="text-[11px] text-gray-600 flex items-center gap-1.5"><FiHome size={9} />{selectedLead.building.name}</p>
                   )}
                 </div>
                 <LeadUnitsOfInterest leadId={selectedLead.id} primaryUnitId={selectedLead.unitId} />
@@ -5824,14 +6049,14 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               </div>
 
               {/* Log Activity */}
-              <div className="px-4 py-3 border-b border-stone-100">
-                <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-2">Log Activity</p>
+              <div className="px-4 py-3 border-b border-gray-100">
+                <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-gray-600 mb-2">Log Activity</p>
                 <div className="flex gap-1 mb-2">
                   {ACTIVITY_TYPES_TAB.map((t) => (
                     <button
                       key={t}
                       onClick={() => setActivityType(t)}
-                      className={`flex items-center justify-center w-6 h-6 rounded transition-all ${activityType === t ? `${ACT_BG[t] || 'bg-stone-200 text-stone-600'} ring-1 ring-current` : 'text-stone-400 hover:bg-stone-100'}`}
+                      className={`flex items-center justify-center w-6 h-6 rounded transition-all ${activityType === t ? `${ACT_BG[t] || 'bg-gray-200 text-gray-600'} ring-1 ring-current` : 'text-gray-600 hover:bg-gray-100'}`}
                       title={t.replace('_', ' ')}
                     >
                       {ACT_ICON[t]}
@@ -5845,12 +6070,12 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                     value={activityNote}
                     onChange={(e) => setActivityNote(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleAddActivity(); }}
-                    className="flex-1 px-2.5 py-1.5 text-xs border border-stone-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-stone-300 text-stone-700 placeholder-stone-400 min-w-0"
+                    className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-gray-300 text-gray-700 placeholder-gray-400 min-w-0"
                   />
                   <button
                     onClick={handleAddActivity}
                     disabled={!activityNote.trim() || addActivity.isPending}
-                    className="px-2.5 py-1.5 bg-stone-800 text-white rounded-lg hover:bg-stone-700 disabled:opacity-40 transition-colors shrink-0"
+                    className="px-2.5 py-1.5 bg-gray-800 text-white rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors shrink-0"
                   >
                     <FiSend size={11} />
                   </button>
@@ -5859,7 +6084,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
 
               {/* Stage promotion suggestion */}
               {stageSuggestion && stageSuggestion.leadId === selectedLead?.id && (
-                <div className="px-4 py-2.5 border-b border-stone-100 bg-indigo-50 flex items-center justify-between gap-2">
+                <div className="px-4 py-2.5 border-b border-gray-100 bg-indigo-50 flex items-center justify-between gap-2">
                   <span className="text-[11px] text-indigo-700">
                     Move to <strong className="capitalize">{stageSuggestion.label.toLowerCase()}</strong>?
                   </span>
@@ -5883,22 +6108,22 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               {/* Activity Timeline */}
               <div className="px-4 py-3 max-h-[260px] overflow-y-auto">
                 {(!activities || (activities as any[]).length === 0) ? (
-                  <p className="text-[11px] text-stone-400 text-center py-4">No activities logged yet</p>
+                  <p className="text-[11px] text-gray-600 text-center py-4">No activities logged yet</p>
                 ) : (
                   <div className="relative">
-                    <div className="absolute left-[10px] top-1 bottom-1 w-px bg-stone-100" />
+                    <div className="absolute left-[10px] top-1 bottom-1 w-px bg-gray-100" />
                     <div className="space-y-3">
                       {(activities as any[]).map((act: any) => (
                         <div key={act.id} className="flex gap-2.5 relative">
-                          <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 z-10 ${ACT_BG[act.type] || 'bg-stone-100 text-stone-500'}`}>
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 z-10 ${ACT_BG[act.type] || 'bg-gray-100 text-gray-600'}`}>
                             {ACT_ICON[act.type] || <FiMessageSquare size={10} />}
                           </div>
                           <div className="flex-1 min-w-0 pt-0.5">
                             <div className="flex items-baseline gap-1.5 flex-wrap">
-                              <span className="text-[10px] font-semibold text-stone-600">{act.type.replace('_', ' ')}</span>
-                              <span className="text-[10px] text-stone-400">{fmtDate(act.createdAt)}</span>
+                              <span className="text-[11px] font-semibold text-gray-600">{act.type.replace('_', ' ')}</span>
+                              <span className="text-[11px] text-gray-600">{fmtDate(act.createdAt)}</span>
                             </div>
-                            <p className="text-xs text-stone-600 leading-snug mt-0.5">{act.note}</p>
+                            <p className="text-xs text-gray-600 leading-snug mt-0.5">{act.note}</p>
                           </div>
                         </div>
                       ))}
@@ -6068,9 +6293,9 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
       <Card shadow="sm" className="mb-4">
         <CardBody>
           {isLoading ? (
-            <p className="text-xs text-gray-400">Loading...</p>
+            <p className="text-xs text-gray-500">Loading...</p>
           ) : displayed.length === 0 ? (
-            <p className="text-xs text-gray-400">No comments yet</p>
+            <p className="text-xs text-gray-500">No comments yet</p>
           ) : (
             <div className="max-h-[500px] overflow-auto space-y-3">
               {displayed.map((c: any) => (
@@ -6080,7 +6305,7 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold">{c.user?.name}</span>
                       <CommentChip type={c.commentType as CommentType} size="sm" />
-                      <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
+                      <span className="text-xs text-gray-500">{fmtDate(c.createdAt)}</span>
                       <Button
                         size="sm"
                         variant="light"
@@ -6089,7 +6314,7 @@ function ProjectCommentsTab({ projectId }: { projectId: string }) {
                         className="ml-auto h-5 w-5 min-w-5"
                         onPress={() => deleteComment.mutate({ id: c.id, source: 'project' })}
                       >
-                        <FiTrash2 className="text-[10px]" />
+                        <FiTrash2 className="text-[11px]" />
                       </Button>
                     </div>
                     <p className="text-sm text-gray-700 break-words mt-0.5">{c.content}</p>
@@ -6901,7 +7126,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm">{v.name}</span>
-                      {v.trade && <span className="text-xs text-gray-400">{v.trade}</span>}
+                      {v.trade && <span className="text-xs text-gray-500">{v.trade}</span>}
                     </div>
                     <div className="flex gap-3 mt-0.5 text-xs text-gray-500">
                       {v.contactName && <span>{v.contactName}</span>}
@@ -6951,7 +7176,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{c.vendor?.name}</span>
                           <Chip size="sm" color={CONTRACT_STATUS_COLORS[c.status] || 'default'} variant="flat">{c.status}</Chip>
-                          {c.vendor?.trade && <span className="text-xs text-gray-400">{c.vendor.trade}</span>}
+                          {c.vendor?.trade && <span className="text-xs text-gray-500">{c.vendor.trade}</span>}
                         </div>
                         <p className="text-xs text-gray-500 mt-0.5">{c.description}</p>
                         <div className="flex gap-4 mt-2 text-xs text-gray-600">
@@ -6984,7 +7209,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
                           <div>
                             <p className="text-xs font-semibold text-gray-500 mb-1">Change Orders</p>
                             <div className="responsive-table-wrap"><table className="w-full text-xs min-w-[480px]">
-                              <thead><tr className="text-gray-400">
+                              <thead><tr className="text-gray-500">
                                 <th className="text-left py-1">#</th><th className="text-left py-1">Description</th>
                                 <th className="text-right py-1">Amount</th><th className="text-left py-1 pl-2">Status</th>
                                 {canEdit && <th />}
@@ -7016,7 +7241,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
                           <div>
                             <p className="text-xs font-semibold text-gray-500 mb-1">Payments</p>
                             <div className="responsive-table-wrap"><table className="w-full text-xs min-w-[480px]">
-                              <thead><tr className="text-gray-400">
+                              <thead><tr className="text-gray-500">
                                 <th className="text-left py-1">Date</th><th className="text-right py-1">Amount</th><th className="text-left py-1 pl-2">Notes</th>
                               </tr></thead>
                               <tbody>
@@ -7268,7 +7493,7 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                         <Button size="sm" isIconOnly color="primary" onPress={handleSaveEdit} isLoading={renameDoc.isPending || replaceDoc.isPending} aria-label="Save"><FiCheck className="w-3 h-3" /></Button>
                       </div>
                     </div>
-                    {editErr && <p className="text-xs text-red-500">{editErr}</p>}
+                    {editErr && <p className="text-xs text-red-700">{editErr}</p>}
                     <Input size="sm" label="File name" value={editName} onChange={(e) => { setEditName(e.target.value); setEditErr(null); }} isInvalid={!!editErr} />
                     <Button size="sm" variant="flat" className="w-full" onPress={() => editFileRef.current?.click()} startContent={<FiUpload className="w-3.5 h-3.5" />}>
                       {editFile ? editFile.name : 'Replace file…'}
@@ -7283,14 +7508,14 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                 ) : (
                   <>
                     <div className="flex items-start gap-3">
-                      <div className="text-2xl text-gray-400 mt-0.5">{docIcon(doc.mimeType)}</div>
+                      <div className="text-2xl text-gray-500 mt-0.5">{docIcon(doc.mimeType)}</div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate">{doc.fileName}</p>
                         <div className="flex items-center gap-2 mt-1">
                           <span className={`text-xs px-2 py-0.5 rounded-full ${DOC_CATEGORY_COLORS[doc.category] || 'bg-gray-100 text-gray-600'}`}>{doc.category}</span>
-                          {doc.fileSize && <span className="text-xs text-gray-400">{(doc.fileSize / 1024).toFixed(0)} KB</span>}
+                          {doc.fileSize && <span className="text-xs text-gray-500">{(doc.fileSize / 1024).toFixed(0)} KB</span>}
                         </div>
-                        <p className="text-xs text-gray-400 mt-1">{doc.uploadedBy?.name} · {fmtDate(doc.createdAt)}</p>
+                        <p className="text-xs text-gray-500 mt-1">{doc.uploadedBy?.name} · {fmtDate(doc.createdAt)}</p>
                       </div>
                     </div>
                     <div className="flex gap-2 mt-3">
@@ -7381,7 +7606,7 @@ const ENTITY_CFG: Record<string, EntityCfg> = {
   sale:      { label: 'Sale',      icon: FiDollarSign,   borderColor: 'border-l-emerald-400', chipStyle: 'bg-emerald-50 text-emerald-700 border border-emerald-200', filterActive: 'bg-emerald-500 text-white' },
   lease:     { label: 'Lease',     icon: FiKey,          borderColor: 'border-l-teal-400',    chipStyle: 'bg-teal-50 text-teal-700 border border-teal-200',       filterActive: 'bg-teal-500 text-white' },
   task:      { label: 'Task',      icon: FiCheckSquare,  borderColor: 'border-l-orange-400',  chipStyle: 'bg-orange-50 text-orange-700 border border-orange-200', filterActive: 'bg-orange-500 text-white' },
-  comment:   { label: 'Comment',   icon: FiMessageSquare,borderColor: 'border-l-slate-300',   chipStyle: 'bg-slate-100 text-slate-600 border border-slate-200',   filterActive: 'bg-slate-700 text-white' },
+  comment:   { label: 'Comment',   icon: FiMessageSquare,borderColor: 'border-l-gray-300',   chipStyle: 'bg-gray-100 text-gray-600 border border-gray-200',   filterActive: 'bg-gray-700 text-white' },
   building:  { label: 'Building',  icon: FiHome,         borderColor: 'border-l-indigo-400',  chipStyle: 'bg-indigo-50 text-indigo-700 border border-indigo-200', filterActive: 'bg-indigo-500 text-white' },
   unit:      { label: 'Unit',      icon: FiLayers,       borderColor: 'border-l-cyan-400',    chipStyle: 'bg-cyan-50 text-cyan-700 border border-cyan-200',       filterActive: 'bg-cyan-500 text-white' },
   budget:    { label: 'Budget',    icon: FiBarChart2,    borderColor: 'border-l-rose-400',    chipStyle: 'bg-rose-50 text-rose-700 border border-rose-200',       filterActive: 'bg-rose-500 text-white' },
@@ -7390,8 +7615,8 @@ const ENTITY_CFG: Record<string, EntityCfg> = {
 
 const ACTION_CFG: Record<string, { label: string; style: string }> = {
   UPLOADED:  { label: 'Uploaded',  style: 'bg-blue-500 text-white' },
-  CREATED:   { label: 'Created',   style: 'bg-slate-700 text-white' },
-  ADDED:     { label: 'Added',     style: 'bg-slate-700 text-white' },
+  CREATED:   { label: 'Created',   style: 'bg-gray-700 text-white' },
+  ADDED:     { label: 'Added',     style: 'bg-gray-700 text-white' },
   COMPLETED: { label: 'Completed', style: 'bg-emerald-500 text-white' },
   CONVERTED: { label: 'Converted', style: 'bg-emerald-600 text-white' },
   LOST:      { label: 'Lost',      style: 'bg-red-500 text-white' },
@@ -7414,66 +7639,66 @@ const STATUS_CHIP_STYLE: Record<string, string> = {
   LEASE_PENDING: 'bg-amber-50 text-amber-700 border border-amber-200',
   NEGOTIATING: 'bg-amber-50 text-amber-700 border border-amber-200',
   IN_PROGRESS: 'bg-sky-50 text-sky-700 border border-sky-200',
-  UNDER_CONSTRUCTION: 'bg-orange-50 text-orange-600 border border-orange-200',
-  DRAFT: 'bg-slate-50 text-slate-500 border border-slate-200',
-  PROSPECT: 'bg-slate-50 text-slate-600 border border-slate-200',
-  NEW: 'bg-slate-50 text-slate-600 border border-slate-200',
-  TODO: 'bg-slate-50 text-slate-500 border border-slate-200',
-  NOT_STARTED: 'bg-slate-50 text-slate-500 border border-slate-200',
+  UNDER_CONSTRUCTION: 'bg-orange-50 text-orange-700 border border-orange-200',
+  DRAFT: 'bg-gray-50 text-gray-500 border border-gray-200',
+  PROSPECT: 'bg-gray-50 text-gray-600 border border-gray-200',
+  NEW: 'bg-gray-50 text-gray-600 border border-gray-200',
+  TODO: 'bg-gray-50 text-gray-500 border border-gray-200',
+  NOT_STARTED: 'bg-gray-50 text-gray-500 border border-gray-200',
   CONTACTED: 'bg-blue-50 text-blue-600 border border-blue-200',
   QUALIFIED: 'bg-indigo-50 text-indigo-600 border border-indigo-200',
   PROPOSAL_SENT: 'bg-violet-50 text-violet-600 border border-violet-200',
-  LOST: 'bg-red-50 text-red-600 border border-red-200',
+  LOST: 'bg-red-50 text-red-700 border border-red-200',
   DEAD: 'bg-red-50 text-red-400 border border-red-100',
-  CANCELLED: 'bg-red-50 text-red-500 border border-red-200',
-  TERMINATED: 'bg-red-50 text-red-600 border border-red-200',
-  EXPIRED: 'bg-orange-50 text-orange-600 border border-orange-200',
-  OVERDUE: 'bg-red-50 text-red-600 border border-red-200',
-  BLOCKED: 'bg-rose-50 text-rose-600 border border-rose-200',
+  CANCELLED: 'bg-red-50 text-red-700 border border-red-200',
+  TERMINATED: 'bg-red-50 text-red-700 border border-red-200',
+  EXPIRED: 'bg-orange-50 text-orange-700 border border-orange-200',
+  OVERDUE: 'bg-red-50 text-red-700 border border-red-200',
+  BLOCKED: 'bg-rose-50 text-rose-700 border border-rose-200',
   URGENT: 'bg-red-100 text-red-700 border border-red-200',
   HIGH: 'bg-orange-100 text-orange-700 border border-orange-200',
   MEDIUM: 'bg-amber-100 text-amber-700 border border-amber-200',
-  LOW: 'bg-slate-100 text-slate-600 border border-slate-200',
+  LOW: 'bg-gray-100 text-gray-600 border border-gray-200',
 };
 
 // Status legend: shown as a bar when a type filter is active
 const STATUS_LEGENDS: Record<string, { label: string; style: string }[]> = {
   lead: [
-    { label: 'New',           style: 'bg-slate-100 text-slate-600' },
+    { label: 'New',           style: 'bg-gray-100 text-gray-600' },
     { label: 'Contacted',     style: 'bg-blue-100 text-blue-600' },
     { label: 'Qualified',     style: 'bg-indigo-100 text-indigo-600' },
     { label: 'Proposal Sent', style: 'bg-violet-100 text-violet-600' },
     { label: 'Negotiating',   style: 'bg-amber-100 text-amber-700' },
     { label: 'Converted',     style: 'bg-emerald-100 text-emerald-700' },
-    { label: 'Lost',          style: 'bg-red-100 text-red-600' },
+    { label: 'Lost',          style: 'bg-red-100 text-red-700' },
     { label: 'Dead',          style: 'bg-red-50 text-red-400' },
   ],
   sale: [
-    { label: 'Prospect',       style: 'bg-slate-100 text-slate-600' },
+    { label: 'Prospect',       style: 'bg-gray-100 text-gray-600' },
     { label: 'LOI Signed',     style: 'bg-blue-100 text-blue-600' },
     { label: 'Under Contract', style: 'bg-amber-100 text-amber-700' },
     { label: 'Closed',         style: 'bg-emerald-100 text-emerald-700' },
-    { label: 'Cancelled',      style: 'bg-red-100 text-red-500' },
+    { label: 'Cancelled',      style: 'bg-red-100 text-red-700' },
   ],
   lease: [
-    { label: 'Draft',          style: 'bg-slate-100 text-slate-500' },
+    { label: 'Draft',          style: 'bg-gray-100 text-gray-500' },
     { label: 'Active',         style: 'bg-emerald-100 text-emerald-700' },
-    { label: 'Expired',        style: 'bg-orange-100 text-orange-600' },
-    { label: 'Terminated',     style: 'bg-red-100 text-red-600' },
+    { label: 'Expired',        style: 'bg-orange-100 text-orange-700' },
+    { label: 'Terminated',     style: 'bg-red-100 text-red-700' },
     { label: 'Owner Occupied', style: 'bg-sky-100 text-sky-600' },
   ],
   task: [
-    { label: 'Todo',        style: 'bg-slate-100 text-slate-500' },
+    { label: 'Todo',        style: 'bg-gray-100 text-gray-500' },
     { label: 'In Progress', style: 'bg-sky-100 text-sky-600' },
     { label: 'Done',        style: 'bg-emerald-100 text-emerald-700' },
-    { label: 'Cancelled',   style: 'bg-slate-100 text-slate-400' },
+    { label: 'Cancelled',   style: 'bg-gray-100 text-gray-500' },
   ],
   milestone: [
-    { label: 'Not Started', style: 'bg-slate-100 text-slate-500' },
+    { label: 'Not Started', style: 'bg-gray-100 text-gray-500' },
     { label: 'In Progress', style: 'bg-sky-100 text-sky-600' },
     { label: 'Completed',   style: 'bg-emerald-100 text-emerald-700' },
-    { label: 'Overdue',     style: 'bg-red-100 text-red-600' },
-    { label: 'Blocked',     style: 'bg-rose-100 text-rose-600' },
+    { label: 'Overdue',     style: 'bg-red-100 text-red-700' },
+    { label: 'Blocked',     style: 'bg-rose-100 text-rose-700' },
   ],
   unit: [
     { label: 'Available',          style: 'bg-emerald-100 text-emerald-700' },
@@ -7482,7 +7707,7 @@ const STATUS_LEGENDS: Record<string, { label: string; style: string }[]> = {
     { label: 'Leased',             style: 'bg-teal-100 text-teal-700' },
     { label: 'Sold',               style: 'bg-purple-100 text-purple-700' },
     { label: 'Occupied',           style: 'bg-sky-100 text-sky-600' },
-    { label: 'Under Construction', style: 'bg-orange-100 text-orange-600' },
+    { label: 'Under Construction', style: 'bg-orange-100 text-orange-700' },
   ],
 };
 
@@ -7546,14 +7771,14 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
       <div className="flex flex-col sm:flex-row sm:items-start gap-4 justify-between mb-5">
         <div>
           <div className="flex items-center gap-2.5">
-            <p className="text-base font-bold text-slate-900 tracking-tight">Project Activity Log</p>
+            <p className="text-base font-bold text-gray-900 tracking-tight">Project Activity Log</p>
             {!isLoading && total > 0 && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-900 text-white tabular-nums">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-gray-900 text-white tabular-nums">
                 {total}
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-xs text-gray-500 mt-0.5">
             Every action across leads, docs, milestones, tasks &amp; more
           </p>
         </div>
@@ -7563,12 +7788,12 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
           <button
             onClick={() => setTypeFilter('')}
             className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-all duration-150 ${
-              !typeFilter ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+              !typeFilter ? 'bg-gray-900 text-white shadow-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }`}
           >
             All
             {!typeFilter && total > 0 && (
-              <span className="ml-0.5 text-[10px] font-bold opacity-60">{total}</span>
+              <span className="ml-0.5 text-[11px] font-bold opacity-60">{total}</span>
             )}
           </button>
           {ALL_ACTIVITY_TYPES.map((t) => {
@@ -7580,13 +7805,13 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
                 key={t}
                 onClick={() => setTypeFilter(typeFilter === t ? '' : t)}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold transition-all duration-150 ${
-                  typeFilter === t ? cfg.filterActive + ' shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  typeFilter === t ? cfg.filterActive + ' shadow-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                 }`}
               >
                 <Icon size={10} />
                 {cfg.label}
                 {count > 0 && (
-                  <span className={`ml-0.5 text-[10px] font-bold ${typeFilter === t ? 'opacity-60' : 'opacity-50'}`}>
+                  <span className={`ml-0.5 text-[11px] font-bold ${typeFilter === t ? 'opacity-60' : 'opacity-50'}`}>
                     {count}
                   </span>
                 )}
@@ -7598,18 +7823,18 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
 
       {/* ── Status legend bar — answers "mention all statuses on bar" ── */}
       {legend && (
-        <div className="flex items-center gap-2 flex-wrap mb-4 px-3 py-2.5 bg-slate-50 rounded-lg border border-slate-100">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">
+        <div className="flex items-center gap-2 flex-wrap mb-4 px-3 py-2.5 bg-gray-50 rounded-lg border border-gray-100">
+          <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest shrink-0">
             Status key
           </span>
-          <span className="w-px h-3 bg-slate-200 shrink-0" />
+          <span className="w-px h-3 bg-gray-200 shrink-0" />
           {legend.map((s, i) => (
             <React.Fragment key={s.label}>
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${s.style}`}>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${s.style}`}>
                 {s.label}
               </span>
               {i < legend.length - 1 && (
-                <span className="text-slate-300 text-[10px]">→</span>
+                <span className="text-gray-300 text-[11px]">→</span>
               )}
             </React.Fragment>
           ))}
@@ -7620,20 +7845,20 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
       {isLoading && (
         <div className="space-y-2">
           {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="border-l-4 border-l-slate-200 bg-white rounded-r-lg border border-slate-100 px-3 py-3 animate-pulse">
+            <div key={i} className="border-l-4 border-l-gray-200 bg-white rounded-r-lg border border-gray-100 px-3 py-3 animate-pulse">
               <div className="flex justify-between mb-2">
                 <div className="flex gap-2">
-                  <div className="h-5 w-16 bg-slate-100 rounded-full" />
-                  <div className="h-5 w-12 bg-slate-100 rounded-full" />
-                  <div className="h-5 w-24 bg-slate-100 rounded" />
+                  <div className="h-5 w-16 bg-gray-100 rounded-full" />
+                  <div className="h-5 w-12 bg-gray-100 rounded-full" />
+                  <div className="h-5 w-24 bg-gray-100 rounded" />
                 </div>
-                <div className="h-4 w-14 bg-slate-100 rounded" />
+                <div className="h-4 w-14 bg-gray-100 rounded" />
               </div>
-              <div className="h-3.5 bg-slate-100 rounded w-2/3 mb-2.5 ml-5" />
+              <div className="h-3.5 bg-gray-100 rounded w-2/3 mb-2.5 ml-5" />
               <div className="flex gap-2 ml-5">
-                <div className="h-4 w-16 bg-slate-100 rounded-full" />
-                <div className="h-4 w-14 bg-slate-100 rounded-full" />
-                <div className="h-4 w-20 bg-slate-100 rounded-full" />
+                <div className="h-4 w-16 bg-gray-100 rounded-full" />
+                <div className="h-4 w-14 bg-gray-100 rounded-full" />
+                <div className="h-4 w-20 bg-gray-100 rounded-full" />
               </div>
             </div>
           ))}
@@ -7642,7 +7867,7 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
 
       {/* ── Error ── */}
       {!isLoading && error && (
-        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
           Failed to load activity log. Please try again.
         </div>
       )}
@@ -7650,9 +7875,9 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
       {/* ── Empty ── */}
       {!isLoading && !error && filtered.length === 0 && (
         <div className="text-center py-14">
-          <FiActivity size={32} className="mx-auto text-slate-300 mb-3" />
-          <p className="text-sm font-medium text-slate-400">No activity recorded yet</p>
-          <p className="text-xs text-slate-300 mt-1">Events will appear here as the project progresses</p>
+          <FiActivity size={32} className="mx-auto text-gray-300 mb-3" />
+          <p className="text-sm font-medium text-gray-500">No activity recorded yet</p>
+          <p className="text-xs text-gray-300 mt-1">Events will appear here as the project progresses</p>
         </div>
       )}
 
@@ -7663,11 +7888,11 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
             <div key={dateLabel}>
               {/* Day header */}
               <div className="flex items-center gap-2.5 mb-2.5">
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">
+                <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest whitespace-nowrap">
                   {dateLabel}
                 </span>
-                <div className="h-px flex-1 bg-slate-100" />
-                <span className="text-[10px] font-semibold text-slate-300 whitespace-nowrap tabular-nums">
+                <div className="h-px flex-1 bg-gray-100" />
+                <span className="text-[11px] font-semibold text-gray-300 whitespace-nowrap tabular-nums">
                   {items.length} {items.length === 1 ? 'event' : 'events'}
                 </span>
               </div>
@@ -7676,13 +7901,13 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
               <div className="space-y-2">
                 {items.map((ev: any) => {
                   const cfg = ENTITY_CFG[ev.type] ?? ENTITY_CFG['document'];
-                  const actionCfg = ACTION_CFG[ev.action] ?? { label: ev.action, style: 'bg-slate-600 text-white' };
+                  const actionCfg = ACTION_CFG[ev.action] ?? { label: ev.action, style: 'bg-gray-600 text-white' };
                   const Icon = cfg.icon;
 
                   // Status chip: prefer meta.status, fall back to meta.priority
                   const statusValue: string | null = ev.meta?.status ?? ev.meta?.priority ?? null;
                   const statusStyle = statusValue
-                    ? (STATUS_CHIP_STYLE[statusValue] ?? 'bg-slate-100 text-slate-600 border border-slate-200')
+                    ? (STATUS_CHIP_STYLE[statusValue] ?? 'bg-gray-100 text-gray-600 border border-gray-200')
                     : null;
                   const statusLabel = statusValue
                     ? String(statusValue).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())
@@ -7701,18 +7926,18 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
                   return (
                     <div
                       key={ev.id}
-                      className={`border-l-4 ${cfg.borderColor} bg-white rounded-r-lg border border-l-0 border-slate-100 px-3 py-2.5 hover:border-slate-200 hover:shadow-sm transition-all duration-150`}
+                      className={`border-l-4 ${cfg.borderColor} bg-white rounded-r-lg border border-l-0 border-gray-100 px-3 py-2.5 hover:border-gray-200 hover:shadow-sm transition-all duration-150`}
                     >
                       {/* Row 1: icon + entity name + timestamp */}
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <Icon size={13} className="text-slate-400 shrink-0 mt-px" />
-                          <span className="text-sm font-semibold text-slate-800 truncate">
+                          <Icon size={13} className="text-gray-500 shrink-0 mt-px" />
+                          <span className="text-sm font-semibold text-gray-800 truncate">
                             {ev.entityName}
                           </span>
                         </div>
                         <span
-                          className="text-[11px] font-mono text-slate-400 whitespace-nowrap shrink-0 tabular-nums"
+                          className="text-[11px] font-mono text-gray-500 whitespace-nowrap shrink-0 tabular-nums"
                           title={formatAbsoluteTime(ev.timestamp)}
                         >
                           {formatRelativeTime(ev.timestamp)}
@@ -7720,33 +7945,33 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
                       </div>
 
                       {/* Row 2: description label */}
-                      <p className="text-xs text-slate-500 mt-0.5 mb-2 line-clamp-1 pl-[19px]">
+                      <p className="text-xs text-gray-500 mt-0.5 mb-2 line-clamp-1 pl-[19px]">
                         {ev.label}
                       </p>
 
                       {/* Row 3: type + action + status + meta + actor */}
                       <div className="flex items-center gap-1.5 flex-wrap pl-[19px]">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${cfg.chipStyle}`}>
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide ${cfg.chipStyle}`}>
                           {cfg.label}
                         </span>
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${actionCfg.style}`}>
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide ${actionCfg.style}`}>
                           {actionCfg.label}
                         </span>
                         {statusLabel && statusStyle && (
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${statusStyle}`}>
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold ${statusStyle}`}>
                             {statusLabel}
                           </span>
                         )}
                         {metaItems.map((m, idx) => (
-                          <span key={idx} className="text-[10px] text-slate-400 font-medium">
+                          <span key={idx} className="text-[11px] text-gray-500 font-medium">
                             {m}
                           </span>
                         ))}
                         {ev.actorName && (
                           <>
                             <span className="flex-1" />
-                            <span className="text-[11px] text-slate-400 whitespace-nowrap">
-                              by <span className="font-semibold text-slate-600">{ev.actorName}</span>
+                            <span className="text-[11px] text-gray-500 whitespace-nowrap">
+                              by <span className="font-semibold text-gray-600">{ev.actorName}</span>
                             </span>
                           </>
                         )}
@@ -7762,8 +7987,8 @@ function ProjectActivityTab({ projectId }: { projectId: string }) {
 
       {/* ── Pagination ── */}
       {totalPages > 1 && !isLoading && (
-        <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-4">
-          <span className="text-xs font-mono text-slate-400 tabular-nums">
+        <div className="flex items-center justify-between pt-4 border-t border-gray-100 mt-4">
+          <span className="text-xs font-mono text-gray-500 tabular-nums">
             {page} / {totalPages} · {total} events
           </span>
           <div className="flex gap-2">

@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SalesService, BackfillSaleInput } from './sales.service';
 import {
-  addColumnarSheet, cellText, cellDateIso, cellNumber, resolveUnit, resolveBroker, joinKey,
+  addColumnarSheet, assertHeaderMatches, cellText, cellDateIso, cellNumber, resolveUnit, resolveBroker, joinKey,
 } from '../../common/utils/xlsx-import';
 
 const SHEET_SALES = 'Sales';
@@ -48,7 +48,13 @@ export interface SalePreviewRow {
   status: 'ready' | 'error';
   errors: string[];
   unitNumber: string;
+  /** Raw Building label from the sheet, not resolved — surfaced so a row whose unit
+   * doesn't exist yet can offer creating both the building and the unit, pre-filled with
+   * what the sheet already said, instead of asking the user to retype it. */
+  building: string;
   buyer: string;
+  /** Sheet's own Sqft, same reasoning as building — pre-fills the "create this unit" form. */
+  sqft?: number;
   data: BackfillSaleInput & { unitId: string | null };
 }
 
@@ -104,10 +110,13 @@ export class SaleImportService {
       throw new BadRequestException(`This file has no "${SHEET_SALES}" sheet — use the downloaded template.`);
     }
 
+    assertHeaderMatches(saleSheet, SHEET_SALES, SALE_COLUMNS);
+
     type RawSale = {
       rowNumber: number;
       unitNumber: string;
       building: string;
+      sqft?: number;
       seller: string;
       buyer: string;
       purchasePrice?: number;
@@ -132,6 +141,7 @@ export class SaleImportService {
         rowNumber,
         unitNumber,
         building: cellText(get('building')),
+        sqft: cellNumber(get('sqft')),
         seller: cellText(get('seller')),
         buyer,
         purchasePrice: cellNumber(get('purchasePrice')),
@@ -188,7 +198,9 @@ export class SaleImportService {
         status: errors.length ? 'error' : 'ready',
         errors,
         unitNumber: r.unitNumber,
+        building: r.building,
         buyer: r.buyer,
+        sqft: r.sqft,
         data: {
           unitId,
           seller: r.seller || undefined,
@@ -215,6 +227,7 @@ export class SaleImportService {
     const orphaned: OrphanedCommissionRow[] = [];
     const commissionSheet = wb.getWorksheet(SHEET_COMMISSIONS);
     if (commissionSheet) {
+      assertHeaderMatches(commissionSheet, SHEET_COMMISSIONS, COMMISSION_COLUMNS);
       commissionSheet.eachRow((row, rowNumber) => {
         if (rowNumber === 1) return;
         const get = (key: string) => row.getCell(COMMISSION_COLUMNS.findIndex((c) => c.key === key) + 1);

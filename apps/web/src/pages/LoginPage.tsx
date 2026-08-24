@@ -72,7 +72,7 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               startContent={<FiLock className="text-gray-400 flex-shrink-0" />}
               endContent={
-                <button type="button" onClick={() => setShowPassword((v) => !v)} className="text-gray-400 hover:text-gray-600">
+                <button type="button" onClick={() => setShowPassword((v) => !v)} className="text-gray-500 hover:text-gray-600">
                   {showPassword ? <FiEyeOff /> : <FiEye />}
                 </button>
               }

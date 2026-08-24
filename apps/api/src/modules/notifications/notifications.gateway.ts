@@ -45,6 +45,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   emitToUser(userId: string, event: string, data: unknown) {
-    this.server.to(`user:${userId}`).emit(event, data);
+    // `server` is only injected once the Socket.IO adapter has initialised, which happens
+    // in main.ts on listen(). Anything that boots AppModule WITHOUT an HTTP server —
+    // NestFactory.createApplicationContext, as prisma/qa-unit-history-check.ts does — has
+    // no gateway, and an unguarded call threw inside every notifications.send(). EventBus
+    // swallows handler errors by design, so that surfaced as notifications silently never
+    // arriving rather than as a failure. Live delivery is a best-effort extra on top of
+    // the row already written to the DB; its absence must never break the send.
+    this.server?.to(`user:${userId}`).emit(event, data);
   }
 }

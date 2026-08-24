@@ -33,7 +33,7 @@ export default function ReceivablesWidget() {
             <FiDollarSign className="text-blue-500" />
             <p className="font-semibold text-sm text-gray-600">Upcoming Receivables</p>
             {items.length > 0 && (
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-gray-500">
                 — {fmt(totalOutstanding)} outstanding across {items.length} installment{items.length !== 1 ? 's' : ''}
               </span>
             )}
@@ -63,7 +63,7 @@ export default function ReceivablesWidget() {
             ))}
           </div>
         ) : items.length === 0 ? (
-          <p className="text-sm text-gray-400 py-6 text-center">
+          <p className="text-sm text-gray-500 py-6 text-center">
             No receivables due in the next {weeks} weeks
           </p>
         ) : (
@@ -95,8 +95,8 @@ export default function ReceivablesWidget() {
                         </td>
                         <td className="py-2.5 px-3 text-gray-700">{r.label}</td>
                         <td className="py-2.5 px-3 text-right text-gray-700">{fmt(r.amount)}</td>
-                        <td className="py-2.5 px-3 text-right text-green-600">{fmt(r.paidAmount)}</td>
-                        <td className={`py-2.5 px-3 text-right font-semibold ${r.outstanding > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                        <td className="py-2.5 px-3 text-right text-green-700">{fmt(r.paidAmount)}</td>
+                        <td className={`py-2.5 px-3 text-right font-semibold ${r.outstanding > 0 ? 'text-red-700' : 'text-gray-500'}`}>
                           {fmt(r.outstanding)}
                         </td>
                         <td className="py-2.5 px-3 text-gray-600">{r.due ? fmtDate(r.due) : '—'}</td>

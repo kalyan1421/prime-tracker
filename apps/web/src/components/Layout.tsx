@@ -84,7 +84,7 @@ function NotificationPanel() {
         <div className="flex items-baseline gap-2">
           <p className="font-semibold text-sm text-gray-700">Notifications</p>
           {unreadCount > 0 && (
-            <span className="text-[11px] text-gray-400">{unreadCount} unread</span>
+            <span className="text-[11px] text-gray-500">{unreadCount} unread</span>
           )}
         </div>
         {unreadCount > 0 && (
@@ -99,7 +99,7 @@ function NotificationPanel() {
       </div>
       <div className="max-h-[60vh] sm:max-h-[380px] overflow-auto">
         {notifications.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-gray-400">
+          <div className="flex flex-col items-center justify-center py-10 text-gray-500">
             <FiBell className="text-2xl mb-2" />
             <p className="text-sm">No notifications</p>
           </div>
@@ -119,7 +119,7 @@ function NotificationPanel() {
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-gray-800 leading-tight">{n.title}</p>
                   <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>
-                  <p className="text-[10px] text-gray-400 mt-1">
+                  <p className="text-[11px] text-gray-500 mt-1">
                     {new Date(n.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                   </p>
                 </div>
@@ -397,7 +397,7 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             <DropdownItem key="mfa" startContent={<FiShield />} onPress={onMfaOpen}>
               {user?.mfaEnabled ? 'MFA Settings' : 'Set Up MFA'}
               {user?.mfaEnabled && (
-                <Chip size="sm" color="success" variant="flat" className="ml-2 text-[10px]">Active</Chip>
+                <Chip size="sm" color="success" variant="flat" className="ml-2 text-[11px]">Active</Chip>
               )}
             </DropdownItem>
             <DropdownItem key="notif-settings" startContent={<FiBell />} onPress={() => navigate('/settings/notifications')}>
@@ -472,8 +472,14 @@ export default function Layout() {
       <div className="flex flex-col flex-1 min-w-0">
         <TopBar onToggleSidebar={handleToggle} />
         <MfaBanner />
+        {/* No `overflow-auto` here. It never actually scrolled — main grows with its
+            content and the DOCUMENT is the scroller (the sidebar's own `sticky top-0`
+            depends on that too). All it did was make main a scroll container, which
+            silently became the containing block for any `position: sticky` inside a page
+            and stopped it ever sticking. Wide content scrolls in its own
+            `overflow-x-auto` wrapper instead, which is where that belongs. */}
         <main
-          className="flex-1 overflow-auto p-4 md:p-6 bg-gray-50"
+          className="flex-1 p-4 md:p-6 bg-gray-50"
           style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 1rem)' }}
         >
           {/* Per-page boundary: a render throw on one page shows the fallback in the

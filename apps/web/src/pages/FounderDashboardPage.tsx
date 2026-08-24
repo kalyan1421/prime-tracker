@@ -132,7 +132,7 @@ export default function FounderDashboardPage() {
           </CardHeader>
           <CardBody>
             {phaseData.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+              <p className="text-sm text-gray-500 py-10 text-center">No data</p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
@@ -155,7 +155,7 @@ export default function FounderDashboardPage() {
           </CardHeader>
           <CardBody>
             {unitData.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No data</p>
+              <p className="text-sm text-gray-500 py-10 text-center">No data</p>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={unitData}>
@@ -182,7 +182,7 @@ export default function FounderDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             {overdueMilestones.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">No overdue milestones</p>
+              <p className="text-sm text-gray-500 py-4 text-center">No overdue milestones</p>
             ) : (
               <div className="overflow-auto">
                 <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
@@ -202,7 +202,7 @@ export default function FounderDashboardPage() {
                       >
                         <td className="py-2 px-2 font-medium text-amber-700">{m.title}</td>
                         <td className="py-2 px-2 text-xs text-gray-500">{m.projectName}</td>
-                        <td className="py-2 px-2 text-xs text-red-600">{fmtDate(m.dueDate)}</td>
+                        <td className="py-2 px-2 text-xs text-red-700">{fmtDate(m.dueDate)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -262,7 +262,7 @@ export default function FounderDashboardPage() {
                         <tr key={b.buildingId} className="border-b border-gray-50 hover:bg-gray-50">
                           <td className="py-1.5 px-3 pl-8 text-gray-600 text-xs">{b.buildingName}</td>
                           <td className="py-1.5 px-3 text-right text-xs text-gray-600">{b.availableCount}</td>
-                          <td className="py-1.5 px-3 text-right text-xs text-green-600">{fmt(b.availableValue)}</td>
+                          <td className="py-1.5 px-3 text-right text-xs text-green-700">{fmt(b.availableValue)}</td>
                           <td className="py-1.5 px-3 text-right text-xs text-blue-600">{b.underContractCount}</td>
                           <td className="py-1.5 px-3 text-right text-xs text-blue-600">{fmt(b.underContractValue)}</td>
                         </tr>
@@ -308,7 +308,7 @@ export default function FounderDashboardPage() {
             </CardHeader>
             <CardBody className="pt-0">
               {!hasAny ? (
-                <p className="text-sm text-gray-400 py-4 text-center">No recent comments</p>
+                <p className="text-sm text-gray-500 py-4 text-center">No recent comments</p>
               ) : (
                 <div className="max-h-[400px] overflow-auto">
                   {TYPE_ORDER.filter((t) => grouped[t].length > 0).map((t) => (
@@ -338,10 +338,10 @@ export default function FounderDashboardPage() {
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-xs font-semibold">{c.user?.name}</span>
                                 <CommentChip type={t as CommentType} size="sm" />
-                                <span className="text-xs text-gray-400">{fmtDate(c.createdAt)}</span>
+                                <span className="text-xs text-gray-500">{fmtDate(c.createdAt)}</span>
                               </div>
                               <p className="text-sm text-gray-700 break-words">{c.content}</p>
-                              <p className="text-xs text-gray-400 mt-0.5">
+                              <p className="text-xs text-gray-500 mt-0.5">
                                 {c.source === 'project'
                                   ? c.project?.name
                                   : `${c.unit?.building?.project?.name} · ${c.unit?.building?.name} · Unit ${c.unit?.unitNumber}`}

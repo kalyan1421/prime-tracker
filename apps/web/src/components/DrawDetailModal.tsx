@@ -137,7 +137,7 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
 
         <ModalBody className="p-0">
           {isLoading ? (
-            <div className="p-6 text-center text-gray-400 text-sm">Loading draw…</div>
+            <div className="p-6 text-center text-gray-500 text-sm">Loading draw…</div>
           ) : (
             <Tabs
               key={drawId}
@@ -221,7 +221,7 @@ export function DrawDetailModal({ drawId, isOpen, onClose, projectName, projectI
                   <div className="mt-6 border-t border-gray-100 pt-4">
                     {can.reject && (
                       <>
-                        <p className="text-xs font-semibold text-red-600 uppercase mb-2">Reject draw</p>
+                        <p className="text-xs font-semibold text-red-700 uppercase mb-2">Reject draw</p>
                         <Input
                           size="sm"
                           placeholder="Reason for rejection (required)"

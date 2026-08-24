@@ -414,6 +414,55 @@ export class ProjectsService {
     });
   }
 
+  /**
+   * Add several members in one round trip.
+   *
+   * Exists because the per-person POST loop the UI used ran straight into the global
+   * 10-requests-per-second throttle: adding 19 people landed 10 and 429'd the rest, leaving
+   * a half-populated team and a bare "9 could not be added" toast. One request cannot be
+   * rate-limited into a partial result.
+   *
+   * Validated up front and written in a transaction, so the whole batch lands or none of it
+   * does — a half-added team is worse than a rejected one, because nobody can tell which
+   * half is missing without re-reading the roster.
+   */
+  async addMembers(
+    projectId: string,
+    members: { userId: string; role?: string; roles?: string[] }[],
+  ) {
+    await this.findById(projectId);
+
+    // De-duplicated first: the same userId twice in one payload would make two upserts race
+    // on the same unique key inside the transaction. Last entry wins, matching the
+    // last-write-wins behaviour of the single-member route.
+    const byUser = new Map<string, string[]>();
+    for (const m of members) {
+      const list = m.roles?.length ? Array.from(new Set(m.roles)) : [m.role ?? 'TEAM_MEMBER'];
+      for (const r of list) {
+        if (!isProjectMemberRole(r)) {
+          throw new BadRequestException(
+            `Invalid project member role '${r}' for user ${m.userId}. ` +
+            `Allowed roles: ${PROJECT_MEMBER_ROLES.join(', ')}`,
+          );
+        }
+      }
+      byUser.set(m.userId, list);
+    }
+
+    return this.prisma.$transaction(
+      Array.from(byUser.entries()).map(([userId, list]) =>
+        this.prisma.projectMember.upsert({
+          where: { projectId_userId: { projectId, userId } },
+          create: { projectId, userId, role: list[0], roles: list },
+          update: { role: list[0], roles: list },
+          include: {
+            user: { select: { id: true, name: true, email: true, avatarUrl: true, role: true } },
+          },
+        }),
+      ),
+    );
+  }
+
   async removeMember(projectId: string, userId: string) {
     return this.prisma.projectMember.delete({
       where: { projectId_userId: { projectId, userId } },

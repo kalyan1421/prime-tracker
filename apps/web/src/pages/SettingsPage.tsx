@@ -72,7 +72,7 @@ const TIERS = [
     title: 'Action needed',
     blurb: 'Something is waiting on you. These email you by default so they do not sit unseen.',
     icon: <FiAlertCircle size={15} />,
-    accent: 'text-amber-600 bg-amber-50',
+    accent: 'text-amber-700 bg-amber-50',
   },
   {
     key: 'FYI' as const,
@@ -150,7 +150,7 @@ function EmailChoiceControl({
               className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
                 selected
                   ? 'bg-white text-gray-800 shadow-sm border border-gray-200'
-                  : 'text-gray-500 hover:text-gray-700'
+                  : 'text-gray-600 hover:text-gray-900'
               } ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
             >
               {opt.text}
@@ -251,10 +251,10 @@ export default function SettingsPage() {
           <FiMail size={13} /> Email
         </span>
         <div className="flex items-center gap-1.5">
-          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-400">
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">
             <FiMessageCircle size={13} /> WhatsApp
           </span>
-          <Chip size="sm" variant="flat" className="text-[10px] bg-amber-50 text-amber-600">
+          <Chip size="sm" variant="flat" className="text-[11px] bg-amber-50 text-amber-700">
             Coming soon
           </Chip>
         </div>
@@ -283,15 +283,15 @@ export default function SettingsPage() {
                     </span>
                     <p className="text-sm font-semibold text-gray-700">{tier.title}</p>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1 leading-relaxed">{tier.blurb}</p>
+                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">{tier.blurb}</p>
                 </CardHeader>
                 <CardBody className="pt-2 px-5 pb-3">
                   {/* column header row */}
                   <div className="flex items-center justify-end gap-6 mb-1 pr-1">
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-gray-500 w-10 justify-center">
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-gray-600 w-10 justify-center">
                       <FiSmartphone size={12} /> App
                     </span>
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-gray-500 w-[186px] justify-start pl-1">
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-gray-600 w-[186px] justify-start pl-1">
                       <FiMail size={12} /> Email
                     </span>
                   </div>
@@ -312,13 +312,13 @@ export default function SettingsPage() {
                             <div className="flex items-center gap-2">
                               <p className="text-sm font-medium text-gray-800">{row.label}</p>
                               {row.group && (
-                                <span className="text-[10px] uppercase tracking-wide text-gray-400 bg-gray-50 border border-gray-100 rounded px-1.5 py-px">
+                                <span className="text-[11px] uppercase tracking-wide text-gray-600 bg-gray-50 border border-gray-100 rounded px-1.5 py-px">
                                   {row.group}
                                 </span>
                               )}
                             </div>
                             {row.description && (
-                              <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{row.description}</p>
+                              <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">{row.description}</p>
                             )}
                           </div>
 
@@ -365,7 +365,7 @@ export default function SettingsPage() {
         <FiMessageCircle className="text-amber-500 mt-0.5 shrink-0" size={16} />
         <div>
           <p className="text-sm font-semibold text-amber-800">WhatsApp notifications — coming soon</p>
-          <p className="text-xs text-amber-600 mt-0.5 leading-relaxed">
+          <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
             WhatsApp delivery is planned for a future release. In-app notifications and email (via SMTP)
             are live now.
           </p>
