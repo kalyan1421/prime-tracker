@@ -120,6 +120,13 @@ export NVM_DIR=/home/ubuntu/.nvm
 source "\$NVM_DIR/nvm.sh" 2>/dev/null || source /root/.nvm/nvm.sh 2>/dev/null || true
 export PATH=\$PATH:/home/ubuntu/.local/share/pnpm:/usr/local/bin
 
+# SSM gives the remote script no TTY. When pnpm decides it needs to remove node_modules
+# (any lockfile or store change will do it), it asks for confirmation, finds nothing to
+# ask, and aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY — which killed the
+# deploy AFTER the git reset, leaving new source on the box with old dependencies. The
+# variable is pnpm's own documented answer for exactly this.
+export CI=true
+
 set -eo pipefail
 cd /home/ubuntu/prime-tracker
 
