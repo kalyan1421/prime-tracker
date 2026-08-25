@@ -837,3 +837,15 @@ export interface TokenPayload {
   permissions: string[];
   mfaVerified: boolean;
 }
+
+/**
+ * The exact 403 body the API sends when a route demands a fresh TOTP step-up, and the
+ * exact string the web client matches to decide whether to open the step-up modal.
+ *
+ * It lived as a duplicated literal in mfa.guard.ts and lib/api.ts. They matched, but
+ * nothing enforced that: editing either one — a typo, a reworded message — would have
+ * left the guard correctly refusing and the client silently showing a raw 403 instead
+ * of prompting, with the request simply failing for no visible reason.
+ */
+export const MFA_REQUIRED_MESSAGE =
+  'MFA verification required for this action. Please verify your TOTP code.';

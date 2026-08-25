@@ -4,13 +4,18 @@ import { LoansService } from './loans.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { MfaGuard } from '../../common/guards/mfa.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, RequireMfa } from '../../common/decorators/index';
 import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawDto, UpdateDrawStatusDto, UpsertDrawScheduleDto } from './dto/create-loan.dto';
 
 @ApiTags('Loans')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
+// Money-moving routes carry @RequireMfa(): a stolen session should not be able to
+// create a loan, alter a draw or mark one funded without a fresh code from the phone
+// in the owner's pocket. READ routes are deliberately untouched — a TOTP prompt to
+// merely view a loan would fire constantly and train people to click through it.
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard, MfaGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('loans')
 export class LoansController {
@@ -46,16 +51,19 @@ export class LoansController {
 
   @Post()
   @RequirePermissions('loan:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Create loan with encrypted fields' })
   create(@Body() body: CreateLoanDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('loan:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Update loan, re-encrypts sensitive fields' })
   update(@Param('id') id: string, @Body() body: UpdateLoanDto) { return this.service.update(id, body); }
 
   @Delete(':id')
   @RequirePermissions('loan:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Soft-delete a loan (blocked if it has active draw requests)' })
   delete(@Param('id') id: string) { return this.service.delete(id); }
 
@@ -92,6 +100,7 @@ export class LoansController {
 
   @Post(':loanId/draws')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Create a draw request for a loan' })
   createDraw(@Param('loanId') loanId: string, @Body() body: CreateDrawDto, @Request() req: any) {
     return this.service.createDraw(loanId, body, req.user.sub);
@@ -99,6 +108,7 @@ export class LoansController {
 
   @Patch('draws/:id')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Edit a DRAFT draw request (amount, requestDate, notes)' })
   updateDraw(@Param('id') id: string, @Body() body: UpdateDrawDto) {
     return this.service.updateDraw(id, body);
@@ -106,6 +116,7 @@ export class LoansController {
 
   @Patch('draws/:id/status')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Advance draw request status (include approvedAmount on APPROVED, rejectionReason on REJECTED)' })
   updateDrawStatus(
     @Param('id') id: string,
@@ -117,6 +128,7 @@ export class LoansController {
 
   @Delete('draws/:id')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Delete a DRAFT draw request' })
   deleteDraw(@Param('id') id: string) {
     return this.service.deleteDraw(id);
@@ -133,6 +145,7 @@ export class LoansController {
 
   @Post(':loanId/schedule')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Upsert a draw schedule line (create or update by drawNumber)' })
   upsertDrawScheduleLine(
     @Param('loanId') loanId: string,
@@ -143,6 +156,7 @@ export class LoansController {
 
   @Delete('schedule/:id')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   @ApiOperation({ summary: 'Delete a draw schedule line' })
   deleteDrawScheduleLine(@Param('id') id: string) {
     return this.service.deleteDrawScheduleLine(id);

@@ -89,11 +89,17 @@ api.interceptors.response.use(
 );
 
 // Handle 403 "MFA required" → pause, prompt for TOTP step-up, then retry
+//
+// Deliberately a literal, NOT an import from @prime-tracker/shared: the web app has no
+// dependency on that package and the deploy-web CI job does not build it, so importing
+// here breaks the production deploy rather than just the local build. The canonical value
+// lives in shared as MFA_REQUIRED_MESSAGE, and mfa-message-parity.spec.ts fails if this
+// copy ever drifts from it.
+const MFA_REQUIRED_MESSAGE = 'MFA verification required for this action. Please verify your TOTP code.';
 // This is a *separate* interceptor from the 401 one above: axios chains
 // response interceptors, so when the 401 handler rejects because the status
 // isn't 401 (or `_retry` is already set), that rejection flows into this
 // handler next. Nothing about the 401/refresh flow is touched.
-const MFA_REQUIRED_MESSAGE = 'MFA verification required for this action. Please verify your TOTP code.';
 
 api.interceptors.response.use(
   (res) => res,

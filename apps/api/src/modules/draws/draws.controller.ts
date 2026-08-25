@@ -7,6 +7,8 @@ import { DrawsService } from './draws.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { MfaGuard } from '../../common/guards/mfa.guard';
+import { RequireMfa } from '../../common/decorators/index';
 import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 
@@ -19,7 +21,11 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
  */
 @ApiTags('Draws')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
+// Money-moving routes carry @RequireMfa(): a stolen session should not be able to
+// create a loan, alter a draw or mark one funded without a fresh code from the phone
+// in the owner's pocket. READ routes are deliberately untouched — a TOTP prompt to
+// merely view a loan would fire constantly and train people to click through it.
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard, MfaGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('draws')
 export class DrawsController {
@@ -41,30 +47,35 @@ export class DrawsController {
 
   @Post(':id/submit')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   submit(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
     return this.draws.submit(id, userId, body?.comment);
   }
 
   @Post(':id/approve-internal')
   @RequirePermissions('draw:approve')
+  @RequireMfa()
   approveInternal(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
     return this.draws.approveInternal(id, userId, body?.comment);
   }
 
   @Post(':id/submit-to-lender')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   submitToLender(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
     return this.draws.submitToLender(id, userId, body?.comment);
   }
 
   @Post(':id/return-for-info')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   returnForInfo(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
     return this.draws.returnForInfo(id, userId, body?.comment);
   }
 
   @Post(':id/mark-funded')
   @RequirePermissions('draw:approve')
+  @RequireMfa()
   markFunded(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
@@ -75,6 +86,7 @@ export class DrawsController {
 
   @Post(':id/reject')
   @RequirePermissions('draw:approve')
+  @RequireMfa()
   reject(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
@@ -85,6 +97,7 @@ export class DrawsController {
 
   @Post(':id/cancel')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   cancel(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
     return this.draws.cancel(id, userId, body?.comment);
   }
@@ -93,6 +106,7 @@ export class DrawsController {
 
   @Post(':id/documents')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   attachDocument(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
@@ -107,12 +121,14 @@ export class DrawsController {
 
   @Patch('documents/:documentId')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   renameDocument(@Param('documentId') documentId: string, @Body() body: { filename: string }) {
     return this.draws.renameDocument(documentId, body.filename);
   }
 
   @Delete('documents/:documentId')
   @RequirePermissions('draw:edit')
+  @RequireMfa()
   removeDocument(@Param('documentId') documentId: string) {
     return this.draws.removeDocument(documentId);
   }
