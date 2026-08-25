@@ -8,3 +8,8 @@ crash.log
 override.tf
 override.tf.json
 *_override.tf
+
+# Saved plans embed VARIABLE VALUES, including db_password. One was committed to
+# this public repo on 2026-08-25; the password was rotated in response. Never commit
+# a plan file — it is not a diff, it is a snapshot of the inputs.
+*.tfplan
