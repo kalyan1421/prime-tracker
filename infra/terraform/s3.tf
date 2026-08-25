@@ -41,6 +41,16 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "all" {
   }
 }
 
+# Versioning is the only thing standing between a bad delete and permanent loss, and
+# `media` holds user uploads exactly like `documents` does. It was versioned and media
+# was not, which is a distinction nothing justifies.
+resource "aws_s3_bucket_versioning" "media" {
+  bucket = aws_s3_bucket.media.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_s3_bucket_versioning" "documents" {
   bucket = aws_s3_bucket.documents.id
   versioning_configuration {

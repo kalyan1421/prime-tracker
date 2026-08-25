@@ -7,6 +7,31 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y curl git nginx ca-certificates gnupg
 
+# --- AWS CLI v2 ---
+# deploy.sh runs ENTIRELY through this binary on the box: it pulls the dist from S3 and
+# reads every secret from SSM. Without it a freshly applied stack cannot be deployed to
+# at all, which is exactly what happened on the 2026-08-25 client build.
+# Arch-matched on purpose — an aarch64 package on x86_64 installs fine and then every
+# invocation dies with "Exec format error".
+ARCH="$(uname -m)"
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$${ARCH}.zip" -o /tmp/awscliv2.zip
+apt-get install -y unzip
+unzip -q -o /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install --update
+ln -sf /usr/local/bin/aws /usr/bin/aws
+
+# --- 4 GB swap ---
+# This box has ~914 MB of RAM. `pnpm install` alone is enough to push it into the OOM
+# killer and wedge it hard enough that SSM commands hang rather than fail. Swap is the
+# difference between a slow install and an unreachable instance.
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 4G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 # --- Node 22 (supabase-js needs the native WebSocket global, added in Node 22.4) ---
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
@@ -30,17 +55,48 @@ docker run -d --name redis --restart unless-stopped \
   -p 127.0.0.1:6379:6379 \
   redis:7-alpine redis-server --appendonly yes
 
+# --- application checkout + PM2 under `ubuntu` ---
+# deploy.sh does `cd /home/ubuntu/prime-tracker && git fetch`, so the checkout has to
+# exist before the first deploy — it is not created by the deploy itself. PM2 is
+# registered here as `ubuntu` (never root) and enabled at boot, so a reboot brings the
+# API back without a human.
+if [ ! -d /home/ubuntu/prime-tracker/.git ]; then
+  sudo -u ubuntu git clone -q https://github.com/kalyan1421/prime-tracker.git /home/ubuntu/prime-tracker
+fi
+sudo -u ubuntu git config --global --add safe.directory /home/ubuntu/prime-tracker
+git config --global --add safe.directory /home/ubuntu/prime-tracker
+chown -R ubuntu:ubuntu /home/ubuntu/prime-tracker
+env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu || true
+
 # --- certbot (TLS for api.<domain>; api is fronted by Nginx, not CloudFront) ---
 snap install --classic certbot || apt-get install -y certbot python3-certbot-nginx
 ln -sf /snap/bin/certbot /usr/bin/certbot || true
 
-# --- Nginx reverse proxy: api.<domain> -> NestJS on :3001 ---
-cat >/etc/nginx/sites-available/prime-api <<'NGINX'
+# --- Nginx: SPA + API on ONE origin ---
+# This used to define an API proxy only, with no document root — so a freshly built box
+# served the API and returned 404 for the app itself, and someone had to hand-write this
+# file before anyone could log in. Sharing one origin also keeps the browser on
+# same-origin requests, so there is no CORS surface to configure.
+# server_name is _ so the box answers on whatever hostname points at it (a nip.io name
+# derived from the EIP, or a real domain later) without needing to be rebuilt.
+mkdir -p /var/www/prime-web
+cat >/etc/nginx/sites-available/prime-web <<'NGINX'
 server {
-    listen 80;
-    server_name api.${domain};
+    listen 80 default_server;
+    server_name _;
     client_max_body_size 25m;
-    location / {
+
+    root /var/www/prime-web;
+    index index.html;
+
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+    }
+    location /api/ {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -48,10 +104,13 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+    # SPA routes are client-side; anything not on disk falls through to index.html.
+    location / { try_files $uri $uri/ /index.html; }
 }
 NGINX
-ln -sf /etc/nginx/sites-available/prime-api /etc/nginx/sites-enabled/prime-api
-rm -f /etc/nginx/sites-enabled/default
+# certbot --nginx rewrites this file in place to add :443 and the http->https redirect.
+ln -sf /etc/nginx/sites-available/prime-web /etc/nginx/sites-enabled/prime-web
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/prime-api
 systemctl enable nginx
 systemctl restart nginx
 

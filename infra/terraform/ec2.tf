@@ -4,6 +4,10 @@ resource "aws_key_pair" "main" {
 }
 
 resource "aws_instance" "api" {
+  # One API call away from destroying the only server, with no ASG to rebuild it.
+  # Terraform can still replace the instance deliberately; this stops the accident.
+  disable_api_termination = true
+
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.ec2_instance_type
   subnet_id              = aws_subnet.public.id

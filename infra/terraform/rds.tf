@@ -25,7 +25,10 @@ resource "aws_db_instance" "main" {
   publicly_accessible    = false
   multi_az               = false
 
-  backup_retention_period = 7
+  # 30, not 7. The likeliest disaster here is not a dead AZ, it is bad data nobody
+  # notices for a fortnight — and 7 days of history cannot recover from that. Storage
+  # for snapshots of a 20 GB instance costs cents.
+  backup_retention_period = 30
   backup_window           = "07:00-08:00"
   maintenance_window      = "Mon:08:00-Mon:09:00"
 

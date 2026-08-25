@@ -159,6 +159,11 @@ done > apps/api/.env
 printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\nMAIL_DRIVER=${MAIL_DRIVER}\nSMTP_FROM=${SMTP_FROM}\n" >> apps/api/.env
 printf "DIRECT_URL=%s\n" "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
 chmod 600 apps/api/.env
+# Ownership, not just mode. This whole block runs as root over SSM, so a bare
+# \`chmod 600\` leaves the file root:root and PM2 — which runs as \`ubuntu\` — dies with
+# EACCES on boot and crash-loops. Invisible on a box where the file predates the
+# hardening and is already ubuntu-owned; fatal on every freshly built one.
+chown ubuntu:ubuntu apps/api/.env
 echo "=== .env written ==="
 
 export DATABASE_URL=\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)
@@ -170,7 +175,19 @@ pnpm --filter @prime-tracker/api exec prisma migrate deploy 2>&1 | tail -8
 # the new columns/fields (500s on every query touching them). Regenerate explicitly.
 pnpm --filter @prime-tracker/api exec prisma generate 2>&1 | tail -8
 
-sudo -u ubuntu pm2 restart prime-api --update-env 2>&1 || pm2 restart prime-api --update-env 2>&1
+# start-or-restart. \`pm2 restart\` errors with "Process or Namespace not found" on a
+# FIRST deploy to a new box, which fails the whole run after migrations have already
+# applied — the worst place to stop. \`describe\` is the cheap existence check.
+if sudo -u ubuntu HOME=/home/ubuntu pm2 describe prime-api >/dev/null 2>&1; then
+  sudo -u ubuntu HOME=/home/ubuntu pm2 restart prime-api --update-env 2>&1
+else
+  echo "=== prime-api not registered yet — first-time pm2 start ==="
+  sudo -u ubuntu HOME=/home/ubuntu pm2 start dist/main.js --name prime-api \\
+    --cwd /home/ubuntu/prime-tracker/apps/api --update-env 2>&1
+  sudo -u ubuntu HOME=/home/ubuntu pm2 save 2>&1 | tail -1
+  # survive a reboot
+  env PATH=\$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu >/dev/null 2>&1 || true
+fi
 
 # Nest boots in well over 6s on a t3.micro once the module graph and Prisma client
 # are loaded, so a single fixed sleep reports a false failure on a perfectly healthy

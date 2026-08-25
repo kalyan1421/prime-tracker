@@ -26,3 +26,21 @@ resource "aws_cloudwatch_metric_alarm" "billing" {
     Currency = "USD"
   }
 }
+
+# Recover the instance when the UNDERLYING HOST fails. There is one box and no ASG, so
+# without this a hardware fault is an outage that lasts until a human notices. The
+# `ec2:recover` action rebuilds it on healthy hardware with the same instance id, same
+# EIP and same volumes — nothing to reconfigure afterwards.
+resource "aws_cloudwatch_metric_alarm" "instance_auto_recover" {
+  alarm_name          = "${local.name}-auto-recover"
+  alarm_description   = "Recover the instance on system status-check failure"
+  namespace           = "AWS/EC2"
+  metric_name         = "StatusCheckFailed_System"
+  dimensions          = { InstanceId = aws_instance.api.id }
+  statistic           = "Maximum"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  alarm_actions       = ["arn:aws:automate:${var.aws_region}:ec2:recover"]
+}
