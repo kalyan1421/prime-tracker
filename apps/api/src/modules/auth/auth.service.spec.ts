@@ -95,6 +95,13 @@ describe('AuthService', () => {
     const profileOn = (email: string) => ({
       id: 'g-1', email, displayName: 'Someone', picture: '',
     });
+    // Every case below states its own findUnique result. Without this, a mock set by
+    // one test leaks into the next and quietly inverts what it proves.
+    beforeEach(() => {
+      mockPrisma.user.create.mockClear();
+      mockPrisma.user.findUnique.mockReset();
+    });
+
     const withDomains = (value: string) => {
       mockConfigService.get.mockImplementation((k: string) =>
         k === 'GOOGLE_ALLOWED_DOMAIN' ? value : '');
@@ -114,7 +121,7 @@ describe('AuthService', () => {
     it.each([
       ['theprimedeveloper.com', 'raj@theprimedeveloper.com'],
       ['primedevelopers.com', 'mallik@primedevelopers.com'],
-    ])('admits %s when both domains are configured', async (_d, email) => {
+    ])('lets a NEW %s account provision itself', async (_d, email) => {
       withDomains('theprimedeveloper.com,primedevelopers.com');
       mockPrisma.user.findUnique.mockResolvedValue(null);
       mockPrisma.user.create.mockResolvedValue({
@@ -123,10 +130,28 @@ describe('AuthService', () => {
       await expect(service.validateGoogleUser(profileOn(email))).resolves.toBeDefined();
     });
 
-    it('still refuses a domain that is not on the list', async () => {
+    // The reason the gate exists. VIEWER carries project/building/unit/milestone/
+    // comment/daily-log view across the WHOLE portfolio, so a stranger self-registering
+    // is a data leak, not an inconvenience.
+    it('refuses to CREATE an account for an off-domain address', async () => {
       withDomains('theprimedeveloper.com,primedevelopers.com');
-      await expect(service.validateGoogleUser(profileOn('someone@gmail.com')))
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.validateGoogleUser(profileOn('stranger@gmail.com')))
         .rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.user.create).not.toHaveBeenCalled();
+    });
+
+    // ...but a colleague on a personal address whom an admin already provisioned is a
+    // different question entirely, and must not be locked out.
+    it('lets an EXISTING off-domain account sign in', async () => {
+      withDomains('theprimedeveloper.com,primedevelopers.com');
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'u-9', email: 'colleague@gmail.com', name: 'Colleague',
+        role: 'VIEWER', isActive: true, googleId: 'g-1',
+      });
+      await expect(service.validateGoogleUser(profileOn('colleague@gmail.com')))
+        .resolves.toBeDefined();
+      expect(mockPrisma.user.create).not.toHaveBeenCalled();
     });
 
     it('tolerates spaces around the commas', async () => {
@@ -154,10 +179,33 @@ describe('AuthService', () => {
     // The branch below this gate CREATES a user for an unrecognised email. An empty
     // gate therefore lets any Google account on earth provision itself an account,
     // which is a far worse failure than locking someone out.
-    it('a single domain keeps working exactly as before', async () => {
+    // Fail closed. The old code treated an unset gate as "no restriction", so a missing
+    // or typo'd env var silently opened self-registration to every Google account on
+    // earth. A config mistake should lock people out, never let strangers in.
+    it('with the gate UNSET, refuses to provision anyone at all', async () => {
+      withDomains('');
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.validateGoogleUser(profileOn('anyone@anywhere.com')))
+        .rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.user.create).not.toHaveBeenCalled();
+    });
+
+    it('with the gate UNSET, an existing account can still sign in', async () => {
+      withDomains('');
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'u-1', email: 'staff@theprimedeveloper.com', name: 'Staff',
+        role: 'VIEWER', isActive: true, googleId: 'g-1',
+      });
+      await expect(service.validateGoogleUser(profileOn('staff@theprimedeveloper.com')))
+        .resolves.toBeDefined();
+    });
+
+    it('a single configured domain still gates provisioning', async () => {
       withDomains('primedevelopers.com');
+      mockPrisma.user.findUnique.mockResolvedValue(null); // nobody by this email yet
       await expect(service.validateGoogleUser(profileOn('x@theprimedeveloper.com')))
         .rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.user.create).not.toHaveBeenCalled();
     });
   });
 
@@ -203,6 +251,11 @@ describe('AuthService', () => {
         mfaEnabled: false,
       };
       mockPrisma.user.create.mockResolvedValue(newUser);
+      // The profile is @primedevelopers.com, so the gate has to permit that domain for
+      // self-provisioning to be reachable at all. This used to pass with the gate unset
+      // because unset meant "no restriction" — it now means "no self-provisioning".
+      mockConfigService.get.mockImplementation((k: string) =>
+        k === 'GOOGLE_ALLOWED_DOMAIN' ? 'primedevelopers.com' : '');
 
       const result = await service.validateGoogleUser(googleProfile);
 

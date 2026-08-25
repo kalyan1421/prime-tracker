@@ -148,22 +148,32 @@ export class AuthService {
       .map((d) => d.trim().toLowerCase())
       .filter(Boolean);
 
-    // Enforce domain restriction for Workspace SSO. Never skip this when the list is
-    // empty by accident: the branch below CREATES a user for an unrecognised email, so
-    // an unset gate would let any Google account on earth provision itself an account.
-    if (allowedDomains.length > 0) {
-      const emailDomain = (profile.email.split('@')[1] ?? '').toLowerCase();
-      if (!allowedDomains.includes(emailDomain)) {
-        throw new ForbiddenException(
-          `Only ${allowedDomains.map((d) => `@${d}`).join(' or ')} accounts are allowed`,
-        );
-      }
-    }
+    const emailDomain = (profile.email.split('@')[1] ?? '').toLowerCase();
 
-    // Find or create user
     let user = await this.prisma.user.findUnique({
       where: { email: profile.email },
     });
+
+    // The gate governs SELF-PROVISIONING, not sign-in.
+    //
+    // It used to run before the lookup, which conflated two different questions: "may
+    // this person sign in" and "may this person create themselves an account". That
+    // forced an impossible choice for the handful of staff on personal addresses —
+    // either lock them out, or add gmail.com to the list and let ANY Google account on
+    // earth provision itself a VIEWER, which carries PROJECT/BUILDING/UNIT/MILESTONE/
+    // COMMENT/DAILYLOG view over the WHOLE portfolio.
+    //
+    // Splitting it resolves both: an account that already exists may sign in from any
+    // domain, because a human deliberately created it. Only the configured domains may
+    // bring a NEW account into existence.
+    if (!user && !allowedDomains.includes(emailDomain)) {
+      throw new ForbiddenException(
+        allowedDomains.length > 0
+          ? `No account exists for ${profile.email}. Ask an administrator to create one, ` +
+            `or sign in with a ${allowedDomains.map((d) => `@${d}`).join(' or ')} address.`
+          : `No account exists for ${profile.email}.`,
+      );
+    }
 
     if (!user) {
       user = await this.prisma.user.create({
