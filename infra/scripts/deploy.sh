@@ -22,6 +22,10 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 # do: without MAIL_DRIVER=ses the mailer falls back to smtp, finds no SMTP_HOST, and disables
 # email entirely (in-app notifications only) — a silent regression, not a startup failure.
 # SMTP_FROM must be an SES-verified identity or every send is rejected.
+# Both real staff domains. It was hardcoded to primedevelopers.com, which covers 4
+# accounts and would have rejected the 31 people on theprimedeveloper.com the moment
+# Google SSO went live. Comma-separated; auth.service splits and trims.
+GOOGLE_ALLOWED_DOMAIN="${GOOGLE_ALLOWED_DOMAIN:-theprimedeveloper.com,primedevelopers.com}"
 MAIL_DRIVER="${MAIL_DRIVER:-ses}"
 SMTP_FROM="${SMTP_FROM:-Prime Tracker <kalyan91333@gmail.com>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -156,7 +160,12 @@ for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
         --region ${AWS_REGION} --query Parameter.Value --output text 2>/dev/null || echo "")
   echo "\$P=\$V"
 done > apps/api/.env
-printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\nMAIL_DRIVER=${MAIL_DRIVER}\nSMTP_FROM=${SMTP_FROM}\n" >> apps/api/.env
+# GOOGLE_CALLBACK_URL is REQUIRED for Google SSO and was never written here.
+# auth.module only registers GoogleStrategy when CLIENT_ID, CLIENT_SECRET *and*
+# CALLBACK_URL are all present, so without it the strategy silently does not
+# register and /api/auth/google answers 503 — with real credentials loaded and no
+# error anywhere to explain why. Derived from APP_URL so it can never drift.
+printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=${GOOGLE_ALLOWED_DOMAIN}\nGOOGLE_CALLBACK_URL=${APP_URL}/api/auth/google/callback\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\nMAIL_DRIVER=${MAIL_DRIVER}\nSMTP_FROM=${SMTP_FROM}\n" >> apps/api/.env
 printf "DIRECT_URL=%s\n" "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
 chmod 600 apps/api/.env
 # Ownership, not just mode. This whole block runs as root over SSM, so a bare

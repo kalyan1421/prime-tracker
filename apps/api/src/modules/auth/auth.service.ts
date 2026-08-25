@@ -138,14 +138,24 @@ export class AuthService {
   }
 
   async validateGoogleUser(profile: GoogleProfile) {
-    const allowedDomain = this.config.get('GOOGLE_ALLOWED_DOMAIN');
+    // Comma-separated, because the staff genuinely span two domains: 31 people on
+    // theprimedeveloper.com and 4 on primedevelopers.com. A single exact-match value
+    // cannot admit both, and whichever one is configured silently rejects everybody on
+    // the other with "Only @x accounts are allowed" — a 403 that looks like a
+    // permissions bug rather than a config one. A single domain still works unchanged.
+    const allowedDomains = (this.config.get<string>('GOOGLE_ALLOWED_DOMAIN') ?? '')
+      .split(',')
+      .map((d) => d.trim().toLowerCase())
+      .filter(Boolean);
 
-    // Enforce domain restriction for Workspace SSO
-    if (allowedDomain) {
-      const emailDomain = profile.email.split('@')[1];
-      if (emailDomain !== allowedDomain) {
+    // Enforce domain restriction for Workspace SSO. Never skip this when the list is
+    // empty by accident: the branch below CREATES a user for an unrecognised email, so
+    // an unset gate would let any Google account on earth provision itself an account.
+    if (allowedDomains.length > 0) {
+      const emailDomain = (profile.email.split('@')[1] ?? '').toLowerCase();
+      if (!allowedDomains.includes(emailDomain)) {
         throw new ForbiddenException(
-          `Only @${allowedDomain} accounts are allowed`,
+          `Only ${allowedDomains.map((d) => `@${d}`).join(' or ')} accounts are allowed`,
         );
       }
     }

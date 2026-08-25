@@ -84,6 +84,83 @@ describe('AuthService', () => {
     (service as any).audit = mockAuditService;
   });
 
+  /**
+   * The gate was a single exact-match value hardcoded to primedevelopers.com, which
+   * covers 4 accounts. The 31 real staff are on theprimedeveloper.com and would every
+   * one of them have been refused the moment SSO went live — with a 403 reading
+   * "Only @primedevelopers.com accounts are allowed", which looks like a permissions
+   * bug rather than a config one.
+   */
+  describe('validateGoogleUser: allowed-domain gate', () => {
+    const profileOn = (email: string) => ({
+      id: 'g-1', email, displayName: 'Someone', picture: '',
+    });
+    const withDomains = (value: string) => {
+      mockConfigService.get.mockImplementation((k: string) =>
+        k === 'GOOGLE_ALLOWED_DOMAIN' ? value : '');
+    };
+
+    afterEach(() => {
+      mockConfigService.get.mockImplementation((k: string) => {
+        const map: Record<string, string> = {
+          JWT_ACCESS_SECRET: 'test-access-secret',
+          JWT_REFRESH_SECRET: 'test-refresh-secret',
+          TOTP_ISSUER: 'PrimeTracker',
+        };
+        return map[k] || '';
+      });
+    });
+
+    it.each([
+      ['theprimedeveloper.com', 'raj@theprimedeveloper.com'],
+      ['primedevelopers.com', 'mallik@primedevelopers.com'],
+    ])('admits %s when both domains are configured', async (_d, email) => {
+      withDomains('theprimedeveloper.com,primedevelopers.com');
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'u', email, name: 'Someone', role: 'VIEWER', isActive: true,
+      });
+      await expect(service.validateGoogleUser(profileOn(email))).resolves.toBeDefined();
+    });
+
+    it('still refuses a domain that is not on the list', async () => {
+      withDomains('theprimedeveloper.com,primedevelopers.com');
+      await expect(service.validateGoogleUser(profileOn('someone@gmail.com')))
+        .rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('tolerates spaces around the commas', async () => {
+      withDomains(' theprimedeveloper.com , primedevelopers.com ');
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'u', email: 'a@primedevelopers.com', name: 'A', role: 'VIEWER', isActive: true,
+      });
+      await expect(service.validateGoogleUser(profileOn('a@primedevelopers.com')))
+        .resolves.toBeDefined();
+    });
+
+    it('matches case-insensitively, since Google may return mixed case', async () => {
+      withDomains('theprimedeveloper.com');
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'u', email: 'A@TheDev.com', name: 'A', role: 'VIEWER', isActive: true,
+      });
+      await expect(service.validateGoogleUser(profileOn('Raj@TheDevPrime.com')))
+        .rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.validateGoogleUser(profileOn('Raj@THEPRIMEDEVELOPER.COM')))
+        .resolves.toBeDefined();
+    });
+
+    // The branch below this gate CREATES a user for an unrecognised email. An empty
+    // gate therefore lets any Google account on earth provision itself an account,
+    // which is a far worse failure than locking someone out.
+    it('a single domain keeps working exactly as before', async () => {
+      withDomains('primedevelopers.com');
+      await expect(service.validateGoogleUser(profileOn('x@theprimedeveloper.com')))
+        .rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
   describe('validateGoogleUser', () => {
     const googleProfile = {
       id: 'google-123',
