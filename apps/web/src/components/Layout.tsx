@@ -217,7 +217,10 @@ function Sidebar({
   }, [mobileOpen]);
 
   const navList = (
-    <div className="flex flex-col gap-1 px-2">
+    // flex-1 + min-h-0 makes THIS the scrolling region rather than the whole sidebar.
+    // Without min-h-0 a flex child refuses to shrink below its content height and the
+    // overflow silently moves back up to the <nav>, which is the bug this fixes.
+    <div className="flex flex-col gap-1 px-2 flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
       {navItems.map((item) => {
         if (item.permission && !hasPermission(item.permission)) return null;
         if (item.anyPermission && !hasAnyPermission(...item.anyPermission)) return null;
@@ -250,8 +253,12 @@ function Sidebar({
   );
 
   const userFooter = !collapsed && user && (
-    <div className="absolute bottom-4 left-0 right-0 px-4">
-      <hr className="mb-3 border-gray-200" />
+    // Was `absolute bottom-4`. The <nav> is not a positioned ancestor, so this resolved
+    // against the viewport and sat on top of the last nav item — with enough entries to
+    // overflow (FOUNDER sees every one) "Admin" was permanently half-covered by the role
+    // chip and could not be scrolled clear. In normal flow as a shrink-0 flex child it is
+    // always visible and never overlaps, which is what the mobile drawer already did.
+    <div className="shrink-0 px-4 pt-3 pb-4 border-t border-gray-200 bg-white">
       <div className="flex items-center gap-2 flex-wrap">
         <Chip size="sm" variant="flat" color="primary">{user.role.replace('_', ' ')}</Chip>
         {user.mfaEnabled && (
@@ -267,9 +274,9 @@ function Sidebar({
     <>
       {/* Desktop sidebar — inline, persistent */}
       <nav
-        className={`${collapsed ? 'w-[60px]' : 'w-[220px]'} hidden lg:flex lg:flex-col sticky top-0 h-screen bg-white border-r border-gray-200 transition-all duration-200 overflow-y-auto overflow-x-hidden pt-4 shrink-0`}
+        className={`${collapsed ? 'w-[60px]' : 'w-[220px]'} hidden lg:flex lg:flex-col sticky top-0 h-screen bg-white border-r border-gray-200 transition-all duration-200 overflow-hidden pt-4 shrink-0`}
       >
-        <div className={`${collapsed ? 'px-2 justify-center' : 'px-4 justify-start'} flex items-center mb-8`}>
+        <div className={`${collapsed ? 'px-2 justify-center' : 'px-4 justify-start'} flex items-center mb-8 shrink-0`}>
           {collapsed ? (
             <img src="/logomark-blue.png" alt="Prime Developers" className="h-8 w-8 object-contain shrink-0" />
           ) : (
