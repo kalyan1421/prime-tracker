@@ -81,7 +81,15 @@ jobs:
 
   # ── Deploys NestJS API to EC2. Arms when DEPLOY_ENABLED=true is set. ──────
   # Required GitHub secrets: EC2_HOST, EC2_SSH_KEY, GH_DEPLOY_TOKEN
-  deploy-api:
+  # Deploys BOTH halves, because both live on the same box: pm2 runs the API on :3001 and
+  # nginx serves the built SPA from /var/www/prime-web, proxying /api/ to it. The S3 app
+  # bucket exists but is empty and there is no CloudFront distribution, so the old
+  # "sync to S3" web job deployed into a void — the live site never changed. It is gone;
+  # restore it only alongside enable_dns=true and a real distribution.
+  #
+  # Required secrets: EC2_HOST, EC2_SSH_KEY, GH_DEPLOY_TOKEN. No AWS credentials are
+  # needed — the instance role reads its own config from SSM.
+  deploy:
     needs: ci
     if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
@@ -101,6 +109,10 @@ jobs:
           script: |
             set -euo pipefail
             REPO_DIR=/home/ubuntu/prime-tracker
+
+            # A deploy that ran as root once leaves the tree root-owned, and every later
+            # run then fails on `git fetch` writing its reflog. Idempotent, and cheap.
+            [ -d "$REPO_DIR" ] && sudo chown -R ubuntu:ubuntu "$REPO_DIR" || true
             REPO_URL="https://x-access-token:${GH_DEPLOY_TOKEN}@github.com/kalyan1421/prime-tracker.git"
 
             # ── 1. Clone (first deploy) or reset to latest main ───────────────
@@ -117,6 +129,10 @@ jobs:
             # ── 2. Install dependencies + build ───────────────────────────────
             pnpm install --frozen-lockfile
             pnpm --filter @prime-tracker/api run build
+            # VITE_API_BASE_URL is intentionally empty in apps/web/.env.production: the
+            # client resolves to a same-origin /api, which nginx proxies to :3001. Setting
+            # it to an absolute URL here would break that and require CORS.
+            pnpm --filter @prime-tracker/web run build
 
             # ── 3. Write apps/api/.env from SSM (instance role has ssm:GetParameter*) ─
             # Use GetParameter per name — GetParametersByPath requires the parent-path ARN
@@ -150,7 +166,14 @@ jobs:
               pm2 save
             fi
 
-            # ── 6. Health check — fail deploy if API doesn't come up ──────────
+            # ── 6. Publish the SPA nginx serves ───────────────────────────────
+            # Copied over the top rather than --delete'd: Vite fingerprints asset
+            # filenames, so stale files are inert, and a half-finished delete would take
+            # the site down. index.html is overwritten, which is what actually cuts over.
+            sudo cp -a apps/web/dist/. /var/www/prime-web/
+            sudo chown -R www-data:www-data /var/www/prime-web
+
+            # ── 7. Health check — fail deploy if API doesn't come up ──────────
             for i in $(seq 1 6); do
               sleep 5
               if curl -sf http://localhost:3001/api/health >/dev/null 2>&1; then
@@ -158,41 +181,3 @@ jobs:
               fi
               [ "$i" -eq 6 ] && { echo "ERROR: API did not become healthy in 30 s"; pm2 logs prime-api --lines 30; exit 1; }
             done
-
-  # ── Builds React SPA, syncs to S3, optionally invalidates CloudFront. ─────
-  # Required GitHub secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-  #   AWS_REGION, S3_APP_BUCKET
-  # Optional: CF_DIST_ID (leave unset in Phase 1 — no CloudFront until enable_dns=true)
-  # Optional repo var: VITE_API_BASE_URL (overrides .env.production value)
-  deploy-web:
-    needs: ci
-    if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-        with: { version: 10 }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Build web
-        run: pnpm --filter @prime-tracker/web run build
-        env:
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      - name: Sync to S3
-        run: aws s3 sync apps/web/dist/ s3://${{ secrets.S3_APP_BUCKET }}/ --delete
-      - name: Invalidate CloudFront cache
-        # Only runs after enable_dns=true + Phase 2 infra is applied.
-        # Set CF_DIST_ID secret to the app distribution ID to enable.
-        if: ${{ env.CF_DIST_ID != '' }}
-        env:
-          CF_DIST_ID: ${{ secrets.CF_DIST_ID }}
-        run: aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" --paths "/*"
