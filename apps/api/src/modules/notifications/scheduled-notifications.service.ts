@@ -95,7 +95,51 @@ export class ScheduledNotificationsService {
       this.checkOverdueRent(),
       this.checkHoldovers(),
       this.checkExpiringDocuments(),
+      this.checkUpdateBoardDueSoon(),
     ]);
+  }
+
+  /**
+   * Update Board Phase 2 — an open post's due date is within the horizon, or has passed.
+   * One pass covers both, same reasoning as checkExpiringDocuments: the query has an
+   * UPPER bound only, so an already-overdue post comes back in the same read as one
+   * approaching its date.
+   *
+   * DONE/CANCELLED posts are excluded — a closed item's due date is no longer a live
+   * condition. Recipients are the post's own assignees plus its creator (deduplicated),
+   * not a role/project lookup — this board has no project-membership routing.
+   */
+  private async checkUpdateBoardDueSoon() {
+    const now = new Date();
+    const horizon = new Date(now);
+    horizon.setDate(horizon.getDate() + 3);
+
+    const posts = await this.prisma.updateBoardPost.findMany({
+      where: {
+        deletedAt: null,
+        dueDate: { not: null, lte: horizon },
+        status: { notIn: ['DONE', 'CANCELLED'] },
+      },
+      include: { assignments: { select: { userId: true } } },
+    });
+
+    let notified = 0;
+    for (const post of posts) {
+      const userIds = [...new Set([post.createdById, ...post.assignments.map((a) => a.userId)])];
+      try {
+        await this.notifications.notifyUpdateBoardDueSoon({
+          postId: post.id,
+          title: post.title,
+          userIds,
+          dueDate: post.dueDate!,
+          isOverdue: post.dueDate! < now,
+        });
+        notified++;
+      } catch (err) {
+        this.logger.warn(`Update Board due-soon notify failed for ${post.id}: ${err}`);
+      }
+    }
+    if (notified) this.logger.log(`Update Board: ${notified} post(s) due soon or overdue`);
   }
 
   /**

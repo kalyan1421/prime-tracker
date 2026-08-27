@@ -130,7 +130,7 @@ export class CreateLeaseDto {
   brokerId?: string;
 
   /** Per-lease override of Broker.commissionRate. */
-  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100)
   brokerCommissionPct?: number;
 
   /**
@@ -258,7 +258,7 @@ export class UpdateLeaseDto {
   brokerId?: string;
 
   /** Per-lease override of Broker.commissionRate. */
-  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0)
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100)
   brokerCommissionPct?: number;
 
   /**

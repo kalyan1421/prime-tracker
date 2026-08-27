@@ -133,12 +133,12 @@ export default function BrokersPage() {
                       <td className="px-4 py-3 text-right">{r.closedSales ?? 0}</td>
                       <td className="px-4 py-3 text-right">{fmt(r.closedValue ?? 0)}</td>
                       <td className="px-4 py-3 text-right font-medium text-indigo-700">{fmt(r.commissionEarned ?? 0)}</td>
-                      <td className="px-4 py-3 text-right">{fmtPct(r.conversionPct ?? 0)}</td>
+                      <td className="px-4 py-3 text-right">{r.conversionPct != null ? fmtPct(r.conversionPct) : '—'}</td>
                       <td className="px-4 py-3 text-right">
                         <PermissionGate permission="broker:edit">
                           <div className="flex gap-1 justify-end">
                             <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(b)}><FiEdit2 className="text-xs" /></Button>
-                            <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => del.mutate(b.id)}><FiTrash2 className="text-xs" /></Button>
+                            <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => { if (confirm(`Delete broker "${b.name}"?`)) del.mutate(b.id); }}><FiTrash2 className="text-xs" /></Button>
                           </div>
                         </PermissionGate>
                       </td>
@@ -160,8 +160,8 @@ export default function BrokersPage() {
               <Input size="sm" label="Company" value={form.company} onChange={set('company')} />
               <Input size="sm" label="Email" value={form.email} onChange={set('email')} />
               <Input size="sm" label="Phone" value={form.phone} onChange={set('phone')} />
-              <Input size="sm" type="number" label="Commission rate (%)" value={form.commissionRate} onChange={set('commissionRate')} description="Default % of sale price" />
-              <Input size="sm" type="number" label="Flat fee ($)" value={form.commissionFlat} onChange={set('commissionFlat')} description="Used when no % is set" />
+              <Input size="sm" type="number" min={0} max={100} label="Commission rate (%)" value={form.commissionRate} onChange={set('commissionRate')} description="Default % of sale price" />
+              <Input size="sm" type="number" min={0} label="Flat fee ($)" value={form.commissionFlat} onChange={set('commissionFlat')} description="Used when no % is set" />
             </div>
             <Textarea size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
           </ModalBody>

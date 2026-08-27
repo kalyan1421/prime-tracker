@@ -9,6 +9,10 @@ const mockPrisma: any = {
 };
 const mockProjectPhase = { recompute: jest.fn() };
 const mockStorage = { signedUrl: jest.fn() };
+// Most blast-radius tests are about the rollup MATH (units-under-a-building math),
+// not about permission redaction — pass full visibility so their assertions keep
+// meaning what they said. The redaction behavior itself gets its own describe block.
+const FULL_VISIBILITY = ['lease:view', 'sales:view', 'financial:view'];
 
 function makeService() {
   return new BuildingsService(mockPrisma as any, mockProjectPhase as any, mockStorage as any);
@@ -59,7 +63,7 @@ describe('BuildingsService blast radius', () => {
     ]);
     stubUnits([{ leases: 1, sales: 1 }, { leases: 2, loans: 1 }]);
 
-    const [b]: any = await service.findByProject('p1');
+    const [b]: any = await service.findByProject('p1', FULL_VISIBILITY);
     expect(b.blastRadius).toEqual({ units: 2, leases: 3, sales: 1, loans: 1 });
   });
 
@@ -75,7 +79,7 @@ describe('BuildingsService blast radius', () => {
     ]);
     stubUnits([{ leases: 4, sales: 3 }]);
 
-    const [b]: any = await service.findByProject('p1');
+    const [b]: any = await service.findByProject('p1', FULL_VISIBILITY);
     expect(b.blastRadius).toEqual({ units: 1, leases: 5, sales: 3, loans: 2 });
   });
 
@@ -87,7 +91,7 @@ describe('BuildingsService blast radius', () => {
     ]);
     stubUnits([{ leases: 1 }]); // 3 unit rows exist; only 1 is live
 
-    const [b]: any = await service.findByProject('p1');
+    const [b]: any = await service.findByProject('p1', FULL_VISIBILITY);
     expect(mockPrisma.unit.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { buildingId: { in: ['b1'] }, deletedAt: null } }),
     );
@@ -122,7 +126,7 @@ describe('BuildingsService blast radius', () => {
       { buildingId: 'b3', _count: { leases: 0, sales: 2, loans: 0 } },
     ]);
 
-    const rows: any = await service.findByProject('p1');
+    const rows: any = await service.findByProject('p1', FULL_VISIBILITY);
     expect(mockPrisma.unit.findMany).toHaveBeenCalledTimes(1);
     expect(mockPrisma.unit.findMany.mock.calls[0][0].where.buildingId).toEqual({ in: ['b1', 'b2', 'b3'] });
     expect(rows.map((r: any) => r.blastRadius)).toEqual([
@@ -136,8 +140,35 @@ describe('BuildingsService blast radius', () => {
     stubBuilding(1, { sales: 1 });
     stubUnits([{ loans: 2 }]);
 
-    const b: any = await service.findById('b1');
+    const b: any = await service.findById('b1', FULL_VISIBILITY);
     expect(b.blastRadius).toEqual({ units: 1, leases: 0, sales: 1, loans: 2 });
+  });
+
+  // The gap this closes: a CONSTRUCTION viewer holds building:view without lease:view/
+  // sales:view/loan:view — the role's own permission list comments it as "fully blind
+  // to financials" — but used to get told exact lease/sale/loan COUNTS on every
+  // building anyway, in both _count and blastRadius. No dollar amounts or names are
+  // in a count, but the counts themselves are still the same kind of financial
+  // signal loan:view/etc. exist to gate.
+  it('redacts leases/sales/loans (both _count and blastRadius) for a viewer missing the matching permission', async () => {
+    mockPrisma.building.findMany.mockResolvedValue([
+      { id: 'b1', name: 'Building A', coverPhotoPath: null, _count: directCounts({ units: 2, leases: 1, sales: 1, loans: 1 }) },
+    ]);
+    stubUnits([{ leases: 1, sales: 1, loans: 1 }]);
+
+    const [b]: any = await service.findByProject('p1', []); // no permissions at all
+    expect(b._count).toEqual(expect.objectContaining({ units: 2, leases: 0, sales: 0, loans: 0 }));
+    expect(b.blastRadius).toEqual({ units: 1, leases: 0, sales: 0, loans: 0 });
+  });
+
+  it('shows only the category a viewer actually holds the permission for', async () => {
+    mockPrisma.building.findMany.mockResolvedValue([
+      { id: 'b1', name: 'Building A', coverPhotoPath: null, _count: directCounts({ units: 1, leases: 1, sales: 1, loans: 1 }) },
+    ]);
+    stubUnits([{ leases: 1, sales: 1, loans: 1 }]);
+
+    const [b]: any = await service.findByProject('p1', ['lease:view']);
+    expect(b.blastRadius).toEqual({ units: 1, leases: 2, sales: 0, loans: 0 });
   });
 });
 

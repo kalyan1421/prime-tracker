@@ -389,7 +389,8 @@ describe('ReportsService — portfolio summary keeps TI isolated', () => {
     expect(res.projectComparison[0].interiorActuals).toBe(80_000);
     // Variance is against a budget that never contained TI, so TI must be out of it.
     expect(res.projectComparison[0].variance).toBe(200_000);
-    // ROI still spends every dollar: (0 revenue - 380,000) / 380,000.
+    // ROI is against totalInvestment (the $500k budget), not totalActuals — with 0
+    // revenue that's still -100% regardless of which positive denominator is used.
     expect(res.kpis.overallROI).toBe(-100);
   });
 });

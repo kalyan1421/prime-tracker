@@ -5,6 +5,10 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import {
+  CreateInvestorDto, UpdateInvestorDto, AddEquityPositionDto,
+  CreateCapitalCallDto, CreateDistributionDto,
+} from './dto/create-investor.dto';
 
 @ApiTags('Investors')
 @ApiBearerAuth()
@@ -45,24 +49,24 @@ export class InvestorsController {
   @Post()
   @RequirePermissions('investor:manage')
   @ApiOperation({ summary: 'Create investor' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateInvestorDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('investor:manage')
   @ApiOperation({ summary: 'Update investor' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateInvestorDto) { return this.service.update(id, body); }
 
   @Post(':id/positions')
   @RequirePermissions('investor:manage')
   @ApiOperation({ summary: 'Add equity position' })
-  addPosition(@Param('id') id: string, @Body() body: any) {
+  addPosition(@Param('id') id: string, @Body() body: AddEquityPositionDto) {
     return this.service.addPosition(id, body);
   }
 
   @Post('capital-calls')
   @RequirePermissions('investor:manage')
   @ApiOperation({ summary: 'Create capital call' })
-  createCapitalCall(@Body() body: any) { return this.service.createCapitalCall(body); }
+  createCapitalCall(@Body() body: CreateCapitalCallDto) { return this.service.createCapitalCall(body); }
 
   @Patch('capital-calls/:id/paid')
   @RequirePermissions('investor:manage')
@@ -72,5 +76,5 @@ export class InvestorsController {
   @Post('distributions')
   @RequirePermissions('investor:manage')
   @ApiOperation({ summary: 'Record distribution' })
-  createDistribution(@Body() body: any) { return this.service.createDistribution(body); }
+  createDistribution(@Body() body: CreateDistributionDto) { return this.service.createDistribution(body); }
 }

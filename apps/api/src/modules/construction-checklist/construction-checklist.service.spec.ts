@@ -1,9 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ConstructionChecklistService } from './construction-checklist.service';
 
-const mockPrisma = {
+const mockPrisma: any = {
   building: { findUnique: jest.fn() },
-  unit: { findUnique: jest.fn() },
+  unit: { findUnique: jest.fn(), update: jest.fn() },
   constructionStageTemplateItem: {
     findMany: jest.fn(),
     findFirst: jest.fn(),
@@ -11,6 +11,8 @@ const mockPrisma = {
     findUnique: jest.fn(),
     delete: jest.fn(),
   },
+  checklistTemplate: { findUnique: jest.fn() },
+  unitConstructionStagePhoto: { create: jest.fn(), findUnique: jest.fn(), delete: jest.fn() },
   unitConstructionStage: {
     findMany: jest.fn(),
     findFirst: jest.fn(),
@@ -21,10 +23,22 @@ const mockPrisma = {
     update: jest.fn(),
     delete: jest.fn(),
   },
+  $transaction: jest.fn((arg: any) => (typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg))),
+};
+
+// applyTemplate now resolves a versioned work-type template FIRST. Default: none exists,
+// so existing suites keep exercising the building-override path they were written for.
+
+// Stages now come back with signed photo URLs.
+const mockStorage: any = { signedUrl: jest.fn().mockResolvedValue('https://signed') };
+
+const mockAccess = {
+  isScoped: jest.fn(),
+  accessibleProjectIds: jest.fn(),
 };
 
 function makeService() {
-  return new ConstructionChecklistService(mockPrisma as any);
+  return new ConstructionChecklistService(mockPrisma as any, mockAccess as any, mockStorage);
 }
 
 beforeEach(() => {
@@ -115,8 +129,8 @@ describe('ConstructionChecklistService.applyTemplate', () => {
     ]);
     mockPrisma.unitConstructionStage.createMany.mockResolvedValue({ count: 2 });
     mockPrisma.unitConstructionStage.findMany.mockResolvedValue([
-      { id: 's1', label: '01 - Contracts' },
-      { id: 's2', label: '02 - Timeline Calendar' },
+      { id: 's1', label: '01 - Contracts', photos: [] },
+      { id: 's2', label: '02 - Timeline Calendar', photos: [] },
     ]);
 
     const service = makeService();
@@ -143,7 +157,7 @@ describe('ConstructionChecklistService — per-unit ad-hoc stages', () => {
     mockPrisma.unitConstructionStage.create.mockImplementation(({ data }: any) => data);
 
     const service = makeService();
-    const created = await service.addUnitStage('u1', 'Extra: HOA walkthrough', 'u1');
+    const created = await service.addUnitStage('u1', { label: 'Extra: HOA walkthrough' }, 'u1');
     expect(created.sortOrder).toBe(3);
     expect(created.label).toBe('Extra: HOA walkthrough');
   });
@@ -151,7 +165,7 @@ describe('ConstructionChecklistService — per-unit ad-hoc stages', () => {
   it('404s adding a stage to a unit that does not exist', async () => {
     mockPrisma.unit.findUnique.mockResolvedValue(null);
     const service = makeService();
-    await expect(service.addUnitStage('missing', 'x')).rejects.toThrow(NotFoundException);
+    await expect(service.addUnitStage('missing', { label: 'x' })).rejects.toThrow(NotFoundException);
   });
 });
 
@@ -256,4 +270,138 @@ describe('ConstructionChecklistService.getProjectRollup', () => {
     const service = makeService();
     expect(await service.getProjectRollup('p1')).toEqual([]);
   });
+
+  it('with no projectId, scopes a project-scoped role to their accessible projects', async () => {
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockAccess.isScoped.mockReturnValue(true);
+    mockAccess.accessibleProjectIds.mockResolvedValue(['p1', 'p2']);
+    const service = makeService();
+
+    await service.getProjectRollup(undefined, 'user1', 'CONSTRUCTION');
+
+    expect(mockAccess.accessibleProjectIds).toHaveBeenCalledWith('user1');
+    expect(mockPrisma.unitConstructionStage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { unit: { building: { projectId: { in: ['p1', 'p2'] } }, deletedAt: null } },
+      }),
+    );
+  });
+
+  it('with no projectId, applies no project filter for an unscoped role', async () => {
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockAccess.isScoped.mockReturnValue(false);
+    const service = makeService();
+
+    await service.getProjectRollup(undefined, 'user1', 'FOUNDER');
+
+    expect(mockAccess.accessibleProjectIds).not.toHaveBeenCalled();
+    expect(mockPrisma.unitConstructionStage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { unit: { building: {}, deletedAt: null } },
+      }),
+    );
+  });
 });
+
+describe('ConstructionChecklistService — stage photos', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.unitConstructionStage.findUnique.mockResolvedValue({ id: 's1', unitId: 'u1' });
+  });
+
+  it('attaches a photo to a stage', async () => {
+    await makeService().addStagePhoto('s1', 'p1/daily-logs/x.jpg', 'Rough electrical', 'user1');
+    expect(mockPrisma.unitConstructionStagePhoto.create).toHaveBeenCalledWith({
+      data: { stageId: 's1', storagePath: 'p1/daily-logs/x.jpg', caption: 'Rough electrical', uploadedById: 'user1' },
+    });
+  });
+
+  it('404s on an unknown stage', async () => {
+    mockPrisma.unitConstructionStage.findUnique.mockResolvedValue(null);
+    await expect(makeService().addStagePhoto('ghost', 'a/b.jpg')).rejects.toThrow(NotFoundException);
+  });
+
+  it.each([
+    ['an absolute path', '/etc/passwd'],
+    ['a traversal', 'a/../../secret.jpg'],
+    ['an external URL', 'https://evil.test/x.jpg'],
+    ['an empty path', ''],
+  ])('refuses %s', async (_label, path) => {
+    // storagePath must be a relative bucket key from our own presign — same hardening as
+    // DailyLogsService.addPhoto.
+    await expect(makeService().addStagePhoto('s1', path)).rejects.toThrow(BadRequestException);
+    expect(mockPrisma.unitConstructionStagePhoto.create).not.toHaveBeenCalled();
+  });
+
+  it('signs photo URLs when reading a unit\'s stages', async () => {
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([
+      { id: 's1', label: '01 - Contracts', photos: [{ id: 'ph1', storagePath: 'a/b.jpg' }] },
+    ]);
+    const out = await makeService().getUnitStages('u1');
+    expect(out[0].photos[0].url).toBe('https://signed');
+  });
+
+  it('survives a signing failure rather than blanking the whole checklist', async () => {
+    mockStorage.signedUrl.mockRejectedValueOnce(new Error('S3 down'));
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([
+      { id: 's1', label: '01 - Contracts', photos: [{ id: 'ph1', storagePath: 'a/b.jpg' }] },
+    ]);
+    const out = await makeService().getUnitStages('u1');
+    expect(out[0].photos[0].url).toBe('');
+    expect(out[0].label).toBe('01 - Contracts');
+  });
+
+  it('removes a photo', async () => {
+    mockPrisma.unitConstructionStagePhoto.findUnique.mockResolvedValue({ id: 'ph1' });
+    await makeService().removeStagePhoto('ph1');
+    expect(mockPrisma.unitConstructionStagePhoto.delete).toHaveBeenCalledWith({ where: { id: 'ph1' } });
+  });
+
+  it('404s removing a photo that is not there', async () => {
+    mockPrisma.unitConstructionStagePhoto.findUnique.mockResolvedValue(null);
+    await expect(makeService().removeStagePhoto('ghost')).rejects.toThrow(NotFoundException);
+  });
+});
+
+describe('ConstructionChecklistService.addUnitStage — full field set', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1', deletedAt: null });
+    mockPrisma.unitConstructionStage.findFirst.mockResolvedValue({ sortOrder: 4 });
+  });
+
+  it('accepts owner, status, inspection and dates at creation', async () => {
+    // A stage used to be created bare and then edited six more times.
+    await makeService().addUnitStage('u1', {
+      label: '19 - Plumbing Final', ownerId: 'user1', status: 'IN_PROGRESS',
+      inspectionStatus: 'SCHEDULED', inspectionDate: '2026-09-01',
+      startsOn: '2026-09-01', endsOn: '2026-09-03', notes: 'Booked',
+    }, 'creator');
+    const data = mockPrisma.unitConstructionStage.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      label: '19 - Plumbing Final', ownerId: 'user1', status: 'IN_PROGRESS',
+      inspectionStatus: 'SCHEDULED', notes: 'Booked', createdById: 'creator',
+    });
+    expect(data.inspectionDate).toBeInstanceOf(Date);
+    expect(data.startsOn).toBeInstanceOf(Date);
+  });
+
+  it('appends rather than inserting', async () => {
+    // sortOrder IS the step order; renumbering to slot something mid-list would rewrite
+    // every row on the unit.
+    await makeService().addUnitStage('u1', { label: 'x' });
+    expect(mockPrisma.unitConstructionStage.create.mock.calls[0][0].data.sortOrder).toBe(5);
+  });
+
+  it('refuses a blank label', async () => {
+    await expect(makeService().addUnitStage('u1', { label: '   ' })).rejects.toThrow(BadRequestException);
+  });
+
+  it('leaves untouched fields alone rather than writing nulls over the defaults', async () => {
+    await makeService().addUnitStage('u1', { label: 'x' });
+    const data = mockPrisma.unitConstructionStage.create.mock.calls[0][0].data;
+    expect(data).not.toHaveProperty('status');
+    expect(data).not.toHaveProperty('inspectionDate');
+  });
+});
+

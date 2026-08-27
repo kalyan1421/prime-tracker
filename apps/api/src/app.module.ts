@@ -36,7 +36,9 @@ import { ContractsModule } from './modules/contracts/contracts.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { InvestorsModule } from './modules/investors/investors.module';
 import { TasksModule } from './modules/tasks/tasks.module';
+import { UpdateBoardModule } from './modules/update-board/update-board.module';
 import { ConstructionChecklistModule } from './modules/construction-checklist/construction-checklist.module';
+import { SiteTrackerModule } from './modules/site-tracker/site-tracker.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ProjectHealthModule } from './modules/project-health/project-health.module';
 import { DrawsModule } from './modules/draws/draws.module';
@@ -90,7 +92,9 @@ import { HistoricalDeletionsModule } from './modules/historical-deletions/histor
     DocumentsModule,
     InvestorsModule,
     TasksModule,
+    UpdateBoardModule,
     ConstructionChecklistModule,
+    SiteTrackerModule,
     OrganizationsModule,
     ProjectHealthModule,
     DrawsModule,

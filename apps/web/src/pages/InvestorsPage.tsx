@@ -20,11 +20,20 @@ export default function InvestorsPage() {
   const createInvestor = useCreateInvestor();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>(EMPTY);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const set = (f: string) => (e: any) => setForm((p) => ({ ...p, [f]: e.target.value }));
 
   const s = summary as any;
 
+  const validateForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!form.name.trim()) errs.name = 'Name is required';
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSave = async () => {
+    if (!validateForm()) return;
     try {
       const inv = await createInvestor.mutateAsync(form);
       addToast({ title: 'Investor created', color: 'success' });
@@ -46,7 +55,7 @@ export default function InvestorsPage() {
           <h1 className="text-xl sm:text-2xl font-bold">Investors</h1>
           <p className="text-sm text-gray-500 mt-0.5">Equity positions, capital calls, and distributions</p>
         </div>
-        <Button color="primary" startContent={<FiPlus />} onPress={onOpen} className="self-start sm:self-auto">Add Investor</Button>
+        <Button color="primary" startContent={<FiPlus />} onPress={() => { setFormErrors({}); onOpen(); }} className="self-start sm:self-auto">Add Investor</Button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -98,7 +107,7 @@ export default function InvestorsPage() {
         <ModalContent>
           <ModalHeader>Add Investor</ModalHeader>
           <ModalBody className="space-y-3">
-            <Input label="Name" value={form.name} onChange={set('name')} isRequired />
+            <Input label="Name" value={form.name} onChange={set('name')} isRequired isInvalid={!!formErrors.name} errorMessage={formErrors.name} />
             <Input label="Entity / LLC Name" value={form.entityName} onChange={set('entityName')} />
             <Input label="Email" type="email" value={form.email} onChange={set('email')} />
             <Input label="Phone" value={form.phone} onChange={set('phone')} />

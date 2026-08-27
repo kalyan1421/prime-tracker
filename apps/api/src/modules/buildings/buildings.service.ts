@@ -90,20 +90,35 @@ export class BuildingsService {
    */
   private withBlastRadius<
     T extends { id: string; _count: { leases: number; sales: number; loans: number } },
-  >(b: T, nested: Map<string, Radius>) {
+  >(b: T, nested: Map<string, Radius>, viewerPermissions: string[] = []) {
     const n = nested.get(b.id) ?? EMPTY_RADIUS();
+    // This is only counts — no tenant/buyer names, no dollar amounts — but a CONSTRUCTION
+    // or SALES viewer who holds building:view without lease:view/sales:view/loan:view is
+    // still told "this building has 1 loan", which the role's own comment elsewhere calls
+    // out as something they should be "fully blind" to. Zero out what the viewer can't
+    // see through the matching real endpoint; `units` is unaffected (unit:view is a much
+    // more widely-held permission and isn't the concern here).
+    const canViewLease = viewerPermissions.includes('lease:view');
+    const canViewSales = viewerPermissions.includes('sales:view');
+    const canViewLoans = viewerPermissions.includes('financial:view') || viewerPermissions.includes('loan:view');
     return {
       ...b,
+      _count: {
+        ...b._count,
+        leases: canViewLease ? b._count.leases : 0,
+        sales: canViewSales ? b._count.sales : 0,
+        loans: canViewLoans ? b._count.loans : 0,
+      },
       blastRadius: {
         units: n.units,
-        leases: n.leases + b._count.leases,
-        sales: n.sales + b._count.sales,
-        loans: n.loans + b._count.loans,
+        leases: canViewLease ? n.leases + b._count.leases : 0,
+        sales: canViewSales ? n.sales + b._count.sales : 0,
+        loans: canViewLoans ? n.loans + b._count.loans : 0,
       },
     };
   }
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: string, viewerPermissions: string[] = []) {
     if (!projectId) {
       throw new BadRequestException('projectId query parameter is required');
     }
@@ -133,10 +148,10 @@ export class BuildingsService {
     });
     // One extra query for the whole list — see nestedCounts().
     const nested = await this.nestedCounts(buildings.map((b) => b.id));
-    return Promise.all(buildings.map((b) => this.withCoverUrl(this.withBlastRadius(b, nested))));
+    return Promise.all(buildings.map((b) => this.withCoverUrl(this.withBlastRadius(b, nested, viewerPermissions))));
   }
 
-  async findById(id: string) {
+  async findById(id: string, viewerPermissions: string[] = []) {
     const building = await this.prisma.building.findUnique({
       where: { id },
       include: {
@@ -154,7 +169,7 @@ export class BuildingsService {
     });
     if (!building) throw new NotFoundException('Building not found');
     const nested = await this.nestedCounts([building.id]);
-    return this.withCoverUrl(this.withBlastRadius(building, nested));
+    return this.withCoverUrl(this.withBlastRadius(building, nested, viewerPermissions));
   }
 
   async create(input: {
@@ -233,7 +248,11 @@ export class BuildingsService {
   }
 
   async delete(id: string, force = false) {
-    const building = await this.findById(id);
+    // The confirmation message must name the FULL blast radius regardless of the
+    // deleting user's own lease:view/sales:view/loan:view — they're about to destroy
+    // those records, not just read them, and need to know the true consequence of an
+    // irreversible action even if their day-to-day role can't otherwise see that data.
+    const building = await this.findById(id, ['lease:view', 'sales:view', 'financial:view', 'loan:view']);
     const unitCount = building._count.units;
 
     if (unitCount > 0 && !force) {

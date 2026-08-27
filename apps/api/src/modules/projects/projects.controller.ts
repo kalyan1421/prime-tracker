@@ -47,11 +47,19 @@ export class ProjectsController {
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
     @CurrentUser('roles') roles: string[],
+    @CurrentUser('permissions') permissions: string[],
   ) {
     const canViewArchived = role === 'SUPER_ADMIN' || role === 'FOUNDER';
     return this.projectsService.findAll(
       { ...query, archived: canViewArchived ? query.archived : undefined },
-      { userId, role, roles },
+      {
+        userId,
+        role,
+        roles,
+        canViewFinancials: permissions?.includes('budget:view') ?? false,
+        canViewSales: permissions?.includes('sales:view') ?? false,
+        canViewLeads: permissions?.includes('lead:view') ?? false,
+      },
     );
   }
 
@@ -76,13 +84,14 @@ export class ProjectsController {
 
   @Get(':id/activity')
   @RequirePermissions('project:view')
-  @ApiOperation({ summary: 'Project activity log (FOUNDER / SUPER_ADMIN only — enforced on frontend)' })
+  @ApiOperation({ summary: 'Project activity log — merged feed, each category filtered to what the caller\'s own permissions allow' })
   getActivity(
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.projectsService.getActivity(id, Number(page) || 1, Number(limit) || 60);
+    return this.projectsService.getActivity(id, Number(page) || 1, Number(limit) || 60, permissions ?? []);
   }
 
   @Get(':id')
@@ -93,8 +102,15 @@ export class ProjectsController {
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
     @CurrentUser('roles') roles: string[],
+    @CurrentUser('permissions') permissions: string[],
   ) {
-    return this.projectsService.findById(id, { userId, role, roles });
+    return this.projectsService.findById(id, {
+      userId,
+      role,
+      roles,
+      canViewFinancials: permissions?.includes('budget:view') ?? false,
+      canViewSales: permissions?.includes('sales:view') ?? false,
+    });
   }
 
   @Post()

@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardHeader, CardBody, Progress, Chip, Button, Select, SelectItem } from '@heroui/react';
+import {
+  Card, CardHeader, CardBody, Progress, Chip, Button, Select, SelectItem, addToast,
+} from '@heroui/react';
 import {
   PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { FiTrendingUp, FiArrowRight } from 'react-icons/fi';
-import { useConstructionDashboard, useUnits, useConstructionRollup } from '../hooks/useApi';
-import { fmt, fmtDate } from '../utils/fmt';
+import { FiTrendingUp, FiArrowRight, FiChevronDown, FiChevronRight, FiEdit2 } from 'react-icons/fi';
+import {
+  useConstructionDashboard, useUnits, useConstructionRollup, useCustomOptions, useUpdateConstructionStage,
+} from '../hooks/useApi';
+import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
+import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
+import { UnitConstructionChecklist } from '../components/UnitConstructionChecklist';
 import { useAuthStore } from '../store/authStore';
+
+interface OptionLike { value: string; label: string; color?: string | null }
 
 const PHASE_COLORS: Record<string, string> = {
   PRE_DEVELOPMENT: '#805AD5', PERMITTING: '#DD6B20', CONSTRUCTION: '#3182CE',
@@ -99,20 +107,67 @@ function OverdueMilestonesCard({ milestones, navigate }: { milestones: any[]; na
   );
 }
 
+/** One unit's inline "advance to this status" control — a compact Select that PATCHes
+ *  its next incomplete stage directly, no navigation. Omitted entirely once the
+ *  checklist is complete (nothing left to advance). */
+function InlineStageAdvance({
+  unitId, nextStage, statusOptions, onAdvance, isPending,
+}: {
+  unitId: string;
+  nextStage: { id: string; label: string; status: string };
+  statusOptions: OptionLike[];
+  onAdvance: (unitId: string, stageId: string, status: string) => void;
+  isPending: boolean;
+}) {
+  return (
+    <Select
+      aria-label={`Update status for ${nextStage.label}`}
+      size="sm"
+      className="w-36 shrink-0"
+      selectedKeys={[nextStage.status]}
+      isLoading={isPending}
+      onSelectionChange={(keys) => {
+        const next = Array.from(keys)[0] as string;
+        if (next && next !== nextStage.status) onAdvance(unitId, nextStage.id, next);
+      }}
+    >
+      {statusOptions.map((o) => (
+        <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
+      ))}
+    </Select>
+  );
+}
+
 /**
- * "Update Unit Progress" — the fast path from dashboard to a specific unit's checklist.
- * Project → unit → deep-link into Unit Detail's Construction Checklist section, instead of
- * Projects → project → Units tab → unit detail. See CONSTRUCTION_DASHBOARD_AND_VISUAL_ROLLUP_SPEC.md.
+ * "Update Unit Progress" — every unit with a checklist across every project the caller can
+ * see, grouped by project, with the next stage updatable right here. Defaults to all
+ * projects at once; the Project filter narrows to one (and, only then, also surfaces units
+ * that haven't started a checklist yet).
+ *
+ * Each row expands in place into the full `UnitConstructionChecklist` — the same
+ * add-stage/apply-template/edit-any-field component the unit page uses — so a
+ * checklist can be started, built out, and fully edited without ever leaving the
+ * dashboard. The inline status Select stays as the one-click fast path for the
+ * common case (just advance the next stage); "Manage" is for anything more.
  */
 function UpdateUnitProgressCard({
-  projects, navigate,
+  projects, navigate, canEditChecklist,
 }: {
   projects: { id: string; name: string }[];
   navigate: (path: string) => void;
+  canEditChecklist: boolean;
 }) {
   const [projectId, setProjectId] = useState('');
-  const unitsQ = useUnits(projectId);
+  const [expandedUnitId, setExpandedUnitId] = useState<string | null>(null);
   const rollupQ = useConstructionRollup(projectId || undefined);
+  const unitsQ = useUnits(projectId || '');
+  const { data: statusOptionsData } = useCustomOptions('construction_stage_status');
+  const statusOptions = useMemo<OptionLike[]>(
+    () => (Array.isArray(statusOptionsData) ? statusOptionsData : []),
+    [statusOptionsData],
+  );
+  const updateStage = useUpdateConstructionStage();
+  const { isExpanded, toggle } = useCollapsibleGroups();
 
   const rollupByUnit = useMemo(() => {
     const map = new Map<string, any>();
@@ -120,7 +175,40 @@ function UpdateUnitProgressCard({
     return map;
   }, [rollupQ.data]);
 
-  const units: any[] = Array.isArray(unitsQ.data) ? unitsQ.data : [];
+  const handleAdvance = async (unitId: string, stageId: string, status: string) => {
+    try {
+      await updateStage.mutateAsync({ stageId, unitId, data: { status } });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to update the stage'), color: 'danger' });
+    }
+  };
+
+  const rows: any[] = Array.isArray(rollupQ.data) ? rollupQ.data : [];
+  const byProject = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; units: any[] }>();
+    for (const r of rows) {
+      const p = r.unit.building?.project;
+      const key = p?.id ?? projectId ?? 'unassigned';
+      const name = p?.name ?? projects.find((pr) => pr.id === projectId)?.name ?? 'Project';
+      if (!map.has(key)) map.set(key, { id: key, name, units: [] });
+      map.get(key)!.units.push(r);
+    }
+    const list = Array.from(map.values());
+    list.forEach((p) => p.units.sort((a, b) =>
+      (a.unit.unitNumber ?? '').localeCompare(b.unit.unitNumber ?? '', undefined, { numeric: true })));
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return list;
+  }, [rows, projectId, projects]);
+
+  // Only meaningful once a single project is picked — units with no checklist at all
+  // never appear in the rollup, so this is the one place "Start" still makes sense.
+  const notStartedUnits: any[] = useMemo(() => {
+    if (!projectId) return [];
+    const units: any[] = Array.isArray(unitsQ.data) ? unitsQ.data : [];
+    return units.filter((u: any) => !rollupByUnit.has(u.id));
+  }, [projectId, unitsQ.data, rollupByUnit]);
+
+  const isEmpty = byProject.length === 0 && notStartedUnits.length === 0;
 
   return (
     <Card shadow="sm" className="mb-6">
@@ -131,7 +219,7 @@ function UpdateUnitProgressCard({
         <Select
           size="sm"
           label="Project"
-          placeholder="Choose a project"
+          placeholder="All Projects"
           className="max-w-xs mb-4"
           selectedKeys={projectId ? [projectId] : []}
           onSelectionChange={(keys) => setProjectId((Array.from(keys)[0] as string) || '')}
@@ -141,44 +229,133 @@ function UpdateUnitProgressCard({
           ))}
         </Select>
 
-        {!projectId && (
-          <p className="text-sm text-gray-500 py-4 text-center">Pick a project to see its units</p>
+        {rollupQ.isLoading && <LoadingState message="Loading checklists..." />}
+        {!rollupQ.isLoading && isEmpty && (
+          <p className="text-sm text-gray-500 py-4 text-center">No unit checklists yet</p>
         )}
-        {projectId && unitsQ.isLoading && <LoadingState message="Loading units..." />}
-        {projectId && !unitsQ.isLoading && units.length === 0 && (
-          <p className="text-sm text-gray-500 py-4 text-center">No units in this project</p>
-        )}
-        {projectId && units.length > 0 && (
-          <div className="max-h-[360px] overflow-y-auto space-y-1.5 pr-1">
-            {units.map((u: any) => {
-              const r = rollupByUnit.get(u.id);
-              const pct = r && r.totalStages > 0 ? Math.round((r.doneStages / r.totalStages) * 100) : null;
+        {!rollupQ.isLoading && !isEmpty && (
+          <div className="max-h-[420px] overflow-y-auto space-y-3 pr-1">
+            {byProject.map((p) => {
+              const hasIncomplete = p.units.some((r: any) => r.nextStage);
+              const expanded = isExpanded(p.id, hasIncomplete || p.units.length <= 5);
               return (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => navigate(`/projects/${projectId}/units/${u.id}#construction-checklist`)}
-                  className="w-full flex items-center justify-between gap-3 rounded-lg border border-gray-100 px-3 py-2 text-left hover:border-gray-200 hover:bg-gray-50/60 transition-colors"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-gray-800 truncate">
-                      Unit {u.unitNumber}
-                      <span className="text-xs text-gray-500 font-normal"> · {u.building?.name}</span>
+                <div key={p.id}>
+                  {!projectId && (
+                    <button
+                      type="button"
+                      onClick={() => toggle(p.id, expanded)}
+                      className="w-full flex items-center gap-1.5 py-1 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"
+                    >
+                      {expanded ? <FiChevronDown className="shrink-0" /> : <FiChevronRight className="shrink-0" />}
+                      {p.name}
+                      <span className="font-normal text-gray-500 normal-case">· {p.units.length} unit{p.units.length === 1 ? '' : 's'}</span>
+                    </button>
+                  )}
+                  {(projectId || expanded) && (
+                    <div className="space-y-1.5">
+                      {p.units.map((r: any) => {
+                        const pct = r.totalStages > 0 ? Math.round((r.doneStages / r.totalStages) * 100) : 0;
+                        const pending = updateStage.isPending
+                          && updateStage.variables?.stageId === r.nextStage?.id;
+                        const unitExpanded = expandedUnitId === r.unit.id;
+                        return (
+                          <div key={r.unit.id} className="rounded-lg border border-gray-100 overflow-hidden">
+                            <div className="flex items-center justify-between gap-3 px-3 py-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium text-gray-800 truncate">
+                                  Unit {r.unit.unitNumber}
+                                  <span className="text-xs text-gray-500 font-normal"> · {r.unit.building?.name}</span>
+                                </div>
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="w-16 shrink-0">
+                                    <Progress size="sm" value={pct} color={pct === 100 ? 'success' : 'primary'} />
+                                  </div>
+                                  <span className="text-xs text-gray-500 truncate">
+                                    {r.nextStage ? r.nextStage.label : 'Checklist complete'}
+                                  </span>
+                                </div>
+                              </div>
+                              {r.nextStage && (
+                                <InlineStageAdvance
+                                  unitId={r.unit.id}
+                                  nextStage={r.nextStage}
+                                  statusOptions={statusOptions}
+                                  onAdvance={handleAdvance}
+                                  isPending={pending}
+                                />
+                              )}
+                              <Button
+                                size="sm"
+                                variant={unitExpanded ? 'flat' : 'light'}
+                                color={unitExpanded ? 'primary' : 'default'}
+                                startContent={<FiEdit2 size={12} />}
+                                onPress={() => setExpandedUnitId(unitExpanded ? null : r.unit.id)}
+                              >
+                                Manage
+                              </Button>
+                              <Button
+                                isIconOnly
+                                size="sm"
+                                variant="light"
+                                aria-label="Open unit page"
+                                onPress={() => navigate(`/projects/${p.id}/units/${r.unit.id}#construction-checklist`)}
+                              >
+                                <FiArrowRight />
+                              </Button>
+                            </div>
+                            {unitExpanded && (
+                              <div className="border-t border-gray-100 bg-gray-50/50 px-3 py-3">
+                                <UnitConstructionChecklist
+                                  unitId={r.unit.id}
+                                  buildingId={r.unit.building?.id}
+                                  canEdit={canEditChecklist}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="text-xs text-gray-500 truncate">
-                      {r ? (r.nextStage ? `Next: ${r.nextStage.label}` : 'Checklist complete') : 'No checklist started'}
+                  )}
+                </div>
+              );
+            })}
+            {notStartedUnits.map((u: any) => {
+              const unitExpanded = expandedUnitId === u.id;
+              return (
+                <div key={u.id} className="rounded-lg border border-gray-100 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedUnitId(unitExpanded ? null : u.id)}
+                    className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-gray-50/60 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-gray-800 truncate">
+                        Unit {u.unitNumber}
+                        <span className="text-xs text-gray-500 font-normal"> · {u.building?.name}</span>
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">No checklist started</div>
                     </div>
-                  </div>
-                  {pct != null ? (
-                    <div className="w-20 shrink-0">
-                      <Progress size="sm" value={pct} color={pct === 100 ? 'success' : 'primary'} />
-                    </div>
-                  ) : (
-                    <Chip size="sm" variant="flat" className="shrink-0 text-xs" endContent={<FiArrowRight />}>
+                    <Chip
+                      size="sm"
+                      variant="flat"
+                      color={unitExpanded ? 'primary' : 'default'}
+                      className="shrink-0 text-xs"
+                      endContent={unitExpanded ? <FiChevronDown /> : <FiArrowRight />}
+                    >
                       Start
                     </Chip>
+                  </button>
+                  {unitExpanded && (
+                    <div className="border-t border-gray-100 bg-gray-50/50 px-3 py-3">
+                      <UnitConstructionChecklist
+                        unitId={u.id}
+                        buildingId={u.building?.id}
+                        canEdit={canEditChecklist}
+                      />
+                    </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -196,6 +373,7 @@ export default function ConstructionDashboardPage() {
   // Construction is blind to financials (no budget:view); the API omits the figures too.
   const canViewFinancials = hasPermission('budget:view');
   const canViewChecklist = hasPermission('checklist:view');
+  const canEditChecklist = hasPermission('checklist:edit');
 
   useEffect(() => {
     if (!user?.role) return;
@@ -245,7 +423,9 @@ export default function ConstructionDashboardPage() {
           onClick={() => navigate('/reports/construction')}
         />
         <StatCard label="In-Progress Milestones" value={String(d.inProgressMilestoneCount)} variant="construction" colorScheme="orange" onClick={() => navigate('/reports/construction')} />
-        <StatCard label="Budget Spent" value={`${budgetPct}%`} helpText="across all active projects" variant="construction" colorScheme="brand" onClick={() => navigate('/reports/construction')} />
+        {canViewFinancials && (
+          <StatCard label="Budget Spent" value={`${budgetPct}%`} helpText="across all active projects" variant="construction" colorScheme="brand" onClick={() => navigate('/reports/construction')} />
+        )}
       </div>
 
       {/* Zone A2 — Financial Overview (budget:view roles only — PM + leadership, not Construction) */}
@@ -292,7 +472,7 @@ export default function ConstructionDashboardPage() {
 
       {/* Zone A3 — Update Unit Progress (checklist:view roles — CONSTRUCTION + PM) */}
       {canViewChecklist && (
-        <UpdateUnitProgressCard projects={d.projectSummaries || []} navigate={navigate} />
+        <UpdateUnitProgressCard projects={d.projectSummaries || []} navigate={navigate} canEditChecklist={canEditChecklist} />
       )}
 
       {/* Zone B — Project Status Board */}

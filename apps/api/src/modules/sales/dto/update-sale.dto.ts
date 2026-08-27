@@ -1,6 +1,6 @@
 import {
   IsString, IsOptional,
-  IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
+  IsNumber, IsPositive, IsDateString, MaxLength, IsEnum, Min, Max,
 } from 'class-validator';
 import { LostReason, SaleBuyerType } from '@prisma/client';
 import { SaleCancellationFieldsDto } from './sale-cancellation.dto';
@@ -63,6 +63,6 @@ export class UpdateSaleDto extends SaleCancellationFieldsDto {
   @IsOptional() @IsString()
   brokerId?: string;
 
-  @IsOptional() @IsNumber()
+  @IsOptional() @IsNumber() @Min(0) @Max(100)
   brokerCommissionPct?: number;
 }

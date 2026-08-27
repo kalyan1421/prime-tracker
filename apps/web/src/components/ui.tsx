@@ -52,7 +52,10 @@ export function StatCard({
           <p className="text-xs uppercase tracking-wide text-gray-600">{label}</p>
           {clickable && <FiArrowRight className="text-gray-300 shrink-0 mt-0.5" aria-hidden />}
         </div>
-        <p className={`text-2xl font-semibold ${colorMap[colorScheme] || 'text-gray-700'}`}>{value}</p>
+        {/* whitespace-nowrap: a 2-column mobile grid gives this card ~160px — without it,
+            a long dollar figure wraps mid-digit ("$6,202,5" / "00") instead of staying on
+            one line. text-xl on narrow screens buys a bit more room before that matters. */}
+        <p className={`text-xl sm:text-2xl font-semibold whitespace-nowrap ${colorMap[colorScheme] || 'text-gray-700'}`}>{value}</p>
         {helpText && (
           <p className="text-sm text-gray-600 mt-1">
             {/* -700, not -500. These glyphs are text, and they are the only thing

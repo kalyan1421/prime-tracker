@@ -6,7 +6,10 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
-import { ChangeOrderStatus } from '@prisma/client';
+import {
+  CreateContractDto, UpdateContractDto, CreateChangeOrderDto,
+  CreateContractPaymentDto, UpdateChangeOrderStatusDto,
+} from './dto/create-contract.dto';
 
 @ApiTags('Contracts')
 @ApiBearerAuth()
@@ -33,12 +36,12 @@ export class ContractsController {
   @Post()
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Create contract' })
-  create(@Body() body: any) { return this.service.create(body); }
+  create(@Body() body: CreateContractDto) { return this.service.create(body); }
 
   @Put(':id')
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Update contract' })
-  update(@Param('id') id: string, @Body() body: any) { return this.service.update(id, body); }
+  update(@Param('id') id: string, @Body() body: UpdateContractDto) { return this.service.update(id, body); }
 
   @Delete(':id')
   @RequirePermissions('vendor:edit')
@@ -48,21 +51,21 @@ export class ContractsController {
   @Post(':id/change-orders')
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Add change order to contract' })
-  addChangeOrder(@Param('id') id: string, @Body() body: any) {
+  addChangeOrder(@Param('id') id: string, @Body() body: CreateChangeOrderDto) {
     return this.service.addChangeOrder(id, body);
   }
 
   @Patch('change-orders/:id/status')
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Update change order status' })
-  updateChangeOrderStatus(@Param('id') id: string, @Body() body: { status: ChangeOrderStatus }) {
+  updateChangeOrderStatus(@Param('id') id: string, @Body() body: UpdateChangeOrderStatusDto) {
     return this.service.updateChangeOrderStatus(id, body.status);
   }
 
   @Post(':id/payments')
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Record payment on contract' })
-  addPayment(@Param('id') id: string, @Body() body: any) {
+  addPayment(@Param('id') id: string, @Body() body: CreateContractPaymentDto) {
     return this.service.addPayment(id, body);
   }
 }

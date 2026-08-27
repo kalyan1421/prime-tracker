@@ -689,6 +689,7 @@ function UsersPanel() {
               color="primary"
               onPress={handleEditSave}
               isLoading={updateUser.isPending}
+              isDisabled={!editForm.name.trim() || !editForm.email.trim()}
             >
               Save Changes
             </Button>

@@ -613,7 +613,9 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     // Deliberately an exact count: it is what catches an enum value added to the DB in
     // a migration but never given a tier, which would make it unmutable in
     // getPreferences(). Bump it WITH the list above, never on its own.
-    expect(Object.values(NotificationType)).toHaveLength(36);
+    // 2026-08-26: +4 for the Update Board (UPDATE_BOARD_POSTED/_COMMENT_MENTION/
+    // _ASSIGNED/_DUE_SOON) — 36 -> 40.
+    expect(Object.values(NotificationType)).toHaveLength(40);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {

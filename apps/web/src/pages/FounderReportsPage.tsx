@@ -22,7 +22,12 @@ function PortfolioPLTab() {
       <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Investment" value={fmt(d.kpis.totalInvestment)} colorScheme="brand" variant="construction" />
         <StatCard label="Total Revenue" value={fmt(d.kpis.totalRevenue)} colorScheme="green" variant="revenue" />
-        <StatCard label="Overall ROI" value={`${d.kpis.overallROI}%`} trend={d.kpis.overallROI >= 0 ? 'increase' : 'decrease'} colorScheme={d.kpis.overallROI >= 0 ? 'green' : 'red'} />
+        <StatCard
+          label="Overall ROI"
+          value={d.kpis.overallROI == null ? '—' : `${d.kpis.overallROI}%`}
+          trend={d.kpis.overallROI == null ? undefined : d.kpis.overallROI >= 0 ? 'increase' : 'decrease'}
+          colorScheme={d.kpis.overallROI == null ? 'gray' : d.kpis.overallROI >= 0 ? 'green' : 'red'}
+        />
         <StatCard label="Closed Sales" value={fmt(d.kpis.closedSalesRevenue)} helpText={`Rent: ${fmt(d.kpis.annualRentRevenue)}/yr`} colorScheme="purple" variant="revenue" />
       </div>
       <Card shadow="sm" className="mb-6">
@@ -33,7 +38,10 @@ function PortfolioPLTab() {
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={d.chartData}>
               <XAxis dataKey="name" fontSize={11} />
-              <YAxis tickFormatter={(v: number) => `$${(v / 1e6).toFixed(1)}M`} />
+              {/* toFixed(2), not (1) — on this chart's small dollar range (well under $1M
+                  per project), 1-decimal rounding collapsed distinct auto-generated ticks
+                  into duplicate "$0.1M" labels. */}
+              <YAxis tickFormatter={(v: number) => `$${(v / 1e6).toFixed(2)}M`} />
               <Tooltip formatter={(v: number) => fmt(v)} />
               <Legend />
               <Bar dataKey="budget" fill="#3182CE" name="Budget" radius={[4, 4, 0, 0]} />
@@ -213,7 +221,10 @@ function ConstructionCostTab() {
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={d.chartData || []}>
               <XAxis dataKey="name" fontSize={11} />
-              <YAxis tickFormatter={(v: number) => `$${(v / 1e6).toFixed(1)}M`} />
+              {/* toFixed(2), not (1) — on this chart's small dollar range (well under $1M
+                  per project), 1-decimal rounding collapsed distinct auto-generated ticks
+                  into duplicate "$0.1M" labels. */}
+              <YAxis tickFormatter={(v: number) => `$${(v / 1e6).toFixed(2)}M`} />
               <Tooltip formatter={(v: number) => fmt(v)} />
               <Legend />
               <Bar dataKey="budget" fill="#3182CE" name="Budget" radius={[4, 4, 0, 0]} />
@@ -599,7 +610,10 @@ export default function FounderReportsPage() {
           <Tab key="construction" title="Construction Cost">
             <ConstructionCostTab />
           </Tab>
-          <Tab key="revenue" title="Revenue & Cash Flow">
+          {/* "Revenue", not "Revenue & Cash Flow" — this tab (RevenueCashFlowTab) is rent/
+              lease/occupancy data, not the cash-flow-forecast the "Cash Flow" tab two over
+              actually owns. Two tabs both claiming "Cash Flow" made the real one harder to find. */}
+          <Tab key="revenue" title="Revenue">
             <RevenueCashFlowTab />
           </Tab>
           <Tab key="unit-sales" title="Unit Sales Value">

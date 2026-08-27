@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChangeOrderStatus, ContractStatus } from '@prisma/client';
+import { CreateContractDto, UpdateContractDto, CreateChangeOrderDto, CreateContractPaymentDto } from './dto/create-contract.dto';
 
 @Injectable()
 export class ContractsService {
@@ -27,7 +28,7 @@ export class ContractsService {
     return { totalOriginal, totalCurrent, totalPaid, pctComplete };
   }
 
-  async create(data: any) {
+  async create(data: CreateContractDto) {
     return this.prisma.contract.create({
       data: {
         projectId: data.projectId,
@@ -43,7 +44,7 @@ export class ContractsService {
     });
   }
 
-  async update(id: string, data: any) {
+  async update(id: string, data: UpdateContractDto) {
     const contract = await this.prisma.contract.findUnique({ where: { id } });
     if (!contract) throw new NotFoundException('Contract not found');
     return this.prisma.contract.update({
@@ -64,7 +65,7 @@ export class ContractsService {
     return this.prisma.contract.delete({ where: { id } });
   }
 
-  async addChangeOrder(contractId: string, data: any) {
+  async addChangeOrder(contractId: string, data: CreateChangeOrderDto) {
     const contract = await this.prisma.contract.findUnique({ where: { id: contractId } });
     if (!contract) throw new NotFoundException('Contract not found');
 
@@ -111,7 +112,7 @@ export class ContractsService {
     return updated;
   }
 
-  async addPayment(contractId: string, data: any) {
+  async addPayment(contractId: string, data: CreateContractPaymentDto) {
     const contract = await this.prisma.contract.findUnique({ where: { id: contractId } });
     if (!contract) throw new NotFoundException('Contract not found');
     // The date input sends a plain yyyy-mm-dd string; parsing that directly reads as UTC

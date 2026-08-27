@@ -164,9 +164,30 @@ describe('SalesService.update — unit-status side effects', () => {
   });
 
   it('still flips the unit to SOLD when a sale CLOSES (regression)', async () => {
-    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'UNDER_CONTRACT', unitId: 'u1', unit: {} });
+    // salePrice must be set — closing a sale with no price is rejected (see the
+    // "requires a sale price to close" tests below), and this test is about the unit
+    // side effect, not price validation, so give it a price to get past that gate.
+    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'UNDER_CONTRACT', unitId: 'u1', unit: {}, salePrice: 500000 });
 
     await service.update('s1', { status: 'CLOSED' } as any);
+
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'u1' }, data: { status: 'SOLD', availableSince: null } }),
+    );
+  });
+
+  it('rejects closing a sale with no price set, and no price on the update either', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'UNDER_CONTRACT', unitId: 'u1', unit: {}, salePrice: null });
+
+    await expect(service.update('s1', { status: 'CLOSED' } as any)).rejects.toBeInstanceOf(BadRequestException);
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+    expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+  });
+
+  it('allows closing when the update itself sets the price, even though the sale had none', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ id: 's1', status: 'UNDER_CONTRACT', unitId: 'u1', unit: {}, salePrice: null });
+
+    await service.update('s1', { status: 'CLOSED', salePrice: 500000 } as any);
 
     expect(mockPrisma.unit.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'u1' }, data: { status: 'SOLD', availableSince: null } }),

@@ -8,6 +8,7 @@ import {
   successionGaps,
   tenancyEndEntries,
   assignmentEntries,
+  activeLeaseCoversNow,
 } from './unit-history.service';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
@@ -412,6 +413,38 @@ describe('successionGaps — which vacancies are real', () => {
         lease({ id: 'l2', leaseStart: d('2026-01-01') }),
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('activeLeaseCoversNow — catches a status-events log that missed a tenancy', () => {
+  const now = d('2026-08-26');
+
+  it('is true for an ACTIVE lease straddling now', () => {
+    expect(activeLeaseCoversNow([lease({ status: 'ACTIVE' })], now)).toBe(true);
+  });
+
+  it('is false when no lease is ACTIVE', () => {
+    expect(activeLeaseCoversNow([lease({ status: 'EXPIRED' })], now)).toBe(false);
+  });
+
+  it('is false for an ACTIVE lease that has not started yet', () => {
+    expect(
+      activeLeaseCoversNow([lease({ status: 'ACTIVE', leaseStart: d('2027-01-01') })], now),
+    ).toBe(false);
+  });
+
+  it('is false for an ACTIVE lease whose term already ran out', () => {
+    // ACTIVE + past leaseEnd is the holdover case, not a fresh tenancy — a real gap in
+    // the status log around a holdover is a different problem this check should not paper over.
+    expect(
+      activeLeaseCoversNow([lease({ status: 'ACTIVE', leaseEnd: d('2026-01-01') })], now),
+    ).toBe(false);
+  });
+
+  it('is true when a real historical import left leaseEnd null', () => {
+    expect(
+      activeLeaseCoversNow([lease({ status: 'ACTIVE', leaseEnd: null })], now),
+    ).toBe(true);
   });
 });
 

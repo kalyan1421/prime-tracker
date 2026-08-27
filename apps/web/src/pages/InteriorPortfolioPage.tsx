@@ -7,6 +7,7 @@ import { fmt } from '../utils/fmt';
 import { StatCard, LoadingState, EmptyState } from '../components/ui';
 import { INTERIOR_PHASES } from '../constants/interior';
 import { InteriorPackagesModal } from '../components/InteriorPackagesModal';
+import { useAuthStore } from '../store/authStore';
 
 const PHASE_LABEL: Record<string, string> = {
   DESIGN: 'Design', CLIENT_APPROVAL: 'Client Approval', CITY_APPROVAL: 'City Approval',
@@ -21,6 +22,11 @@ function phaseColor(phase: string): 'default' | 'primary' | 'success' {
 export default function InteriorPortfolioPage() {
   const navigate = useNavigate();
   const packages = useDisclosure();
+  const { hasPermission } = useAuthStore();
+  // The API nulls contractValue/spend for a caller without interior:finance (the same
+  // "Construction is fully blind to financials" design this app applies everywhere
+  // else) — hide the money UI rather than show a misleading $0/— built from null.
+  const canViewFinance = hasPermission('interior:finance');
   const { data, isLoading } = useInteriorPortfolio();
   const rows: any[] = Array.isArray(data) ? data : [];
 
@@ -49,8 +55,8 @@ export default function InteriorPortfolioPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Active fit-outs" value={String(summary.active)} />
-        <StatCard label="Contract value" value={fmt(summary.contract)} />
-        <StatCard label="Spend to date" value={fmt(summary.spend)} />
+        {canViewFinance && <StatCard label="Contract value" value={fmt(summary.contract)} />}
+        {canViewFinance && <StatCard label="Spend to date" value={fmt(summary.spend)} />}
         <StatCard label="Handover ≤ 30d" value={String(summary.dueSoon)} />
       </div>
 
@@ -66,8 +72,8 @@ export default function InteriorPortfolioPage() {
                   <th className="text-left px-4 py-3">Location</th>
                   <th className="text-left px-4 py-3">PM</th>
                   <th className="text-left px-4 py-3">Phase</th>
-                  <th className="text-right px-4 py-3">Contract</th>
-                  <th className="text-right px-4 py-3">Spend</th>
+                  {canViewFinance && <th className="text-right px-4 py-3">Contract</th>}
+                  {canViewFinance && <th className="text-right px-4 py-3">Spend</th>}
                   <th className="text-right px-4 py-3">Days to handover</th>
                 </tr>
               </thead>
@@ -88,12 +94,12 @@ export default function InteriorPortfolioPage() {
                         {PHASE_LABEL[r.phase] ?? r.phase}
                       </Chip>
                     </td>
-                    <td className="px-4 py-3 text-right">{r.contractValue != null ? fmt(r.contractValue) : '—'}</td>
-                    <td className="px-4 py-3 text-right">{fmt(r.spend ?? 0)}</td>
+                    {canViewFinance && <td className="px-4 py-3 text-right">{r.contractValue != null ? fmt(r.contractValue) : '—'}</td>}
+                    {canViewFinance && <td className="px-4 py-3 text-right">{fmt(r.spend ?? 0)}</td>}
                     <td className="px-4 py-3 text-right">
                       {r.daysToHandover == null ? '—' : (
                         <span className={r.daysToHandover < 0 ? 'text-red-700' : r.daysToHandover <= 30 ? 'text-orange-700' : ''}>
-                          {r.daysToHandover}
+                          {r.daysToHandover < 0 ? `${Math.abs(r.daysToHandover)}d overdue` : `${r.daysToHandover}d`}
                         </span>
                       )}
                     </td>

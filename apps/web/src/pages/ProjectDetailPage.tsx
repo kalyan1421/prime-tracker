@@ -12,7 +12,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
-import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare, FiMove } from 'react-icons/fi';
+import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare, FiMove, FiColumns } from 'react-icons/fi';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { ConstructionChecklistRollup } from '../components/ConstructionChecklistRollup';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
@@ -166,7 +166,14 @@ const TAB_MAP = ['overview', 'construction', 'board', 'budget', 'revenue', 'unit
 const TAB_TITLE_MAP: Record<string, string> = {
   overview: 'Overview',
   construction: 'Construction',
-  board: 'Updates Board',
+  // Renamed from "Checklist" 2026-08-27: this is the ad-hoc WORK BOARD (Task/kind=CONSTRUCTION),
+  // and calling it Checklist put two differently-named-the-same tabs on one page — the other
+  // being Construction > Checklist, which is the per-unit stage list. Two systems, one name.
+  // Original note, still true about the org-wide board it also must not collide with:
+  // Labeled to avoid colliding with the org-wide
+  // /updates announcement board — same nav pattern, unrelated tool. Matches the
+  // checklist:view/checklist:edit permissions this tab is actually gated on.
+  board: 'Work Board',
   budget: 'Budget',
   revenue: 'Revenue',
   units: 'Units',
@@ -1090,10 +1097,16 @@ function OverviewTab({ project: p }: { project: any }) {
   const { data: monthlyPayments } = useMonthlyPayments(canSeeLoans ? p.id : '');
   const { data: leadsData } = useLeads({ projectId: p.id }, canSeeLeads);
   const { data: drawsData } = useProjectDraws(canSeeDraws ? p.id : '');
+  // Loans carry lender/principal — GET /projects/:id deliberately does not embed them
+  // (that endpoint is reachable by every role), so this is the ONLY source for the
+  // Loans card below. useLoans() self-gates on loan:view too, but the explicit
+  // canSeeLoans check matches every other query on this page.
+  const { data: projectLoans } = useLoans(canSeeLoans ? p.id : '');
 
   const pip = (pipeline as any) || { totalPipelineValue: 0, closedRevenue: 0 };
   const li = (leaseIncome as any) || { total: 0, annualProjection: 0 };
   const mp = (monthlyPayments as any) || { total: 0, annualTotal: 0 };
+  const loansArr = (projectLoans as any[]) || [];
   const leadsArr = (leadsData as any[]) || [];
   const leadsConverted = leadsArr.filter((l) => l.status === 'CONVERTED').length;
   const leadsLost = leadsArr.filter((l) => ['LOST', 'DEAD'].includes(l.status)).length;
@@ -1219,17 +1232,29 @@ function OverviewTab({ project: p }: { project: any }) {
               <div className="space-y-3">
                 {buildings.map((b: any) => {
                   const bUnits = b.units || [];
-                  const sold = bUnits.filter((u: any) => u.status === 'SOLD').length;
-                  const available = bUnits.filter((u: any) => u.status === 'AVAILABLE').length;
+                  // Previously only AVAILABLE and SOLD got a chip \u2014 a building whose
+                  // units were mostly LEASED or UNDER_CONSTRUCTION showed a count
+                  // nowhere close to its actual unit total (e.g. 4 chipped out of 17
+                  // units), reading as if 13 units had gone missing rather than just
+                  // being a status this card didn't bother to show. Counting and
+                  // rendering EVERY status present, in the app's own display order,
+                  // means a future unit status can't silently fall out of this card
+                  // the same way \u2014 it either chips or the unit isn't in this building.
+                  const counts: Record<string, number> = {};
+                  for (const u of bUnits) counts[u.status] = (counts[u.status] || 0) + 1;
+                  const presentStatuses = UNIT_STATUS_ORDER.filter((s) => counts[s] > 0);
                   return (
                     <div key={b.id} className="flex items-center justify-between border-b border-gray-50 last:border-0 pb-3 last:pb-0">
                       <div>
                         <p className="text-sm font-medium text-gray-800">{b.name}</p>
                         <p className="text-[11px] text-gray-500">{b.buildingType?.replace(/_/g, ' ') || '\u2014'}{' \u00b7 '}{bUnits.length} unit{bUnits.length === 1 ? '' : 's'}</p>
                       </div>
-                      <div className="flex items-center gap-1.5">
-                        {available > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.AVAILABLE} className="text-[11px]">{available} available</Chip>}
-                        {sold > 0 && <Chip size="sm" variant="flat" color={STATUS_COLORS.SOLD} className="text-[11px]">{sold} sold</Chip>}
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        {presentStatuses.map((s) => (
+                          <Chip key={s} size="sm" variant="flat" color={STATUS_COLORS[s] || 'default'} className="text-[11px]">
+                            {counts[s]} {s.replace(/_/g, ' ').toLowerCase()}
+                          </Chip>
+                        ))}
                       </div>
                     </div>
                   );
@@ -1343,10 +1368,14 @@ function OverviewTab({ project: p }: { project: any }) {
       </div>
       )}
 
-      {/* Row 4: Draws + Loans */}
+      {/* Row 4: Draws + Loans \u2014 each gated on its OWN permission, not the pair's OR.
+          Loans carries lender/principal, and a role holding draw:view without
+          loan:view (CONSTRUCTION, PROJECT_MANAGER \u2014 see ConstructionReportsPage for
+          the same boundary) must not see it just because the Draws card is visible. */}
       {(canSeeDraws || canSeeLoans) && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <Card shadow="sm">
+        {canSeeDraws && (
+        <Card shadow="sm" className={!canSeeLoans ? 'lg:col-span-2' : undefined}>
           <CardHeader className="pb-0 flex justify-between items-center">
             <p className="font-semibold text-sm text-gray-700">Draws</p>
             <CardNavLink label="View Draws" onPress={() => goTab('draws')} />
@@ -1372,14 +1401,16 @@ function OverviewTab({ project: p }: { project: any }) {
             )}
           </CardBody>
         </Card>
+        )}
 
-        <Card shadow="sm">
+        {canSeeLoans && (
+        <Card shadow="sm" className={!canSeeDraws ? 'lg:col-span-2' : undefined}>
           <CardHeader className="pb-0 flex justify-between items-center">
             <p className="font-semibold text-sm text-gray-700">Loans</p>
             <CardNavLink label="View Draws" onPress={() => goTab('draws')} />
           </CardHeader>
           <CardBody>
-            {(p.loans || []).length > 0 ? (
+            {loansArr.length > 0 ? (
               <>
                 <div className="grid grid-cols-2 gap-4 mb-3 pb-3 border-b border-gray-100">
                   <div>
@@ -1391,7 +1422,7 @@ function OverviewTab({ project: p }: { project: any }) {
                     <p className="text-lg font-semibold text-gray-900 mt-0.5">{fmt(mp.annualTotal)}</p>
                   </div>
                 </div>
-                {p.loans.map((l: any) => (
+                {loansArr.map((l: any) => (
                   <div key={l.id} className="flex justify-between items-center mb-1.5">
                     <span className="text-xs text-gray-600">{l.lender || '\u2014'}{' \u00b7 '}{l.loanType?.replace(/_/g, ' ')}</span>
                     <span className="text-xs font-semibold tabular-nums">{fmt(l.principalAmt)}</span>
@@ -1403,6 +1434,7 @@ function OverviewTab({ project: p }: { project: any }) {
             )}
           </CardBody>
         </Card>
+        )}
       </div>
       )}
 
@@ -1669,6 +1701,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   const { isOpen: isCommitFormOpen, onOpen: onCommitFormOpen, onClose: onCommitFormClose } = useDisclosure();
   const { isOpen: isCommitDeleteOpen, onOpen: onCommitDeleteOpen, onClose: onCommitDeleteClose } = useDisclosure();
   const [commitForm, setCommitForm] = useState<Record<string, string>>(EMPTY_COMMITMENT);
+  const [commitFormErrors, setCommitFormErrors] = useState<Record<string, string>>({});
   const [commitEditId, setCommitEditId] = useState<string | null>(null);
   const [commitDeleteId, setCommitDeleteId] = useState<string | null>(null);
 
@@ -1772,9 +1805,10 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   };
 
   // Commitment handlers
-  const openCommitCreate = () => { setCommitEditId(null); setCommitForm({ ...EMPTY_COMMITMENT }); onCommitFormOpen(); };
+  const openCommitCreate = () => { setCommitEditId(null); setCommitForm({ ...EMPTY_COMMITMENT }); setCommitFormErrors({}); onCommitFormOpen(); };
   const openCommitEdit = (c: any) => {
     setCommitEditId(c.id);
+    setCommitFormErrors({});
     setCommitForm({
       vendor: c.vendor || c.vendorName || '',
       description: c.description || '',
@@ -1791,7 +1825,20 @@ function FinancialsTab({ projectId }: { projectId: string }) {
   };
   const openCommitDelete = (id: string) => { setCommitDeleteId(id); onCommitDeleteOpen(); };
 
+  const validateCommitForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!commitForm.vendor.trim()) errs.vendor = 'Vendor is required';
+    if (!commitForm.description.trim()) errs.description = 'Description is required';
+    if (!commitForm.category) errs.category = 'Category is required';
+    const amt = parseFloat(commitForm.contractAmt);
+    if (!commitForm.contractAmt || isNaN(amt)) errs.contractAmt = 'Contract amount is required';
+    else if (amt <= 0) errs.contractAmt = 'Must be greater than 0';
+    setCommitFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleCommitSave = async () => {
+    if (!validateCommitForm()) return;
     try {
       const payload: Record<string, unknown> = {
         projectId,
@@ -1939,10 +1986,14 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         <ObligationsPanel projectId={projectId} />
       </div>
 
-      {/* Budget vs Actual Chart */}
+      {/* Budget vs Actual Chart — Actual/Committed bars are spend data, same
+          financial:view boundary as the StatCards above. A budget:view-only viewer
+          (e.g. PROJECT_MANAGER) still gets the chart, just Budget-only. */}
       <Card shadow="sm" className="mb-6">
         <CardHeader className="pb-0">
-          <p className="font-semibold text-sm text-gray-600">Budget vs Actual by Category</p>
+          <p className="font-semibold text-sm text-gray-600">
+            {canViewFinancial ? 'Budget vs Actual by Category' : 'Budget by Category'}
+          </p>
         </CardHeader>
         <CardBody>
           <ResponsiveContainer width="100%" height={300}>
@@ -1952,8 +2003,8 @@ function FinancialsTab({ projectId }: { projectId: string }) {
               <YAxis tickFormatter={(v) => `$${(v / 1e6).toFixed(1)}M`} />
               <Tooltip formatter={(v: number) => fmt(v)} />
               <Bar dataKey="Budget" fill="#3182CE" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="Actual" fill="#DD6B20" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="Committed" fill="#805AD5" radius={[2, 2, 0, 0]} />
+              {canViewFinancial && <Bar dataKey="Actual" fill="#DD6B20" radius={[2, 2, 0, 0]} />}
+              {canViewFinancial && <Bar dataKey="Committed" fill="#805AD5" radius={[2, 2, 0, 0]} />}
             </BarChart>
           </ResponsiveContainer>
         </CardBody>
@@ -2051,11 +2102,11 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                 <tr className="border-b border-gray-200">
                   <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Category</th>
                   <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Budget</th>
-                  <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Actual</th>
-                  <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Committed</th>
-                  <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Forecast</th>
-                  <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Variance</th>
-                  <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">% Used</th>
+                  {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Actual</th>}
+                  {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Committed</th>}
+                  {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Forecast</th>}
+                  {canViewFinancial && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Variance</th>}
+                  {canViewFinancial && <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">% Used</th>}
                 </tr>
               </thead>
               <tbody>
@@ -2065,21 +2116,25 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                     <tr key={c.category} className="border-b border-gray-50">
                       <td className="py-2 px-2">{(c.category || '').replace(/_/g, ' ')}</td>
                       <td className="py-2 px-2 text-right">{fmt(c.budget)}</td>
-                      <td className="py-2 px-2 text-right">{fmt(c.actual)}</td>
-                      <td className="py-2 px-2 text-right">{fmt(c.committed)}</td>
-                      <td className="py-2 px-2 text-right">{fmt(c.forecast)}</td>
-                      <td className={`py-2 px-2 text-right ${c.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                        {fmt(c.variance)}
-                      </td>
-                      <td className="py-2 px-2 w-[120px]">
-                        <Progress
-                          value={Math.min(pct, 100)}
-                          size="sm"
-                          color={pct > 90 ? 'danger' : pct > 70 ? 'warning' : 'primary'}
-                          className="max-w-[100px]"
-                        />
-                        <span className="text-xs text-gray-500">{pct.toFixed(0)}%</span>
-                      </td>
+                      {canViewFinancial && <td className="py-2 px-2 text-right">{fmt(c.actual)}</td>}
+                      {canViewFinancial && <td className="py-2 px-2 text-right">{fmt(c.committed)}</td>}
+                      {canViewFinancial && <td className="py-2 px-2 text-right">{fmt(c.forecast)}</td>}
+                      {canViewFinancial && (
+                        <td className={`py-2 px-2 text-right ${c.variance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          {fmt(c.variance)}
+                        </td>
+                      )}
+                      {canViewFinancial && (
+                        <td className="py-2 px-2 w-[120px]">
+                          <Progress
+                            value={Math.min(pct, 100)}
+                            size="sm"
+                            color={pct > 90 ? 'danger' : pct > 70 ? 'warning' : 'primary'}
+                            className="max-w-[100px]"
+                          />
+                          <span className="text-xs text-gray-500">{pct.toFixed(0)}%</span>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -2401,8 +2456,16 @@ function FinancialsTab({ projectId }: { projectId: string }) {
           <ModalHeader>{commitEditId ? 'Edit Commitment' : 'Add Commitment'}</ModalHeader>
           <ModalBody>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input size="sm" label="Vendor" isRequired value={commitForm.vendor} onChange={setCommit('vendor')} />
-              <Input size="sm" label="Description" isRequired value={commitForm.description} onChange={setCommit('description')} />
+              <Input
+                size="sm" label="Vendor" isRequired value={commitForm.vendor}
+                onChange={(e) => { setCommit('vendor')(e); if (commitFormErrors.vendor) setCommitFormErrors((errs) => ({ ...errs, vendor: '' })); }}
+                isInvalid={!!commitFormErrors.vendor} errorMessage={commitFormErrors.vendor}
+              />
+              <Input
+                size="sm" label="Description" isRequired value={commitForm.description}
+                onChange={(e) => { setCommit('description')(e); if (commitFormErrors.description) setCommitFormErrors((errs) => ({ ...errs, description: '' })); }}
+                isInvalid={!!commitFormErrors.description} errorMessage={commitFormErrors.description}
+              />
               <Select
                 size="sm"
                 label="Category"
@@ -2411,15 +2474,21 @@ function FinancialsTab({ projectId }: { projectId: string }) {
                 onSelectionChange={(keys) => {
                   const val = Array.from(keys)[0] as string;
                   if (val) setCommitForm((f) => ({ ...f, category: val }));
+                  if (commitFormErrors.category) setCommitFormErrors((errs) => ({ ...errs, category: '' }));
                 }}
+                isInvalid={!!commitFormErrors.category} errorMessage={commitFormErrors.category}
               >
                 {(budgetCategories as any[]).map((opt: any) => (
                   <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
                 ))}
               </Select>
-              <Input size="sm" label="Contract Amount" isRequired type="number" value={commitForm.contractAmt} onChange={setCommit('contractAmt')} />
-              <Input size="sm" label="Paid to Date" type="number" value={commitForm.paidToDate} onChange={setCommit('paidToDate')} />
-              <Input size="sm" label="Retainage" type="number" value={commitForm.retainage} onChange={setCommit('retainage')} />
+              <Input
+                size="sm" label="Contract Amount" isRequired type="number" min={0} value={commitForm.contractAmt}
+                onChange={(e) => { setCommit('contractAmt')(e); if (commitFormErrors.contractAmt) setCommitFormErrors((errs) => ({ ...errs, contractAmt: '' })); }}
+                isInvalid={!!commitFormErrors.contractAmt} errorMessage={commitFormErrors.contractAmt}
+              />
+              <Input size="sm" label="Paid to Date" type="number" min={0} value={commitForm.paidToDate} onChange={setCommit('paidToDate')} />
+              <Input size="sm" label="Retainage" type="number" min={0} value={commitForm.retainage} onChange={setCommit('retainage')} />
               <Input size="sm" label="Contract Date" type="date" value={commitForm.contractDate} onChange={setCommit('contractDate')} />
               <Select
                 size="sm"
@@ -2573,9 +2642,17 @@ function UnitCommentsPanel({ unitId, unitLabel }: { unitId: string; unitLabel: s
 // SALES role uses this to filter the Status dropdown to only valid next-states.
 // SUPER_ADMIN/FOUNDER bypass this on the server, so we show all statuses for them.
 const STATUS_TRANSITIONS: Record<string, string[]> = {
-  AVAILABLE: ['UNDER_CONTRACT', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
+  AVAILABLE: ['UNDER_CONTRACT', 'LEASE_PENDING', 'LEASED', 'SOLD', 'UNDER_CONSTRUCTION', 'OCCUPIED'],
   UNDER_CONTRACT: ['AVAILABLE', 'LEASED', 'SOLD'],
-  LEASED: ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT'],
+  // Signed lease, tenant not yet moved in (→ LEASED) or the deal collapsed during
+  // fit-out (→ AVAILABLE). Was missing here entirely — the backend has allowed it
+  // since the renewal-while-occupied case was added (see LEASED below), so a unit
+  // already sitting in LEASE_PENDING had no reachable next status in this dropdown
+  // at all, and AVAILABLE never offered it as an option to move a unit into.
+  LEASE_PENDING: ['LEASED', 'AVAILABLE'],
+  // Renewal signed while the sitting tenant is still in occupation → LEASE_PENDING,
+  // without pretending the unit went vacant.
+  LEASED: ['AVAILABLE', 'OCCUPIED', 'UNDER_CONTRACT', 'LEASE_PENDING'],
   OCCUPIED: ['AVAILABLE', 'LEASED'],
   SOLD: ['AVAILABLE'],
   UNDER_CONSTRUCTION: ['AVAILABLE'],
@@ -2639,7 +2716,14 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
 
   const buildings = (buildingsData as any[]) || [];
   const li = leaseIncome as any;
-  const isConstruction = role === 'CONSTRUCTION';
+  // Was `role === 'CONSTRUCTION'` — a role-string check that only actually excluded
+  // CONSTRUCTION, so any OTHER role lacking these permissions (VIEWER, MARKETING…)
+  // still saw rent/price. Split by the domain each column actually belongs to: Monthly
+  // Rent is lease data, Asking Price/PSF is sale data. The backend already redacts the
+  // underlying lease/sale records for a viewer without the matching permission — this
+  // just stops the column headers themselves from promising data that won't be there.
+  const canSeeRentColumn = hasPermission('lease:view');
+  const canSeePriceColumns = hasPermission('sales:view');
 
   const openCreate = () => {
     setEditId(null);
@@ -3008,9 +3092,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
       <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Prime</th>
       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant</th>
-      {!isConstruction && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Monthly Rent</th>}
-      {!isConstruction && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Asking Price</th>}
-      {!isConstruction && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">PSF</th>}
+      {canSeeRentColumn && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Monthly Rent</th>}
+      {canSeePriceColumns && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Asking Price</th>}
+      {canSeePriceColumns && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">PSF</th>}
       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
     </tr>
   );
@@ -3032,9 +3116,9 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
           {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime</Chip>}
         </td>
         <td className="py-2 px-2">{u.leases?.[0]?.tenantName || '\u2014'}</td>
-        {!isConstruction && <td className="py-2 px-2 text-right">{monthlyRent ? fmt(monthlyRent) : '\u2014'}</td>}
-        {!isConstruction && <td className="py-2 px-2 text-right">{u.askingPrice ? fmt(u.askingPrice) : '\u2014'}</td>}
-        {!isConstruction && <td className="py-2 px-2 text-right">{psf ? `$${psf}` : '\u2014'}</td>}
+        {canSeeRentColumn && <td className="py-2 px-2 text-right">{monthlyRent ? fmt(monthlyRent) : '\u2014'}</td>}
+        {canSeePriceColumns && <td className="py-2 px-2 text-right">{u.askingPrice ? fmt(u.askingPrice) : '\u2014'}</td>}
+        {canSeePriceColumns && <td className="py-2 px-2 text-right">{psf ? `$${psf}` : '\u2014'}</td>}
         <td className="py-2 px-2" onClick={(e) => e.stopPropagation()}>
           <div className="flex gap-1">
             <Button size="sm" variant="light" isIconOnly onPress={() => openComments(u)} aria-label="Comments">
@@ -3074,6 +3158,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const HEAT_COLORS: Record<string, string> = {
     AVAILABLE: 'bg-green-100 border-green-300 text-green-800',
     UNDER_CONTRACT: 'bg-blue-100 border-blue-300 text-blue-800',
+    LEASE_PENDING: 'bg-amber-100 border-amber-300 text-amber-800',
     LEASED: 'bg-teal-100 border-teal-300 text-teal-800',
     OCCUPIED: 'bg-purple-100 border-purple-300 text-purple-800',
     // -800 like every other status here. This was the one pill using -500, which measured
@@ -3598,14 +3683,16 @@ function MilestonesTab({ projectId }: { projectId: string }) {
   const [showGantt, setShowGantt] = useState(false);
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_MILESTONE);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const users = (usersData as any[]) || [];
 
-  const openCreate = () => { setEditId(null); setForm({ ...EMPTY_MILESTONE }); onFormOpen(); };
+  const openCreate = () => { setEditId(null); setForm({ ...EMPTY_MILESTONE }); setFormErrors({}); onFormOpen(); };
   const openEdit = (m: any) => {
     setEditId(m.id);
+    setFormErrors({});
     setForm({
       title: m.title || '',
       description: m.description || '',
@@ -3622,6 +3709,8 @@ function MilestonesTab({ projectId }: { projectId: string }) {
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
 
   const handleSave = async () => {
+    if (!form.title.trim()) { setFormErrors({ title: 'Title is required' }); return; }
+    setFormErrors({});
     try {
       const payload: Record<string, unknown> = {
         projectId,
@@ -3832,7 +3921,11 @@ function MilestonesTab({ projectId }: { projectId: string }) {
           <ModalHeader>{editId ? 'Edit Milestone' : 'Add Milestone'}</ModalHeader>
           <ModalBody>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input size="sm" label="Title" isRequired value={form.title} onChange={set('title')} />
+              <Input
+                size="sm" label="Title" isRequired value={form.title}
+                onChange={(e) => { set('title')(e); if (formErrors.title) setFormErrors((errs) => ({ ...errs, title: '' })); }}
+                isInvalid={!!formErrors.title} errorMessage={formErrors.title}
+              />
               <Input size="sm" label="Description" value={form.description} onChange={set('description')} />
               <Select
                 size="sm"
@@ -4498,6 +4591,10 @@ function SalesTab({ projectId }: { projectId: string }) {
       setSaleFormError('Please select a reason — why was this deal lost?');
       return;
     }
+    if (form.contractDate && form.closingDate && new Date(form.contractDate) > new Date(form.closingDate)) {
+      setSaleFormError('Closing date must be after contract date');
+      return;
+    }
     try {
       const payload = buildSalePayload(form, projectId, editId ? 'update' : 'create');
       if (editId) {
@@ -4936,7 +5033,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
           {!isLoading && !isReorderMode && (
             <p className="font-semibold text-sm text-gray-600">
-              {buildings.length} building{buildings.length !== 1 ? '' : ''}
+              {buildings.length} building{buildings.length === 1 ? '' : 's'}
               {buildings.length !== allBuildings.length && (
                 <span className="text-gray-500 font-normal"> of {allBuildings.length}</span>
               )}
@@ -5089,7 +5186,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                   )}
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                     {b.buildingType && (
-                      <span className="text-xs text-gray-500 truncate">{b.buildingType}</span>
+                      <span className="text-xs text-gray-500 truncate">{b.buildingType.replace(/_/g, ' ')}</span>
                     )}
                     {/* Slice 3: building-level phase chip */}
                     {b.phase && <PhaseChip phase={b.phase} size="sm" />}
@@ -5305,7 +5402,26 @@ function ConstructionTab({ projectId }: { projectId: string }) {
       {/* Switched, not stacked — see SectionSwitch. Buildings previously sat below the
           full checklist rollup, so on a project with many units it opened off-screen. */}
       <SectionSwitch sections={sections} value={active} onChange={setActive} />
-      {active === 'checklist' && <ConstructionChecklistRollup projectId={projectId} />}
+      {active === 'checklist' && (
+        <div className="space-y-3">
+          {/* One checklist, one home. This used to be a second, read-only copy of the same
+              125 stages the Site Tracker edits; keeping both meant two places to look and
+              two places to be out of date. The rollup stays as the at-a-glance summary and
+              the link goes to the one screen where a checklist is actually changed. */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2">
+            <p className="text-xs text-gray-700">
+              Editing a checklist happens on the Site Tracker, where every property's units sit together.
+            </p>
+            <Button
+              as={Link} to={`/site-tracker?projectId=${projectId}`} size="sm" color="primary" variant="flat"
+              startContent={<FiColumns />}
+            >
+              Open in Site Tracker
+            </Button>
+          </div>
+          <ConstructionChecklistRollup projectId={projectId} />
+        </div>
+      )}
       {active === 'buildings' && <BuildingsTab projectId={projectId} />}
       {/* Budget & Costs now lives in its own top-level Budget tab. */}
     </div>
@@ -5317,6 +5433,10 @@ function BudgetTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   // Admin (Super Admin), Founder, Finance & Accounting hold budget:edit and may set the approved total.
   const canEditBudget = hasPermission('budget:edit');
+  // Committed/Actuals are spend data — same financial:view boundary FinancialsTab's
+  // StatCards already use for the identical figures. PROJECT_MANAGER holds
+  // budget:view but not financial:view and must not see them here either.
+  const canViewFinancial = hasPermission('financial:view');
   const budgetLinesRef = React.useRef<HTMLDivElement>(null);
   const scrollToLines = () => budgetLinesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -5387,24 +5507,32 @@ function BudgetTab({ projectId }: { projectId: string }) {
               <p className="text-[11px] text-amber-700 mt-1">No approved total set — showing the sum of budget lines. {canEditBudget ? 'Set an approved budget to track plan-vs-approved.' : ''}</p>
             )}
             <Progress aria-label="Budget used" value={usedPct} size="sm" className="mt-3" color={usedPct > 100 ? 'danger' : 'warning'} />
-            {/* Reconciliation: Approved → Planned → Committed → Actual */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+            {/* Reconciliation: Approved → Planned → Committed → Actual. Committed/Actuals/
+                Remaining all require financial:view — Remaining is derived from them
+                (baseTotal - actuals - committed), so showing it alongside a visible
+                baseTotal would let a budget:view-only viewer back the hidden two out by
+                subtraction; it's gated with them, not just the raw figures. */}
+            <div className={`grid grid-cols-2 gap-3 mt-4 ${canViewFinancial ? 'sm:grid-cols-4' : ''}`}>
               <div>
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Planned (lines)</p>
                 <p className="text-sm font-semibold text-blue-600 tabular-nums">{fmt(planned)}</p>
               </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-wide text-gray-500">Committed</p>
-                <p className="text-sm font-semibold text-purple-600 tabular-nums">{fmt(totalCommitted)}</p>
-              </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-wide text-gray-500">Actuals</p>
-                <p className="text-sm font-semibold text-orange-700 tabular-nums">{fmt(totalActuals)}</p>
-              </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-wide text-gray-500">Remaining</p>
-                <p className={`text-sm font-semibold tabular-nums ${remaining >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmt(remaining)}</p>
-              </div>
+              {canViewFinancial && (
+                <>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500">Committed</p>
+                    <p className="text-sm font-semibold text-purple-600 tabular-nums">{fmt(totalCommitted)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500">Actuals</p>
+                    <p className="text-sm font-semibold text-orange-700 tabular-nums">{fmt(totalActuals)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500">Remaining</p>
+                    <p className={`text-sm font-semibold tabular-nums ${remaining >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmt(remaining)}</p>
+                  </div>
+                </>
+              )}
             </div>
             {/* Plan-vs-approved signal — the headline number for planning discipline. */}
             {planVsApproved != null && (
@@ -5600,6 +5728,14 @@ function LeadUnitsOfInterest({ leadId, primaryUnitId }: { leadId: string; primar
 }
 
 function ProjectLeadsTab({ projectId }: { projectId: string }) {
+  // Was entirely ungated — New/Edit/Delete/Convert/Log-Activity all rendered for
+  // anyone who could merely open the tab (lead:view). DrawsTab, one component below
+  // this one in the same file, already does this correctly; this tab just never had it.
+  const { hasPermission } = useAuthStore();
+  const canCreateLead = hasPermission('lead:create');
+  const canEditLead = hasPermission('lead:edit');
+  const canDeleteLead = hasPermission('lead:delete');
+  const canConvertLead = hasPermission('lead:convert');
   const { data: leads, isLoading } = useLeads({ projectId } as any);
   const { data: projectUnits } = useUnits(projectId);
   const createLead = useCreateLead();
@@ -5697,6 +5833,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
       addToast({ title: 'Unit, buyer name, and sale price are required', color: 'warning' });
       return;
     }
+    if (convertForm.contractDate && convertForm.closingDate && new Date(convertForm.contractDate) > new Date(convertForm.closingDate)) {
+      addToast({ title: 'Expected close date must be after contract date', color: 'warning' });
+      return;
+    }
     try {
       await convertLead.mutateAsync({
         id: selectedLead.id,
@@ -5706,7 +5846,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
       addToast({ title: 'Lead converted to sale!', color: 'success' });
       setShowConvert(false);
       setConvertForm({ unitId: '', buyer: '', salePrice: '', contractDate: '', closingDate: '' });
-    } catch { addToast({ title: 'Failed to convert lead', color: 'danger' }); }
+    } catch (e) { addToast({ title: errMsg(e, 'Failed to convert lead'), color: 'danger' }); }
   };
 
   const STAGE_ORDER = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING'];
@@ -5872,9 +6012,11 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
             className="w-full pl-7 pr-3 py-1.5 text-[11px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-gray-300 text-gray-700 placeholder-gray-400"
           />
         </div>
-        <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNewForm} className="shrink-0">
-          New Lead
-        </Button>
+        {canCreateLead && (
+          <Button size="sm" color="primary" startContent={<FiPlus />} onPress={openNewForm} className="shrink-0">
+            New Lead
+          </Button>
+        )}
       </div>
 
       {/* Main Layout */}
@@ -5895,7 +6037,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               <p className="text-sm text-gray-600">
                 {search ? 'No leads match your search' : leadsArr.length === 0 ? 'No leads yet — add your first' : 'No leads in this group'}
               </p>
-              {leadsArr.length === 0 && (
+              {leadsArr.length === 0 && canCreateLead && (
                 <Button size="sm" color="primary" className="mt-3" startContent={<FiPlus />} onPress={openNewForm}>Add Lead</Button>
               )}
             </div>
@@ -5915,13 +6057,19 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                     <span className="text-sm font-semibold text-gray-800 truncate">
                       {lead.name || <span className="text-gray-600 font-normal italic text-xs">Unnamed</span>}
                     </span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setPopoverLeadId(popoverLeadId === lead.id ? null : lead.id); }}
-                      className={`text-[11px] font-bold uppercase tracking-[0.08em] hover:opacity-70 transition-opacity ${STATUS_TEXT[lead.status] || 'text-gray-600'}`}
-                    >
-                      {STATUS_LABEL[lead.status] || lead.status} ▾
-                    </button>
-                    {popoverLeadId === lead.id && (
+                    {canEditLead ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setPopoverLeadId(popoverLeadId === lead.id ? null : lead.id); }}
+                        className={`text-[11px] font-bold uppercase tracking-[0.08em] hover:opacity-70 transition-opacity ${STATUS_TEXT[lead.status] || 'text-gray-600'}`}
+                      >
+                        {STATUS_LABEL[lead.status] || lead.status} ▾
+                      </button>
+                    ) : (
+                      <span className={`text-[11px] font-bold uppercase tracking-[0.08em] ${STATUS_TEXT[lead.status] || 'text-gray-600'}`}>
+                        {STATUS_LABEL[lead.status] || lead.status}
+                      </span>
+                    )}
+                    {canEditLead && popoverLeadId === lead.id && (
                       <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-xl shadow-lg py-1.5 min-w-[172px]">
                         <p className="px-3 pb-1 text-[11px] font-bold uppercase tracking-widest text-gray-600">Set Stage</p>
                         {STAGE_ORDER.map(s => {
@@ -5980,18 +6128,22 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                     <span className="text-xs font-semibold text-gray-600 tabular-nums">${Number(lead.budget).toLocaleString()}</span>
                   )}
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openEditForm(lead); }}
-                      className="p-1 rounded text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                    >
-                      <FiEdit2 size={12} />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
-                      className="p-1 rounded text-gray-600 hover:text-rose-700 hover:bg-rose-50"
-                    >
-                      <FiTrash2 size={12} />
-                    </button>
+                    {canEditLead && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openEditForm(lead); }}
+                        className="p-1 rounded text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                      >
+                        <FiEdit2 size={12} />
+                      </button>
+                    )}
+                    {canDeleteLead && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
+                        className="p-1 rounded text-gray-600 hover:text-rose-700 hover:bg-rose-50"
+                      >
+                        <FiTrash2 size={12} />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -6038,7 +6190,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                   )}
                 </div>
                 <LeadUnitsOfInterest leadId={selectedLead.id} primaryUnitId={selectedLead.unitId} />
-                {!['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
+                {canConvertLead && !['CONVERTED', 'LOST', 'DEAD'].includes(selectedLead.status) && (
                   <button
                     onClick={() => { setShowConvert(true); setConvertForm((f) => ({ ...f, unitId: selectedLead.unitId || '', buyer: selectedLead.name || '', salePrice: selectedLead.budget ? String(Number(selectedLead.budget)) : '' })); }}
                     className="mt-3 w-full text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg py-1.5 transition-colors"
@@ -6049,6 +6201,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
               </div>
 
               {/* Log Activity */}
+              {canEditLead && (
               <div className="px-4 py-3 border-b border-gray-100">
                 <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-gray-600 mb-2">Log Activity</p>
                 <div className="flex gap-1 mb-2">
@@ -6081,6 +6234,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                   </button>
                 </div>
               </div>
+              )}
 
               {/* Stage promotion suggestion */}
               {stageSuggestion && stageSuggestion.leadId === selectedLead?.id && (
@@ -6209,7 +6363,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                 })}
               </Select>
               <Input size="sm" label="Buyer Name *" value={convertForm.buyer} onChange={(e) => setCF('buyer', e.target.value)} />
-              <Input size="sm" label="Sale Price ($) *" type="number" value={convertForm.salePrice} onChange={(e) => setCF('salePrice', e.target.value)} />
+              <Input size="sm" label="Sale Price ($) *" type="number" min={0} value={convertForm.salePrice} onChange={(e) => setCF('salePrice', e.target.value)} />
               <Input size="sm" label="Contract Date" type="date" value={convertForm.contractDate} onChange={(e) => setCF('contractDate', e.target.value)} />
               <Input size="sm" label="Expected Close Date" type="date" value={convertForm.closingDate} onChange={(e) => setCF('closingDate', e.target.value)} />
             </div>
@@ -6366,6 +6520,9 @@ const DRAW_STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'se
   APPROVED: 'success',
   FUNDED: 'secondary',
   REJECTED: 'danger',
+  // Was missing — a cancelled draw fell back to 'default', the same chip color as
+  // DRAFT, so the two were visually indistinguishable in the list.
+  CANCELLED: 'danger',
 };
 
 const EMPTY_DRAW = { loanId: '', requestedAmount: '', requestDate: '', expectedFundingDate: '', notes: '' };
@@ -6393,6 +6550,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
   // and the draw-schedule mutating routes — one gate for every mutating action in this tab.
   const canEdit = hasPermission('draw:edit');
   const canEditLoans = hasPermission('loan:edit');
+  const canViewLoans = hasPermission('loan:view');
 
   const { isOpen, onOpen, onClose } = useDisclosure();
   const { isOpen: isLoanOpen, onOpen: onLoanOpen, onClose: onLoanClose } = useDisclosure();
@@ -6400,6 +6558,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const [loanDeleteTarget, setLoanDeleteTarget] = useState<{ id: string; lender: string; principalAmt: number } | null>(null);
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_DRAW);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [editingDrawId, setEditingDrawId] = useState<string | null>(null);
   // Slice 8 — detail modal with stepper + checklist + workflow buttons
   const [detailDrawId, setDetailDrawId] = useState<string | null>(null);
@@ -6408,6 +6567,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const [detailDrawDefaultTab, setDetailDrawDefaultTab] = useState<'workflow' | 'documents' | undefined>(undefined);
 
   const [loanForm, setLoanForm] = useState<Record<string, string>>(EMPTY_LOAN);
+  const [loanFormErrors, setLoanFormErrors] = useState<Record<string, string>>({});
   const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
   const [isCustomLoanType, setIsCustomLoanType] = useState(false);
 
@@ -6422,6 +6582,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const openAddDraw = () => {
     setEditingDrawId(null);
     setForm(EMPTY_DRAW);
+    setFormErrors({});
     onOpen();
   };
 
@@ -6432,6 +6593,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
 
   const openEditDraw = (draw: any) => {
     setEditingDrawId(draw.id);
+    setFormErrors({});
     setForm({
       loanId: draw.loanId || '',
       requestedAmount: String(draw.requestedAmount ?? draw.amount ?? ''),
@@ -6442,13 +6604,26 @@ function DrawsTab({ projectId }: { projectId: string }) {
     onOpen();
   };
 
+  const validateDrawForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!editingDrawId && !form.loanId) errs.loanId = 'Loan is required';
+    const amt = parseFloat(form.requestedAmount);
+    if (!form.requestedAmount || isNaN(amt) || amt <= 0) errs.requestedAmount = 'Requested amount is required';
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSave = async () => {
+    if (!validateDrawForm()) return;
     try {
       if (editingDrawId) {
         await updateDraw.mutateAsync({
           id: editingDrawId,
           projectId,
-          requestedAmount: form.requestedAmount ? parseFloat(form.requestedAmount) : undefined,
+          // Same parseFloat on both the create and edit paths — the create path used to
+          // send the raw string here, which the backend happened to coerce, but the two
+          // paths disagreeing about the same field was the actual bug.
+          requestedAmount: parseFloat(form.requestedAmount),
           requestDate: form.requestDate || undefined,
           expectedFundingDate: form.expectedFundingDate || undefined,
           notes: form.notes,
@@ -6459,7 +6634,7 @@ function DrawsTab({ projectId }: { projectId: string }) {
         onClose();
       } else {
         const created = await createDraw.mutateAsync({
-          loanId: form.loanId, projectId, requestedAmount: form.requestedAmount,
+          loanId: form.loanId, projectId, requestedAmount: parseFloat(form.requestedAmount),
           expectedFundingDate: form.expectedFundingDate || undefined, notes: form.notes,
         });
         addToast({ title: 'Draw request created', color: 'success' });
@@ -6483,12 +6658,14 @@ function DrawsTab({ projectId }: { projectId: string }) {
   const openAddLoan = () => {
     setEditingLoanId(null);
     setLoanForm(EMPTY_LOAN);
+    setLoanFormErrors({});
     setIsCustomLoanType(false);
     onLoanOpen();
   };
 
   const openEditLoan = (loan: any) => {
     setEditingLoanId(loan.id);
+    setLoanFormErrors({});
     const loanType = loan.loanType || 'CONSTRUCTION';
     setLoanForm({
       loanType,
@@ -6509,13 +6686,27 @@ function DrawsTab({ projectId }: { projectId: string }) {
     onLoanOpen();
   };
 
+  const validateLoanForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!loanForm.lender.trim()) errs.lender = 'Lender is required';
+    const principal = parseFloat(loanForm.principalAmt);
+    if (!loanForm.principalAmt || isNaN(principal) || principal <= 0) errs.principalAmt = 'Principal amount is required';
+    const rate = parseFloat(loanForm.interestRate);
+    if (!loanForm.interestRate || isNaN(rate) || rate < 0) errs.interestRate = 'Interest rate is required';
+    const term = parseInt(loanForm.termMonths, 10);
+    if (!loanForm.termMonths || isNaN(term) || term <= 0) errs.termMonths = 'Term is required';
+    setLoanFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSaveLoan = async () => {
+    if (!validateLoanForm()) return;
     const payload: Record<string, unknown> = {
       loanType: loanForm.loanType,
       lender: loanForm.lender,
-      principalAmt: parseFloat(loanForm.principalAmt) || 0,
-      interestRate: parseFloat(loanForm.interestRate) || 0,
-      termMonths: parseInt(loanForm.termMonths, 10) || 0,
+      principalAmt: parseFloat(loanForm.principalAmt),
+      interestRate: parseFloat(loanForm.interestRate),
+      termMonths: parseInt(loanForm.termMonths, 10),
       maturityDate: loanForm.maturityDate || undefined,
       currentBalance: loanForm.currentBalance ? parseFloat(loanForm.currentBalance) : undefined,
       monthlyPayment: loanForm.monthlyPayment ? parseFloat(loanForm.monthlyPayment) : undefined,
@@ -6626,7 +6817,13 @@ function DrawsTab({ projectId }: { projectId: string }) {
         </CardHeader>
         <CardBody className="p-0">
           {(loans as any[]).length === 0 ? (
-            <div className="p-6"><EmptyState message="No loans yet — add a loan before creating draw requests" /></div>
+            <div className="p-6">
+              <EmptyState
+                message={canViewLoans
+                  ? 'No loans yet — add a loan before creating draw requests'
+                  : "Loans aren't visible to your role — ask someone with loan:view to add or check one before you file a draw request"}
+              />
+            </div>
           ) : (
             <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[640px]">
               <thead className="bg-gray-50 border-b">
@@ -6737,16 +6934,22 @@ function DrawsTab({ projectId }: { projectId: string }) {
           <ModalBody className="space-y-3">
             <Select
               label="Loan"
+              isRequired={!editingDrawId}
               selectedKeys={form.loanId ? [form.loanId] : []}
-              onSelectionChange={(k) => setForm((p) => ({ ...p, loanId: Array.from(k)[0] as string }))}
+              onSelectionChange={(k) => { setForm((p) => ({ ...p, loanId: Array.from(k)[0] as string })); if (formErrors.loanId) setFormErrors((errs) => ({ ...errs, loanId: '' })); }}
               isDisabled={!!editingDrawId}
               description={editingDrawId ? 'Loan cannot be changed once a draw is created' : undefined}
+              isInvalid={!!formErrors.loanId} errorMessage={formErrors.loanId}
             >
               {(loans as any[]).map((l: any) => (
                 <SelectItem key={l.id} textValue={`${l.lender || l.loanType} — ${fmt(Number(l.principalAmt || 0))}`}>{l.lender || l.loanType} — {fmt(Number(l.principalAmt || 0))}</SelectItem>
               ))}
             </Select>
-            <Input label="Requested Amount ($)" type="number" value={form.requestedAmount} onChange={set('requestedAmount')} />
+            <Input
+              label="Requested Amount ($)" type="number" min={0} isRequired value={form.requestedAmount}
+              onChange={(e) => { set('requestedAmount')(e); if (formErrors.requestedAmount) setFormErrors((errs) => ({ ...errs, requestedAmount: '' })); }}
+              isInvalid={!!formErrors.requestedAmount} errorMessage={formErrors.requestedAmount}
+            />
             <Input label="Request Date" type="date" value={form.requestDate} onChange={set('requestDate')} />
             <Input
               label="Expected Funding Date" type="date" value={form.expectedFundingDate} onChange={set('expectedFundingDate')}
@@ -6905,7 +7108,11 @@ function DrawsTab({ projectId }: { projectId: string }) {
                 {isCustomLoanType ? 'Choose from list instead' : '+ Add custom loan type'}
               </button>
             </div>
-            <Input label="Lender" value={loanForm.lender} onChange={setLoanField('lender')} isRequired />
+            <Input
+              label="Lender" value={loanForm.lender} isRequired
+              onChange={(e) => { setLoanField('lender')(e); if (loanFormErrors.lender) setLoanFormErrors((errs) => ({ ...errs, lender: '' })); }}
+              isInvalid={!!loanFormErrors.lender} errorMessage={loanFormErrors.lender}
+            />
             <div className="grid grid-cols-2 gap-3">
               <Select
                 label="Building (optional)"
@@ -6933,11 +7140,23 @@ function DrawsTab({ projectId }: { projectId: string }) {
               </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Principal Amount ($)" type="number" step="0.01" value={loanForm.principalAmt} onChange={setLoanField('principalAmt')} isRequired />
-              <Input label="Interest Rate (%)" type="number" step="0.0001" value={loanForm.interestRate} onChange={setLoanField('interestRate')} isRequired />
+              <Input
+                label="Principal Amount ($)" type="number" min={0} step="0.01" value={loanForm.principalAmt} isRequired
+                onChange={(e) => { setLoanField('principalAmt')(e); if (loanFormErrors.principalAmt) setLoanFormErrors((errs) => ({ ...errs, principalAmt: '' })); }}
+                isInvalid={!!loanFormErrors.principalAmt} errorMessage={loanFormErrors.principalAmt}
+              />
+              <Input
+                label="Interest Rate (%)" type="number" min={0} max={100} step="0.0001" value={loanForm.interestRate} isRequired
+                onChange={(e) => { setLoanField('interestRate')(e); if (loanFormErrors.interestRate) setLoanFormErrors((errs) => ({ ...errs, interestRate: '' })); }}
+                isInvalid={!!loanFormErrors.interestRate} errorMessage={loanFormErrors.interestRate}
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Term (months)" type="number" value={loanForm.termMonths} onChange={setLoanField('termMonths')} isRequired />
+              <Input
+                label="Term (months)" type="number" min={0} value={loanForm.termMonths} isRequired
+                onChange={(e) => { setLoanField('termMonths')(e); if (loanFormErrors.termMonths) setLoanFormErrors((errs) => ({ ...errs, termMonths: '' })); }}
+                isInvalid={!!loanFormErrors.termMonths} errorMessage={loanFormErrors.termMonths}
+              />
               <Input label="Maturity Date" type="date" value={loanForm.maturityDate} onChange={setLoanField('maturityDate')} />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -7010,8 +7229,11 @@ function VendorsTab({ projectId }: { projectId: string }) {
   const { isOpen: isPmtOpen, onOpen: onPmtOpen, onClose: onPmtClose } = useDisclosure();
   const { isOpen: isVendorOpen, onOpen: onVendorOpen, onClose: onVendorClose } = useDisclosure();
   const [form, setForm] = useState<Record<string, string>>(EMPTY_CONTRACT);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [coForm, setCOForm] = useState<Record<string, string>>(EMPTY_CO);
+  const [coFormErrors, setCOFormErrors] = useState<Record<string, string>>({});
   const [pmtForm, setPmtForm] = useState<Record<string, string>>(EMPTY_PAYMENT);
+  const [pmtFormErrors, setPmtFormErrors] = useState<Record<string, string>>({});
   const [vendorForm, setVendorForm] = useState<Record<string, string>>(EMPTY_VENDOR);
   const [editVendorId, setEditVendorId] = useState<string | null>(null);
   const [selectedContractId, setSelectedContractId] = useState('');
@@ -7073,16 +7295,51 @@ function VendorsTab({ projectId }: { projectId: string }) {
   const { page: contractsPage, setPage: setContractsPage, totalPages: contractsTotalPages, paged: pagedContracts, total: contractsTotal } =
     usePagination(contracts as any[], LIST_PAGE_SIZE);
 
+  const validateContractForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!form.vendorId) errs.vendorId = 'Vendor is required';
+    if (!form.description.trim()) errs.description = 'Description is required';
+    const amt = parseFloat(form.originalAmount);
+    if (!form.originalAmount || isNaN(amt)) errs.originalAmount = 'Contract amount is required';
+    else if (amt <= 0) errs.originalAmount = 'Must be greater than 0';
+    if (form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate)) {
+      errs.endDate = 'End date must be after start date';
+    }
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSaveContract = async () => {
+    if (!validateContractForm()) return;
     try {
-      await createContract.mutateAsync({ projectId, ...form, originalAmount: parseFloat(form.originalAmount) });
+      await createContract.mutateAsync({
+        projectId,
+        ...form,
+        originalAmount: parseFloat(form.originalAmount),
+        // Empty date inputs land here as '' (form state is always Record<string,string>) —
+        // the backend's @IsDateString() correctly rejects '' as not a real date, since
+        // @IsOptional() only skips null/undefined, not an empty string.
+        startDate: form.startDate || undefined,
+        endDate: form.endDate || undefined,
+      });
       addToast({ title: 'Contract created', color: 'success' });
       setForm(EMPTY_CONTRACT);
       onContractClose();
     } catch (e) { addToast({ title: errMsg(e, 'Failed to create contract'), color: 'danger' }); }
   };
 
+  const validateCOForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!coForm.description.trim()) errs.description = 'Description is required';
+    const amt = parseFloat(coForm.amount);
+    if (!coForm.amount || isNaN(amt)) errs.amount = 'Amount is required';
+    else if (amt <= 0) errs.amount = 'Must be greater than 0';
+    setCOFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSaveCO = async () => {
+    if (!validateCOForm()) return;
     try {
       await addCO.mutateAsync({ contractId: selectedContractId, projectId, ...coForm, amount: parseFloat(coForm.amount) });
       addToast({ title: 'Change order added', color: 'success' });
@@ -7091,7 +7348,18 @@ function VendorsTab({ projectId }: { projectId: string }) {
     } catch (e) { addToast({ title: errMsg(e, 'Failed to add CO'), color: 'danger' }); }
   };
 
+  const validatePmtForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    const amt = parseFloat(pmtForm.amount);
+    if (!pmtForm.amount || isNaN(amt)) errs.amount = 'Amount is required';
+    else if (amt <= 0) errs.amount = 'Must be greater than 0';
+    if (!pmtForm.paidDate) errs.paidDate = 'Paid date is required';
+    setPmtFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleSavePayment = async () => {
+    if (!validatePmtForm()) return;
     try {
       await addPayment.mutateAsync({ contractId: selectedContractId, projectId, ...pmtForm, amount: parseFloat(pmtForm.amount) });
       addToast({ title: 'Payment recorded', color: 'success' });
@@ -7158,7 +7426,7 @@ function VendorsTab({ projectId }: { projectId: string }) {
       <Card shadow="sm">
         <CardHeader className="flex justify-between items-center">
           <span className="font-semibold text-sm">Contracts</span>
-          {canEdit && <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onContractOpen}>Add Contract</Button>}
+          {canEdit && <Button size="sm" color="primary" startContent={<FiPlus />} onPress={() => { setFormErrors({}); onContractOpen(); }}>Add Contract</Button>}
         </CardHeader>
         <CardBody className="p-0">
           {(contracts as any[]).length === 0 ? (
@@ -7190,8 +7458,8 @@ function VendorsTab({ projectId }: { projectId: string }) {
                       <div className="flex items-center gap-1 ml-4">
                         {canEdit && (
                           <>
-                            <Button size="sm" variant="flat" onPress={() => { setSelectedContractId(c.id); onCOOpen(); }}>+ CO</Button>
-                            <Button size="sm" variant="flat" color="success" onPress={() => { setSelectedContractId(c.id); onPmtOpen(); }}>$ Pay</Button>
+                            <Button size="sm" variant="flat" onPress={() => { setSelectedContractId(c.id); setCOFormErrors({}); onCOOpen(); }}>+ CO</Button>
+                            <Button size="sm" variant="flat" color="success" onPress={() => { setSelectedContractId(c.id); setPmtFormErrors({}); onPmtOpen(); }}>$ Pay</Button>
                             <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => deleteContract.mutate({ id: c.id, projectId })}>
                               <FiTrash2 />
                             </Button>
@@ -7280,17 +7548,30 @@ function VendorsTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>New Contract</ModalHeader>
           <ModalBody className="space-y-3">
-            <Select label="Vendor" selectedKeys={form.vendorId ? [form.vendorId] : []} onSelectionChange={(k) => setForm((p) => ({ ...p, vendorId: Array.from(k)[0] as string }))}>
+            <Select
+              label="Vendor" isRequired
+              selectedKeys={form.vendorId ? [form.vendorId] : []}
+              onSelectionChange={(k) => { setForm((p) => ({ ...p, vendorId: Array.from(k)[0] as string })); if (formErrors.vendorId) setFormErrors((errs) => ({ ...errs, vendorId: '' })); }}
+              isInvalid={!!formErrors.vendorId} errorMessage={formErrors.vendorId}
+            >
               {(vendors as any[]).map((v: any) => <SelectItem key={v.id} textValue={v.name}>{v.name}{v.trade ? ` (${v.trade})` : ''}</SelectItem>)}
             </Select>
-            <Input label="Description" value={form.description} onChange={set('description')} />
-            <Input label="Contract Amount" type="number" value={form.originalAmount} onChange={set('originalAmount')} />
+            <Input
+              label="Description" isRequired value={form.description}
+              onChange={(e) => { set('description')(e); if (formErrors.description) setFormErrors((errs) => ({ ...errs, description: '' })); }}
+              isInvalid={!!formErrors.description} errorMessage={formErrors.description}
+            />
+            <Input
+              label="Contract Amount" isRequired type="number" min={0} value={form.originalAmount}
+              onChange={(e) => { set('originalAmount')(e); if (formErrors.originalAmount) setFormErrors((errs) => ({ ...errs, originalAmount: '' })); }}
+              isInvalid={!!formErrors.originalAmount} errorMessage={formErrors.originalAmount}
+            />
             <Select label="Status" selectedKeys={[form.status]} onSelectionChange={(k) => setForm((p) => ({ ...p, status: Array.from(k)[0] as string }))}>
               {['DRAFT', 'ACTIVE', 'COMPLETED', 'TERMINATED'].map((s) => <SelectItem key={s}>{s}</SelectItem>)}
             </Select>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input label="Start Date" type="date" value={form.startDate} onChange={set('startDate')} />
-              <Input label="End Date" type="date" value={form.endDate} onChange={set('endDate')} />
+              <Input label="End Date" type="date" value={form.endDate} onChange={set('endDate')} isInvalid={!!formErrors.endDate} errorMessage={formErrors.endDate} />
             </div>
           </ModalBody>
           <ModalFooter>
@@ -7305,8 +7586,16 @@ function VendorsTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>Add Change Order</ModalHeader>
           <ModalBody className="space-y-3">
-            <Input label="Description" value={coForm.description} onChange={setCO('description')} />
-            <Input label="Amount" type="number" value={coForm.amount} onChange={setCO('amount')} />
+            <Input
+              label="Description" isRequired value={coForm.description}
+              onChange={(e) => { setCO('description')(e); if (coFormErrors.description) setCOFormErrors((errs) => ({ ...errs, description: '' })); }}
+              isInvalid={!!coFormErrors.description} errorMessage={coFormErrors.description}
+            />
+            <Input
+              label="Amount" isRequired type="number" min={0} value={coForm.amount}
+              onChange={(e) => { setCO('amount')(e); if (coFormErrors.amount) setCOFormErrors((errs) => ({ ...errs, amount: '' })); }}
+              isInvalid={!!coFormErrors.amount} errorMessage={coFormErrors.amount}
+            />
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={onCOClose}>Cancel</Button>
@@ -7320,8 +7609,16 @@ function VendorsTab({ projectId }: { projectId: string }) {
         <ModalContent>
           <ModalHeader>Record Payment</ModalHeader>
           <ModalBody className="space-y-3">
-            <Input label="Amount" type="number" value={pmtForm.amount} onChange={setPmt('amount')} />
-            <Input label="Payment Date" type="date" value={pmtForm.paidDate} onChange={setPmt('paidDate')} />
+            <Input
+              label="Amount" isRequired type="number" min={0} value={pmtForm.amount}
+              onChange={(e) => { setPmt('amount')(e); if (pmtFormErrors.amount) setPmtFormErrors((errs) => ({ ...errs, amount: '' })); }}
+              isInvalid={!!pmtFormErrors.amount} errorMessage={pmtFormErrors.amount}
+            />
+            <Input
+              label="Payment Date" isRequired type="date" value={pmtForm.paidDate}
+              onChange={(e) => { setPmt('paidDate')(e); if (pmtFormErrors.paidDate) setPmtFormErrors((errs) => ({ ...errs, paidDate: '' })); }}
+              isInvalid={!!pmtFormErrors.paidDate} errorMessage={pmtFormErrors.paidDate}
+            />
             <Textarea label="Notes" value={pmtForm.notes} onChange={setPmt('notes')} minRows={2} />
           </ModalBody>
           <ModalFooter>
@@ -7360,7 +7657,18 @@ function VendorsTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Documents Tab ----
-const DOC_CATEGORIES = ['GENERAL', 'PERMIT', 'CONTRACT', 'FINANCIAL', 'DRAWING', 'PHOTO', 'LEGAL'];
+// Was 7 of the 16 real DocCategory values (schema.prisma) — missing BROCHURE, LOI,
+// DEED, BOOKING_AGREEMENT, RECEIPT, NOC, POSSESSION_CERTIFICATE, CITY_APPROVAL,
+// HANDOVER_CERTIFICATE. Unlike BuildingDetailPage's deliberately-curated subset
+// (transaction-specific categories excluded because they belong to a Sale/Lead, not
+// the asset), Project is the widest scope in this app's document hierarchy — there's
+// no category a project-level document couldn't legitimately be filed under, so this
+// carries the full enum rather than picking a subset that can drift again.
+const DOC_CATEGORIES = [
+  'GENERAL', 'PERMIT', 'CONTRACT', 'FINANCIAL', 'DRAWING', 'PHOTO', 'LEGAL',
+  'BROCHURE', 'LOI', 'DEED', 'BOOKING_AGREEMENT', 'RECEIPT', 'NOC',
+  'POSSESSION_CERTIFICATE', 'CITY_APPROVAL', 'HANDOVER_CERTIFICATE',
+];
 const DOC_CATEGORY_COLORS: Record<string, string> = {
   GENERAL: 'bg-gray-100 text-gray-600',
   PERMIT: 'bg-yellow-100 text-yellow-700',
@@ -7369,6 +7677,15 @@ const DOC_CATEGORY_COLORS: Record<string, string> = {
   DRAWING: 'bg-purple-100 text-purple-700',
   PHOTO: 'bg-pink-100 text-pink-700',
   LEGAL: 'bg-red-100 text-red-700',
+  BROCHURE: 'bg-indigo-100 text-indigo-700',
+  LOI: 'bg-amber-100 text-amber-700',
+  DEED: 'bg-teal-100 text-teal-700',
+  BOOKING_AGREEMENT: 'bg-cyan-100 text-cyan-700',
+  RECEIPT: 'bg-lime-100 text-lime-700',
+  NOC: 'bg-orange-100 text-orange-700',
+  POSSESSION_CERTIFICATE: 'bg-emerald-100 text-emerald-700',
+  CITY_APPROVAL: 'bg-sky-100 text-sky-700',
+  HANDOVER_CERTIFICATE: 'bg-violet-100 text-violet-700',
 };
 
 function docIcon(mime: string) {

@@ -1,14 +1,13 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useMemo, useEffect } from 'react';
 import {
-  Chip, Button, Avatar, Textarea, Select, SelectItem, Switch,
+  Chip, Button, Avatar, Textarea, Select, SelectItem, Switch, Tooltip,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers, FiCheckSquare, FiUsers } from 'react-icons/fi';
+import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers, FiCheckSquare, FiUsers, FiClipboard } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
-import { MentionTextarea } from '../components/MentionTextarea';
 import {
-  useUnit, useUnitComments, useCreateComment, useDeleteComment, useUpdateUnit, useLeads, useDocuments,
+  useUnit, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
   useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers, useUnitHistory,
@@ -24,8 +23,8 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
 };
 import { fmt, fmtDate, fmtPct, errMsg } from '../utils/fmt';
 import { StatusBadge, LoadingState, ErrorState, PermissionGate } from '../components/ui';
-import { CommentChip, type CommentType } from '../components/CommentChip';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
+import { UnitActivity } from '../components/UnitActivity';
 import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
 import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
@@ -50,6 +49,12 @@ import {
 const UNIT_STATUSES = ['AVAILABLE', 'UNDER_CONTRACT', 'LEASED', 'SOLD', 'OCCUPIED', 'UNDER_CONSTRUCTION'];
 
 // Single metric cell used inside the unified key-metrics strip.
+/** Whole days a unit has been blocked, or null when it is not. */
+function blockerDays(since?: string | null) {
+  if (!since) return null;
+  return Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
+}
+
 function Metric({ label, value, unit, accent, sub }: { label: string; value: string; unit?: string; accent?: string; sub?: string }) {
   return (
     <div className="p-4 sm:p-5">
@@ -72,7 +77,7 @@ function Metric({ label, value, unit, accent, sub }: { label: string; value: str
  * so the emptiest one used to set the height of the row it was in.
  */
 function Section({
-  icon, title, subtitle, count, action, children, empty, className = '', id,
+  icon, title, subtitle, count, action, children, empty, className = '', id, headerClassName = '',
 }: {
   icon: React.ReactNode;
   title: string;
@@ -87,11 +92,15 @@ function Section({
   className?: string;
   /** DOM id so other pages (e.g. the Construction dashboard) can deep-link via #hash. */
   id?: string;
+  /** Optional tint on the header strip — for a card sitting next to a same-named
+   *  neighbor (e.g. "Construction" / "Construction Checklist"), so the two are
+   *  distinguishable at a glance rather than only on reading the subtitle. */
+  headerClassName?: string;
 }) {
   if (empty) {
     return (
-      <div id={id} className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
-        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5">
+      <div id={id} className={`rounded-2xl border border-gray-200 bg-white overflow-hidden ${className}`}>
+        <div className={`flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 ${headerClassName}`}>
           <div className="flex items-center gap-2.5">
             {icon}
             <div>
@@ -108,8 +117,8 @@ function Section({
     );
   }
   return (
-    <div id={id} className={`rounded-2xl border border-gray-200 bg-white ${className}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-3">
+    <div id={id} className={`rounded-2xl border border-gray-200 bg-white overflow-hidden ${className}`}>
+      <div className={`flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-3 ${headerClassName}`}>
         <div className="flex items-center gap-2.5">
           {icon}
           <div>
@@ -143,6 +152,97 @@ function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
     <div className="flex flex-col items-center justify-center gap-2 py-6 text-gray-300">
       {icon}
       <p className="text-sm text-gray-500">{text}</p>
+    </div>
+  );
+}
+
+// ---- Section jump rail ----
+// The page below is 8+ heterogeneous sections deep with no way to reach the bottom
+// ones (Documents, Comments) short of scrolling past everything else, every time. This
+// is a sticky wayfinding strip, not route tabs: every section still renders on the same
+// URL, so the existing #construction-checklist deep link from the Construction
+// dashboard — and any other, present or future — keeps working exactly as before.
+const SECTION_NAV_ITEMS = [
+  { id: 'section-overview', label: 'Overview' },
+  { id: 'construction-checklist', label: 'Checklist' },
+  { id: 'section-history', label: 'History' },
+  { id: 'section-notes', label: 'Notes' },
+  { id: 'section-leads', label: 'Leads' },
+  { id: 'section-interior', label: 'Interior' },
+  { id: 'section-documents', label: 'Documents' },
+  { id: 'section-activity', label: 'Activity' },
+] as const;
+
+function SectionNav({ constructionFirst = false }: { constructionFirst?: boolean }) {
+  const [presentIds, setPresentIds] = useState<string[]>([]);
+  const [active, setActive] = useState<string | null>(null);
+
+  // Which sections actually rendered is a function of permissions and whether there is
+  // anything to show (e.g. Notes only renders with content or edit rights, Interior
+  // only behind a permission gate) — logic that already lives at each section's own
+  // render site. Asking the DOM what exists, once mounted, is simpler and can't drift
+  // out of sync with that logic the way re-deriving every gate a second time here would.
+  useEffect(() => {
+    const found = SECTION_NAV_ITEMS.map((it) => it.id).filter((id) => document.getElementById(id));
+    setPresentIds(found);
+  }, []);
+
+  useEffect(() => {
+    if (presentIds.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length === 0) return;
+        const topmost = visible.reduce((a, b) =>
+          a.boundingClientRect.top < b.boundingClientRect.top ? a : b,
+        );
+        setActive(topmost.target.id);
+      },
+      { rootMargin: '-104px 0px -70% 0px', threshold: 0 },
+    );
+    presentIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, [presentIds]);
+
+  const orderedItems = constructionFirst
+    ? [
+        ...SECTION_NAV_ITEMS.filter((it) => it.id === 'construction-checklist' || it.id === 'section-activity'),
+        ...SECTION_NAV_ITEMS.filter((it) => it.id !== 'construction-checklist' && it.id !== 'section-activity'),
+      ]
+    : [...SECTION_NAV_ITEMS];
+
+  if (presentIds.length < 2) return null;
+
+  const jump = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + window.scrollY - 96;
+    window.scrollTo({ top, behavior: 'smooth' });
+  };
+
+  return (
+    <div className="sticky top-14 z-20 mb-5 sm:mb-6 -mx-1 px-1 py-2 overflow-x-auto">
+      <div className="flex gap-1 bg-white/95 backdrop-blur border border-gray-200 rounded-full px-1.5 py-1.5 w-max shadow-sm">
+        {/* The pills must follow the page, not the constant: for a construction-first
+            viewer Checklist and Activity are rendered above the overview, and a nav that
+            still led with Overview would jump the reader backwards. */}
+        {orderedItems.filter((it) => presentIds.includes(it.id)).map((it) => (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => jump(it.id)}
+            aria-current={active === it.id ? 'true' : undefined}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+              active === it.id ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            {it.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -225,11 +325,17 @@ function UnitHistorySummary({ summary }: { summary: any }) {
   const partial = !!summary.historyStartsAtBootstrap;
   const since = partial ? `since ${fmtDate(summary.firstEventAt)}` : null;
 
+  // The API nulls lifetimeRentCollected/lifetimeSaleProceeds for a caller without
+  // lease:view/sales:view (see UnitHistoryService.getHistory) — that's the signal to
+  // hide the tile, not `?? 0`, which would show a real-looking "$0" for data that's
+  // actually just hidden from this role.
   const tiles = [
     { label: 'Total vacant', value: daysLabel(summary.totalDaysVacant ?? 0), tone: 'text-gray-700', note: since },
     { label: 'Total leased', value: daysLabel(summary.totalDaysLeased ?? 0), tone: 'text-emerald-700', note: since },
     { label: 'Tenancies', value: String(summary.tenancyCount ?? 0), tone: 'text-gray-700', note: null },
-    { label: 'Rent collected', value: fmt(summary.lifetimeRentCollected ?? 0), tone: 'text-emerald-700', note: null },
+    ...(summary.lifetimeRentCollected != null
+      ? [{ label: 'Rent collected', value: fmt(summary.lifetimeRentCollected), tone: 'text-emerald-700', note: null }]
+      : []),
   ];
   return (
     <div className="mb-4">
@@ -326,9 +432,16 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                       Current
                     </span>
                   )}
+                  {/* isHistorical means "entered by hand from records," not "this tenancy
+                      has ended" — those are independent facts. A lease can be both
+                      backfilled AND still running today, so pair it with "Current"
+                      instead of contradicting it. */}
                   {e.isHistorical && (
-                    <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
-                      Historical
+                    <span
+                      className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500"
+                      title="Entered by hand from records, not recorded live"
+                    >
+                      {e.isOngoing ? 'Backfilled' : 'Historical'}
                     </span>
                   )}
                 </p>
@@ -740,7 +853,14 @@ export default function UnitDetailPage() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [primeOwned, setPrimeOwned] = useState(false);
   const { hasPermission } = useAuthStore();
-  const canEditUnit = hasPermission('unit:edit');
+  // The narrower build-field permission: CONSTRUCTION may fix a unit's number, type,
+  // size and notes. The commercial inputs inside the modal gate themselves on `unit:edit`.
+  const canEditUnit = hasPermission('unit:editBuild');
+  const canViewSales = hasPermission('sales:view');
+  // Reaching the edit form only needs `unit:editBuild`; the commercial half of it —
+  // status, asking price, asking rent, ownership — needs `unit:edit`, matching the
+  // server-side allowlist in UnitsService.update exactly.
+  const canEditCommercial = hasPermission('unit:edit');
   const canEditSale = hasPermission('sales:edit');
   const canEditLease = hasPermission('lease:edit');
   const canViewLeases = hasPermission('lease:view');
@@ -750,14 +870,27 @@ export default function UnitDetailPage() {
   const canViewBudget = hasPermission('budget:view');
   const canViewChecklist = hasPermission('checklist:view');
   const canEditChecklist = hasPermission('checklist:edit');
+  /**
+   * A construction-focused viewer: runs checklists, cannot read leases. That is the
+   * Construction role exactly — a PM holds lease:view too. For them the page led with an
+   * empty Tenant card and the checklist sat several cards down the masonry, so the one thing
+   * they came for was below the fold. Checklist and Activity move to the top instead.
+   */
+  // Whose unit page opens on the build work rather than the money: the roles that run
+  // the site. Expressed as "can edit the checklist AND does not read financials" so it
+  // resolves to exactly PROJECT_MANAGER and CONSTRUCTION — PM was previously excluded by
+  // a `!canViewLeases` test, which PM fails because they hold lease:view, even though the
+  // construction-first ordering is just as right for them. Kept permission-derived rather
+  // than a role-name list, which is the thing that has drifted repeatedly in this codebase.
+  const constructionFirst = canEditChecklist && !hasPermission('financial:view');
   const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
   // Derived from `unit` (not `u`) because the early returns below sit between here and
   // where `activeLease` is computed — hooks cannot live after a conditional return.
   const activeLeaseId = (unit as any)?.leases?.find(
     (l: any) => !['EXPIRED', 'TERMINATED'].includes(l.status),
   )?.id as string | undefined;
-  const { data: rentPeriods = [] } = useLeaseRentPeriods(activeLeaseId);
-  const { data: obligationSummary } = useUnitObligationSummary(unitId);
+  const { data: rentPeriods = [] } = useLeaseRentPeriods(canViewLeases ? activeLeaseId : undefined);
+  const { data: obligationSummary } = useUnitObligationSummary(canViewLeases ? unitId : undefined);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [leaseModalOpen, setLeaseModalOpen] = useState(false);
@@ -963,7 +1096,7 @@ export default function UnitDetailPage() {
    * while editing, so it costs nothing the rest of the time.
    */
   const editedLeaseLedger: any[] =
-    (useLeaseRentInvoices(leaseEditId ?? undefined).data as any[]) ?? [];
+    (useLeaseRentInvoices(canViewLeases ? (leaseEditId ?? undefined) : undefined).data as any[]) ?? [];
   /** "covering Jan 2025 – Aug 2026" — the range, so the warning is specific. */
   const ledgerSpan = useMemo(() => {
     if (editedLeaseLedger.length === 0) return null;
@@ -1061,11 +1194,17 @@ export default function UnitDetailPage() {
         data: {
           unitNumber: form.unitNumber || undefined,
           unitType: form.unitType || undefined,
-          status: form.status || undefined,
           sqft: form.sqft ? parseInt(form.sqft, 10) : null,
-          askingPrice: form.askingPrice ? parseFloat(form.askingPrice) : null,
-          askingRent: form.askingRent ? parseFloat(form.askingRent) : null,
-          primeOwned,
+          // Status, the commercial terms and ownership all need `unit:edit`; the route
+          // itself only needs `unit:editBuild`. Omitted rather than sent as null,
+          // because the API refuses the whole request if a field it disallows is present
+          // — so sending them would fail the save instead of just ignoring them.
+          ...(canEditCommercial ? {
+            status: form.status || undefined,
+            askingPrice: form.askingPrice ? parseFloat(form.askingPrice) : null,
+            askingRent: form.askingRent ? parseFloat(form.askingRent) : null,
+            primeOwned,
+          } : {}),
           notes: form.notes || null,
         },
       });
@@ -1088,6 +1227,36 @@ export default function UnitDetailPage() {
     }
   };
 
+
+  // Defined once and placed by `constructionFirst` above, so the two orderings cannot drift
+  // apart into two copies of the same JSX.
+  const checklistSection = (
+    <Section
+      id="construction-checklist"
+      icon={<FiCheckSquare className="w-4 h-4 text-teal-600" />}
+      title="Construction Checklist"
+      subtitle="Build stages — fixed template checklist"
+      headerClassName="bg-teal-50/60"
+    >
+      <UnitConstructionChecklist
+        unitId={unitId!} buildingId={u.building?.id}
+        projectId={u.building?.project?.id} canEdit={canEditChecklist}
+      />
+    </Section>
+  );
+
+  const activitySection = (
+    <div id="section-activity" className="mb-5 sm:mb-6">
+      <Section
+        icon={<FiClipboard className="w-4 h-4 text-blue-600" />}
+        title="Activity"
+        subtitle="Site updates and team comments, newest first"
+        headerClassName="bg-blue-50/60"
+      >
+        <UnitActivity unitId={unitId!} projectId={u.building?.project?.id} />
+      </Section>
+    </div>
+  );
   return (
     <div className="max-w-[1200px] mx-auto">
       <button
@@ -1111,6 +1280,29 @@ export default function UnitDetailPage() {
             <div className="flex items-center gap-2 flex-wrap mt-3">
               <StatusBadge status={u.unitType} />
               <StatusBadge status={u.status} />
+              {/* Site Tracker state, surfaced here too. It used to live ONLY on the Site
+                  Tracker grid, so opening a unit gave no hint that it was blocked — the one
+                  fact anyone arriving at this page most needs to know. */}
+              {u.blockerStatus === 'YES' && (
+                <Tooltip size="sm" content={u.blockerReason ?? 'Blocked'}>
+                  <span>
+                    <Chip
+                      size="sm" color="danger" variant="flat"
+                      startContent={<FiAlertTriangle className="w-3 h-3" />}
+                    >
+                      Blocked{blockerDays(u.blockerSince) !== null && ` · ${blockerDays(u.blockerSince)}d`}
+                    </Chip>
+                  </span>
+                </Tooltip>
+              )}
+              {u.sitePriority && (
+                <Chip
+                  size="sm" variant="flat"
+                  color={u.sitePriority === 'HIGH' ? 'secondary' : u.sitePriority === 'MEDIUM' ? 'warning' : 'primary'}
+                >
+                  {u.sitePriority.charAt(0) + u.sitePriority.slice(1).toLowerCase()} priority
+                </Chip>
+              )}
               {/* Slice 4: time-on-market shown only for AVAILABLE units */}
               {u.status === 'AVAILABLE' && u.availableSince && (
                 <TimeOnMarketBar availableSince={u.availableSince} />
@@ -1118,9 +1310,15 @@ export default function UnitDetailPage() {
               {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime Owned</Chip>}
             </div>
           </div>
-          <Button size="sm" variant="flat" color="primary" startContent={<FiEdit2 />} onPress={openEdit} className="shrink-0 font-medium">
-            Edit
-          </Button>
+          {/* `canEditUnit` was computed and used in four other places on this page but not
+              here, so Construction, Viewer, Legal and Finance — none of whom hold unit:edit —
+              were offered an Edit button that the API refuses. Offering an action the server
+              will reject is a bug on its own terms. */}
+          {canEditUnit && (
+            <Button size="sm" variant="flat" color="primary" startContent={<FiEdit2 />} onPress={openEdit} className="shrink-0 font-medium">
+              Edit
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1149,17 +1347,19 @@ export default function UnitDetailPage() {
                   <SelectItem key={opt.value} textValue={opt.label}>{opt.label}</SelectItem>
                 ))}
               </Select>
-              <Select
-                label="Status"
-                size="sm"
-                selectedKeys={form.status ? [form.status] : []}
-                onSelectionChange={(keys) => {
-                  const v = Array.from(keys)[0] as string;
-                  if (v) setForm((f) => ({ ...f, status: v }));
-                }}
-              >
-                {UNIT_STATUSES.map((s) => <SelectItem key={s}>{s.replace(/_/g, ' ')}</SelectItem>)}
-              </Select>
+              {canEditCommercial && (
+                <Select
+                  label="Status"
+                  size="sm"
+                  selectedKeys={form.status ? [form.status] : []}
+                  onSelectionChange={(keys) => {
+                    const v = Array.from(keys)[0] as string;
+                    if (v) setForm((f) => ({ ...f, status: v }));
+                  }}
+                >
+                  {UNIT_STATUSES.map((s) => <SelectItem key={s}>{s.replace(/_/g, ' ')}</SelectItem>)}
+                </Select>
+              )}
               <Input
                 label="Size (sqft)"
                 type="number"
@@ -1167,20 +1367,24 @@ export default function UnitDetailPage() {
                 onChange={set('sqft')}
                 size="sm"
               />
-              <Input
-                label="Asking Price ($)"
-                type="number"
-                value={form.askingPrice ?? ''}
-                onChange={set('askingPrice')}
-                size="sm"
-              />
-              <Input
-                label="Asking Rent ($/mo)"
-                type="number"
-                value={form.askingRent ?? ''}
-                onChange={set('askingRent')}
-                size="sm"
-              />
+              {canEditCommercial && (
+                <>
+                  <Input
+                    label="Asking Price ($)"
+                    type="number"
+                    value={form.askingPrice ?? ''}
+                    onChange={set('askingPrice')}
+                    size="sm"
+                  />
+                  <Input
+                    label="Asking Rent ($/mo)"
+                    type="number"
+                    value={form.askingRent ?? ''}
+                    onChange={set('askingRent')}
+                    size="sm"
+                  />
+                </>
+              )}
             </div>
             <div className="mt-4">
               <Textarea
@@ -1192,11 +1396,13 @@ export default function UnitDetailPage() {
                 maxRows={5}
               />
             </div>
-            <div className="mt-3">
-              <Switch isSelected={primeOwned} onValueChange={setPrimeOwned} size="sm">
-                Prime Owned
-              </Switch>
-            </div>
+            {canEditCommercial && (
+              <div className="mt-3">
+                <Switch isSelected={primeOwned} onValueChange={setPrimeOwned} size="sm">
+                  Prime Owned
+                </Switch>
+              </div>
+            )}
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={onClose}>Cancel</Button>
@@ -1342,6 +1548,8 @@ export default function UnitDetailPage() {
         onClose={() => setBackfilling(false)}
       />
 
+      <SectionNav constructionFirst={constructionFirst} />
+
       {/* Key metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 rounded-2xl border border-gray-200 bg-white overflow-hidden mb-5 sm:mb-6 divide-x divide-y md:divide-y-0 divide-gray-100">
         <Metric label="Size" value={u.sqft ? `${u.sqft.toLocaleString()}` : '\u2014'} unit={u.sqft ? 'sqft' : undefined} />
@@ -1356,11 +1564,42 @@ export default function UnitDetailPage() {
               <Metric label="Closed" value={fmtDate(closedSale?.closingDate)} />
             </>
           );
+        })() : TENANTED_STATUSES.includes(u.status) && activeLease ? (() => {
+          // "Asking Price / Asking Rent" describe a unit still on the market \u2014 showing
+          // them here for a unit that already HAS a tenant is why this strip read as
+          // four dashes on a space earning real rent. Report what's actually true of a
+          // leased unit instead: what it's collecting, and for how much longer.
+          const rentPsfMo = activeLease.rentPerSqft != null ? Number(activeLease.rentPerSqft) : null;
+          return (
+            <>
+              <Metric
+                label="Monthly Rent"
+                value={fmt(activeLease.monthlyRent)}
+                accent="text-emerald-700"
+                sub={rentPsfMo ? `$${rentPsfMo.toFixed(2)}/sqft/mo` : undefined}
+              />
+              <Metric
+                label="Lease End"
+                value={fmtDate(activeLease.leaseEnd)}
+                accent={tenancy?.key === 'OVERDUE_TO_CLOSE' ? 'text-red-700' : undefined}
+              />
+              <Metric label="Occupied Since" value={fmtDate(activeLease.leaseStart)} />
+            </>
+          );
         })() : (
           <>
-            <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-700" />
-            <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
-            <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-700" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
+            {/* Asking price and rent are what the unit is being marketed at, not facts
+                about the building, so they follow the sales/leasing permissions rather
+                than unit:view. CONSTRUCTION holds neither and was seeing both. */}
+            {canViewSales && (
+              <>
+                <Metric label="Asking Price" value={u.askingPrice ? fmt(u.askingPrice) : '\u2014'} accent="text-emerald-700" />
+                <Metric label="Price PSF" value={psf ? `$${psf}` : '\u2014'} />
+              </>
+            )}
+            {canViewLeases && (
+              <Metric label="Asking Rent" value={u.askingRent ? fmt(u.askingRent) : '\u2014'} unit={u.askingRent ? '/mo' : undefined} accent="text-emerald-700" sub={rentPsf ? `$${rentPsf}/sqft/yr` : undefined} />
+            )}
           </>
         )}
       </div>
@@ -1444,7 +1683,15 @@ export default function UnitDetailPage() {
           The trade-off, accepted deliberately: reading order becomes column-major — the
           whole left column, then the right — rather than left-to-right in pairs.
           `break-inside-avoid` is what stops a card being split across the column boundary. */}
-      <div className="columns-1 lg:columns-2 gap-5 sm:gap-6 mb-5 sm:mb-6 [&>*]:break-inside-avoid [&>*]:mb-5 sm:[&>*]:mb-6">
+      {/* Construction-first: for a viewer who runs checklists and cannot read leases, these
+          two are the page. Rendered here, above the overview masonry, and skipped in their
+          usual positions further down. */}
+      {constructionFirst && canViewChecklist && (
+        <div className="mb-5 sm:mb-6">{checklistSection}</div>
+      )}
+      {constructionFirst && activitySection}
+
+      <div id="section-overview" className="columns-1 lg:columns-2 gap-5 sm:gap-6 mb-5 sm:mb-6 [&>*]:break-inside-avoid [&>*]:mb-5 sm:[&>*]:mb-6">
         {/* Active Lease / Tenant Profile — hidden for SOLD units */}
         {u.status !== 'SOLD' && <Section
           icon={<FiHome className="w-4 h-4 text-blue-600" />}
@@ -1642,62 +1889,61 @@ export default function UnitDetailPage() {
           <UnitConstructionPanel unitId={unitId!} canEdit={hasPermission('task:edit')} />
         </Section>
 
-        {/* Construction Checklist — the fixed, ordered per-unit stage list (client's Monday
-            board), distinct from the ad-hoc "Construction" work items above. */}
-        {canViewChecklist && (
-          <Section
-            id="construction-checklist"
-            icon={<FiCheckSquare className="w-4 h-4 text-teal-600" />}
-            title="Construction Checklist"
-            subtitle="Build stages — fixed template checklist"
-          >
-            <UnitConstructionChecklist unitId={unitId!} buildingId={u.building?.id} canEdit={canEditChecklist} />
-          </Section>
-        )}
+        {/* Rendered here only for viewers whose job is not construction — for Construction
+            it is lifted above the overview, see `constructionFirst`. */}
+        {canViewChecklist && !constructionFirst && checklistSection}
 
-        {/* Linked Loans */}
-        <Section
-          icon={<FiCreditCard className="w-4 h-4 text-violet-600" />}
-          title="Linked Loans"
-          count={u.loans?.length}
-          empty={u.loans?.length ? null : 'None'}
-        >
-          {u.loans?.length > 0 ? (
-            <div className="space-y-4">
-              {u.loans.map((loan: any) => (
-                <dl key={loan.id} className="text-sm divide-y divide-gray-100 rounded-xl border border-gray-100 px-3">
-                  <Row label="Lender"><span className="font-medium text-gray-900">{loan.lender || '\u2014'}</span></Row>
-                  <Row label="Type"><span className="text-gray-700">{loan.loanType?.replace(/_/g, ' ') || '\u2014'}</span></Row>
-                  <Row label="Monthly Payment"><span className="text-gray-700 tabular-nums">{loan.monthlyPayment ? fmt(loan.monthlyPayment) : '\u2014'}</span></Row>
-                  <Row label="Principal"><span className="text-gray-700 tabular-nums">{loan.principalAmt ? fmt(loan.principalAmt) : '\u2014'}</span></Row>
+
+
+        {/* Financing — loans and budget scoped to this unit, combined into one card so
+            the two money sections stay together regardless of where the masonry's
+            column break falls (previously two separate cards could land in different
+            columns purely as a function of how tall the Tenant card rendered). */}
+        {(() => {
+          const budgetTotal = Number((budgetSummary as any)?.budgetTotal ?? 0);
+          const committedTotal = Number((budgetSummary as any)?.committedTotal ?? 0);
+          const actualTotal = Number((budgetSummary as any)?.actualTotal ?? 0);
+          const variance = Number((budgetSummary as any)?.variance ?? 0);
+          const hasBudget = canViewBudget && (budgetTotal !== 0 || committedTotal !== 0 || actualTotal !== 0);
+          const hasLoans = u.loans?.length > 0;
+          if (!canViewBudget && !hasLoans) return null;
+          return (
+            <Section icon={<FiDollarSign className="w-4 h-4 text-emerald-600" />} title="Financing" subtitle="Linked loans & budget">
+              {hasLoans && (
+                <div className={`space-y-4 ${hasBudget ? 'mb-4 pb-4 border-b border-gray-100' : ''}`}>
+                  {u.loans.map((loan: any) => (
+                    <dl key={loan.id} className="text-sm divide-y divide-gray-100 rounded-xl border border-gray-100 px-3">
+                      <Row label="Lender"><span className="font-medium text-gray-900">{loan.lender || '\u2014'}</span></Row>
+                      <Row label="Type"><span className="text-gray-700">{loan.loanType?.replace(/_/g, ' ') || '\u2014'}</span></Row>
+                      <Row label="Monthly Payment"><span className="text-gray-700 tabular-nums">{loan.monthlyPayment ? fmt(loan.monthlyPayment) : '\u2014'}</span></Row>
+                      <Row label="Principal"><span className="text-gray-700 tabular-nums">{loan.principalAmt ? fmt(loan.principalAmt) : '\u2014'}</span></Row>
+                    </dl>
+                  ))}
+                </div>
+              )}
+              {hasBudget && (
+                <dl className="text-sm divide-y divide-gray-100">
+                  <Row label="Budget"><span className="text-gray-700 tabular-nums">{fmt(budgetTotal)}</span></Row>
+                  <Row label="Committed"><span className="text-gray-700 tabular-nums">{fmt(committedTotal)}</span></Row>
+                  <Row label="Actual"><span className="text-gray-700 tabular-nums">{fmt(actualTotal)}</span></Row>
+                  <Row label="Remaining">
+                    <span className={`tabular-nums font-medium ${variance >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                      {fmt(variance)}
+                    </span>
+                  </Row>
                 </dl>
-              ))}
-            </div>
-          ) : (
-            <EmptyRow icon={<FiCreditCard className="w-5 h-5" />} text="No linked loans" />
-          )}
-        </Section>
-
-        {/* Budget — budget/committed/actual/remaining scoped to this unit */}
-        {canViewBudget && (
-          <Section icon={<FiDollarSign className="w-4 h-4 text-emerald-600" />} title="Budget">
-            <dl className="text-sm divide-y divide-gray-100">
-              <Row label="Budget"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.budgetTotal ?? 0))}</span></Row>
-              <Row label="Committed"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.committedTotal ?? 0))}</span></Row>
-              <Row label="Actual"><span className="text-gray-700 tabular-nums">{fmt(Number((budgetSummary as any)?.actualTotal ?? 0))}</span></Row>
-              <Row label="Remaining">
-                <span className={`tabular-nums font-medium ${Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  {fmt(Number((budgetSummary as any)?.variance ?? 0))}
-                </span>
-              </Row>
-            </dl>
-          </Section>
-        )}
+              )}
+              {!hasLoans && !hasBudget && (
+                <EmptyRow icon={<FiCreditCard className="w-5 h-5" />} text="No loans or budget on this unit" />
+              )}
+            </Section>
+          );
+        })()}
       </div>
 
       {/* History — full lease + sale timeline, survives the unit changing status
           (e.g. a past tenant stays visible after the unit is later sold) */}
-      <div className="mb-5 sm:mb-6">
+      <div id="section-history" className="mb-5 sm:mb-6">
         <Section icon={<FiClock className="w-4 h-4 text-gray-600" />} title="History">
           <UnitHistoryTimeline unitId={unitId} />
         </Section>
@@ -1759,7 +2005,7 @@ export default function UnitDetailPage() {
 
       {/* Notes — always visible so users can add notes even when empty */}
       {(u.notes || canEditUnit) && (
-        <div className="mb-5 sm:mb-6">
+        <div id="section-notes" className="mb-5 sm:mb-6">
           <Section
             icon={<FiAlignLeft className="w-4 h-4 text-gray-500" />}
             title="Notes"
@@ -1801,17 +2047,19 @@ export default function UnitDetailPage() {
         </div>
       )}
 
-      {/* Leads & Activity */}
-      <div className="mb-5 sm:mb-6">
-        <UnitLeadsPanel unitId={unitId!} projectId={projectId!} />
-      </div>
+      {/* Leads & Activity — both panels hit /leads endpoints (lead:view) */}
+      <PermissionGate permission="lead:view">
+        <div id="section-leads" className="mb-5 sm:mb-6">
+          <UnitLeadsPanel unitId={unitId!} projectId={projectId!} />
+        </div>
 
-      {/* Waitlist — demand signal */}
-      <UnitWaitlistPanel unitId={unitId!} />
+        {/* Waitlist — demand signal */}
+        <UnitWaitlistPanel unitId={unitId!} />
+      </PermissionGate>
 
       {/* Interior / Fit-Out */}
       <PermissionGate permission="interior:view">
-        <div className="mb-5 sm:mb-6">
+        <div id="section-interior" className="mb-5 sm:mb-6">
           <InteriorPanel
             unitId={unitId!}
             unitNumber={(unit as any)?.unitNumber}
@@ -1821,20 +2069,15 @@ export default function UnitDetailPage() {
       </PermissionGate>
 
       {/* Documents scoped to this unit */}
-      <div className="mb-5 sm:mb-6">
+      <div id="section-documents" className="mb-5 sm:mb-6">
         <UnitDocumentsPanel unitId={unitId!} />
       </div>
 
       {/* Comments */}
-      <div className="mb-5 sm:mb-6">
-        <Section
-          icon={<FiMessageSquare className="w-4 h-4 text-purple-600" />}
-          title="Comments"
-          count={u._count?.comments > 0 ? u._count.comments : undefined}
-        >
-          <InlineComments unitId={unitId!} />
-        </Section>
-      </div>
+      {/* Site updates and team comments in one chronological list. They were two separate
+          sections and anyone checking on a unit had to read both and merge them mentally.
+          The two RECORD types stay separate on purpose — see UnitActivity's header. */}
+      {!constructionFirst && activitySection}
     </div>
   );
 }
@@ -2435,91 +2678,3 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
   );
 }
 
-function InlineComments({ unitId }: { unitId: string }) {
-  const { data, isLoading } = useUnitComments(unitId);
-  const createComment = useCreateComment();
-  const deleteComment = useDeleteComment();
-  // /users/assignable is gated on project:view, which every role holds — unlike
-  // /users (user:manage), which would 403 for anyone who can actually post a comment.
-  const { data: mentionUsers } = useAssignableUsers();
-  const [text, setText] = useState('');
-  const [commentType, setCommentType] = useState('MARKETING');
-
-  const comments = ((data as any[]) || []).slice().sort((a: any, b: any) => {
-    const ORDER = ['MARKETING', 'SALES', 'FINANCIAL'];
-    const ai = ORDER.indexOf(a.commentType);
-    const bi = ORDER.indexOf(b.commentType);
-    if (ai !== bi) return ai - bi;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
-
-  const handleSubmit = async () => {
-    if (!text.trim()) return;
-    try {
-      await createComment.mutateAsync({ unitId, content: text.trim(), commentType });
-      setText('');
-    } catch (e) {
-      addToast({ title: errMsg(e, 'Failed to add comment'), color: 'danger' });
-    }
-  };
-
-  return (
-    <div>
-      {isLoading ? (
-        <p className="text-xs text-gray-500">Loading...</p>
-      ) : comments.length === 0 ? (
-        <p className="text-xs text-gray-500 mb-3">No comments yet</p>
-      ) : (
-        <div className="space-y-3 mb-4">
-          {comments.map((c: any) => (
-            <div key={c.id} className="flex gap-2">
-              <Avatar size="sm" name={c.user?.name} src={c.user?.avatarUrl} className="flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-semibold">{c.user?.name}</span>
-                  <CommentChip type={c.commentType as CommentType} size="sm" />
-                  <span className="text-xs text-gray-500">{fmtDate(c.createdAt)}</span>
-                  <Button
-                    size="sm"
-                    variant="light"
-                    color="danger"
-                    isIconOnly
-                    className="ml-auto h-5 w-5 min-w-5"
-                    onPress={() => deleteComment.mutate({ id: c.id, source: 'unit' })}
-                  >
-                    <FiTrash2 className="text-[11px]" />
-                  </Button>
-                </div>
-                <p className="text-sm text-gray-700 break-words">{c.content}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="flex flex-col sm:flex-row gap-2">
-        <Select
-          size="sm"
-          aria-label="Comment type"
-          className="w-full sm:w-[140px]"
-          selectedKeys={[commentType]}
-          onSelectionChange={(keys) => { const v = Array.from(keys)[0] as string; if (v) setCommentType(v); }}
-        >
-          {['MARKETING', 'SALES', 'FINANCIAL'].map((t) => <SelectItem key={t}>{t}</SelectItem>)}
-        </Select>
-        <MentionTextarea
-          minRows={1}
-          maxRows={3}
-          placeholder="Add a comment… use @ to mention someone"
-          value={text}
-          onChange={setText}
-          onSubmit={handleSubmit}
-          users={(mentionUsers as any[]) || []}
-          className="flex-1"
-        />
-        <Button size="sm" color="primary" isIconOnly onPress={handleSubmit} isLoading={createComment.isPending} className="self-start sm:self-auto">
-          <FiSend />
-        </Button>
-      </div>
-    </div>
-  );
-}

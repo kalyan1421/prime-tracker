@@ -1981,7 +1981,16 @@ describe('LeasesService.backfillTenancy', () => {
       const before = new Date();
       await service.backfillTenancy(STILL_GOING, 'user-1');
       const through = mockInvoices.generateForLease.mock.calls[0][1].through;
-      expect(through.getTime()).toBeGreaterThanOrEqual(new Date(before.toDateString()).getTime());
+      // Compared against UTC midnight, not `new Date(before.toDateString())`.
+      // toDateString() renders the LOCAL date and re-parsing it yields LOCAL midnight, while
+      // the service bills through UTC midnight. Once the local clock has ticked into
+      // tomorrow but UTC has not, local-midnight sits AHEAD of the value under test and this
+      // assertion flipped — so on a UTC+5:30 machine the suite went red every day between
+      // 18:30 and 24:00 UTC. The service was right the whole time; the comparison was not.
+      const utcMidnight = Date.UTC(
+        before.getUTCFullYear(), before.getUTCMonth(), before.getUTCDate(),
+      );
+      expect(through.getTime()).toBeGreaterThanOrEqual(utcMidnight);
       expect(through.getTime()).toBeLessThanOrEqual(Date.now());
     });
 

@@ -30,7 +30,7 @@ import {
 import {
   useTasks, useCreateTask, useUpdateTask, useDeleteTask,
   useTaskUpdates, useAddTaskUpdate, useDeleteTaskUpdate, useAddTaskUpdatePhoto,
-  useBuildings, useUnits, useUsers, useCustomOptions, usePresignedUpload,
+  useBuildings, useUnits, useAssignableUsers, useCustomOptions, usePresignedUpload,
 } from '../hooks/useApi';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { errMsg, fmtDate } from '../utils/fmt';
@@ -91,7 +91,13 @@ function unitLabel(task: any): string {
 export function ConstructionBoard({ projectId, canEdit }: { projectId: string; canEdit: boolean }) {
   const { data: tasks, isLoading, error } = useTasks({ projectId, kind: KIND });
   const { data: buildings } = useBuildings(projectId);
-  const { data: users } = useUsers();
+  // Was useUsers(), gated on user:manage (SUPER_ADMIN/FOUNDER only) — this board's own
+  // docstring says it's modelled for PROJECT_MANAGER and CONSTRUCTION, neither of which
+  // holds that permission, so the Assignee filter and the People picker below were
+  // silently empty for exactly the roles this board exists for. useAssignableUsers()
+  // (project:view — everyone who can open this board) is the same fix TasksPage.tsx
+  // already uses for identical pickers.
+  const { data: users } = useAssignableUsers();
   const statuses = useOptionLookup('task_status');
   const priorities = useOptionLookup('task_priority');
 
@@ -361,7 +367,7 @@ function ItemDialog({
   const update = useUpdateTask();
   const del = useDeleteTask();
   const { data: buildings } = useBuildings(projectId);
-  const { data: users } = useUsers();
+  const { data: users } = useAssignableUsers(); // same fix as the list view above
 
   const [form, setForm] = useState<Record<string, string>>({});
   const [unitIds, setUnitIds] = useState<string[]>([]);
@@ -728,7 +734,17 @@ function UpdatesDialog({
                           // Revealed on hover for pointers, always reachable by keyboard,
                           // and never hidden on touch — where there is no hover at all.
                           className="ml-auto p-1 text-gray-300 opacity-100 transition-opacity hover:text-red-700 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-                          onClick={() => del.mutateAsync({ updateId: u.id, taskId: task.id })}
+                          onClick={() => {
+                            // task:edit (which shows this button to everyone here) is wider
+                            // than the backend's actual rule — only the update's own author
+                            // or a TASK_MANAGER_ROLES member may delete it (tasks.service.ts).
+                            // Was a bare mutateAsync with no catch, so a role holding
+                            // task:edit but not that narrower rule got a silent 403 and the
+                            // row just stayed put with no explanation.
+                            del.mutateAsync({ updateId: u.id, taskId: task.id }).catch((err) => {
+                              addToast({ title: errMsg(err, 'Could not delete this update'), color: 'danger' });
+                            });
+                          }}
                           title="Delete update"
                           aria-label={`Delete the update from ${fmtDate(u.updateDate)}`}
                         >

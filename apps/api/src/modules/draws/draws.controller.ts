@@ -33,8 +33,10 @@ export class DrawsController {
 
   @Get(':id')
   @RequirePermissions('draw:view')
-  findById(@Param('id') id: string) {
-    return this.draws.findById(id);
+  findById(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    const perms = permissions ?? [];
+    const canViewFinancial = perms.includes('financial:view') || perms.includes('loan:view');
+    return this.draws.findById(id, canViewFinancial);
   }
 
   @Get(':id/checklist')
@@ -62,8 +64,14 @@ export class DrawsController {
   @Post(':id/submit-to-lender')
   @RequirePermissions('draw:edit')
   @RequireMfa()
-  submitToLender(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
-    return this.draws.submitToLender(id, userId, body?.comment);
+  submitToLender(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('permissions') permissions: string[] = [],
+    @Body() body: { comment?: string },
+  ) {
+    const canViewFinancial = permissions.includes('financial:view') || permissions.includes('loan:view');
+    return this.draws.submitToLender(id, userId, canViewFinancial, body?.comment);
   }
 
   @Post(':id/return-for-info')

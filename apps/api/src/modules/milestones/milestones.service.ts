@@ -91,6 +91,20 @@ export class MilestonesService {
     const wasCompleted = existing.status === 'COMPLETED';
     if (typeof data.dueDate === 'string') data.dueDate = new Date(data.dueDate);
 
+    // Dependency gate — canStart()'s own contract: "a milestone can move from
+    // NOT_STARTED only when its dependency is COMPLETED". This was only ever exposed
+    // as a read-only GET /milestones/:id/can-start the frontend never called, so a
+    // blocked milestone could be marked COMPLETED directly — including auto-drafting
+    // a lender draw request (see the milestone.completed handler below) for work whose
+    // prerequisite never actually finished. Enforced here, at the one place every
+    // status write goes through.
+    if (existing.status === 'NOT_STARTED' && data.status && data.status !== 'NOT_STARTED') {
+      const gate = await this.deps.canStart(id);
+      if (!gate.allowed) {
+        throw new ConflictException(gate.reason ?? 'Blocked by an incomplete dependency');
+      }
+    }
+
     // C6 — the sign-off gate. Only on the transition INTO COMPLETED: editing the title of
     // an already-complete milestone is not a re-completion, and re-gating it would strand
     // every milestone completed before this feature existed.

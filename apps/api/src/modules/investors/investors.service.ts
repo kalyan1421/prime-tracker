@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CapitalCallStatus } from '@prisma/client';
+import {
+  CreateInvestorDto, UpdateInvestorDto, AddEquityPositionDto,
+  CreateCapitalCallDto, CreateDistributionDto,
+} from './dto/create-investor.dto';
 
 @Injectable()
 export class InvestorsService {
@@ -60,7 +64,7 @@ export class InvestorsService {
     };
   }
 
-  async create(data: any) {
+  async create(data: CreateInvestorDto) {
     return this.prisma.investor.create({
       data: {
         name: data.name,
@@ -71,13 +75,21 @@ export class InvestorsService {
     });
   }
 
-  async update(id: string, data: any) {
+  async update(id: string, data: UpdateInvestorDto) {
     const inv = await this.prisma.investor.findUnique({ where: { id } });
     if (!inv) throw new NotFoundException('Investor not found');
-    return this.prisma.investor.update({ where: { id }, data });
+    return this.prisma.investor.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.email !== undefined && { email: data.email }),
+        ...(data.phone !== undefined && { phone: data.phone }),
+        ...(data.entityName !== undefined && { entityName: data.entityName }),
+      },
+    });
   }
 
-  async addPosition(investorId: string, data: any) {
+  async addPosition(investorId: string, data: AddEquityPositionDto) {
     const inv = await this.prisma.investor.findUnique({ where: { id: investorId } });
     if (!inv) throw new NotFoundException('Investor not found');
     return this.prisma.equityPosition.create({
@@ -92,7 +104,7 @@ export class InvestorsService {
     });
   }
 
-  async createCapitalCall(data: any) {
+  async createCapitalCall(data: CreateCapitalCallDto) {
     const call = await this.prisma.capitalCall.create({
       data: {
         investorId: data.investorId,
@@ -128,7 +140,7 @@ export class InvestorsService {
     return updated;
   }
 
-  async createDistribution(data: any) {
+  async createDistribution(data: CreateDistributionDto) {
     return this.prisma.distribution.create({
       data: {
         investorId: data.investorId,

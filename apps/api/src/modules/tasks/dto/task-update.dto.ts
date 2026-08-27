@@ -1,5 +1,5 @@
 import { IsArray, IsDateString, IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { TASK_KINDS, TaskKind } from '../tasks.service';
+import { TASK_KINDS, TaskKind } from '../task-kinds';
 
 export class CreateTaskUpdateDto {
   @IsString() @IsNotEmpty() @MaxLength(5000)

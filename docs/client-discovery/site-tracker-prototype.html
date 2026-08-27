@@ -1,0 +1,845 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
+<title>Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+/* ═══ TOKENS — mirrors apps/web/src/index.css: one gray ramp, semantic at -700 ═══ */
+:root{
+  --ground:#f9fafb; --surface:#ffffff; --surface-2:#f3f4f6; --surface-3:#eef0f3;
+  --ink:#111827; --ink-2:#1f2937; --muted:#4b5563; --faint:#6b7280;
+  --line:#e5e7eb; --line-2:#d1d5db;
+  --brand:#005ab4; --brand-2:#004182; --brand-tint:#e6f2ff;
+  --ok:#047857;  --ok-tint:#ecfdf5;  --ok-fill:#10b981;
+  --warn:#b45309;--warn-tint:#fffbeb;--warn-fill:#f59e0b;
+  --bad:#b91c1c; --bad-tint:#fef2f2; --bad-fill:#ef4444;
+  --info:#1d4ed8;--info-tint:#eff6ff;
+  --plum:#7e22ce;--plum-tint:#faf5ff;
+  --burnt:#c2410c;--burnt-tint:#fff7ed;
+  --idle-fill:#d1d5db;
+  --shadow-1:0 1px 2px rgba(16,24,40,.06);
+  --shadow-2:0 8px 28px rgba(16,24,40,.12);
+  --shadow-3:-14px 0 40px rgba(16,24,40,.14);
+  --on-brand:#ffffff;
+  --focus:#0073e6;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --ground:#0f1115; --surface:#171a21; --surface-2:#1d212a; --surface-3:#232833;
+  --ink:#e9ebf0; --ink-2:#d3d7e0; --muted:#a0a8b8; --faint:#8b93a3;
+  --line:#262b36; --line-2:#333a48;
+  --brand:#6bb4ff; --brand-2:#a6d2ff; --brand-tint:#12243a;
+  --ok:#4ade80;  --ok-tint:#0e2620;  --ok-fill:#22c55e;
+  --warn:#fbbf24;--warn-tint:#2b2110;--warn-fill:#f59e0b;
+  --bad:#fb7185; --bad-tint:#2e1418; --bad-fill:#ef4444;
+  --info:#7dabff;--info-tint:#101f38;
+  --plum:#c99bf5;--plum-tint:#231633;
+  --burnt:#fb923c;--burnt-tint:#2b1a10;
+  --idle-fill:#3d4453;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4);
+  --shadow-2:0 8px 28px rgba(0,0,0,.5);
+  --shadow-3:-14px 0 40px rgba(0,0,0,.55);
+  --on-brand:#08121e;
+  --focus:#4da6ff;
+}}
+:root[data-theme="dark"]{
+  --ground:#0f1115; --surface:#171a21; --surface-2:#1d212a; --surface-3:#232833;
+  --ink:#e9ebf0; --ink-2:#d3d7e0; --muted:#a0a8b8; --faint:#8b93a3;
+  --line:#262b36; --line-2:#333a48;
+  --brand:#6bb4ff; --brand-2:#a6d2ff; --brand-tint:#12243a;
+  --ok:#4ade80;  --ok-tint:#0e2620;  --ok-fill:#22c55e;
+  --warn:#fbbf24;--warn-tint:#2b2110;--warn-fill:#f59e0b;
+  --bad:#fb7185; --bad-tint:#2e1418; --bad-fill:#ef4444;
+  --info:#7dabff;--info-tint:#101f38;
+  --plum:#c99bf5;--plum-tint:#231633;
+  --burnt:#fb923c;--burnt-tint:#2b1a10;
+  --idle-fill:#3d4453;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4);
+  --shadow-2:0 8px 28px rgba(0,0,0,.5);
+  --shadow-3:-14px 0 40px rgba(0,0,0,.55);
+  --on-brand:#08121e;
+  --focus:#4da6ff;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-size:12px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:3px}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+/* ═══ SHELL ═══ */
+.wrap{max-width:1560px;margin:0 auto;padding:0 20px 72px}
+.topbar{
+  position:sticky;top:0;z-index:40;background:var(--ground);
+  border-bottom:1px solid var(--line);padding:18px 0 12px;
+}
+.crumb{font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;font-weight:600}
+.titlerow{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-top:6px}
+h1{font-size:24px;line-height:1.15;letter-spacing:-.022em;margin:0;font-weight:700;text-wrap:balance}
+.sub{color:var(--muted);margin-top:3px;max-width:64ch}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.btn{
+  display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:7px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);
+  font-size:12px;font-weight:600;box-shadow:var(--shadow-1);transition:background .13s,border-color .13s;
+}
+.btn:hover{background:var(--surface-2)}
+.btn--primary{background:var(--brand);border-color:var(--brand);color:var(--on-brand)}
+.btn--primary:hover{background:var(--brand-2)}
+
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.field{
+  display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line-2);
+  border-radius:7px;padding:6px 9px;box-shadow:var(--shadow-1);
+}
+.field label{font-size:11px;color:var(--faint);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.field select,.field input{border:0;background:none;color:var(--ink);font:inherit;font-size:12px;outline:0;min-width:0}
+.field input{width:180px}
+.spacer{flex:1}
+.count{font-size:11px;color:var(--faint);font-weight:500}
+
+/* ═══ SUMMARY RAIL ═══ */
+.rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:10px;margin:16px 0 18px}
+.tile{
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+  box-shadow:var(--shadow-1);display:flex;flex-direction:column;gap:2px;position:relative;overflow:hidden;
+}
+.tile::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--idle-fill)}
+.tile--bad::before{background:var(--bad-fill)}
+.tile--warn::before{background:var(--warn-fill)}
+.tile--ok::before{background:var(--ok-fill)}
+.tile--info::before{background:#3b82f6}
+.tile dt{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.03em}
+.tile dd{margin:0;font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
+.tile .foot{font-size:11px;color:var(--faint)}
+
+/* ═══ GRID ═══ */
+.tablewrap{
+  background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  overflow-x:auto;overflow-y:visible;box-shadow:var(--shadow-1);
+}
+table{border-collapse:separate;border-spacing:0;width:100%;min-width:1040px}
+thead th{
+  position:sticky;top:0;z-index:20;background:var(--surface-2);
+  font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
+  text-align:left;padding:9px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap;
+}
+thead th.c-unit{left:0;z-index:22}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.c-unit{position:sticky;left:0;background:var(--surface);z-index:10;min-width:214px;box-shadow:1px 0 0 var(--line)}
+tr:hover .c-unit{background:var(--surface-2)}
+tr.grow:hover>td{background:var(--surface-2)}
+tr.grow>td{transition:background .1s}
+.c-block{min-width:152px;max-width:230px}
+.blockwhy{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.45;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.c-narrow{white-space:nowrap}
+
+/* group header row */
+tr.ghead>td{
+  background:var(--surface-3);border-bottom:1px solid var(--line-2);border-top:1px solid var(--line-2);
+  padding:8px 12px;position:sticky;top:33px;z-index:15;
+}
+tr.ghead .c-unit{background:var(--surface-3);z-index:18}
+.ghead-in{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.gtitle{font-size:12px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:7px}
+.gdot{width:8px;height:8px;border-radius:2px;flex:none}
+.gproj{font-size:11px;color:var(--faint);font-weight:500}
+.gmeta{display:flex;align-items:center;gap:12px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+
+/* battery — the group footer bar from the monday board, moved into the header */
+.battery{display:flex;height:7px;width:132px;border-radius:4px;overflow:hidden;background:var(--surface);border:1px solid var(--line-2)}
+.battery i{display:block;height:100%}
+.b-done{background:var(--ok-fill)} .b-wip{background:var(--warn-fill)} .b-idle{background:var(--idle-fill)}
+
+/* unit cell */
+.unitname{display:flex;align-items:center;gap:7px}
+.disc{
+  width:17px;height:17px;border-radius:4px;border:1px solid var(--line-2);background:var(--surface);
+  display:grid;place-items:center;font-size:9px;color:var(--muted);flex:none;line-height:1;
+}
+.disc:hover{background:var(--surface-3);color:var(--ink)}
+.ulink{font-weight:600;font-size:12px;color:var(--ink);text-align:left;letter-spacing:-.005em}
+.ulink:hover{color:var(--brand);text-decoration:underline;text-underline-offset:2px}
+.ubadges{display:flex;gap:5px;align-items:center;margin:4px 0 0 24px;flex-wrap:wrap}
+.mini{font-size:11px;color:var(--faint);display:inline-flex;align-items:center;gap:3px}
+
+/* chips */
+.chip{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:5px;
+  font-size:11px;font-weight:600;line-height:1.5;white-space:nowrap;border:1px solid transparent;
+}
+.chip--ok{background:var(--ok-tint);color:var(--ok);border-color:color-mix(in srgb,var(--ok) 22%,transparent)}
+.chip--bad{background:var(--bad-tint);color:var(--bad);border-color:color-mix(in srgb,var(--bad) 26%,transparent)}
+.chip--warn{background:var(--warn-tint);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 24%,transparent)}
+.chip--info{background:var(--info-tint);color:var(--info);border-color:color-mix(in srgb,var(--info) 22%,transparent)}
+.chip--plum{background:var(--plum-tint);color:var(--plum);border-color:color-mix(in srgb,var(--plum) 24%,transparent)}
+.chip--burnt{background:var(--burnt-tint);color:var(--burnt);border-color:color-mix(in srgb,var(--burnt) 24%,transparent)}
+.chip--mute{background:var(--surface-2);color:var(--muted);border-color:var(--line-2)}
+.chip--scope{background:transparent;color:var(--faint);border-color:var(--line-2);font-weight:500}
+button.chip{cursor:pointer}
+button.chip:hover{filter:brightness(.96)}
+:root[data-theme="dark"] button.chip:hover{filter:brightness(1.25)}
+
+
+/* progress */
+.prog{display:flex;align-items:center;gap:8px}
+.ring{transform:rotate(-90deg);flex:none}
+.ring circle{fill:none;stroke-width:3.5}
+.ring .bg{stroke:var(--line-2)}
+.pct{font-size:12px;font-weight:700;letter-spacing:-.01em}
+.stagelbl{font-size:12px;font-weight:500;color:var(--ink-2)}
+.stagesub{font-size:11px;color:var(--faint);margin-top:1px}
+
+/* owners */
+.avstack{display:flex}
+.av{
+  width:23px;height:23px;border-radius:50%;display:grid;place-items:center;
+  font-size:11px;font-weight:600;color:#fff;border:2px solid var(--surface);margin-left:-6px;flex:none;
+}
+.av:first-child{margin-left:0}
+.av--add{background:var(--surface-2);color:var(--faint);border:1px dashed var(--line-2);font-weight:500}
+
+/* expanded checklist */
+tr.detail>td{padding:0;background:var(--surface-2);border-bottom:1px solid var(--line-2)}
+.detail-in{padding:14px 18px 16px}
+.detail-hd{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.detail-hd h3{margin:0;font-size:14px;font-weight:700;letter-spacing:-.01em}
+.tmpl{font-size:11px;color:var(--muted)}
+.steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:6px}
+.step{
+  display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--line);
+  border-radius:7px;padding:7px 10px;
+}
+.step .no{font-size:11px;color:var(--faint);width:18px;flex:none}
+.step .lbl{flex:1;font-size:12px;color:var(--ink-2);min-width:0}
+.step.is-done .lbl{color:var(--faint)}
+.step.is-wip{border-color:color-mix(in srgb,var(--warn) 42%,transparent);background:var(--warn-tint)}
+.step.is-blocked{border-color:color-mix(in srgb,var(--bad) 42%,transparent);background:var(--bad-tint)}
+.tick{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line-2);display:grid;place-items:center;
+  font-size:9px;color:transparent;flex:none;background:var(--surface)}
+.tick.on{background:var(--ok-fill);border-color:var(--ok-fill);color:#fff}
+
+/* empty group */
+.emptyrow td{padding:20px 12px;color:var(--faint);font-style:italic}
+
+/* ═══ DRAWER ═══ */
+.scrim{position:fixed;inset:0;background:rgba(16,24,40,.42);opacity:0;pointer-events:none;transition:opacity .2s;z-index:60}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(486px,100%);background:var(--surface);
+  border-left:1px solid var(--line-2);box-shadow:var(--shadow-3);z-index:70;
+  transform:translateX(100%);transition:transform .24s cubic-bezier(.32,.72,0,1);
+  display:flex;flex-direction:column;
+}
+.drawer.open{transform:none}
+.dhead{padding:16px 18px 12px;border-bottom:1px solid var(--line)}
+.dhead .kicker{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.dhead h2{margin:3px 0 0;font-size:17px;font-weight:700;letter-spacing:-.015em}
+.dclose{position:absolute;top:14px;right:14px;width:26px;height:26px;border-radius:6px;color:var(--muted);
+  display:grid;place-items:center;font-size:14px}
+.dclose:hover{background:var(--surface-2);color:var(--ink)}
+.dmeta{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+
+
+.feed{flex:1;overflow-y:auto;padding:14px 18px 8px;display:flex;flex-direction:column;gap:12px}
+.post{display:flex;gap:10px}
+.post .body{flex:1;min-width:0}
+.post .by{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.post .who{font-size:12px;font-weight:600}
+.post .when{font-size:11px;color:var(--faint)}
+.post .text{margin-top:3px;color:var(--ink-2)}
+.photos{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+.ph{width:62px;height:46px;border-radius:5px;border:1px solid var(--line-2);flex:none;
+  display:grid;place-items:center;font-size:13px;color:var(--faint);overflow:hidden;
+  background:linear-gradient(150deg,var(--surface-3) 0%,var(--surface-2) 48%,var(--surface-3) 100%)}
+.ph::after{content:"";width:16px;height:16px;border-radius:50%;
+  border:1.5px solid var(--line-2);border-top-color:var(--faint);opacity:.55}
+.feed-empty{color:var(--faint);font-style:italic;padding:18px 0;text-align:center}
+
+.composer{border-top:1px solid var(--line);padding:12px 18px 16px;background:var(--surface-2)}
+.composer textarea{
+  width:100%;min-height:66px;resize:vertical;border:1px solid var(--line-2);border-radius:8px;
+  padding:9px 11px;font:inherit;font-size:12px;background:var(--surface);color:var(--ink);outline:0;
+}
+.composer textarea:focus{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 18%,transparent)}
+.composer .crow{display:flex;align-items:center;gap:8px;margin-top:8px}
+.hint{font-size:11px;color:var(--faint)}
+
+/* ═══ MODAL ═══ */
+.modal{
+  position:fixed;z-index:80;top:50%;left:50%;transform:translate(-50%,-48%) scale(.98);
+  width:min(492px,calc(100% - 32px));max-height:86vh;overflow-y:auto;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:13px;box-shadow:var(--shadow-2);
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;
+}
+.modal.open{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+.mhead{padding:16px 18px 4px}
+.mhead h2{margin:0;font-size:16px;font-weight:700;letter-spacing:-.015em}
+.mhead p{margin:4px 0 0;color:var(--muted)}
+.mbody{padding:14px 18px 4px;display:grid;gap:11px}
+.fg{display:grid;gap:4px}
+.fg label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.fg input,.fg select{
+  border:1px solid var(--line-2);border-radius:7px;padding:8px 10px;font:inherit;font-size:12px;
+  background:var(--surface);color:var(--ink);outline:0;width:100%;
+}
+.fg input:focus,.fg select:focus{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 18%,transparent)}
+.fg .note{font-size:11px;color:var(--faint)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.mfoot{padding:14px 18px 16px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--line);margin-top:12px}
+
+/* ═══ LEGEND ═══ */
+.legend{margin-top:26px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:18px 20px;box-shadow:var(--shadow-1)}
+.legend h2{margin:0 0 3px;font-size:14px;font-weight:700;letter-spacing:-.01em}
+.legend .lead{color:var(--muted);margin:0 0 14px;max-width:72ch}
+.lgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:14px}
+.lg{border-left:2px solid var(--line-2);padding-left:12px}
+.lg.is-done{border-left-color:var(--ok-fill)}
+.lg.is-open{border-left-color:var(--brand)}
+.lg.is-cut{border-left-color:var(--line-2)}
+.lg .ph{all:unset}
+.lg .tag{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint)}
+.lg.is-done .tag{color:var(--ok)}
+.lg.is-open .tag{color:var(--brand)}
+.lg.is-cut .tag{color:var(--faint)}
+.lg h3{margin:2px 0 3px;font-size:12px;font-weight:600}
+.lg p{margin:0;color:var(--muted);font-size:11px;line-height:1.55}
+
+.toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(14px);
+  background:var(--ink);color:var(--ground);padding:9px 15px;border-radius:8px;font-size:12px;font-weight:500;
+  box-shadow:var(--shadow-2);opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:90;
+}
+.toast.show{opacity:1;transform:translateX(-50%)}
+
+@media (max-width:640px){
+  .wrap{padding:0 12px 60px}
+  h1{font-size:20px}
+  .drawer{width:100%}
+  .two{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+</style>
+
+<div class="wrap">
+  <header class="topbar">
+    <div class="crumb">Prime Developers · Construction</div>
+    <div class="titlerow">
+      <div>
+        <h1>Site Tracker</h1>
+        <p class="sub">Every unit under construction across all properties, its blocker, and where its checklist stands — in one grid.</p>
+      </div>
+      <div class="actions">
+        <button class="btn" id="themeBtn" type="button">◐ Theme</button>
+        <button class="btn btn--primary" id="newBtn" type="button">＋ Add unit to tracker</button>
+      </div>
+    </div>
+    <div class="filters">
+      <div class="field"><label for="fProp">Property</label>
+        <select id="fProp"><option value="">All</option></select></div>
+      <div class="field"><label for="fBlock">Blocker</label>
+        <select id="fBlock"><option value="">All</option><option value="YES">Blocked only</option><option value="NO">Not blocked</option></select></div>
+      <div class="field"><label for="fWork">Work type</label>
+        <select id="fWork"><option value="">All</option><option value="INTERIOR_FINISHOUT">Interior finish-out</option><option value="SHELL">Shell</option></select></div>
+      <div class="field"><label for="fQ">Find</label><input id="fQ" type="search" placeholder="unit, tenant, stage…"></div>
+      <div class="spacer"></div>
+      <div class="count" id="countLbl"></div>
+    </div>
+  </header>
+
+  <dl class="rail" id="rail"></dl>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th class="c-unit">Unit</th>
+        <th class="c-block">Blocker</th>
+        <th>Priority</th>
+        <th>Work type / Tenant</th>
+        <th>Owners</th>
+        <th class="c-narrow">Progress</th>
+        <th>Current stage</th>
+      </tr></thead>
+      <tbody id="grid"></tbody>
+    </table>
+  </div>
+
+  <section class="legend">
+    <h2>What this prototype is showing</h2>
+    <p class="lead">The grid ports the monday board's columns, minus the ones that were not worth porting. Three panels below have shipped; two are next; two are deliberately not being built.</p>
+    <div class="lgrid">
+      <div class="lg is-done"><div class="tag">Delivered</div><h3>Blocker, priority, work type, owners</h3>
+        <p>None of these existed on <code>Unit</code>. Blocker carries a reason and an age, so the grid can say
+        “blocked for 11 days” — the board's is a bare yes/no. Its stray “DONE” priority value is deliberately
+        not ported: completion is the checklist percentage, not a priority.</p></div>
+      <div class="lg is-done"><div class="tag">Delivered</div><h3>Versioned checklist templates</h3>
+        <p>Expand any row: the checklist names its template <em>and version</em>, stamped at creation. Five step
+        lists had already drifted apart on the board because nothing recorded which one a unit came from — and
+        measuring this database first found the same fault here, five lists across fourteen units.</p></div>
+      <div class="lg is-done"><div class="tag">Delivered</div><h3>This grid</h3>
+        <p>Grouped property → building, with a status battery and average completion per group. The percentage
+        ring is a number the source board shows nowhere. Tenant identity is hidden from roles that cannot read
+        leases, which includes the Construction team most likely to be using this screen.</p></div>
+      <div class="lg is-open"><div class="tag">Next</div><h3>One canonical update feed</h3>
+        <p>Per-unit updates now exist and post from this panel. Still to come: threaded replies, a source chip
+        on every post, and one shared feed component used on the unit page, the building page and here — folding
+        three overlapping comment surfaces down to one.</p></div>
+      <div class="lg is-open"><div class="tag">Next</div><h3>Email and WhatsApp ingestion</h3>
+        <p>A per-unit inbound address so the field crew can post by replying to an email or sending a message,
+        photos included. The audit's own pick for the highest-value integration: everything else on the board
+        is manual data entry.</p></div>
+      <div class="lg is-cut"><div class="tag">Cut from scope</div><h3>AI summary columns</h3>
+        <p>The board generates a “Latest update” and a “Next action” per unit from the feed. Built, then removed
+        at the client's direction — the operational tracker is the product; the summarisation layer on top is not
+        wanted for now.</p></div>
+      <div class="lg is-cut"><div class="tag">Skipped</div><h3>Vibe views, agents, workflows</h3>
+        <p>All empty scaffolds on the real board. Also skipped: the parent Timeline column (0 of 25 rows used)
+        and the two duplicate untitled text columns (4 values across 540 rows).</p></div>
+    </div>
+  </section>
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="Unit site updates">
+  <div class="dhead">
+    <button class="dclose" id="dclose" type="button" aria-label="Close">✕</button>
+    <div class="kicker" id="dKicker"></div>
+    <h2 id="dTitle"></h2>
+    <div class="dmeta" id="dMeta"></div>
+  </div>
+  <div class="feed" id="dFeed"></div>
+  <div class="composer">
+    <textarea id="dInput" placeholder="What happened on site? Photos and @mentions welcome."></textarea>
+    <div class="crow">
+      <button class="btn btn--primary" id="dPost" type="button">Post update</button>
+      <span class="hint" id="dHint">Photos and @mentions are on the way.</span>
+    </div>
+  </div>
+</aside>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+  <div class="mhead">
+    <h2 id="mTitle">Add a unit to the tracker</h2>
+    <p>The monday board has no form — its button appends a blank row and fires 16 automations. Choosing a template here is what stops checklists drifting.</p>
+  </div>
+  <div class="mbody">
+    <div class="two">
+      <div class="fg"><label for="mProj">Project</label><select id="mProj"></select></div>
+      <div class="fg"><label for="mBldg">Building</label><select id="mBldg"></select></div>
+    </div>
+    <div class="fg"><label for="mName">Unit number</label><input id="mName" placeholder="e.g. 512"></div>
+    <div class="two">
+      <div class="fg"><label for="mWork">Work type</label>
+        <select id="mWork">
+          <option value="INTERIOR_FINISHOUT">Interior finish-out</option>
+          <option value="SHELL">Shell</option>
+          <option value="PERMIT">Permit only</option>
+        </select></div>
+      <div class="fg"><label for="mPri">Priority</label>
+        <select id="mPri"><option>MEDIUM</option><option>LOW</option><option>HIGH</option></select></div>
+    </div>
+    <div class="fg"><label for="mTenant">Tenant / business</label><input id="mTenant" placeholder="Leave blank if not yet leased">
+      <span class="note">Read from the lease once one exists — never re-typed.</span></div>
+    <div class="fg"><label for="mTmpl">Checklist template</label><select id="mTmpl"></select>
+      <span class="note" id="mTmplNote"></span></div>
+  </div>
+  <div class="mfoot">
+    <button class="btn" id="mCancel" type="button">Cancel</button>
+    <button class="btn btn--primary" id="mCreate" type="button">Create unit</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   Templates — transcribed from the audit (§5.1 Interior 22-step, §5.3 Shell
+   18-step) with its noted misspellings corrected. Versioned, which is the
+   whole point: the board had five divergent lists and no way to tell which
+   one a unit was built from.
+   ══════════════════════════════════════════════════════════════════════════ */
+const TEMPLATES = {
+  INTERIOR_FINISHOUT: { name:'Interior Finish-out', version:3, steps:[
+    'Contracts','Timeline Calendar','Stamped Permits Printouts','Rough Plumbing','Rough Mechanical',
+    'Framing','Fire Sprinkler','Rough Electrical','Topout','Insulation','Drywall','Flooring',
+    'Paint, Tape & Float','Ceiling','Sprinkler Turn Downs','Permanent Power Inspection','PEC Meter Release',
+    'Punch List','Plumbing Final','Electrical Final','Mechanical Final','Final Inspection'],
+    inspects:[15,18,19,20,21] },
+  SHELL: { name:'Ground-up Shell', version:2, steps:[
+    'Soil Compaction','Rebar Laying','Plumbing – Underground','Concrete Pour / Foundation','Columns',
+    'Roof Decking','Truss Installation','Shell Framing','Dense Glass / Glazing','Fire Sprinklers',
+    'Electrical – Rough-In','Plumbing – Rough-In','Masonry','Electrical Wire Pulling','Heater Installation',
+    'Final Building / Finish-Out','Store Front Glass','Garage Doors'],
+    inspects:[3,15] },
+};
+
+const PEOPLE = {
+  VP:{n:'Victor P.',   c:'#005ab4'}, AK:{n:'Andrew K.', c:'#7e22ce'},
+  RY:{n:'Ryan Y.',     c:'#047857'}, KM:{n:'Kevin M.',  c:'#b45309'},
+  RP:{n:'Raju P.',     c:'#be185d'},
+};
+
+/* Units. `done` = steps completed, `wip` = index currently in progress (-1 none). */
+const UNITS = [
+  { id:'u506', proj:'Prime Lewisville', bldg:'Building 5', name:'UNIT 506', work:'INTERIOR_FINISHOUT',
+    tenant:'Qamaria Coffee', blocker:'NO', pri:'HIGH', owners:['VP','RY'], done:16, wip:16,
+    feed:[
+      {who:'AK',when:'2 days ago',src:'MOBILE',text:'Cabinets landed this morning, crew started hanging uppers. Countertop template still not scheduled — that is what is holding the punch list.',ph:2},
+      {who:'AK',when:'4 days ago',src:'EMAIL',text:'Joe finishing restroom fixtures Thursday. Once that clears we can call plumbing final.',ph:0},
+      {who:'RY',when:'6 days ago',src:'WEB',text:'Permanent power inspection passed. PEC meter release submitted.',ph:1},
+    ]},
+  { id:'u501', proj:'Prime Lewisville', bldg:'Building 5', name:'UNIT 501, 503', work:'INTERIOR_FINISHOUT',
+    tenant:'Elevate Montessori Academy', blocker:'NO', pri:'MEDIUM', owners:['VP'], done:11, wip:11,
+    feed:[{who:'VP',when:'1 day ago',src:'WEB',text:'Tape and float running in 501. Still no signed spec sheet back on the flooring selection.',ph:0}]},
+  { id:'u509', proj:'Prime Lewisville', bldg:'Building 5', name:'UNIT 509', work:'INTERIOR_FINISHOUT',
+    tenant:'Saloon Suites', blocker:'NO', pri:'LOW', owners:['RY'], done:6, wip:6,
+    feed:[{who:'RY',when:'5 days ago',src:'WEB',text:'Sprinkler rough done, inspector signed off. Electricians started pulling.',ph:0}]},
+  { id:'u511', proj:'Prime Lewisville', bldg:'Building 5', name:'UNIT 511', work:'INTERIOR_FINISHOUT',
+    tenant:'Dance Studio', blocker:'NO', pri:'MEDIUM', owners:['VP','KM'], done:19, wip:19,
+    feed:[{who:'KM',when:'3 days ago',src:'WEB',text:'Plumbing final passed. Electrical final passed same day. Mechanical booked for Monday.',ph:1}]},
+  { id:'u402', proj:'Prime Lewisville', bldg:'Building 4', name:'UNITS 402, 403, 404', work:'INTERIOR_FINISHOUT',
+    tenant:'Dinosaur Adventure Park', blocker:'YES', pri:'HIGH', owners:['VP','AK'], done:8, wip:8,
+    blockReason:'City comments outstanding on the revised sprinkler layout', blockDays:11,
+    feed:[
+      {who:'AK',when:'6 hours ago',src:'EMAIL',text:'City came back with comments on the sprinkler layout again. Resubmitted, waiting on approval. Nothing else can move until this clears.',ph:0},
+      {who:'VP',when:'3 days ago',src:'WEB',text:'Rough electrical done. Holding framing inspection pending sprinkler resolution.',ph:3},
+    ]},
+  { id:'b7',   proj:'Prime Lewisville', bldg:'Building 7', name:'Building 7 — Shell', work:'SHELL', scope:'BUILDING',
+    tenant:null, blocker:'NO', pri:'HIGH', owners:['RP','AK'], done:13, wip:13,
+    feed:[{who:'RP',when:'1 day ago',src:'WHATSAPP',text:'Masonry wrapped. Wire pulling started today. Glass supplier still has not given a firm date.',ph:2}]},
+
+  { id:'u400', proj:'Prime Leander', bldg:'Building A', name:'UNIT 400', work:'INTERIOR_FINISHOUT',
+    tenant:'Mugdha', blocker:'YES', pri:'HIGH', owners:['RY'], done:7, wip:7,
+    blockReason:'Electrical subcontractor has not shown for three consecutive days', blockDays:3,
+    feed:[
+      {who:'RY',when:'4 hours ago',src:'MOBILE',text:'Third day in a row, no electricians on site. Called Leo twice, no answer. Framing inspection is stuck behind this.',ph:1},
+      {who:'RY',when:'2 days ago',src:'WEB',text:'Framing complete and ready for inspection as soon as rough electrical is in.',ph:0},
+    ]},
+  { id:'u420', proj:'Prime Leander', bldg:'Building A', name:'UNIT 420', work:'INTERIOR_FINISHOUT',
+    tenant:'Ojas', blocker:'NO', pri:'MEDIUM', owners:['RY','VP'], done:7, wip:7,
+    feed:[{who:'VP',when:'1 day ago',src:'WEB',text:'Same electrician issue as 400 but we have a backup crew lined up here, so not calling this blocked.',ph:0}]},
+  { id:'u430', proj:'Prime Leander', bldg:'Building A', name:'UNIT 430', work:'INTERIOR_FINISHOUT',
+    tenant:'SRISHTI', blocker:'NO', pri:'LOW', owners:['RY'], done:4, wip:4,
+    feed:[{who:'RY',when:'8 days ago',src:'WEB',text:'Mechanical rough signed off.',ph:0}]},
+  { id:'b2',   proj:'Prime Leander', bldg:'Building 2', name:'Building 2 — Shell', work:'SHELL', scope:'BUILDING',
+    tenant:null, blocker:'NO', pri:'MEDIUM', owners:['RP'], done:5, wip:5,
+    feed:[{who:'RP',when:'2 days ago',src:'WHATSAPP',text:'Columns poured and stripped. Decking crew on site.',ph:2}]},
+
+  { id:'c103', proj:'Centro Plaza', bldg:'Building 1', name:'Unit 103', work:'INTERIOR_FINISHOUT',
+    tenant:'Office space', blocker:'NO', pri:'MEDIUM', owners:['AK'], done:2, wip:2,
+    feed:[{who:'AK',when:'3 days ago',src:'EMAIL',text:'Permits picked up and posted. Plumber can start whenever we call him.',ph:1}]},
+  { id:'c805', proj:'Centro Plaza', bldg:'Building 8', name:'Units 805–815', work:'INTERIOR_FINISHOUT',
+    tenant:null, blocker:'NO', pri:'LOW', owners:['AK','KM'], done:1, wip:1, feed:[]},
+
+  { id:'r1116',proj:'RRC', bldg:'Building 11', name:'UNIT 1116', work:'INTERIOR_FINISHOUT',
+    tenant:null, blocker:'NO', pri:'MEDIUM', owners:['KM'], done:10, wip:10,
+    feed:[{who:'KM',when:'4 days ago',src:'WEB',text:'Insulation inspected and passed. Drywall delivered.',ph:0}]},
+  { id:'r1201',proj:'RRC', bldg:'Building 12', name:'UNIT 1201', work:'INTERIOR_FINISHOUT',
+    tenant:null, blocker:'NO', pri:'LOW', owners:[], done:12, wip:-1, drift:true,
+    feed:[{who:'VP',when:'7 days ago',src:'WEB',text:'Floors in. Need to get paint bid awarded.',ph:0}]},
+
+  { id:'ph',   proj:'Rio Ranch', bldg:'Event Center', name:'PARTY HALL', work:'INTERIOR_FINISHOUT',
+    tenant:null, blocker:null, pri:null, owners:[], done:0, wip:-1,
+    feed:[]},
+];
+
+const EMPTY_GROUPS = [{proj:'Spur Plaza', bldg:'—'}];
+const GCOLORS = {'Prime Lewisville':'#005ab4','Prime Leander':'#7e22ce','Centro Plaza':'#047857','RRC':'#6b7280','Rio Ranch':'#c2410c','Spur Plaza':'#0369a1'};
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+const $ = (s)=>document.querySelector(s);
+const grid = $('#grid');
+const state = { open:new Set(), prop:'', block:'', work:'', q:'' };
+
+function tmplOf(u){ return TEMPLATES[u.work] || TEMPLATES.INTERIOR_FINISHOUT; }
+function totalOf(u){ return tmplOf(u).steps.length; }
+function pctOf(u){ return Math.round(u.done / totalOf(u) * 100); }
+function stageOf(u){
+  const t = tmplOf(u);
+  if (u.done >= t.steps.length) return { label:'Complete', no:t.steps.length, state:'done' };
+  return { label:t.steps[u.done], no:u.done+1, state: u.blocker==='YES' ? 'blocked' : (u.wip===u.done ? 'wip' : 'idle') };
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function priChip(p){
+  if (!p) return '<span class="chip chip--mute">—</span>';
+  const c = { HIGH:'chip--plum', MEDIUM:'chip--warn', LOW:'chip--info' }[p];
+  return `<span class="chip ${c}">${p}</span>`;
+}
+function blockChip(u){
+  if (u.blocker === null) return `<button class="chip chip--mute" data-block="${u.id}" type="button">Not set</button>`;
+  if (u.blocker === 'YES') return `<button class="chip chip--bad" data-block="${u.id}" type="button">● YES</button>`;
+  return `<button class="chip chip--ok" data-block="${u.id}" type="button">NO</button>`;
+}
+function avatars(ids){
+  if (!ids.length) return '<span class="av av--add" title="Unassigned">＋</span>';
+  return `<span class="avstack">${ids.map(i=>{
+    const p = PEOPLE[i];
+    return `<span class="av" style="background:${p.c}" title="${esc(p.n)}">${i}</span>`;
+  }).join('')}</span>`;
+}
+function srcChip(s){
+  const map = { WEB:['chip--mute','Web'], MOBILE:['chip--info','Mobile'], EMAIL:['chip--burnt','Email'], WHATSAPP:['chip--ok','WhatsApp'] };
+  const [c,l] = map[s] || map.WEB;
+  return `<span class="chip ${c}">${l}</span>`;
+}
+function ring(pct){
+  const r = 11, circ = 2*Math.PI*r, off = circ - (pct/100)*circ;
+  const col = pct >= 90 ? 'var(--ok-fill)' : pct >= 40 ? 'var(--brand)' : 'var(--warn-fill)';
+  return `<svg class="ring" width="27" height="27" viewBox="0 0 27 27" aria-hidden="true">
+    <circle class="bg" cx="13.5" cy="13.5" r="${r}"></circle>
+    <circle cx="13.5" cy="13.5" r="${r}" stroke="${col}" stroke-linecap="round"
+      stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"></circle></svg>`;
+}
+
+function visible(){
+  return UNITS.filter(u=>{
+    if (state.prop && u.proj !== state.prop) return false;
+    if (state.block && u.blocker !== state.block) return false;
+    if (state.work && u.work !== state.work) return false;
+    if (state.q){
+      const hay = [u.name,u.tenant,u.proj,u.bldg,stageOf(u).label].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(state.q.toLowerCase())) return false;
+    }
+    return true;
+  });
+}
+
+function renderRail(){
+  const all = UNITS;
+  const blocked = all.filter(u=>u.blocker==='YES');
+  const oldest = blocked.reduce((m,u)=>Math.max(m,u.blockDays||0),0);
+  const avg = Math.round(all.reduce((s,u)=>s+pctOf(u),0)/all.length);
+  const stale = all.filter(u=>u.stamp==='never'||/\b([7-9]|\d{2,})\s+days/.test(u.stamp)).length;
+  const insp = 3;
+  $('#rail').innerHTML = `
+    <div class="tile ${blocked.length?'tile--bad':''}"><dt>Blocked now</dt><dd>${blocked.length}</dd>
+      <span class="foot">${oldest?`oldest ${oldest} days`:'none open'}</span></div>
+    <div class="tile"><dt>Units tracked</dt><dd>${all.length}</dd><span class="foot">across ${new Set(all.map(u=>u.proj)).size} properties</span></div>
+    <div class="tile tile--ok"><dt>Avg. complete</dt><dd>${avg}%</dd><span class="foot">the board shows this nowhere</span></div>
+    <div class="tile ${stale?'tile--warn':''}"><dt>No update 7d+</dt><dd>${stale}</dd><span class="foot">silence is the real risk</span></div>
+    <div class="tile tile--info"><dt>Awaiting inspection</dt><dd>${insp}</dd><span class="foot">scheduled or in progress</span></div>`;
+}
+
+function battery(units){
+  let done=0, wip=0, idle=0;
+  units.forEach(u=>{ const t=totalOf(u); done+=u.done; if(u.wip>=0) wip+=1; idle += t-u.done-(u.wip>=0?1:0); });
+  const tot = Math.max(done+wip+idle,1);
+  return `<span class="battery" role="img" aria-label="${done} steps done, ${wip} in progress, ${idle} not started">
+    <i class="b-done" style="width:${done/tot*100}%"></i>
+    <i class="b-wip" style="width:${wip/tot*100}%"></i>
+    <i class="b-idle" style="width:${idle/tot*100}%"></i></span>`;
+}
+
+function render(){
+  const rows = visible();
+  const groups = [];
+  rows.forEach(u=>{
+    let g = groups.find(g=>g.proj===u.proj && g.bldg===u.bldg);
+    if (!g){ g = {proj:u.proj,bldg:u.bldg,units:[]}; groups.push(g); }
+    g.units.push(u);
+  });
+  if (!state.prop && !state.block && !state.work && !state.q) EMPTY_GROUPS.forEach(g=>groups.push({...g,units:[]}));
+
+  let html = '';
+  for (const g of groups){
+    const avg = g.units.length ? Math.round(g.units.reduce((s,u)=>s+pctOf(u),0)/g.units.length) : 0;
+    const nb = g.units.filter(u=>u.blocker==='YES').length;
+    html += `<tr class="ghead"><td class="c-unit"><div class="gtitle">
+        <span class="gdot" style="background:${GCOLORS[g.proj]||'#6b7280'}"></span>
+        <span>${esc(g.bldg)}</span></div>
+        <div class="gproj">${esc(g.proj)}</div></td>
+      <td colspan="6"><div class="ghead-in"><div class="gmeta">
+        <span>${g.units.length} unit${g.units.length===1?'':'s'}</span>
+        ${g.units.length?`<span>${battery(g.units)}</span><span class="mono">${avg}% avg</span>`:''}
+        ${nb?`<span class="chip chip--bad">${nb} blocked</span>`:''}
+      </div></div></td></tr>`;
+
+    if (!g.units.length){
+      html += `<tr class="emptyrow"><td class="c-unit">No units yet</td><td colspan="6">Nothing is being tracked on this property — the same empty group the board carries.</td></tr>`;
+      continue;
+    }
+
+    for (const u of g.units){
+      const st = stageOf(u), pct = pctOf(u), t = tmplOf(u), isOpen = state.open.has(u.id);
+      const nUp = u.feed.length, nPh = u.feed.reduce((s,f)=>s+f.ph,0);
+      html += `<tr class="grow" data-row="${u.id}">
+        <td class="c-unit">
+          <div class="unitname">
+            <button class="disc" data-toggle="${u.id}" type="button" aria-expanded="${isOpen}" aria-label="Show checklist">${isOpen?'▾':'▸'}</button>
+            <button class="ulink" data-open="${u.id}" type="button">${esc(u.name)}</button>
+          </div>
+          <div class="ubadges">
+            ${u.scope==='BUILDING'?'<span class="chip chip--scope">Building-level</span>':''}
+            <span class="mini">${nUp} update${nUp===1?'':'s'}</span>
+            ${nPh?`<span class="mini">${nPh} photo${nPh===1?'':'s'}</span>`:''}
+          </div>
+        </td>
+        <td class="c-block">${blockChip(u)}${u.blocker==='YES'?`<div class="blockwhy" title="${esc(u.blockReason)}">${esc(u.blockReason)} · <span class="mono">${u.blockDays}d</span></div>`:''}</td>
+        <td>${priChip(u.pri)}</td>
+        <td><div>${t.name==='Ground-up Shell'?'<span class="chip chip--mute">Shell</span>':'<span class="chip chip--mute">Finish-out</span>'}</div>
+            <div class="stagesub">${u.tenant?esc(u.tenant):'No tenant yet'}</div></td>
+        <td>${avatars(u.owners)}</td>
+        <td class="c-narrow"><div class="prog">${ring(pct)}<span class="pct mono">${pct}%</span></div>
+            <div class="stagesub mono">${u.done}/${t.steps.length}</div></td>
+        <td><div class="stagelbl">${esc(st.label)}</div>
+            <div class="stagesub">${st.state==='blocked'?'<span class="chip chip--bad">Held</span>':st.state==='wip'?'<span class="chip chip--warn">Working on it</span>':st.state==='done'?'<span class="chip chip--ok">Done</span>':'<span class="chip chip--mute">Not started</span>'}</div></td>
+      </tr>`;
+
+      if (isOpen){
+        html += `<tr class="detail"><td colspan="7"><div class="detail-in">
+          <div class="detail-hd"><h3>Checklist</h3>
+            <span class="tmpl">${esc(t.name)} <span class="mono">v${t.version}</span> · ${t.steps.length} steps · stamped at creation</span>
+            ${u.drift?'<span class="chip chip--burnt">Drifted from template</span>':''}
+          </div>
+          <div class="steps">${t.steps.map((s,i)=>{
+            const done = i < u.done, wip = i === u.wip, blocked = wip && u.blocker==='YES';
+            const insp = t.inspects.includes(i);
+            return `<div class="step ${done?'is-done':''} ${blocked?'is-blocked':wip?'is-wip':''}">
+              <span class="tick ${done?'on':''}">✓</span>
+              <span class="no mono">${String(i+1).padStart(2,'0')}</span>
+              <span class="lbl">${esc(s)}</span>
+              ${blocked?'<span class="chip chip--bad">Held</span>':wip?'<span class="chip chip--warn">Working</span>':''}
+              ${insp&&done?'<span class="chip chip--ok">Passed</span>':insp&&wip?'<span class="chip chip--info">Scheduled</span>':''}
+            </div>`;
+          }).join('')}</div></div></td></tr>`;
+      }
+    }
+  }
+  grid.innerHTML = html;
+  $('#countLbl').textContent = `${rows.length} of ${UNITS.length} units`;
+}
+
+/* ── interactions ───────────────────────────────────────────────────────── */
+grid.addEventListener('click', (e)=>{
+  const t = e.target.closest('[data-toggle],[data-open],[data-block],[data-edit]');
+  if (!t) return;
+  if (t.dataset.toggle){
+    const id = t.dataset.toggle;
+    state.open.has(id) ? state.open.delete(id) : state.open.add(id);
+    render(); return;
+  }
+  if (t.dataset.open){ openDrawer(t.dataset.open); return; }
+  if (t.dataset.block){
+    const u = UNITS.find(x=>x.id===t.dataset.block);
+    u.blocker = u.blocker === 'YES' ? 'NO' : 'YES';
+    if (u.blocker === 'YES'){ u.blockReason = u.blockReason || 'Flagged from the tracker'; u.blockDays = u.blockDays || 0; }
+    render(); renderRail();
+    toast(u.blocker==='YES' ? `${u.name} flagged blocked` : `${u.name} unblocked`);
+    return;
+  }
+});
+
+/* ── drawer ─────────────────────────────────────────────────────────────── */
+let current = null;
+function openDrawer(id){
+  current = UNITS.find(u=>u.id===id);
+  paintDrawer();
+  $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden','false');
+  $('#scrim').classList.add('open');
+  $('#dInput').focus();
+}
+function paintDrawer(){
+  const u = current, t = tmplOf(u);
+  $('#dKicker').textContent = `${u.proj} · ${u.bldg}`;
+  $('#dTitle').textContent = u.name;
+  $('#dMeta').innerHTML = [
+    blockChip(u), priChip(u.pri),
+    `<span class="chip chip--mute">${esc(t.name)} v${t.version}</span>`,
+    `<span class="chip chip--mute">${pctOf(u)}% · ${u.done}/${t.steps.length}</span>`,
+    u.tenant ? `<span class="chip chip--info">${esc(u.tenant)}</span>` : '',
+  ].join('');
+  $('#dFeed').innerHTML = u.feed.length ? u.feed.map(f=>{
+    const p = PEOPLE[f.who];
+    return `<div class="post">
+      <span class="av" style="background:${p.c}">${f.who}</span>
+      <div class="body">
+        <div class="by"><span class="who">${esc(p.n)}</span><span class="when">${esc(f.when)}</span>${srcChip(f.src)}</div>
+        <div class="text">${esc(f.text)}</div>
+        ${f.ph?`<div class="photos">${Array.from({length:f.ph},()=>'<span class="ph" role="img" aria-label="Site photo"></span>').join('')}</div>`:''}
+      </div></div>`;
+  }).join('') : '<div class="feed-empty">No updates on this unit yet.</div>';
+}
+function closeDrawer(){
+  $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden','true');
+  $('#scrim').classList.remove('open'); current = null;
+}
+$('#dclose').addEventListener('click', closeDrawer);
+$('#scrim').addEventListener('click', ()=>{ closeDrawer(); closeModal(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeDrawer(); closeModal(); } });
+
+/* Post an update. Appends to the unit's feed — nothing else fires. */
+$('#dPost').addEventListener('click', ()=>{
+  const box = $('#dInput'), text = box.value.trim();
+  if (!text || !current) return;
+  const u = current;
+  u.feed.unshift({ who:'VP', when:'just now', src:'WEB', text, ph:0 });
+    box.value = '';
+  paintDrawer();
+  render();
+  toast('Update posted');
+});
+
+/* ── filters ────────────────────────────────────────────────────────────── */
+const props = [...new Set(UNITS.map(u=>u.proj)), ...EMPTY_GROUPS.map(g=>g.proj)];
+$('#fProp').innerHTML = '<option value="">All</option>' + props.map(p=>`<option>${esc(p)}</option>`).join('');
+$('#fProp').addEventListener('change', e=>{ state.prop = e.target.value; render(); });
+$('#fBlock').addEventListener('change', e=>{ state.block = e.target.value; render(); });
+$('#fWork').addEventListener('change', e=>{ state.work = e.target.value; render(); });
+let qt; $('#fQ').addEventListener('input', e=>{ clearTimeout(qt); const v=e.target.value; qt=setTimeout(()=>{ state.q=v; render(); },180); });
+
+/* ── create modal ───────────────────────────────────────────────────────── */
+$('#mProj').innerHTML = [...new Set(UNITS.map(u=>u.proj))].map(p=>`<option>${esc(p)}</option>`).join('');
+function syncBldg(){
+  const p = $('#mProj').value;
+  $('#mBldg').innerHTML = [...new Set(UNITS.filter(u=>u.proj===p).map(u=>u.bldg))].map(b=>`<option>${esc(b)}</option>`).join('');
+}
+$('#mProj').addEventListener('change', syncBldg); syncBldg();
+function syncTmpl(){
+  const w = $('#mWork').value, t = TEMPLATES[w];
+  if (!t){ $('#mTmpl').innerHTML = '<option>None — permit tracking only</option>'; $('#mTmplNote').textContent = 'No checklist is seeded for permit-only units.'; return; }
+  $('#mTmpl').innerHTML = `<option>${esc(t.name)} v${t.version} — ${t.steps.length} steps</option>`;
+  $('#mTmplNote').textContent = `Stamped on the unit at creation. This is the field the board lacks, and the reason five templates drifted apart on it.`;
+}
+$('#mWork').addEventListener('change', syncTmpl); syncTmpl();
+function openModal(){ $('#modal').classList.add('open'); $('#scrim').classList.add('open'); $('#mName').focus(); }
+function closeModal(){ $('#modal').classList.remove('open'); if(!current) $('#scrim').classList.remove('open'); }
+$('#newBtn').addEventListener('click', openModal);
+$('#mCancel').addEventListener('click', closeModal);
+$('#mCreate').addEventListener('click', ()=>{
+  const name = $('#mName').value.trim();
+  if (!name){ $('#mName').focus(); toast('Give the unit a number first'); return; }
+  const work = $('#mWork').value, t = TEMPLATES[work];
+  UNITS.push({
+    id:'n'+Date.now(), proj:$('#mProj').value, bldg:$('#mBldg').value,
+    name:/^\d/.test(name) ? 'UNIT '+name : name, work,
+    tenant:$('#mTenant').value.trim() || null, blocker:'NO', pri:$('#mPri').value,
+    owners:[], done:0, wip:-1, feed:[],
+  });
+  closeModal(); $('#mName').value=''; $('#mTenant').value='';
+  state.prop=''; $('#fProp').value=''; render(); renderRail();
+  toast(`Created with ${t ? t.steps.length + ' checklist steps from ' + t.name + ' v' + t.version : 'no checklist'}`);
+});
+
+/* ── misc ───────────────────────────────────────────────────────────────── */
+let tt;
+function toast(msg){ const el=$('#toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(tt); tt=setTimeout(()=>el.classList.remove('show'),2600); }
+$('#themeBtn').addEventListener('click', ()=>{
+  const r = document.documentElement;
+  const now = r.getAttribute('data-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  r.setAttribute('data-theme', now === 'dark' ? 'light' : now === 'light' ? 'dark' : (prefersDark ? 'light' : 'dark'));
+});
+
+renderRail(); render();
+</script>
+</body></html>

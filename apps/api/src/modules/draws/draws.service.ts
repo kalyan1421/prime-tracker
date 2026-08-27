@@ -44,7 +44,7 @@ export class DrawsService {
     return this.transition(drawId, 'returnForInfo', actorId, 'INTERNAL_FOUNDER', 'RETURNED_FOR_INFO', comment);
   }
 
-  async submitToLender(drawId: string, actorId: string, comment?: string) {
+  async submitToLender(drawId: string, actorId: string, canViewFinancial: boolean, comment?: string) {
     // Records that finance forwarded to lender. State stays APPROVED.
     const draw = await this.findById(drawId);
     if (draw.status !== 'APPROVED') {
@@ -56,7 +56,9 @@ export class DrawsService {
       data: { submittedToLenderAt: new Date() },
     });
     this.bus.emit({ type: 'drawRequest.submitted', drawId, step: 'LENDER_SUBMITTED' });
-    return this.findById(drawId);
+    // Route is gated draw:edit, which PROJECT_MANAGER holds without loan:view/
+    // financial:view — the response below must respect that, same as GET /draws/:id.
+    return this.findById(drawId, canViewFinancial);
   }
 
   async markFunded(drawId: string, actorId: string, fundedAt?: Date) {
@@ -176,7 +178,12 @@ export class DrawsService {
 
   // ─────── Reads ───────
 
-  async findById(id: string) {
+  // Internal reuse (transition handlers below) always passes true — they're gated on
+  // draw:approve/draw:edit already (stricter than plain draw:view) and only read
+  // draw.status/draw.loanId, never forward loan financials to an HTTP response
+  // themselves. Only the GET /draws/:id controller computes this from the caller's
+  // real permissions.
+  async findById(id: string, canViewFinancial = true) {
     const draw = await this.prisma.drawRequest.findUnique({
       where: { id },
       include: {
@@ -193,8 +200,18 @@ export class DrawsService {
       },
     });
     if (!draw) throw new NotFoundException('Draw request not found');
-    // DrawDetailModal renders loan.lender in its header and detail grid.
-    return { ...draw, loan: draw.loan ? this.encryption.decryptLoan(draw.loan) : draw.loan };
+    if (!draw.loan) return draw;
+    // This route is gated only on draw:view — CONSTRUCTION and PROJECT_MANAGER both
+    // hold it without financial:view/loan:view ("Construction is fully blind to
+    // financials"). lender/principalAmt/interestRate/currentBalance all live ONLY in
+    // encryptedFields (the plain columns are left NULL on purpose — see the Loan
+    // model) and decrypt together as one blob, so getting lender at all means
+    // decrypting first, THEN dropping the financial fields for a viewer who
+    // shouldn't see them — returning the raw (null) columns instead would just make
+    // lender blank for everyone, which is what findDrawsByProject() below used to do.
+    const decrypted = this.encryption.decryptLoan(draw.loan);
+    const loan = canViewFinancial ? decrypted : { id: decrypted.id, lender: decrypted.lender };
+    return { ...draw, loan };
   }
 
   // ─────── Internal ───────

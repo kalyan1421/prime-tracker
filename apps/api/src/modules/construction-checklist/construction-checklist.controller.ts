@@ -15,9 +15,11 @@ import { AddUnitStageDto, UpdateUnitStageDto } from './dto/unit-stage.dto';
 @UseInterceptors(AuditInterceptor)
 @Controller('construction-checklist')
 export class ConstructionChecklistController {
-  constructor(private service: ConstructionChecklistService) {}
+  constructor(
+    private service: ConstructionChecklistService,
+  ) {}
 
-  // ── Building template ───────────────────────────────────────────────────────
+  // ── Building template (per-building override) ───────────────────────────────
 
   @Get('template')
   @RequirePermissions('checklist:view')
@@ -71,7 +73,7 @@ export class ConstructionChecklistController {
     @Body() body: AddUnitStageDto,
     @CurrentUser('sub') userId: string,
   ) {
-    return this.service.addUnitStage(unitId, body.label, userId);
+    return this.service.addUnitStage(unitId, body, userId);
   }
 
   @Patch('stage/:stageId')
@@ -79,6 +81,24 @@ export class ConstructionChecklistController {
   @ApiOperation({ summary: 'Update a stage — status, owner, inspection status/date, notes' })
   updateStage(@Param('stageId') stageId: string, @Body() body: UpdateUnitStageDto) {
     return this.service.updateStage(stageId, body);
+  }
+
+  @Post('stage/:stageId/photos')
+  @RequirePermissions('checklist:edit')
+  @ApiOperation({ summary: 'Attach a photo to a checklist stage' })
+  addStagePhoto(
+    @Param('stageId') stageId: string,
+    @Body() body: { storagePath: string; caption?: string },
+    @CurrentUser('sub') userId?: string,
+  ) {
+    return this.service.addStagePhoto(stageId, body.storagePath, body.caption, userId);
+  }
+
+  @Delete('photos/:photoId')
+  @RequirePermissions('checklist:edit')
+  @ApiOperation({ summary: 'Remove a stage photo' })
+  removeStagePhoto(@Param('photoId') photoId: string) {
+    return this.service.removeStagePhoto(photoId);
   }
 
   @Delete('stage/:stageId')
@@ -92,8 +112,12 @@ export class ConstructionChecklistController {
 
   @Get('rollup')
   @RequirePermissions('checklist:view')
-  @ApiOperation({ summary: 'Every unit with a checklist in a project, progress and next stage' })
-  getProjectRollup(@Query('projectId') projectId: string) {
-    return this.service.getProjectRollup(projectId);
+  @ApiOperation({ summary: 'Every unit with a checklist, progress and next stage — one project, or all the caller can see' })
+  getProjectRollup(
+    @Query('projectId') projectId: string | undefined,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.service.getProjectRollup(projectId, userId, role);
   }
 }

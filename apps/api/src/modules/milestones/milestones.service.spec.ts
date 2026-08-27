@@ -83,7 +83,11 @@ function makeWorld(photos: FakePhoto[] = [], milestoneOver: Record<string, any> 
   };
 
   const bus = { emit: jest.fn() };
-  const deps = { proposeSlippage: jest.fn().mockResolvedValue(null) };
+  const deps = {
+    proposeSlippage: jest.fn().mockResolvedValue(null),
+    // Default: nothing blocks — most tests here aren't about the dependency gate.
+    canStart: jest.fn().mockResolvedValue({ allowed: true }),
+  };
   const storage = { signedUrl: jest.fn().mockResolvedValue('') };
   const service = new MilestonesService(
     prisma,
@@ -92,7 +96,7 @@ function makeWorld(photos: FakePhoto[] = [], milestoneOver: Record<string, any> 
     storage as any,
   );
 
-  return { service, prisma, bus, milestone, store };
+  return { service, prisma, bus, deps, milestone, store };
 }
 
 /** The refusal, or `null` when the call succeeded. */
@@ -256,6 +260,53 @@ describe('MilestonesService — photo sign-off (C6)', () => {
       await service.update('m1', { status: 'COMPLETED', title: 'Foundation pour (rev B)' } as any, 'pm-1');
 
       expect(milestone.title).toBe('Foundation pour (rev B)');
+    });
+  });
+
+  describe('the dependency gate', () => {
+    // canStart() existed as a read-only GET the frontend never called — a blocked
+    // milestone could be moved straight to COMPLETED (or any other status) with
+    // nothing checking its dependency. Wired into applyUpdate() so every status
+    // write goes through it.
+    it('refuses to move a NOT_STARTED milestone past its unfinished dependency', async () => {
+      const { service, deps, milestone } = makeWorld([], { status: 'NOT_STARTED' });
+      deps.canStart.mockResolvedValue({ allowed: false, reason: 'Blocked by "Foundation" (status: IN_PROGRESS)' });
+
+      const err = await refusal(() => service.update('m1', { status: 'COMPLETED' } as any, 'pm-1'));
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect(err.message).toContain('Blocked by "Foundation"');
+      expect(milestone.status).toBe('NOT_STARTED');
+      expect(deps.canStart).toHaveBeenCalledWith('m1');
+    });
+
+    it('allows the move once the dependency has actually completed', async () => {
+      const { service, deps, milestone } = makeWorld([], { status: 'NOT_STARTED' });
+      deps.canStart.mockResolvedValue({ allowed: true });
+
+      await service.update('m1', { status: 'IN_PROGRESS' } as any, 'pm-1');
+
+      expect(milestone.status).toBe('IN_PROGRESS');
+    });
+
+    it('does not check the gate for a milestone that was never NOT_STARTED', async () => {
+      // Default world status is IN_PROGRESS — moving between two non-NOT_STARTED
+      // statuses (or completing normally) is not what canStart() was built to police.
+      const { service, deps, milestone } = makeWorld([photo('ph1', { reviewStatus: 'APPROVED', reviewedAt: new Date() })]);
+
+      await service.update('m1', { status: 'COMPLETED' } as any, 'pm-1');
+
+      expect(milestone.status).toBe('COMPLETED');
+      expect(deps.canStart).not.toHaveBeenCalled();
+    });
+
+    it('does not check the gate on an edit that leaves status untouched', async () => {
+      const { service, deps, milestone } = makeWorld([], { status: 'NOT_STARTED' });
+
+      await service.update('m1', { title: 'Renamed' } as any, 'pm-1');
+
+      expect(milestone.title).toBe('Renamed');
+      expect(deps.canStart).not.toHaveBeenCalled();
     });
   });
 

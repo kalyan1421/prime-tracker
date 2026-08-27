@@ -191,13 +191,17 @@ export class LoansService {
     });
     return draws.map((d) => {
       if (!d.loan) return { ...d, loan: null };
+      const decrypted = this.decryptLoan(d.loan);
       if (canViewFinancial) {
-        return { ...d, loan: this.decryptLoan(d.loan) };
+        return { ...d, loan: decrypted };
       }
       // Financial-blind roles (e.g. CONSTRUCTION holds draw:view but not financial:view/
-      // loan:view): expose only non-financial loan identifiers. Never decrypt the blob
-      // (principal/rate/balance) and never ship the raw encryptedFields ciphertext.
-      return { ...d, loan: { id: d.loan.id, loanType: d.loan.loanType, lender: d.loan.lender } };
+      // loan:view): expose only non-financial loan identifiers. lender lives ONLY in
+      // encryptedFields (the plain column is left NULL — see the Loan model), so it has
+      // to be decrypted like the rest of the blob first; this just doesn't forward
+      // principal/rate/balance from the decrypted result. Never ship the raw
+      // encryptedFields ciphertext either way.
+      return { ...d, loan: { id: decrypted.id, loanType: decrypted.loanType, lender: decrypted.lender } };
     });
   }
 

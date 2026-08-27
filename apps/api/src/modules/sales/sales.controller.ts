@@ -57,7 +57,7 @@ export class SalesController {
 
   /** GET /api/sales/receivables?weeks=4 — upcoming + overdue installments (cashflow inflows). */
   @Get('receivables')
-  @RequirePermissions('interior:finance')
+  @RequirePermissions('financial:view')
   @ApiOperation({ summary: 'Upcoming + overdue sale-payment receivables (Finance widget / cashflow inflows)' })
   receivables(@Query('weeks') weeks?: string) {
     return this.salePayments.receivables(weeks ? Number(weeks) : 4);

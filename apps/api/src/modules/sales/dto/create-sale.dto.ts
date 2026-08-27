@@ -1,6 +1,6 @@
 import {
   IsString, IsNotEmpty, IsOptional,
-  IsNumber, IsPositive, IsDateString, MaxLength, IsEnum,
+  IsNumber, IsPositive, IsDateString, MaxLength, IsEnum, Min, Max,
 } from 'class-validator';
 import { LostReason, SaleBuyerType } from '@prisma/client';
 
@@ -65,6 +65,6 @@ export class CreateSaleDto {
   @IsOptional() @IsString()
   brokerId?: string;
 
-  @IsOptional() @IsNumber()
+  @IsOptional() @IsNumber() @Min(0) @Max(100)
   brokerCommissionPct?: number;
 }

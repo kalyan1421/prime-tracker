@@ -1,3 +1,4 @@
+import { Navigate } from 'react-router-dom';
 import { useRef, useState } from 'react';
 import { Button, Card, CardHeader, CardBody, Tabs, Tab, Select, SelectItem } from '@heroui/react';
 import { useReactToPrint } from 'react-to-print';
@@ -607,6 +608,11 @@ export default function ReportsPage() {
   );
 
   if (visibleTabs.length === 0) {
+    // Every tab here needs a financial/sales/lease/loan permission, so a site role lands
+    // on an empty hub. They do have a report — Construction Reports — and the sidebar
+    // already sends them straight there; typing /reports or following an old link used to
+    // dead-end instead. Forward rather than show "no reports available", which was false.
+    if (hasPermission('milestone:view')) return <Navigate to="/reports/construction" replace />;
     return (
       <div>
         <h1 className="text-2xl font-bold mb-6">Reports</h1>

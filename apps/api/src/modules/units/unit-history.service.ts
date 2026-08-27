@@ -298,7 +298,7 @@ export function rentEntriesForLease(
 export class UnitHistoryService {
   constructor(private prisma: PrismaService) {}
 
-  async getHistory(unitId: string, now: Date = new Date()) {
+  async getHistory(unitId: string, permissions: string[] = [], now: Date = new Date()) {
     const unit = await this.prisma.unit.findUnique({
       where: { id: unitId },
       select: {
@@ -392,6 +392,22 @@ export class UnitHistoryService {
 
     const windows = buildOccupancyWindows(events, now);
     const summary = summariseWindows(windows);
+
+    // The event log can be wrong about "vacant right now" — see activeLeaseCoversNow.
+    // Asserting a false vacancy is worse than the SOLD-with-ACTIVE-lease case below: it
+    // is not ambiguous data needing a human call, it is knowably wrong while a lease
+    // with a future end date is sitting right there. Correct it before it reaches the
+    // summary tiles or the timeline's "currently vacant" entry.
+    const vacantWithActiveLease = summary.isCurrentlyVacant && activeLeaseCoversNow(leases, now);
+    if (vacantWithActiveLease) {
+      // Remove exactly the open window's contribution to the lifetime total — a genuine
+      // PAST vacancy (a closed window, before this lease or between two others) is
+      // unaffected, only the one currently misclassified as vacant.
+      summary.totalDaysVacant = Math.max(0, summary.totalDaysVacant - summary.currentVacancyDays);
+      summary.isCurrentlyVacant = false;
+      summary.currentVacancyDays = 0;
+      summary.vacantSince = null;
+    }
 
     // Rent movements, grouped back onto their lease so each entry can name the tenant
     // it belongs to — a unit on its third tenancy has three separate rent stories and
@@ -503,7 +519,7 @@ export class UnitHistoryService {
     const entries = [
       ...this.leaseEntries(leases, economics, combinedSiblingUnitsByRef),
       ...this.saleEntries(sales),
-      ...this.vacancyEntries(windows, leases),
+      ...this.vacancyEntries(windows, leases, now),
       ...this.statusEntries(windows),
       ...tenancyEndEntries(leases),
       ...assignmentEntries(assignments, leases),
@@ -511,6 +527,21 @@ export class UnitHistoryService {
       ...fitOutEntries,
       ...changeEntries,
     ].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+
+    // Every kind but 'vacancy'/'status' embeds a tenant name or a dollar figure
+    // straight into `title`/`data` (e.g. "Leased to Acme Corp", `monthlyRent`) — there
+    // is no separate field to null out, so an entry the caller can't see gets dropped
+    // whole rather than scrubbed. Mirrors how the rest of this session's audit fixed
+    // the same class of leak elsewhere: redact, don't just rely on the frontend to not
+    // render it.
+    const canViewLeases = permissions.includes('lease:view');
+    const canViewSales = permissions.includes('sales:view');
+    const LEASE_KINDS = new Set(['lease', 'rent_change', 'free_rent', 'fit_out', 'lease_change', 'tenancy_end', 'assignment']);
+    const visibleEntries = entries.filter((e) => {
+      if (e.kind === 'sale') return canViewSales;
+      if (LEASE_KINDS.has(e.kind)) return canViewLeases;
+      return true;
+    });
 
     return {
       unit: {
@@ -522,7 +553,7 @@ export class UnitHistoryService {
         buildingName: unit.building.name,
         projectId: unit.building.projectId,
       },
-      entries,
+      entries: visibleEntries,
       windows,
       summary: {
         ...summary,
@@ -530,11 +561,11 @@ export class UnitHistoryService {
         saleCount: sales.length,
         closedSaleCount: sales.filter((s) => s.status === 'CLOSED').length,
         /** Rent collected across every tenancy this unit has ever had. */
-        lifetimeRentCollected: leases.reduce(
+        lifetimeRentCollected: !canViewLeases ? null : leases.reduce(
           (sum, l) => sum + (economics.get(l.id)?.collected ?? 0),
           0,
         ),
-        lifetimeSaleProceeds: sales
+        lifetimeSaleProceeds: !canViewSales ? null : sales
           .filter((s) => s.status === 'CLOSED')
           .reduce((sum, s) => sum + Number(s.salePrice ?? 0), 0),
         /**
@@ -560,6 +591,13 @@ export class UnitHistoryService {
                 'This unit is marked SOLD but still has an ACTIVE lease. Rent invoices are ' +
                 'generated from lease status, so the tenant may still be being billed. ' +
                 'Terminate the lease, or correct the unit status.',
+              ]
+            : []),
+          ...(vacantWithActiveLease
+            ? [
+                'This unit’s status history shows it as vacant, but an ACTIVE lease covers ' +
+                'today. The status-change log is likely missing an event for this tenancy — ' +
+                'vacancy totals before today may undercount leased time until it is corrected.',
               ]
             : []),
           ...(suppressedAfterSale > 0
@@ -708,7 +746,7 @@ export class UnitHistoryService {
    * one it may be sitting in right now — the two the old client-side derivation could
    * not see.
    */
-  private vacancyEntries(windows: OccupancyWindow[], leases: any[] = []) {
+  private vacancyEntries(windows: OccupancyWindow[], leases: any[] = [], now: Date = new Date()) {
     // A lease linked to a successor on the SAME unit is a renewal: the tenant never
     // left, so any vacancy window sitting in the handover is an artefact of how the
     // records were entered, not something that happened.
@@ -723,10 +761,15 @@ export class UnitHistoryService {
           w.start.getTime() >= g.from.getTime() &&
           (w.end ? w.end.getTime() <= g.to.getTime() : false),
       );
+    // The open window is never really vacant if a lease covers today — see
+    // activeLeaseCoversNow. Only the OPEN window is filtered: a past vacancy the log
+    // genuinely recorded (e.g. between two tenancies) is real history and stays.
+    const activeNow = activeLeaseCoversNow(leases, now);
 
     return windows
       .filter((w) => w.kind === 'VACANT')
       .filter((w) => !suppressed(w))
+      .filter((w) => !(w.isOngoing && activeNow))
       .map((w) => ({
         id: `vacancy-${w.start.toISOString()}`,
         kind: 'vacancy' as TimelineEntryKind,
@@ -761,6 +804,24 @@ export class UnitHistoryService {
         data: { status: w.status },
       }));
   }
+}
+
+/**
+ * True when an ACTIVE lease on the unit covers `now`. Used to catch the mirror image
+ * of `activeLeaseOnSoldUnit` below: a unit whose `unit_status_events` log is missing
+ * whatever transition should have closed its vacancy window — most often a combined
+ * unit created directly with `status: LEASED` but no matching event ever recorded, so
+ * the log still has nothing later than the implicit "available" from creation. The
+ * event log says vacant; a lease that has not ended says otherwise, and the lease is
+ * the fact a person can see and correct the unit's event log against.
+ */
+export function activeLeaseCoversNow(leases: any[], now: Date): boolean {
+  return leases.some(
+    (l) =>
+      l.status === 'ACTIVE' &&
+      +new Date(l.leaseStart) <= +now &&
+      (!l.leaseEnd || +new Date(l.leaseEnd) >= +now),
+  );
 }
 
 /**

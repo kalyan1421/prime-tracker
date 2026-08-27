@@ -40,10 +40,12 @@ export class BudgetsController {
     @Query('projectId') projectId: string,
     @Query('buildingId') buildingId?: string,
     @Query('unitId') unitId?: string,
+    @CurrentUser('permissions') permissions: string[] = [],
   ) {
     if (unitId) return this.service.getUnitSummary(unitId);
     if (buildingId) return this.service.getBuildingSummary(buildingId);
-    return this.service.getFinancialSummary(projectId);
+    const canViewFinancial = permissions.includes('financial:view');
+    return this.service.getFinancialSummary(projectId, canViewFinancial);
   }
 
   @Get('report')

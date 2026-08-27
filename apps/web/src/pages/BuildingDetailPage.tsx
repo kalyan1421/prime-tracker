@@ -64,6 +64,7 @@ export default function BuildingDetailPage() {
   // Same permission the obligation-summary endpoints require, so we never render
   // a card whose only possible outcome is a 403 error state.
   const canViewLeases = hasPermission('lease:view');
+  const canViewLoans = hasPermission('loan:view');
   const canViewChecklist = hasPermission('checklist:view');
   const canEditChecklist = hasPermission('checklist:edit');
 
@@ -189,12 +190,19 @@ export default function BuildingDetailPage() {
         )}
       </div>
 
-      {/* KPI tiles */}
+      {/* KPI tiles — Monthly rent/Loan balance omitted (not shown as $0) for a role
+          without lease:view/loan:view, since `leases`/`loans` are empty for them
+          simply because useLeases/useLoans never fire, not because there's nothing
+          there. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Units" value={`${occupied + sold}/${totalUnits}`} helpText={`${sold} sold · ${occupied} leased · ${available} available`} />
         <StatCard label="Occupancy" value={`${occupancyPct}%`} colorScheme={occupancyPct >= 80 ? 'success' : occupancyPct >= 50 ? 'warning' : 'danger'} />
-        <StatCard label="Monthly rent" value={fmtMoney(monthlyRent)} helpText={`${activeLeases.length} active lease${activeLeases.length === 1 ? '' : 's'}`} />
-        <StatCard label="Loan balance" value={loanBalance > 0 ? fmtMoney(loanBalance) : '—'} helpText={`${loans.length} loan${loans.length === 1 ? '' : 's'}`} />
+        {canViewLeases && (
+          <StatCard label="Monthly rent" value={fmtMoney(monthlyRent)} helpText={`${activeLeases.length} active lease${activeLeases.length === 1 ? '' : 's'}`} />
+        )}
+        {canViewLoans && (
+          <StatCard label="Loan balance" value={loanBalance > 0 ? fmtMoney(loanBalance) : '—'} helpText={`${loans.length} loan${loans.length === 1 ? '' : 's'}`} />
+        )}
       </div>
 
       {/* Budget summary — budget/committed/actual/remaining scoped to this building */}
@@ -333,39 +341,41 @@ export default function BuildingDetailPage() {
 
       {/* Linked loans + Documents */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card shadow="sm">
-          <CardHeader className="pb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FiCreditCard className="text-blue-600" />
-              <p className="font-semibold text-sm text-gray-700">Linked loans</p>
-            </div>
-            {canEditLoans && (
-              <Button size="sm" variant="light" startContent={<FiPlus className="text-xs" />} onPress={addLoan.onOpen}>
-                Attach
-              </Button>
-            )}
-          </CardHeader>
-          <CardBody className="pt-0">
-            {loans.length === 0 ? (
-              <div className="text-sm text-gray-500 text-center py-6">No loans attached to this building.</div>
-            ) : (
-              <div className="space-y-2">
-                {loans.map((l: any) => (
-                  <div key={l.id} className="flex items-start justify-between gap-3 py-2 border-b border-gray-100 last:border-b-0">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{l.lender || 'Encrypted lender'}</p>
-                      <p className="text-xs text-gray-500">{l.loanType.replace('_', ' ')}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-sm font-semibold text-gray-900 tabular-nums">{fmtMoney(Number(l.currentBalance ?? l.principalAmt ?? 0))}</p>
-                      {l.maturityDate && <p className="text-[11px] text-gray-500">Matures {fmtDate(l.maturityDate)}</p>}
-                    </div>
-                  </div>
-                ))}
+        {canViewLoans && (
+          <Card shadow="sm">
+            <CardHeader className="pb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FiCreditCard className="text-blue-600" />
+                <p className="font-semibold text-sm text-gray-700">Linked loans</p>
               </div>
-            )}
-          </CardBody>
-        </Card>
+              {canEditLoans && (
+                <Button size="sm" variant="light" startContent={<FiPlus className="text-xs" />} onPress={addLoan.onOpen}>
+                  Attach
+                </Button>
+              )}
+            </CardHeader>
+            <CardBody className="pt-0">
+              {loans.length === 0 ? (
+                <div className="text-sm text-gray-500 text-center py-6">No loans attached to this building.</div>
+              ) : (
+                <div className="space-y-2">
+                  {loans.map((l: any) => (
+                    <div key={l.id} className="flex items-start justify-between gap-3 py-2 border-b border-gray-100 last:border-b-0">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">{l.lender || 'Encrypted lender'}</p>
+                        <p className="text-xs text-gray-500">{l.loanType.replace('_', ' ')}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-semibold text-gray-900 tabular-nums">{fmtMoney(Number(l.currentBalance ?? l.principalAmt ?? 0))}</p>
+                        {l.maturityDate && <p className="text-[11px] text-gray-500">Matures {fmtDate(l.maturityDate)}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        )}
 
         <Card shadow="sm">
           <CardHeader className="pb-2 flex items-center justify-between">

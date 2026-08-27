@@ -2252,16 +2252,135 @@ export function useDeleteTaskAttachment() {
   });
 }
 
+// ---- Global Update Board ----
+//
+// Org-wide chat/announcement feed — NOT project-scoped, distinct from the Task/
+// kind=CONSTRUCTION board above. See docs/client-discovery/UPDATE_BOARD_DESIGN.md.
+
+export function useUpdateBoardPosts(params?: {
+  projectId?: string;
+  buildingId?: string;
+  unitId?: string;
+  assignedTo?: string;
+  status?: string;
+  priority?: string;
+  search?: string;
+  pinned?: boolean;
+}) {
+  return useQuery({
+    queryKey: ['update-board', params],
+    queryFn: () => api.get('/update-board', { params }).then((r) => r.data),
+  });
+}
+
+export function useUpdateBoardPost(id: string) {
+  return useQuery({
+    queryKey: ['update-board-post', id],
+    queryFn: () => api.get(`/update-board/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useCreateUpdateBoardPost() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/update-board', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['update-board'] }),
+  });
+}
+
+export function useUpdateUpdateBoardPost() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/update-board/${id}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['update-board'] });
+      qc.invalidateQueries({ queryKey: ['update-board-post', vars.id] });
+    },
+  });
+}
+
+export function useDeleteUpdateBoardPost() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/update-board/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['update-board'] }),
+  });
+}
+
+export function useUpdateBoardComments(postId: string) {
+  return useQuery({
+    queryKey: ['update-board-comments', postId],
+    queryFn: () => api.get(`/update-board/${postId}/comments`).then((r) => r.data),
+    enabled: !!postId,
+  });
+}
+
+export function useCreateUpdateBoardComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postId, content }: { postId: string; content: string }) =>
+      api.post(`/update-board/${postId}/comments`, { content }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['update-board-comments', vars.postId] });
+      qc.invalidateQueries({ queryKey: ['update-board-post', vars.postId] });
+    },
+  });
+}
+
+export function useDeleteUpdateBoardComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postId, commentId }: { postId: string; commentId: string }) =>
+      api.delete(`/update-board/${postId}/comments/${commentId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['update-board-comments', vars.postId] });
+      qc.invalidateQueries({ queryKey: ['update-board-post', vars.postId] });
+    },
+  });
+}
+
+/** Records an attachment already uploaded via usePresignedUpload (category 'update-board'). */
+export function useAddUpdateBoardAttachment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postId, storagePath, fileName, mimeType }: {
+      postId: string; storagePath: string; fileName: string; mimeType?: string;
+    }) => api.post(`/update-board/${postId}/attachments`, { storagePath, fileName, mimeType }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['update-board-post', vars.postId] });
+      // The feed row shows an attachment COUNT, so the list is stale too — same reason
+      // useAddTaskUpdate invalidates ['tasks'] alongside ['task-updates', ...].
+      qc.invalidateQueries({ queryKey: ['update-board'] });
+    },
+  });
+}
+
+export function useDeleteUpdateBoardAttachment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postId, attachmentId }: { postId: string; attachmentId: string }) =>
+      api.delete(`/update-board/${postId}/attachments/${attachmentId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['update-board-post', vars.postId] });
+      qc.invalidateQueries({ queryKey: ['update-board'] });
+    },
+  });
+}
+
 // ---- Unit Construction Checklist ----
 //
 // A fixed, ordered per-unit stage checklist — separate from the Task/kind=CONSTRUCTION
 // "Updates Board" hooks above. See construction-checklist.service.ts on the API side.
 
 export function useConstructionTemplate(buildingId?: string) {
+  const can = useCan('checklist:view');
   return useQuery({
     queryKey: ['construction-template', buildingId],
     queryFn: () => api.get('/construction-checklist/template', { params: { buildingId } }).then((r) => r.data),
-    enabled: !!buildingId,
+    enabled: can && (!!buildingId),
   });
 }
 
@@ -2284,10 +2403,15 @@ export function useDeleteConstructionTemplateItem() {
 }
 
 export function useUnitConstructionStages(unitId?: string) {
+  // Gated like every other checklist hook. Without this the query fires for a role that
+  // lacks checklist:view, the API 403s, and the axios interceptor raises a "Missing
+  // permissions" toast on a page the person is otherwise entitled to see — and it keeps
+  // firing on refetch even after the component that wanted it stopped rendering.
+  const can = useCan('checklist:view');
   return useQuery({
     queryKey: ['construction-stages', unitId],
     queryFn: () => api.get('/construction-checklist/unit', { params: { unitId } }).then((r) => r.data),
-    enabled: !!unitId,
+    enabled: can && (!!unitId),
   });
 }
 
@@ -2296,16 +2420,26 @@ export function useApplyConstructionTemplate() {
   return useMutation({
     mutationFn: ({ unitId }: { unitId: string }) =>
       api.post(`/construction-checklist/unit/${unitId}/apply-template`).then((r) => r.data),
-    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+    },
   });
 }
 
 export function useAddUnitConstructionStage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ unitId, label }: { unitId: string; label: string }) =>
-      api.post(`/construction-checklist/unit/${unitId}/stage`, { label }).then((r) => r.data),
-    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+    // Takes the whole field set now — a stage is created from a form, not as a bare row
+    // that then needs six more edits.
+    mutationFn: ({ unitId, ...body }: { unitId: string } & Record<string, unknown>) =>
+      api.post(`/construction-checklist/unit/${unitId}/stage`, body).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['missing-template-steps', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+    },
   });
 }
 
@@ -2314,7 +2448,35 @@ export function useUpdateConstructionStage() {
   return useMutation({
     mutationFn: ({ stageId, unitId, data }: { stageId: string; unitId: string; data: Record<string, unknown> }) =>
       api.patch(`/construction-checklist/stage/${stageId}`, data).then((r) => r.data),
-    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      // Prefix match — covers both the per-project rollup and the all-projects
+      // dashboard rollup, so an inline status change there reflects immediately.
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+    },
+  });
+}
+
+export function useAddStagePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ stageId, storagePath, caption }: { stageId: string; unitId: string; storagePath: string; caption?: string }) =>
+      api.post(`/construction-checklist/stage/${stageId}/photos`, { storagePath, caption }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+    },
+  });
+}
+
+export function useRemoveStagePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ photoId }: { photoId: string; unitId: string }) =>
+      api.delete(`/construction-checklist/photos/${photoId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+    },
   });
 }
 
@@ -2323,17 +2485,70 @@ export function useDeleteConstructionStage() {
   return useMutation({
     mutationFn: ({ stageId }: { stageId: string; unitId: string }) =>
       api.delete(`/construction-checklist/stage/${stageId}`).then((r) => r.data),
-    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+    },
   });
 }
 
+// No projectId means "every project I can see" — the backend resolves that to the
+// caller's accessible projects for a scoped role, or no filter at all otherwise.
 export function useConstructionRollup(projectId?: string) {
+  const can = useCan('checklist:view');
   return useQuery({
-    queryKey: ['construction-rollup', projectId],
+    queryKey: ['construction-rollup', projectId ?? 'all'],
     queryFn: () => api.get('/construction-checklist/rollup', { params: { projectId } }).then((r) => r.data),
-    enabled: !!projectId,
+    enabled: can,
   });
 }
+
+// ---- Site Tracker (Phase 5) ----
+// The cross-property construction grid. `siteTracker:view` is a narrower gate than
+// `unit:view` on purpose — see the permission comment in packages/shared.
+
+export function useSiteTracker(filters: Record<string, string | undefined>) {
+  const can = useCan('siteTracker:view');
+  // Only the keys that are actually set take part in the query key, so an untouched
+  // filter never splits the cache into a second identical entry.
+  const active = Object.fromEntries(
+    Object.entries(filters).filter(([, v]) => !!v),
+  ) as Record<string, string>;
+  return useQuery({
+    queryKey: ['site-tracker', active],
+    queryFn: () => api.get('/site-tracker', { params: active }).then((r) => r.data),
+    enabled: can,
+  });
+}
+
+export function useUpdateSiteTracker() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, data }: { unitId: string; data: Record<string, unknown> }) =>
+      api.patch(`/units/${unitId}/site-tracker`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+      qc.invalidateQueries({ queryKey: ['unit', vars.unitId] });
+      // Blocker and the checklist rollup read the same units — keep the Construction
+      // dashboard in step with an edit made here.
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+    },
+  });
+}
+
+export function useSetUnitAssignees() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, userIds }: { unitId: string; userIds: string[] }) =>
+      api.put(`/units/${unitId}/assignees`, { userIds }).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['site-tracker'] }); },
+  });
+}
+
+// The checklist-template hooks lived here. Their only caller was the Checklist Templates
+// screen, removed along with the work-type field that selected a template; unit checklists
+// now come from the building's stage list. The API routes remain and still serve the units
+// already seeded from a template.
 
 // ---- Organizations ----
 
@@ -2962,17 +3177,22 @@ export function useDeleteSalePayment() {
 // Daily Construction Logs (Phase 4)
 // ============================================================================
 
-export function useDailyLogs(projectId?: string, buildingId?: string) {
+export function useDailyLogs(projectId?: string, buildingId?: string, unitId?: string) {
   const can = useCan('dailylog:view');
   return useQuery({
-    queryKey: ['daily-logs', projectId, buildingId ?? 'all'],
-    queryFn: () => api.get('/daily-logs', { params: { projectId, buildingId } }).then((r) => r.data),
-    enabled: can && (!!projectId),
+    queryKey: ['daily-logs', projectId, buildingId ?? 'all', unitId ?? 'all'],
+    queryFn: () => api.get('/daily-logs', { params: { projectId, buildingId, unitId } }).then((r) => r.data),
+    // A unit-scoped feed is valid on its own — the API accepts any one of the three
+    // filters, so requiring projectId here would leave the unit feed permanently disabled.
+    enabled: can && (!!projectId || !!unitId),
   });
 }
 
 function invalidateDailyLogs(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['daily-logs'] });
+  // The Site Tracker renders a per-unit update count off the same rows, so a post from
+  // anywhere has to refresh it or the grid shows a stale number.
+  qc.invalidateQueries({ queryKey: ['site-tracker'] });
 }
 
 export function useCreateDailyLog() {
@@ -3516,5 +3736,32 @@ export function useWaiveRentInvoice() {
     mutationFn: ({ invoiceId, data }: RentInvoiceScope & { invoiceId: string; data: { reason: string } }) =>
       api.post(`/leases/rent-invoices/${invoiceId}/waive`, data).then((r) => r.data),
     onSuccess: (_d, v) => invalidateRentInvoices(qc, v),
+  });
+}
+
+// ---- Activity Log (Updates section, second tab) ----
+// Reads /audit/activity, NOT /audit. The admin audit endpoint returns whole rows
+// including the before/after values and needs `audit:view`; this one is permission-
+// filtered per entity server-side and carries no values, so it is safe for everyone who
+// can open the Updates section. See AuditService.activityFeed.
+
+export function useActivityFeed(params: { page?: number; limit?: number; userId?: string; area?: string } = {}) {
+  const can = useCan('updateBoard:view');
+  return useQuery({
+    queryKey: ['activity-feed', params.page ?? 1, params.limit ?? 30, params.userId ?? '', params.area ?? ''],
+    queryFn: () => api.get('/audit/activity', { params }).then((r) => r.data),
+    enabled: can,
+    // The feed is append-only history; keeping the previous page on screen while the next
+    // one loads avoids the list collapsing to a spinner on every page step.
+    placeholderData: (prev: any) => prev,
+  });
+}
+
+export function useActivityActors() {
+  const can = useCan('updateBoard:view');
+  return useQuery({
+    queryKey: ['activity-actors'],
+    queryFn: () => api.get('/audit/activity/actors').then((r) => r.data),
+    enabled: can,
   });
 }

@@ -2,10 +2,10 @@ import { useRef, useState } from 'react';
 import {
   Card, CardBody, CardHeader, Button, Input, Textarea, Avatar, Chip, Select, SelectItem, addToast,
 } from '@heroui/react';
-import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage, FiHome } from 'react-icons/fi';
+import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage, FiHome, FiGrid, FiSmartphone, FiCornerDownRight, FiCheckSquare } from 'react-icons/fi';
 import {
   useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useAddDailyLogPhoto, useRemoveDailyLogPhoto,
-  usePresignedUpload, useBuildings,
+  usePresignedUpload, useBuildings, useUnitConstructionStages,
 } from '../hooks/useApi';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
@@ -16,13 +16,42 @@ const photoUrl = (photo: { url?: string; storagePath: string }) => photo.url || 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 /**
- * Daily construction log feed for a project (optionally scoped to a building).
- * When no buildingId prop is passed, shows a building selector in the form so
- * the author can tag which building the log entry relates to.
+ * How the update arrived. WEB is deliberately absent: it is the unremarkable default and a
+ * chip on every single row would be noise. The client's own board does the same — it marks a
+ * post made from a phone and says nothing about the rest.
+ *
+ * Only MOBILE is listed because only WEB and MOBILE are reachable — inbound email ingestion
+ * was removed on 2026-08-27. An unknown value renders no chip rather than breaking the row,
+ * so restoring a channel is a matter of adding its entry back here.
  */
-export function DailyLogFeed({ projectId, buildingId }: { projectId: string; buildingId?: string }) {
-  const { data, isLoading } = useDailyLogs(projectId, buildingId);
+const SOURCE_MARKS: Record<string, { icon: JSX.Element; label: string; color: 'default' | 'primary' | 'success' }> = {
+  MOBILE: { icon: <FiSmartphone className="text-xs" />, label: 'From site', color: 'default' },
+};
+
+/**
+ * The site update feed. Scoped to a project, a building, or a single unit.
+ *
+ * `unitId` is the narrowest scope and the one the Site Tracker links to. When it is set the
+ * building selector disappears: the API derives the building from the unit, so offering the
+ * choice would let someone file a unit's update under a building it is not in.
+ *
+ * The weather and crew fields also drop away at unit scope — they describe a site day, not
+ * one unit's fit-out, and every unit-level post would otherwise carry the same two values.
+ */
+export function DailyLogFeed({
+  projectId, buildingId, unitId, title, showList = true, bare = false,
+}: {
+  projectId: string; buildingId?: string; unitId?: string; title?: string;
+  /** Composer only. Used when a merged timeline elsewhere is already showing the posts. */
+  showList?: boolean;
+  /** Drop the Card chrome, for embedding inside another section. */
+  bare?: boolean;
+}) {
+  const { data, isLoading } = useDailyLogs(projectId, buildingId, unitId);
   const { data: buildingsData } = useBuildings(projectId);
+  // Only meaningful at unit scope — a site-wide log has no stage to hang off.
+  const { data: stagesData } = useUnitConstructionStages(unitId);
+  const stages: any[] = Array.isArray(stagesData) ? stagesData : [];
   const create = useCreateDailyLog();
   const addPhoto = useAddDailyLogPhoto();
   const presigned = usePresignedUpload();
@@ -31,6 +60,7 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
 
   const [form, setForm] = useState<Record<string, string>>({
     logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '',
+    stageId: '',
   });
   const set = (k: string) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const [logFeedErr, setLogFeedErr] = useState<string | null>(null);
@@ -63,11 +93,15 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
       setUploading(true);
       const log = await create.mutateAsync({
         projectId,
-        buildingId: form.buildingId || undefined,
+        unitId: unitId || undefined,
+        // At unit scope the server derives this from the unit; sending the form value
+        // would be the caller asserting something it cannot know better than the server.
+        buildingId: unitId ? undefined : (form.buildingId || undefined),
         logDate: form.logDate ? new Date(form.logDate).toISOString() : undefined,
         notes: form.notes.trim(),
         weather: form.weather || undefined,
         crewCount: form.crewCount ? Number(form.crewCount) : undefined,
+        stageId: form.stageId || undefined,
       });
       for (const { file } of pendingFiles) {
         try {
@@ -79,7 +113,7 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
       }
       pendingFiles.forEach((p) => URL.revokeObjectURL(p.preview));
       setPendingFiles([]);
-      setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '' });
+      setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
       addToast({ title: 'Log posted', color: 'success' });
     } catch (e) {
       setLogFeedErr(errMsg(e, 'Failed to post log'));
@@ -91,21 +125,18 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
 
   const isPosting = create.isPending || uploading;
 
-  return (
-    <Card shadow="sm">
-      <CardHeader className="pb-2 flex items-center gap-2">
-        <FiClipboard className="text-blue-600" />
-        <p className="font-semibold text-sm text-gray-600">Daily Logs {logs.length > 0 && `(${logs.length})`}</p>
-      </CardHeader>
-      <CardBody className="pt-0 space-y-4">
+  const body = (
+    <>
         <PermissionGate permission="dailylog:edit">
           <div className="rounded-lg border border-gray-100 p-3 space-y-2 bg-gray-50/50">
             <FormError message={logFeedErr} />
             <Textarea
-              size="sm" minRows={2} label="What happened on site today?"
+              size="sm" minRows={2} label={unitId ? 'What happened on this unit?' : 'What happened on site today?'}
               value={form.notes}
               onChange={(e) => { set('notes')(e); setLogFeedErr(null); }}
-              placeholder="Poured foundation for Building A, inspection passed…"
+              placeholder={unitId
+                ? 'Cabinets delivered, countertop template still not scheduled…'
+                : 'Poured foundation for Building A, inspection passed…'}
               isInvalid={!!logFeedErr && !form.notes.trim()}
               errorMessage="Required"
             />
@@ -137,12 +168,34 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
               </div>
             )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className={`grid gap-2 ${unitId ? 'grid-cols-1' : 'grid-cols-2 sm:grid-cols-4'}`}>
               <Input size="sm" type="date" label="Date" value={form.logDate} onChange={set('logDate')} />
-              <Input size="sm" label="Weather" value={form.weather} onChange={set('weather')} placeholder="Sunny, 78°F" />
-              <Input size="sm" type="number" label="Crew" value={form.crewCount} onChange={set('crewCount')} />
+              {!unitId && (
+                <Input size="sm" label="Weather" value={form.weather} onChange={set('weather')} placeholder="Sunny, 78°F" />
+              )}
+              {!unitId && (
+                <Input size="sm" type="number" label="Crew" value={form.crewCount} onChange={set('crewCount')} />
+              )}
+              {/* Pin to a checklist stage — unit scope only, and only once the unit HAS a
+                  checklist. Expected to stay empty most of the time: most updates are about
+                  the unit, not one step of it. */}
+              {unitId && stages.length > 0 && (
+                <Select
+                  size="sm"
+                  label="Pin to stage (optional)"
+                  selectedKeys={form.stageId ? new Set([form.stageId]) : new Set()}
+                  onSelectionChange={(keys) => {
+                    const val = Array.from(keys)[0] as string ?? '';
+                    setForm((f) => ({ ...f, stageId: val }));
+                  }}
+                >
+                  {stages.map((st: any) => (
+                    <SelectItem key={st.id} textValue={st.label}>{st.label}</SelectItem>
+                  ))}
+                </Select>
+              )}
               {/* Building tag — show selector only when the feed is at project scope */}
-              {!buildingId && buildings.length > 0 && (
+              {!unitId && !buildingId && buildings.length > 0 && (
                 <Select
                   size="sm"
                   label="Building (optional)"
@@ -187,22 +240,48 @@ export function DailyLogFeed({ projectId, buildingId }: { projectId: string; bui
         </PermissionGate>
 
         {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
-        {!isLoading && logs.length === 0 && (
-          <p className="text-sm text-gray-500">No daily logs yet. Field crews can post progress + photos from their phone.</p>
+        {showList && !isLoading && logs.length === 0 && (
+          <p className="text-sm text-gray-500">
+            {unitId
+              ? 'No updates on this unit yet. Post progress and photos from the site.'
+              : 'No daily logs yet. Field crews can post progress + photos from their phone.'}
+          </p>
         )}
 
+      {showList && (
         <div className="space-y-3">
           {logs.map((log) => (
-            <DailyLogCard key={log.id} log={log} />
+            <DailyLogCard key={log.id} log={log} showUnit={!unitId} projectId={projectId} />
           ))}
         </div>
-      </CardBody>
+      )}
+    </>
+  );
+
+  // `bare` drops the Card so this can sit inside another section's chrome without the
+  // page ending up with a card inside a card inside a card.
+  if (bare) return <div className="space-y-4">{body}</div>;
+
+  return (
+    <Card shadow="sm">
+      <CardHeader className="pb-2 flex items-center gap-2">
+        <FiClipboard className="text-blue-600" />
+        <p className="font-semibold text-sm text-gray-600">
+          {title ?? (unitId ? 'Site Updates' : 'Daily Logs')} {logs.length > 0 && `(${logs.length})`}
+        </p>
+      </CardHeader>
+      <CardBody className="pt-0 space-y-4">{body}</CardBody>
     </Card>
   );
 }
 
-function DailyLogCard({ log }: { log: any }) {
+function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
+  log: any; showUnit?: boolean; projectId: string; isReply?: boolean;
+}) {
   const del = useDeleteDailyLog();
+  const create = useCreateDailyLog();
+  const [replying, setReplying] = useState(false);
+  const [replyText, setReplyText] = useState('');
   const addPhoto = useAddDailyLogPhoto();
   const removePhoto = useRemoveDailyLogPhoto();
   const presigned = usePresignedUpload();
@@ -243,15 +322,37 @@ function DailyLogCard({ log }: { log: any }) {
 
       {/* Chips: building tag + weather + crew */}
       <div className="flex flex-wrap gap-1.5 mt-2">
-        {log.building?.name && (
+        {SOURCE_MARKS[log.source] && (
+          <Chip
+            size="sm" variant="flat" color={SOURCE_MARKS[log.source].color}
+            startContent={SOURCE_MARKS[log.source].icon}
+          >
+            {SOURCE_MARKS[log.source].label}
+          </Chip>
+        )}
+        {showUnit && log.unit?.unitNumber && (
+          <Chip size="sm" variant="flat" color="secondary" startContent={<FiGrid className="text-xs" />}>
+            Unit {log.unit.unitNumber}
+          </Chip>
+        )}
+        {showUnit && log.building?.name && (
           <Chip size="sm" variant="flat" color="primary" startContent={<FiHome className="text-xs" />}>
             {log.building.name}
           </Chip>
         )}
         {log.weather && <Chip size="sm" variant="flat" startContent={<FiCloud className="text-xs" />}>{log.weather}</Chip>}
         {log.crewCount != null && <Chip size="sm" variant="flat" startContent={<FiUsers className="text-xs" />}>{log.crewCount} crew</Chip>}
+        {log.stage?.label && (
+          <Chip size="sm" variant="flat" color="warning" startContent={<FiCheckSquare className="text-xs" />}>
+            {log.stage.label}
+          </Chip>
+        )}
       </div>
 
+      {/* Only when the update actually has photos. The add-button used to sit on every card
+          as an empty 80x80 box, which is a lot of furniture for something most updates never
+          use — the first photo is attached in the composer when the update is written. */}
+      {photos.length > 0 && (
       <div className="flex flex-wrap gap-2 mt-2 items-center">
         {photos.map((p) => (
           <div key={p.id} className="relative group rounded border border-gray-200 overflow-hidden w-20 h-20 bg-gray-100">
@@ -282,6 +383,57 @@ function DailyLogCard({ log }: { log: any }) {
           <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
         </PermissionGate>
       </div>
+      )}
+
+      {/* Replies. One level only — a reply carries no reply button of its own, matching the
+          server rule. Threading a site update is for answering a question, not a forum. */}
+      {!isReply && (
+        <>
+          {(log.replies ?? []).length > 0 && (
+            <div className="mt-3 space-y-2 border-l-2 border-gray-100 pl-3">
+              {log.replies.map((r: any) => (
+                <DailyLogCard key={r.id} log={r} showUnit={false} projectId={projectId} isReply />
+              ))}
+            </div>
+          )}
+          <PermissionGate permission="dailylog:edit">
+            {replying ? (
+              <div className="mt-3 space-y-2 border-l-2 border-gray-100 pl-3">
+                <Textarea
+                  size="sm" minRows={2} autoFocus value={replyText} onValueChange={setReplyText}
+                  aria-label="Reply" placeholder="Reply to this update…"
+                />
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm" color="primary" isDisabled={!replyText.trim()} isLoading={create.isPending}
+                    onPress={async () => {
+                      try {
+                        await create.mutateAsync({ projectId, parentId: log.id, notes: replyText.trim() });
+                        setReplyText(''); setReplying(false);
+                      } catch (e) {
+                        addToast({ title: errMsg(e, 'Could not post the reply'), color: 'danger' });
+                      }
+                    }}
+                  >
+                    Reply
+                  </Button>
+                  <Button size="sm" variant="light" onPress={() => { setReplying(false); setReplyText(''); }}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button" onClick={() => setReplying(true)}
+                className="mt-2 inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-blue-600"
+              >
+                <FiCornerDownRight /> Reply
+                {(log.replies ?? []).length > 0 && ` (${log.replies.length})`}
+              </button>
+            )}
+          </PermissionGate>
+        </>
+      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import { CustomOptionsService } from '../custom-options/custom-options.service';
 import { UserRole, UnitStatus } from '@prisma/client';
 
 // ---- Status state machine ----
@@ -46,22 +47,38 @@ export class UnitsService {
     private access: ProjectAccessService,
     private encryption: EncryptionService,
     private statusEvents: UnitStatusEventService,
+    private customOptions: CustomOptionsService,
   ) {}
 
   // ---- Reads ----
 
-  async findByBuilding(buildingId: string) {
+  async findByBuilding(buildingId: string, viewerPermissions: string[] = []) {
     if (!buildingId) throw new BadRequestException('buildingId required');
-    return this.prisma.unit.findMany({
+    const canViewLease = viewerPermissions.includes('lease:view');
+    const canViewSales = viewerPermissions.includes('sales:view');
+    const units = await this.prisma.unit.findMany({
       where: { buildingId, deletedAt: null },
       include: { leases: { where: { status: 'ACTIVE', deletedAt: null } }, sales: { where: { deletedAt: null } } },
       orderBy: { unitNumber: 'asc' },
     });
+    if (canViewLease && canViewSales) return units;
+    return units.map((u) => ({
+      ...u,
+      leases: canViewLease ? u.leases : [],
+      sales: canViewSales ? u.sales : [],
+    }));
   }
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: string, viewerPermissions: string[] = []) {
     if (!projectId) throw new BadRequestException('projectId required');
-    return this.prisma.unit.findMany({
+    // Tenant name/rent and buyer/price live on the Lease/Sale rows, which have their
+    // own permissions (lease:view, sales:view) for exactly this reason — unit:view
+    // alone must not carry them along for the ride. `_count` stays unconditional
+    // (a number, not an identity or a dollar figure) so leaseCount/saleCount on the
+    // frontend still work for a viewer who gets the arrays redacted below.
+    const canViewLease = viewerPermissions.includes('lease:view');
+    const canViewSales = viewerPermissions.includes('sales:view');
+    const units = await this.prisma.unit.findMany({
       where: { building: { projectId }, deletedAt: null },
       include: {
         building: { select: { id: true, name: true } },
@@ -78,9 +95,15 @@ export class UnitsService {
         { unitNumber: 'asc' },
       ],
     });
+    if (canViewLease && canViewSales) return units;
+    return units.map((u) => ({
+      ...u,
+      leases: canViewLease ? u.leases : [],
+      sales: canViewSales ? u.sales : [],
+    }));
   }
 
-  async findById(id: string) {
+  async findById(id: string, viewerPermissions: string[] = []) {
     const unit = await this.prisma.unit.findUnique({
       where: { id },
       include: {
@@ -130,7 +153,21 @@ export class UnitsService {
     if (unit.deletedAt || unit.building?.deletedAt || unit.building?.project?.deletedAt) {
       throw new NotFoundException('Unit not found');
     }
-    return { ...unit, loans: this.encryption.decryptLoans(unit.loans) };
+    // This endpoint is gated only on unit:view — a permission nearly every role holds —
+    // but the include above pulls full lease (tenant name, rent), sale (buyer, price)
+    // and loan (lender, principal, rate, balance — decrypted) records. Each of those
+    // has its own permission for exactly this reason; unit:view alone must not carry
+    // them along. `_count` stays unconditional (numbers, not identities or dollars).
+    const canViewLease = viewerPermissions.includes('lease:view');
+    const canViewSales = viewerPermissions.includes('sales:view');
+    const canViewLoanFinancials =
+      viewerPermissions.includes('financial:view') || viewerPermissions.includes('loan:view');
+    return {
+      ...unit,
+      leases: canViewLease ? unit.leases : [],
+      sales: canViewSales ? unit.sales : [],
+      loans: canViewLoanFinancials ? this.encryption.decryptLoans(unit.loans) : [],
+    };
   }
 
   /**
@@ -360,8 +397,29 @@ export class UnitsService {
     userRole: UserRole,
     /** Stamped onto the occupancy event so a status change has an author. */
     userId?: string,
+    /**
+     * The caller's permission list. Defaults to empty only for internal callers that
+     * pass no permissions; those are trusted paths that supply their own field set.
+     */
+    permissions: string[] = [],
   ) {
     const unit = await this.findById(id);
+
+    // The route is gated on `unit:editBuild`, which is deliberately wider than
+    // `unit:edit` (see the controller). A caller who reached it WITHOUT `unit:edit` —
+    // CONSTRUCTION today — may correct the physical facts of the unit but not its
+    // commercial terms or its sale/lease lifecycle, so `askingPrice`, `askingRent` and
+    // `status` are refused here rather than silently dropped: a site lead who types a
+    // price into a form deserves to be told it was not saved.
+    const BUILD_FIELDS = ['unitNumber', 'unitType', 'sqft', 'notes'];
+    if (permissions.length > 0 && !permissions.includes('unit:edit')) {
+      const blocked = Object.keys(input).filter((k) => !BUILD_FIELDS.includes(k));
+      if (blocked.length > 0) {
+        throw new ForbiddenException(
+          `Editing unit number, type, size and notes is allowed; these fields need the unit:edit permission: ${blocked.join(', ')}`,
+        );
+      }
+    }
 
     // SALES role: only `status` and `notes` are allowed.
     if (userRole === 'SALES') {
@@ -496,6 +554,7 @@ export class UnitsService {
     projectId?: string;
     search?: string;
     viewer?: { userId: string; role: string; roles?: string[] };
+    viewerPermissions?: string[];
   }) {
     const where: any = { deletedAt: null };
     if (filters.status) where.status = filters.status;
@@ -526,7 +585,15 @@ export class UnitsService {
       ];
     }
 
-    return this.prisma.unit.findMany({
+    // Tenant name/rent and buyer/price live on the Lease/Sale rows, which have their
+    // own permissions (lease:view, sales:view) for exactly this reason — unit:view
+    // alone (all this endpoint requires) must not carry them along for the ride.
+    // Same redaction findByProject/findByBuilding/findById already apply, just
+    // missed here when this cross-project endpoint was added.
+    const canViewLease = (filters.viewerPermissions ?? []).includes('lease:view');
+    const canViewSales = (filters.viewerPermissions ?? []).includes('sales:view');
+
+    const units = await this.prisma.unit.findMany({
       where,
       include: {
         building: {
@@ -546,6 +613,12 @@ export class UnitsService {
         { unitNumber: 'asc' },
       ],
     });
+    if (canViewLease && canViewSales) return units;
+    return units.map((u) => ({
+      ...u,
+      leases: canViewLease ? u.leases : [],
+      sales: canViewSales ? u.sales : [],
+    }));
   }
 
   // ---- Aggregates ----
@@ -586,6 +659,140 @@ export class UnitsService {
 
     const total = perUnit.reduce((sum, u) => sum + u.monthlyRent, 0);
     return { total, annualProjection: total * 12, perUnit };
+  }
+
+  // ---- Site Tracker (Phase 1) ----
+
+  /**
+   * Blocker / site priority / work type. Its own method and its own permission
+   * (`siteTracker:edit`) rather than a branch of update(), for two reasons:
+   *
+   *  1. update() is gated on `unit:edit`, which CONSTRUCTION does not hold and SALES and
+   *     MARKETING do. A blocker flag reachable by Sales but not by the site team is
+   *     precisely backwards.
+   *  2. update() carries the status state machine and the SALES field allowlist, neither
+   *     of which has anything to say about these fields.
+   */
+  async updateSiteTracker(
+    id: string,
+    input: {
+      blockerStatus?: 'YES' | 'NO' | null;
+      blockerReason?: string | null;
+      sitePriority?: string | null;
+      workType?: string | null;
+    },
+    userId?: string,
+  ) {
+    const unit = await this.prisma.unit.findUnique({
+      where: { id },
+      select: { id: true, deletedAt: true, blockerStatus: true, blockerReason: true },
+    });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    const data: Record<string, unknown> = {};
+
+    if (input.sitePriority !== undefined) {
+      await this.assertOption('site_priority', input.sitePriority);
+      data.sitePriority = input.sitePriority;
+    }
+    if (input.workType !== undefined) {
+      await this.assertOption('work_type', input.workType);
+      data.workType = input.workType;
+    }
+
+    // Reason may be edited on its own while a unit stays blocked.
+    const reasonProvided = input.blockerReason !== undefined;
+    const nextReason = reasonProvided ? (input.blockerReason?.trim() || null) : unit.blockerReason;
+    if (reasonProvided) data.blockerReason = nextReason;
+
+    if (input.blockerStatus !== undefined) {
+      const from = unit.blockerStatus;
+      const to = input.blockerStatus;
+
+      // A YES with no reason is what makes the source board's blocker column unactionable:
+      // you can see that something is stuck and never why. Refuse it here instead.
+      if (to === 'YES' && !nextReason) {
+        throw new BadRequestException(
+          'Flagging a unit blocked needs a reason — say what is holding it up.',
+        );
+      }
+
+      // `blockerSince` is maintained here and nowhere else, the same way update() owns
+      // `availableSince`. Re-flagging an already-blocked unit must NOT restart the clock:
+      // blocker age is the number worth looking at, and resetting it on every edit of the
+      // reason would quietly hide the oldest problems.
+      if (to === 'YES' && from !== 'YES') data.blockerSince = new Date();
+      else if (to !== 'YES' && from === 'YES') data.blockerSince = null;
+
+      // Clearing the flag clears the reason with it, unless this same call set a new one.
+      if (to !== 'YES' && from === 'YES' && !reasonProvided) data.blockerReason = null;
+
+      data.blockerStatus = to;
+    }
+
+    if (Object.keys(data).length === 0) return this.findById(id);
+
+    await this.prisma.unit.update({ where: { id }, data: data as any });
+    return this.findById(id);
+  }
+
+  /** Full replacement of the unit's site owners. Multi-assign; send [] to clear. */
+  async setAssignees(id: string, userIds: string[], actingUserId?: string) {
+    const unit = await this.prisma.unit.findUnique({
+      where: { id }, select: { id: true, deletedAt: true },
+    });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    const wanted = [...new Set(userIds.filter(Boolean))];
+    if (wanted.length > 0) {
+      const found = await this.prisma.user.findMany({
+        where: { id: { in: wanted }, isActive: true },
+        select: { id: true },
+      });
+      if (found.length !== wanted.length) {
+        const missing = wanted.filter((w) => !found.some((f) => f.id === w));
+        throw new BadRequestException(
+          `Not an active user: ${missing.join(', ')}`,
+        );
+      }
+    }
+
+    // Delete-then-insert inside one transaction. Rows already present are re-created, so
+    // `assignedAt` resets for everyone — acceptable here because, unlike UpdateBoardAssignment,
+    // nothing keys off it (no notification de-duplication reads this table yet).
+    await this.prisma.$transaction([
+      this.prisma.unitAssignee.deleteMany({ where: { unitId: id } }),
+      ...(wanted.length
+        ? [this.prisma.unitAssignee.createMany({
+            data: wanted.map((userId) => ({ unitId: id, userId, assignedById: actingUserId ?? null })),
+          })]
+        : []),
+    ]);
+
+    return this.prisma.unitAssignee.findMany({
+      where: { unitId: id },
+      include: { user: { select: { id: true, name: true, email: true } } },
+      orderBy: { assignedAt: 'asc' },
+    });
+  }
+
+  /**
+   * Validates a free-text value against its CustomOption category. Mirrors how unitType is
+   * handled elsewhere: the value set is org-editable, so this checks membership at write
+   * time rather than pinning an enum into the schema. null/'' clears the field.
+   */
+  private async assertOption(category: string, value: string | null | undefined) {
+    if (value === null || value === undefined || value === '') return;
+    const custom = await this.prisma.customOption.findFirst({
+      where: { category, value, isActive: true },
+      select: { id: true },
+    });
+    if (custom) return;
+    const defaults = this.customOptions.getSystemDefaults()[category] ?? [];
+    if (defaults.some((d) => d.value === value)) return;
+    throw new BadRequestException(
+      `'${value}' is not a valid ${category.replace(/_/g, ' ')}.`,
+    );
   }
 
   // ---- Helpers ----

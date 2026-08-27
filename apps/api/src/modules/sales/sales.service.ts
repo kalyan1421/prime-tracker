@@ -388,6 +388,17 @@ export class SalesService {
     // afterward (e.g. correcting the record from the unit page) — otherwise the
     // stamped commission goes stale the moment any of its inputs changes post-close.
     const closingNow = data.status === 'CLOSED' && sale.status !== 'CLOSED';
+
+    // A closed sale with no price silently read as $0 revenue everywhere downstream
+    // (closedRevenue rollups, computeBrokerCommission bailing quietly) with no error
+    // anywhere in the chain — require the price to actually be set before allowing the
+    // close, same as the document/discount gates just above.
+    if (closingNow) {
+      const resultingSalePrice = data.salePrice !== undefined ? data.salePrice : sale.salePrice;
+      if (resultingSalePrice == null) {
+        throw new BadRequestException('A sale price is required to close a sale');
+      }
+    }
     const editingClosedCommissionInputs =
       sale.status === 'CLOSED' &&
       (data.brokerId !== undefined || data.brokerCommissionPct !== undefined || data.salePrice !== undefined);

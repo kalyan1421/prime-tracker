@@ -126,10 +126,14 @@ export class ReportsService {
     });
 
     const totalRevenue = closedSalesRevenue + annualRentRevenue;
-    // ROI is measured against ALL money spent, construction + fit-out, so the headline
-    // figure is identical to before the TI split above.
-    const totalSpend = totalActuals + totalInteriorActuals;
-    const overallROI = totalSpend > 0 ? ((totalRevenue - totalSpend) / totalSpend) * 100 : 0;
+    // ROI is measured against Total Investment (the budget figure), not Total Actuals —
+    // they're two different denominators shown as separate KPI cards on the same screen,
+    // and computing ROI against actuals while labeling the card "vs investment" produced
+    // a number that didn't match what a reader would assume it was computed against. Null
+    // (not 0) when there's no investment recorded at all, matching the "—" convention
+    // already used for campaigns.service.ts's CPL/CPA.
+    const overallROI =
+      totalInvestment > 0 ? ((totalRevenue - totalInvestment) / totalInvestment) * 100 : null;
 
     const chartData = projectRows.map((r) => ({
       name: r.projectName,
@@ -147,7 +151,7 @@ export class ReportsService {
         closedSalesRevenue,
         annualRentRevenue,
         totalRevenue,
-        overallROI: Math.round(overallROI * 10) / 10,
+        overallROI: overallROI === null ? null : Math.round(overallROI * 10) / 10,
       },
       projectComparison: projectRows,
       chartData,

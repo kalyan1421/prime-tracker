@@ -1,0 +1,6 @@
+-- Update Board Phase 2 — notification triggers. See UPDATE_BOARD_DESIGN.md §4.
+-- AlterEnum
+ALTER TYPE "NotificationType" ADD VALUE 'UPDATE_BOARD_POSTED';
+ALTER TYPE "NotificationType" ADD VALUE 'UPDATE_BOARD_COMMENT_MENTION';
+ALTER TYPE "NotificationType" ADD VALUE 'UPDATE_BOARD_ASSIGNED';
+ALTER TYPE "NotificationType" ADD VALUE 'UPDATE_BOARD_DUE_SOON';

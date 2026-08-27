@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CreateCustomOptionDto, UpdateCustomOptionDto } from './dto/create-custom-option.dto';
 
 // System defaults per category — always shown, cannot be deleted
 const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: string }[]> = {
@@ -122,14 +123,39 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'BLOCKED',     label: 'Blocked',       color: 'danger'  },
     { value: 'DONE',        label: 'Done',          color: 'success' },
   ],
-  // Assumed value set — the client's screenshots show this column but every visible row
-  // reads "Not Started", so the real vocabulary (e.g. Scheduled/Passed/Failed) is still an
-  // open question. Relabel or extend here once confirmed; no schema change needed either way.
+  // No longer assumed. The 2026-08-26 audit of the client's live monday board read this
+  // column's stored label set directly: six values, of which only "Passed" has ever been
+  // used (3 of 540 rows). NOT_STARTED is renamed to the board's own NOT_INSPECTED, and the
+  // two states it was missing — IN_PROGRESS and REQUIRES_FOLLOW_UP — are added.
+  //
+  // Colours are deliberately NOT ported. On the board, Failed renders brown and Requires
+  // Follow-up renders dark green, both calmer than In Progress in red — unadjusted template
+  // defaults that make a failed inspection look less urgent than one merely underway.
   construction_inspection_status: [
-    { value: 'NOT_STARTED', label: 'Not Started', color: 'default' },
-    { value: 'SCHEDULED',   label: 'Scheduled',    color: 'primary' },
-    { value: 'PASSED',      label: 'Passed',       color: 'success' },
-    { value: 'FAILED',      label: 'Failed',       color: 'danger'  },
+    { value: 'NOT_INSPECTED',       label: 'Not Inspected',       color: 'default'   },
+    { value: 'SCHEDULED',           label: 'Scheduled',            color: 'primary'   },
+    { value: 'IN_PROGRESS',         label: 'In Progress',          color: 'secondary' },
+    { value: 'PASSED',              label: 'Passed',               color: 'success'   },
+    { value: 'FAILED',              label: 'Failed',               color: 'danger'    },
+    { value: 'REQUIRES_FOLLOW_UP',  label: 'Requires Follow-up',   color: 'warning'   },
+  ],
+  // ── Site Tracker (Phase 1) ────────────────────────────────────────────────
+  // LOW/MEDIUM/HIGH only. The source board's PRIORITY column also carries a "DONE" label,
+  // which is a completion state living in a priority scale; worse, its "done" colour is set
+  // to LOW, so its own group battery reports LOW items as finished. Completion here is the
+  // checklist percentage, and the two concepts stay apart.
+  site_priority: [
+    { value: 'LOW',    label: 'Low',    color: 'primary' },
+    { value: 'MEDIUM', label: 'Medium', color: 'warning' },
+    { value: 'HIGH',   label: 'High',   color: 'danger'  },
+  ],
+  // Selects which checklist template a unit is seeded from (checklist_templates.workType).
+  // Adding a value here does NOT create a template — a work type with no active template
+  // simply has no default checklist, which the apply endpoint reports plainly.
+  work_type: [
+    { value: 'SHELL',              label: 'Shell',              color: 'secondary' },
+    { value: 'INTERIOR_FINISHOUT', label: 'Interior Finish-out', color: 'primary'   },
+    { value: 'PERMIT',             label: 'Permit Only',         color: 'default'   },
   ],
 };
 
@@ -171,21 +197,11 @@ export class CustomOptionsService {
     return Array.from(all).sort();
   }
 
-  async create(data: {
-    category: string;
-    value: string;
-    label: string;
-    color?: string;
-    sortOrder?: number;
-    createdById: string;
-  }) {
+  async create(data: CreateCustomOptionDto & { createdById: string }) {
     return this.prisma.customOption.create({ data });
   }
 
-  async update(
-    id: string,
-    data: { label?: string; color?: string; sortOrder?: number; isActive?: boolean },
-  ) {
+  async update(id: string, data: UpdateCustomOptionDto) {
     const opt = await this.prisma.customOption.findUnique({ where: { id } });
     if (!opt) throw new NotFoundException('Custom option not found');
     return this.prisma.customOption.update({ where: { id }, data });

@@ -9,6 +9,7 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { AddScopeItemDto, AddInteriorInvoiceDto } from './dto/scope-invoice.dto';
 
 @ApiTags('Interior')
 @ApiBearerAuth()
@@ -21,8 +22,8 @@ export class InteriorController {
   @Get('portfolio')
   @RequirePermissions('interior:view')
   @ApiOperation({ summary: 'Cross-project interior portfolio (phase, budget vs actual, days-to-handover)' })
-  portfolio() {
-    return this.service.portfolio();
+  portfolio(@CurrentUser('permissions') permissions?: string[]) {
+    return this.service.portfolio(permissions ?? []);
   }
 
   // ─────── Package templates (must precede ':id' routes) ───────
@@ -71,15 +72,16 @@ export class InteriorController {
     @Query('unitId') unitId?: string,
     @Query('buildingId') buildingId?: string,
     @Query('status') status?: InteriorStatus,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.findAll({ unitId, buildingId, status });
+    return this.service.findAll({ unitId, buildingId, status }, permissions ?? []);
   }
 
   @Get(':id')
   @RequirePermissions('interior:view')
   @ApiOperation({ summary: 'Get one interior project with scope, snags, invoices, documents' })
-  findOne(@Param('id') id: string) {
-    return this.service.findById(id);
+  findOne(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.service.findById(id, permissions ?? []);
   }
 
   @Post()
@@ -176,7 +178,7 @@ export class InteriorController {
   @RequirePermissions('interior:edit')
   addScope(
     @Param('id') id: string,
-    @Body() body: { description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number },
+    @Body() body: AddScopeItemDto,
   ) {
     return this.service.addScopeItem(id, body);
   }
@@ -193,7 +195,7 @@ export class InteriorController {
   @RequirePermissions('interior:finance')
   addInvoice(
     @Param('id') id: string,
-    @Body() body: { vendorId: string; amount: number; invoiceNo?: string; invoiceDate?: string },
+    @Body() body: AddInteriorInvoiceDto,
   ) {
     return this.service.addInvoice(id, body);
   }

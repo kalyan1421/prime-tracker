@@ -5,10 +5,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { resolveMentions } from '../comments/mentions';
 import { StorageService } from '../../common/storage/storage.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
-
-/** Work-item kinds. See the note on Task.kind for why they share one table. */
-export const TASK_KINDS = ['TASK', 'CONSTRUCTION'] as const;
-export type TaskKind = (typeof TASK_KINDS)[number];
+import { CreateTaskDto, UpdateTaskDto } from './dto/create-task.dto';
+import { TASK_KINDS, TaskKind } from './task-kinds';
 
 /** Who may edit or delete someone else's item. */
 const TASK_MANAGER_ROLES = ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER'];
@@ -138,21 +136,7 @@ export class TasksService {
         return task;
     }
 
-    async create(data: {
-        projectId: string;
-        buildingId?: string;
-        unitId?: string;
-        unitIds?: string[];
-        kind?: string;
-        title: string;
-        description?: string;
-        status?: string;
-        priority?: string;
-        dueDate?: string;
-        assignedTo?: string;
-        buildingIds?: string[];
-        assigneeIds?: string[];
-    }, createdBy: string) {
+    async create(data: CreateTaskDto, createdBy: string) {
         const unitIds = await this.resolveUnitIds(data.unitIds, data.unitId, data.buildingId);
         const buildingIds = await this.resolveBuildingIds(data.buildingIds, data.buildingId, unitIds);
         const assigneeIds = await this.resolveAssigneeIds(data.assigneeIds, data.assignedTo);
@@ -356,20 +340,7 @@ export class TasksService {
         }
     }
 
-    async update(id: string, data: {
-        title?: string;
-        description?: string;
-        status?: string;
-        priority?: string;
-        dueDate?: string | null;
-        assignedTo?: string | null;
-        assigneeIds?: string[];
-        buildingId?: string | null;
-        buildingIds?: string[];
-        unitId?: string | null;
-        unitIds?: string[];
-        kind?: string;
-    }, userId: string, userRole: string) {
+    async update(id: string, data: UpdateTaskDto, userId: string, userRole: string) {
         const task = await this.findById(id);
         if (task.createdBy !== userId && !TASK_MANAGER_ROLES.includes(userRole)) {
             throw new ForbiddenException('Only the task creator or a Project Manager can edit this task');

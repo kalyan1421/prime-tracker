@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
+import { CreateBrokerDto, UpdateBrokerDto } from './dto/create-broker.dto';
 
 @ApiTags('Brokers')
 @ApiBearerAuth()
@@ -37,12 +38,7 @@ export class BrokersController {
 
   @Post()
   @RequirePermissions('broker:edit')
-  create(
-    @Body() body: {
-      name: string; company?: string; email?: string; phone?: string;
-      commissionRate?: number; commissionFlat?: number; notes?: string;
-    },
-  ) {
+  create(@Body() body: CreateBrokerDto) {
     return this.service.create(body);
   }
 
@@ -50,10 +46,7 @@ export class BrokersController {
   @RequirePermissions('broker:edit')
   update(
     @Param('id') id: string,
-    @Body() body: {
-      name?: string; company?: string; email?: string; phone?: string;
-      commissionRate?: number; commissionFlat?: number; notes?: string; isActive?: boolean;
-    },
+    @Body() body: UpdateBrokerDto,
   ) {
     return this.service.update(id, body);
   }

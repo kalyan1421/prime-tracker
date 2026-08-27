@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
+import { CreateBrokerDto, UpdateBrokerDto } from './dto/create-broker.dto';
 
 /**
  * Broker / referral tracking — internal-only (brokers have no login). Brokers bring
@@ -42,19 +43,13 @@ export class BrokersService {
     return broker;
   }
 
-  async create(input: {
-    name: string;
-    company?: string;
-    email?: string;
-    phone?: string;
-    commissionRate?: number;
-    commissionFlat?: number;
-    notes?: string;
-  }) {
-    if (!input.name?.trim()) throw new BadRequestException('Broker name is required');
+  async create(input: CreateBrokerDto) {
+    const name = input.name?.trim();
+    if (!name) throw new BadRequestException('Broker name is required');
+    await this.assertNoDuplicate(name, input.email);
     return this.prisma.broker.create({
       data: {
-        name: input.name.trim(),
+        name,
         company: input.company,
         email: input.email,
         phone: input.phone,
@@ -65,20 +60,38 @@ export class BrokersService {
     });
   }
 
-  async update(
-    id: string,
-    input: {
-      name?: string;
-      company?: string;
-      email?: string;
-      phone?: string;
-      commissionRate?: number;
-      commissionFlat?: number;
-      notes?: string;
-      isActive?: boolean;
-    },
-  ) {
-    await this.findById(id);
+  /**
+   * Case-insensitive name (and email, when given) check against active brokers, so
+   * "kalyan" / "Kalyan" / "KALYAN" don't silently pile up as separate rows with no way
+   * to tell them apart in the list. Excludes `excludeId` so update() can call this too
+   * without a broker tripping over its own row.
+   */
+  private async assertNoDuplicate(name: string, email?: string, excludeId?: string) {
+    const email2 = email?.trim();
+    const existing = await this.prisma.broker.findFirst({
+      where: {
+        deletedAt: null,
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+        OR: [
+          { name: { equals: name, mode: 'insensitive' } },
+          ...(email2 ? [{ email: { equals: email2, mode: 'insensitive' as const } }] : []),
+        ],
+      },
+      select: { id: true, name: true, email: true },
+    });
+    if (!existing) return;
+    if (existing.name.toLowerCase() === name.toLowerCase()) {
+      throw new BadRequestException(`A broker named "${existing.name}" already exists`);
+    }
+    throw new BadRequestException(`A broker with email "${existing.email}" already exists (${existing.name})`);
+  }
+
+  async update(id: string, input: UpdateBrokerDto) {
+    const existing = await this.findById(id);
+    const nextName = input.name?.trim();
+    if (nextName || input.email !== undefined) {
+      await this.assertNoDuplicate(nextName ?? existing.name, input.email ?? existing.email ?? undefined, id);
+    }
     return this.prisma.broker.update({
       where: { id },
       data: {
@@ -213,7 +226,10 @@ export class BrokersService {
         closedSales,
         closedValue: Number(closed?._sum.salePrice ?? 0),
         commissionEarned,
-        conversionPct: leads > 0 ? Math.round((closedSales / leads) * 100) : 0,
+        // null (not 0) when there are no leads to convert — "not applicable," not "failed
+        // to convert." Matches campaigns.service.ts's CPL/CPA, which use the same null
+        // convention for the same zero-denominator case.
+        conversionPct: leads > 0 ? Math.round((closedSales / leads) * 100) : null,
         commissionPaid,
         commissionOwed: commissionEarned - commissionPaid,
         // ---- Leasing side (R23) ----

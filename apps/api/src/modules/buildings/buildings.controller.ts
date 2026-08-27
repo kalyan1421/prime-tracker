@@ -8,7 +8,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateBuildingDto } from './dto/create-building.dto';
 import { UpdateBuildingDto } from './dto/update-building.dto';
 import { ReorderBuildingsDto } from './dto/reorder-buildings.dto';
@@ -30,8 +30,8 @@ export class BuildingsController {
       'would go dark if the building were archived, counting both direct attachments and everything ' +
       'under its units. Intended for the delete-confirmation dialog.',
   })
-  findByProject(@Query('projectId') projectId: string) {
-    return this.service.findByProject(projectId);
+  findByProject(@Query('projectId') projectId: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.service.findByProject(projectId, permissions ?? []);
   }
 
   @Patch('reorder')
@@ -44,8 +44,8 @@ export class BuildingsController {
   @Get(':id')
   @RequirePermissions('building:view')
   @ApiOperation({ summary: 'Get building by ID with units (includes `blastRadius`)' })
-  findById(@Param('id') id: string) {
-    return this.service.findById(id);
+  findById(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.service.findById(id, permissions ?? []);
   }
 
   @Post()

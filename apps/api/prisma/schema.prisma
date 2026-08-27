@@ -26,7 +26,7 @@ model User {
   phone        String?
   jobTitle     String?
   role         UserRole   @default(VIEWER)
-  roles        UserRole[]
+  roles        UserRole[] @default([])
   isActive     Boolean    @default(true)
   passwordHash String?
   mfaEnabled   Boolean    @default(false)
@@ -36,71 +36,80 @@ model User {
   updatedAt    DateTime   @updatedAt
   // tenantId   String?   // future multi-tenant
 
-  milestones                   Milestone[]                 @relation("MilestoneOwner")
-  auditEvents                  AuditEvent[]
-  sessions                     RefreshToken[]
-  unitComments                 UnitComment[]
-  projectComments              ProjectComment[]
-  notifications                Notification[]
-  notificationPreferences      NotificationPreference[]
-  assignedLeads                Lead[]                      @relation("LeadAssignee")
-  createdLeads                 Lead[]                      @relation("LeadCreator")
-  leadActivities               LeadActivity[]              @relation("ActivityCreator")
-  drawRequests                 DrawRequest[]               @relation("DrawCreator")
-  approvedDraws                DrawRequest[]               @relation("DrawApprover")
-  uploadedDocuments            Document[]                  @relation("DocumentUploader")
-  assignedTasks                Task[]                      @relation("TaskAssignee")
-  createdTasks                 Task[]                      @relation("TaskCreator")
-  taskComments                 TaskComment[]
-  taskAttachments              TaskAttachment[]            @relation("TaskAttachmentUploader")
-  orgMemberships               OrgMembership[]             @relation("OrgMember")
-  managedMembers               OrgMembership[]             @relation("ManagedBy")
-  projectMemberships           ProjectMember[]
+  milestones                        Milestone[]                     @relation("MilestoneOwner")
+  auditEvents                       AuditEvent[]
+  sessions                          RefreshToken[]
+  unitComments                      UnitComment[]
+  projectComments                   ProjectComment[]
+  notifications                     Notification[]
+  notificationPreferences           NotificationPreference[]
+  assignedLeads                     Lead[]                          @relation("LeadAssignee")
+  createdLeads                      Lead[]                          @relation("LeadCreator")
+  leadActivities                    LeadActivity[]                  @relation("ActivityCreator")
+  drawRequests                      DrawRequest[]                   @relation("DrawCreator")
+  approvedDraws                     DrawRequest[]                   @relation("DrawApprover")
+  uploadedDocuments                 Document[]                      @relation("DocumentUploader")
+  assignedTasks                     Task[]                          @relation("TaskAssignee")
+  createdTasks                      Task[]                          @relation("TaskCreator")
+  taskComments                      TaskComment[]
+  taskAttachments                   TaskAttachment[]                @relation("TaskAttachmentUploader")
+  orgMemberships                    OrgMembership[]                 @relation("OrgMember")
+  managedMembers                    OrgMembership[]                 @relation("ManagedBy")
+  projectMemberships                ProjectMember[]
   // New relations from Slices 1, 5, 7, 8
-  milestonePhotos              MilestonePhoto[]            @relation("MilestonePhotoUploader")
+  milestonePhotos                   MilestonePhoto[]                @relation("MilestonePhotoUploader")
   // C6 — the sign-off half of milestone photo evidence. Deliberately a SECOND relation:
   // the person who shot the photo and the person who vouches for it are different people,
   // and collapsing them into one column is exactly what makes a sign-off meaningless.
-  milestonePhotoReviews        MilestonePhoto[]            @relation("MilestonePhotoReviewer")
-  milestoneSignoffOverrides    Milestone[]                 @relation("MilestoneSignoffOverrider")
-  budgetRevisionsCreated       BudgetRevision[]            @relation("BudgetRevCreator")
-  budgetRevisionsApproved      BudgetRevision[]            @relation("BudgetRevApprover")
-  drawApprovals                DrawApproval[]              @relation("DrawApprovalActor")
-  drawDocuments                DrawDocument[]              @relation("DrawDocUploader")
+  milestonePhotoReviews             MilestonePhoto[]                @relation("MilestonePhotoReviewer")
+  milestoneSignoffOverrides         Milestone[]                     @relation("MilestoneSignoffOverrider")
+  budgetRevisionsCreated            BudgetRevision[]                @relation("BudgetRevCreator")
+  budgetRevisionsApproved           BudgetRevision[]                @relation("BudgetRevApprover")
+  drawApprovals                     DrawApproval[]                  @relation("DrawApprovalActor")
+  drawDocuments                     DrawDocument[]                  @relation("DrawDocUploader")
   // Document Vault Phase 1
-  uploadedDocVersions          DocumentVersion[]           @relation("VersionUploader")
+  uploadedDocVersions               DocumentVersion[]               @relation("VersionUploader")
   // Document Vault Phase 2 — buyer portal
-  clientProfile                Client?                     @relation("ClientUser")
+  clientProfile                     Client?                         @relation("ClientUser")
   // Sprint 2 — Campaign attribution
-  campaignsCreated             Campaign[]                  @relation("CampaignCreator")
-  campaignSpendRecorded        CampaignSpend[]             @relation("CampaignSpender")
+  campaignsCreated                  Campaign[]                      @relation("CampaignCreator")
+  campaignSpendRecorded             CampaignSpend[]                 @relation("CampaignSpender")
   // Interior / Fit-Out + Sale Payments
-  interiorProjects             InteriorProject[]           @relation("InteriorPM")
-  snagItems                    SnagItem[]                  @relation("SnagAssignee")
-  discountApprovedSales        Sale[]                      @relation("SaleDiscountApprover")
-  cancelledSales               SaleCancellation[]          @relation("SaleCancelledBy")
-  dailyLogs                    DailyLog[]                  @relation("DailyLogAuthor")
+  interiorProjects                  InteriorProject[]               @relation("InteriorPM")
+  snagItems                         SnagItem[]                      @relation("SnagAssignee")
+  discountApprovedSales             Sale[]                          @relation("SaleDiscountApprover")
+  cancelledSales                    SaleCancellation[]              @relation("SaleCancelledBy")
+  dailyLogs                         DailyLog[]                      @relation("DailyLogAuthor")
   // Leasing depth — rent timeline + deposit/TI ledger
-  leaseRentPeriods             LeaseRentPeriod[]           @relation("LeaseRentPeriodCreator")
-  leaseRentCorrections         LeaseRentPeriodCorrection[] @relation("LeaseRentPeriodCorrector")
-  leaseObligationPayments      LeaseObligationPayment[]    @relation("LeaseObligationPaymentRecorder")
-  leaseRentInvoices            LeaseRentInvoice[]          @relation("LeaseRentInvoiceRecorder")
-  leaseAssignmentsRecorded     LeaseTenantAssignment[]     @relation("LeaseAssignmentRecorder")
-  historicalDeletionsRequested HistoricalRecordDeletion[]  @relation("HistoricalDeletionRequester")
-  historicalDeletionsDecided   HistoricalRecordDeletion[]  @relation("HistoricalDeletionDecider")
-  taskUpdates                  TaskUpdate[]                @relation("TaskUpdateAuthor")
-  taskAssignments              TaskAssignment[]            @relation("TaskAssignmentUser")
+  leaseRentPeriods                  LeaseRentPeriod[]               @relation("LeaseRentPeriodCreator")
+  leaseRentCorrections              LeaseRentPeriodCorrection[]     @relation("LeaseRentPeriodCorrector")
+  leaseObligationPayments           LeaseObligationPayment[]        @relation("LeaseObligationPaymentRecorder")
+  leaseRentInvoices                 LeaseRentInvoice[]              @relation("LeaseRentInvoiceRecorder")
+  leaseAssignmentsRecorded          LeaseTenantAssignment[]         @relation("LeaseAssignmentRecorder")
+  historicalDeletionsRequested      HistoricalRecordDeletion[]      @relation("HistoricalDeletionRequester")
+  historicalDeletionsDecided        HistoricalRecordDeletion[]      @relation("HistoricalDeletionDecider")
+  taskUpdates                       TaskUpdate[]                    @relation("TaskUpdateAuthor")
+  taskAssignments                   TaskAssignment[]                @relation("TaskAssignmentUser")
   // Unit construction checklist
   constructionStageTemplatesCreated ConstructionStageTemplateItem[] @relation("ConstructionStageTemplateCreator")
-  constructionStagesOwned      UnitConstructionStage[]     @relation("UnitConstructionStageOwner")
-  constructionStagesCreated    UnitConstructionStage[]     @relation("UnitConstructionStageCreator")
+  constructionStagesOwned           UnitConstructionStage[]         @relation("UnitConstructionStageOwner")
+  stagePhotosUploaded               UnitConstructionStagePhoto[]    @relation("StagePhotoUploader")
+  checklistTemplatesCreated         ChecklistTemplate[]             @relation("ChecklistTemplateCreator")
+  unitAssignments                   UnitAssignee[]                  @relation("UnitAssigneeUser")
+  unitAssignmentsMade               UnitAssignee[]                  @relation("UnitAssigneeAssigner")
+  constructionStagesCreated         UnitConstructionStage[]         @relation("UnitConstructionStageCreator")
   // Unit occupancy log
-  unitStatusEvents             UnitStatusEvent[]           @relation("UnitStatusEventRecorder")
+  unitStatusEvents                  UnitStatusEvent[]               @relation("UnitStatusEventRecorder")
   // C3 — the PM review gate on a milestone slip cascade
-  slipProposalsRequested       MilestoneSlipProposal[]     @relation("SlipProposalRequester")
-  slipProposalsDecided         MilestoneSlipProposal[]     @relation("SlipProposalDecider")
+  slipProposalsRequested            MilestoneSlipProposal[]         @relation("SlipProposalRequester")
+  slipProposalsDecided              MilestoneSlipProposal[]         @relation("SlipProposalDecider")
   // S3 — unit swap mid-contract
-  saleUnitTransfersRecorded    SaleUnitTransfer[]          @relation("SaleUnitTransferRecorder")
+  saleUnitTransfersRecorded         SaleUnitTransfer[]              @relation("SaleUnitTransferRecorder")
+  // Global Update Board — org-wide, not project-scoped (see model UpdateBoardPost)
+  createdUpdateBoardPosts           UpdateBoardPost[]               @relation("UpdateBoardPostCreator")
+  updateBoardAssignments            UpdateBoardAssignment[]         @relation("UpdateBoardAssignmentUser")
+  updateBoardAttachments            UpdateBoardAttachment[]         @relation("UpdateBoardAttachmentUploader")
+  updateBoardComments               UpdateBoardComment[]            @relation("UpdateBoardCommentAuthor")
 
   @@map("users")
 }
@@ -226,6 +235,8 @@ model Project {
   campaignProjects CampaignProject[]
   dailyLogs        DailyLog[]
   slipProposals    MilestoneSlipProposal[]
+  // Optional tag only — see UpdateBoardPost. Does not scope who can see the board.
+  updateBoardPosts UpdateBoardPost[]
 
   @@index([orgId])
   @@index([status, phase])
@@ -241,7 +252,7 @@ model ProjectMember {
   // project (e.g. Finance AND Legal). `role` mirrors roles[0] as the primary, exactly as
   // User.role mirrors User.roles[0], so every existing read keeps working unchanged.
   role      String   @default("TEAM_MEMBER")
-  roles     String[]
+  roles     String[] @default([])
   addedAt   DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -287,24 +298,26 @@ model Building {
   updatedAt      DateTime      @updatedAt
   deletedAt      DateTime? // soft-delete
 
-  units            Unit[]
-  tasks            Task[]
-  taskBuildings    TaskBuilding[]
-  documents        Document[]
+  units                          Unit[]
+  tasks                          Task[]
+  taskBuildings                  TaskBuilding[]
+  documents                      Document[]
   // Polymorphic back-relations: Sale/Lease/Lead/Loan can attach to a Building directly
   // (e.g. Leander Building 1 leased as one whole asset to "22 Yards Austin") in addition to
   // attaching to a specific Unit. Service-level validation ensures exactly one of
   // (buildingId, unitId) is set per row — see Sprint 1 docs.
-  sales            Sale[]
-  leases           Lease[]
-  leads            Lead[]
-  loans            Loan[]
-  budgetLines      BudgetLine[]
-  commitments      Commitment[]
-  actuals          Actual[]
-  interiorProjects InteriorProject[]
-  dailyLogs        DailyLog[]
+  sales                          Sale[]
+  leases                         Lease[]
+  leads                          Lead[]
+  loans                          Loan[]
+  budgetLines                    BudgetLine[]
+  commitments                    Commitment[]
+  actuals                        Actual[]
+  interiorProjects               InteriorProject[]
+  dailyLogs                      DailyLog[]
   constructionStageTemplateItems ConstructionStageTemplateItem[]
+  // Optional tag only — see UpdateBoardPost. Does not scope who can see the board.
+  updateBoardPosts               UpdateBoardPost[]
 
   @@index([projectId])
   @@index([projectId, sortOrder])
@@ -353,36 +366,74 @@ model Unit {
   // Time-on-market tracking: set when status flips to AVAILABLE, cleared on any other status.
   // Read-only from app code — UnitsService maintains this in update().
   availableSince DateTime?
+
+  // ── Site Tracker (Phase 1) ────────────────────────────────────────────────
+  // Ported from the client's monday board, which tracks these per building-unit and has
+  // nowhere to put them here. Three-state on purpose: 'YES' | 'NO' | null. The board
+  // itself has 23 NO, 1 YES and 1 genuinely-empty row, and "nobody has assessed this yet"
+  // is not the same claim as "not blocked" — a boolean would erase that distinction.
+  blockerStatus String?
+  // The board has no such field, which makes its own YES flag unactionable: you can see
+  // that something is stuck and not why. Required by the service whenever status is YES.
+  blockerReason String?
+  // Stamped on the flip TO 'YES', cleared on the flip away — the same maintained-in-
+  // service pattern as `availableSince` above. Gives blocker AGE, which the board cannot
+  // show at all; "blocked" matters much less than "blocked for eleven days".
+  blockerSince  DateTime?
+  // CustomOption category "site_priority". Deliberately LOW/MEDIUM/HIGH only: the board's
+  // PRIORITY column also carries a "DONE" value, which mixes priority with completion and
+  // is why its own group battery reports the wrong number. Completion is the checklist %.
+  sitePriority  String?
+  // CustomOption category "work_type". On the board this is fused with the tenant name in
+  // one free-text column ("INTERIOR FINISHOUT" and "QAMARIA COFFEE" in the same field);
+  // split here because work type is what selects the checklist template below, while the
+  // tenant is already modelled properly via Lease -> LeaseTenantAssignment and must be
+  // read from there rather than re-typed.
+  workType      String?
+
+  // ── Checklist template provenance (Phase 2) ───────────────────────────────
+  // Which template this unit's checklist was built from, stamped once at apply time.
+  // This is the field the source board lacks, and the direct cause of the five divergent
+  // step lists found on it. Nullable: units whose checklist predates templating, and
+  // units whose stages were built ad-hoc, legitimately have no provenance.
+  templateId      String?
+  template        ChecklistTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateVersion Int?
+
+  siteAssignees UnitAssignee[]
+
   // Unit combine: when adjacent units merge into one legal unit, the source units are
   // soft-deleted and point here at the surviving combined unit (retains their child history).
-  mergedIntoId   String?
-  mergedInto     Unit?      @relation("UnitMerge", fields: [mergedIntoId], references: [id])
-  mergedFrom     Unit[]     @relation("UnitMerge")
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  deletedAt      DateTime? // soft-delete: preserves financial history
+  mergedIntoId String?
+  mergedInto   Unit?     @relation("UnitMerge", fields: [mergedIntoId], references: [id])
+  mergedFrom   Unit[]    @relation("UnitMerge")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime? // soft-delete: preserves financial history
 
-  leases           Lease[]
-  sales            Sale[]
-  statusEvents     UnitStatusEvent[]
-  comments         UnitComment[]
-  loans            Loan[]
-  budgetLines      BudgetLine[]
-  commitments      Commitment[]
-  actuals          Actual[]
-  documents        Document[]
-  tasks            Task[]
-  taskUnits        TaskUnit[]
-  dailyLogs        DailyLog[]
-  clients          Client[]
-  leads            Lead[]
-  interiorProjects InteriorProject[]
-  interestedLeads  LeadUnitInterest[]
+  leases             Lease[]
+  sales              Sale[]
+  statusEvents       UnitStatusEvent[]
+  comments           UnitComment[]
+  loans              Loan[]
+  budgetLines        BudgetLine[]
+  commitments        Commitment[]
+  actuals            Actual[]
+  documents          Document[]
+  tasks              Task[]
+  taskUnits          TaskUnit[]
+  dailyLogs          DailyLog[]
+  clients            Client[]
+  leads              Lead[]
+  interiorProjects   InteriorProject[]
+  interestedLeads    LeadUnitInterest[]
   constructionStages UnitConstructionStage[]
   // S3 — unit swap mid-contract. Both sides, so a unit's page can show "a buyer moved
   // off this unit" and "this unit was taken over by an existing sale" alike.
-  saleTransfersOut SaleUnitTransfer[] @relation("SaleUnitTransferFrom")
-  saleTransfersIn  SaleUnitTransfer[] @relation("SaleUnitTransferTo")
+  saleTransfersOut   SaleUnitTransfer[]      @relation("SaleUnitTransferFrom")
+  saleTransfersIn    SaleUnitTransfer[]      @relation("SaleUnitTransferTo")
+  // Optional tag only — see UpdateBoardPost. Does not scope who can see the board.
+  updateBoardPosts   UpdateBoardPost[]
 
   // Uniqueness of (buildingId, unitNumber) is enforced by a partial unique index
   // (WHERE "deletedAt" IS NULL) added in migration 20260703000000_units_partial_unique_active —
@@ -394,6 +445,11 @@ model Unit {
   @@index([status, availableSince])
   @@index([deletedAt])
   @@index([mergedIntoId])
+  // The Site Tracker's default sort is "blocked first"; the partial-ish shape of this
+  // index also serves the "how many are blocked right now" rail count.
+  @@index([blockerStatus, deletedAt])
+  @@index([workType])
+  @@index([templateId])
   @@map("units")
 }
 
@@ -420,6 +476,23 @@ model Unit {
 // `availableSince` is kept in sync as a denormalised convenience (the stale-unit
 // cron and existing reports read it) but is no longer the source of truth.
 // ============================================================================
+
+/// Who owns this unit's site work. Multi-assign: the board routinely carries two avatars
+/// on a row, and 24 of its 25 rows are assigned. Distinct from ProjectMember (an access
+/// boundary) and from TaskAssignment (per task) — this is "whose unit is this".
+model UnitAssignee {
+  unitId       String
+  userId       String
+  unit         Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  user         User     @relation("UnitAssigneeUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime @default(now())
+  assignedById String?
+  assignedBy   User?    @relation("UnitAssigneeAssigner", fields: [assignedById], references: [id])
+
+  @@id([unitId, userId])
+  @@index([userId])
+  @@map("unit_assignees")
+}
 
 model UnitStatusEvent {
   id           String      @id @default(cuid())
@@ -509,43 +582,43 @@ model UnitComment {
 // ---- Milestones ----
 
 model Milestone {
-  id                   String           @id @default(cuid())
-  projectId            String
-  project              Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  title                String
-  description          String?
-  phase                String
-  dueDate              DateTime
-  completedAt          DateTime?
-  status               String           @default("NOT_STARTED")
+  id                    String                      @id @default(cuid())
+  projectId             String
+  project               Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title                 String
+  description           String?
+  phase                 String
+  dueDate               DateTime
+  completedAt           DateTime?
+  status                String                      @default("NOT_STARTED")
   // C6 — completion forced past the photo sign-off gate. Sits next to completedAt on
   // purpose: anyone reading "this phase is complete" reads the caveat in the same breath,
   // instead of it being buried in an audit table nobody opens.
-  signoffOverrideById  String?
-  signoffOverrideBy    User?            @relation("MilestoneSignoffOverrider", fields: [signoffOverrideById], references: [id], onDelete: SetNull)
-  signoffOverrideAt    DateTime?
+  signoffOverrideById   String?
+  signoffOverrideBy     User?                       @relation("MilestoneSignoffOverrider", fields: [signoffOverrideById], references: [id], onDelete: SetNull)
+  signoffOverrideAt     DateTime?
   signoffOverrideReason String?
-  ownerId              String?
-  owner                User?            @relation("MilestoneOwner", fields: [ownerId], references: [id])
-  sortOrder            Int              @default(0)
+  ownerId               String?
+  owner                 User?                       @relation("MilestoneOwner", fields: [ownerId], references: [id])
+  sortOrder             Int                         @default(0)
   // Dependency: this milestone cannot start until dependsOn is COMPLETED.
   // Cycle prevention is enforced in MilestonesService.setDependency().
-  dependsOnId          String?
-  dependsOn            Milestone?       @relation("MilestoneDeps", fields: [dependsOnId], references: [id], onDelete: SetNull)
-  dependents           Milestone[]      @relation("MilestoneDeps")
+  dependsOnId           String?
+  dependsOn             Milestone?                  @relation("MilestoneDeps", fields: [dependsOnId], references: [id], onDelete: SetNull)
+  dependents            Milestone[]                 @relation("MilestoneDeps")
   // Link to a draw schedule entry — completing this milestone auto-drafts a DrawRequest.
-  linkedDrawScheduleId String?
-  linkedDrawSchedule   DrawSchedule?    @relation(fields: [linkedDrawScheduleId], references: [id])
-  photos               MilestonePhoto[]
+  linkedDrawScheduleId  String?
+  linkedDrawSchedule    DrawSchedule?               @relation(fields: [linkedDrawScheduleId], references: [id])
+  photos                MilestonePhoto[]
   // Interior / Fit-Out + Sale Payments
-  salePayments         SalePayment[]
-  snags                SnagItem[]
+  salePayments          SalePayment[]
+  snags                 SnagItem[]
   // C3 — slip review gate. `slipProposals` are the ones THIS milestone's own date move
   // triggered; `slipProposalItems` are every proposal that would move THIS milestone.
-  slipProposals        MilestoneSlipProposal[]     @relation("SlipProposalTrigger")
-  slipProposalItems    MilestoneSlipProposalItem[]
-  createdAt            DateTime         @default(now())
-  updatedAt            DateTime         @updatedAt
+  slipProposals         MilestoneSlipProposal[]     @relation("SlipProposalTrigger")
+  slipProposalItems     MilestoneSlipProposalItem[]
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
 
   @@index([projectId, phase])
   @@index([dependsOnId])
@@ -559,18 +632,18 @@ model Milestone {
 // counts as complete". Uploading is evidence; the review is the judgement. A reviewer can
 // approve OR reject — a one-way "approve" button would only be a slower upload.
 model MilestonePhoto {
-  id           String    @id @default(cuid())
+  id           String                     @id @default(cuid())
   milestoneId  String
-  milestone    Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  milestone    Milestone                  @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
   storagePath  String // Supabase Storage key
   caption      String?
   uploadedById String
-  uploadedBy   User      @relation("MilestonePhotoUploader", fields: [uploadedById], references: [id])
-  uploadedAt   DateTime  @default(now())
+  uploadedBy   User                       @relation("MilestonePhotoUploader", fields: [uploadedById], references: [id])
+  uploadedAt   DateTime                   @default(now())
   // ---- Sign-off (C6) ----
   reviewStatus MilestonePhotoReviewStatus @default(PENDING)
   reviewedById String?
-  reviewedBy   User?     @relation("MilestonePhotoReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedBy   User?                      @relation("MilestonePhotoReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt   DateTime?
   // Mandatory on REJECTED (DB CHECK + service): a rejection the uploader cannot read is
   // an instruction to re-shoot with no idea what was wrong.
@@ -611,12 +684,12 @@ enum MilestonePhotoReviewStatus {
 // ============================================================================
 
 model MilestoneSlipProposal {
-  id             String    @id @default(cuid())
+  id             String                 @id @default(cuid())
   projectId      String
-  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project        Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   /// The milestone whose due date actually moved.
   milestoneId    String
-  milestone      Milestone @relation("SlipProposalTrigger", fields: [milestoneId], references: [id], onDelete: Cascade)
+  milestone      Milestone              @relation("SlipProposalTrigger", fields: [milestoneId], references: [id], onDelete: Cascade)
   /// The trigger's own move, recorded so the reviewer sees the cause, not just the effect.
   oldDueDate     DateTime
   newDueDate     DateTime
@@ -629,17 +702,17 @@ model MilestoneSlipProposal {
   ///              proposals over one sub-tree would double-shift it.
   /// STALE      — approval found the schedule had moved under the proposal. Terminal on
   ///              purpose: see MilestoneDepsService.decideProposal.
-  status         String    @default("PENDING")
+  status         String                 @default("PENDING")
   /// Nullable: the gate matters more than the attribution. A date moved by an import or a
   /// future automated path must still raise a reviewable proposal rather than silently
   /// applying, or failing to record itself at all.
   requestedById  String?
-  requestedBy    User?     @relation("SlipProposalRequester", fields: [requestedById], references: [id], onDelete: SetNull)
-  requestedAt    DateTime  @default(now())
+  requestedBy    User?                  @relation("SlipProposalRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  requestedAt    DateTime               @default(now())
   /// Null for SUPERSEDED / STALE — those are closed by the system, not by a person. The
   /// CHECK constraint requires a decider only for APPROVED / REJECTED.
   decidedById    String?
-  decidedBy      User?     @relation("SlipProposalDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedBy      User?                  @relation("SlipProposalDecider", fields: [decidedById], references: [id], onDelete: SetNull)
   /// Set for EVERY terminal status, human or system: when it closed is always knowable.
   /// For APPROVED this is also the moment the dates were written — approval applies.
   decidedAt      DateTime?
@@ -994,7 +1067,7 @@ model DrawSchedule {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  linkedMilestones Milestone[]
+  linkedMilestones  Milestone[]
   // C4 — proposed shifts of plannedDate awaiting PM approval. A lender-facing date is
   // never moved outside an approved proposal.
   slipProposalItems MilestoneSlipProposalItem[]
@@ -1007,16 +1080,16 @@ model DrawSchedule {
 // ---- Sales ----
 
 model Sale {
-  id                     String      @id @default(cuid())
+  id                     String        @id @default(cuid())
   projectId              String
-  project                Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project                Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
   // Enforced at the service layer (SalesService.create/update). DB lets both be null
   // to support data migration; queries should always include the populated side.
   unitId                 String?
-  unit                   Unit?       @relation(fields: [unitId], references: [id])
+  unit                   Unit?         @relation(fields: [unitId], references: [id])
   buildingId             String?
-  building               Building?   @relation(fields: [buildingId], references: [id])
+  building               Building?     @relation(fields: [buildingId], references: [id])
   buyer                  String?
   // WHO the buyer is relative to the sitting tenancy — the fact from which the close's
   // effect on that tenancy is DERIVED (S4/T1). A boolean `endsLease` was rejected: six
@@ -1026,9 +1099,9 @@ model Sale {
   // vacant unit both values close identically. Defaults to SITTING_TENANT so every sale
   // written before this field existed keeps exactly the behaviour it had.
   buyerType              SaleBuyerType @default(SITTING_TENANT)
-  salePrice              Decimal?    @db.Decimal(14, 2)
-  depositAmt             Decimal?    @db.Decimal(14, 2)
-  status                 String      @default("PROSPECT")
+  salePrice              Decimal?      @db.Decimal(14, 2)
+  depositAmt             Decimal?      @db.Decimal(14, 2)
+  status                 String        @default("PROSPECT")
   loiDate                DateTime?
   contractDate           DateTime?
   closingDate            DateTime?
@@ -1042,41 +1115,41 @@ model Sale {
   // org threshold needs Founder/Co-Founder sign-off before it can be committed
   // (UNDER_CONTRACT/CLOSED). Single approval — no dual-approval (client decision).
   discountApprovedById   String?
-  discountApprovedBy     User?       @relation("SaleDiscountApprover", fields: [discountApprovedById], references: [id])
+  discountApprovedBy     User?         @relation("SaleDiscountApprover", fields: [discountApprovedById], references: [id])
   discountApprovedAt     DateTime?
   // Broker attribution + commission (internal-only; brokers have no login).
   // Commission is earned/stamped when the sale CLOSES.
   brokerId               String?
-  broker                 Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
-  brokerCommissionPct    Decimal?    @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
-  brokerCommissionAmt    Decimal?    @db.Decimal(14, 2) // computed + stored on close
+  broker                 Broker?       @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  brokerCommissionPct    Decimal?      @db.Decimal(5, 2) // per-sale override of Broker.commissionRate
+  brokerCommissionAmt    Decimal?      @db.Decimal(14, 2) // computed + stored on close
   brokerCommissionPaidAt DateTime? // set when commission is remitted to broker
   // ---- Historical backfill (R4, 2026-08-22) ----
   // Entered by hand after the fact, mirroring Lease.isHistorical. A sale that already
   // closed years ago, typed in from records the system never witnessed — same reasoning,
   // same eventual approval-gate on deletion (R6, not yet built) that Lease already has.
-  isHistorical           Boolean     @default(false)
+  isHistorical           Boolean       @default(false)
   // Free text — Prime Tracker has no structured owning-entity/LLC model for either side
   // of a deal (buyer already exists; the historical sales sheet also names a seller).
   // Not worth a real relation for v1 — see the import spec's Non-Goals.
   seller                 String?
-  createdAt              DateTime    @default(now())
-  updatedAt              DateTime    @updatedAt
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
   deletedAt              DateTime? // soft-delete
 
   convertedLead Lead?
 
-  documents        Document[]
-  client           Client?
+  documents              Document[]
+  client                 Client?
   // Sale Payment Schedule (milestone-linked installments) + interior fit-out context
-  payments         SalePayment[]
-  interiorProjects InteriorProject[]
+  payments               SalePayment[]
+  interiorProjects       InteriorProject[]
   // What became of the money already collected when this sale was cancelled (S1).
-  cancellation     SaleCancellation?
+  cancellation           SaleCancellation?
   // Every unit this sale has moved between (S3), oldest first.
-  unitTransfers    SaleUnitTransfer[]
+  unitTransfers          SaleUnitTransfer[]
   commissionInstallments CommissionInstallment[]
-  deletionRequests HistoricalRecordDeletion[]
+  deletionRequests       HistoricalRecordDeletion[]
 
   @@index([projectId])
   @@index([unitId])
@@ -1166,36 +1239,36 @@ model SaleCancellation {
 /// percentOfPrice installment, and launders a discount approval granted against a
 /// different asset at a different price.
 model SaleUnitTransfer {
-  id                String   @id @default(cuid())
-  saleId            String
-  sale              Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  fromUnitId        String
-  fromUnit          Unit     @relation("SaleUnitTransferFrom", fields: [fromUnitId], references: [id])
-  toUnitId          String
-  toUnit            Unit     @relation("SaleUnitTransferTo", fields: [toUnitId], references: [id])
+  id                 String   @id @default(cuid())
+  saleId             String
+  sale               Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  fromUnitId         String
+  fromUnit           Unit     @relation("SaleUnitTransferFrom", fields: [fromUnitId], references: [id])
+  toUnitId           String
+  toUnit             Unit     @relation("SaleUnitTransferTo", fields: [toUnitId], references: [id])
   /// When the switch takes effect in the real world — not when it was typed in. Both
   /// occupancy events are dated to this.
-  effectiveDate     DateTime
+  effectiveDate      DateTime
   /// The agreed price on either side of the switch. Snapshotted because the sale row
   /// carries only the current one, and every installment rebase below is derived from
   /// the difference between these two figures.
-  priceBefore       Decimal? @db.Decimal(14, 2)
-  priceAfter        Decimal? @db.Decimal(14, 2)
+  priceBefore        Decimal? @db.Decimal(14, 2)
+  priceAfter         Decimal? @db.Decimal(14, 2)
   /// The discount off each unit's asking price, as a %. Recorded so the carry-or-clear
   /// decision below is auditable without re-deriving it from asking prices that may
   /// have moved since. Null when a unit carries no asking price.
-  discountPctBefore Decimal? @db.Decimal(6, 2)
-  discountPctAfter  Decimal? @db.Decimal(6, 2)
+  discountPctBefore  Decimal? @db.Decimal(6, 2)
+  discountPctAfter   Decimal? @db.Decimal(6, 2)
   /// True when this transfer left the sale needing a Founder discount approval it does
   /// not have. A Founder approving 12% off an $800k unit has not approved 12% off a
   /// $1.1M one — the absolute concession is larger — so an INCREASED discount % clears
   /// the approval and re-gates (client-confirmed 2026-08-14).
-  approvalReRequired Boolean @default(false)
-  reason            String?
-  note              String?
-  recordedById      String?
-  recordedBy        User?    @relation("SaleUnitTransferRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
-  recordedAt        DateTime @default(now())
+  approvalReRequired Boolean  @default(false)
+  reason             String?
+  note               String?
+  recordedById       String?
+  recordedBy         User?    @relation("SaleUnitTransferRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  recordedAt         DateTime @default(now())
 
   @@index([saleId, effectiveDate])
   @@index([fromUnitId])
@@ -1355,13 +1428,13 @@ model Lease {
   updatedAt              DateTime  @updatedAt
   deletedAt              DateTime? // soft-delete
 
-  interiorProjects      InteriorProject[]
-  rentPeriods           LeaseRentPeriod[]
-  rentCorrections       LeaseRentPeriodCorrection[]
-  obligations           LeaseObligation[]
-  rentInvoices          LeaseRentInvoice[]
-  tenantAssignments     LeaseTenantAssignment[]
-  deletionRequests      HistoricalRecordDeletion[]
+  interiorProjects       InteriorProject[]
+  rentPeriods            LeaseRentPeriod[]
+  rentCorrections        LeaseRentPeriodCorrection[]
+  obligations            LeaseObligation[]
+  rentInvoices           LeaseRentInvoice[]
+  tenantAssignments      LeaseTenantAssignment[]
+  deletionRequests       HistoricalRecordDeletion[]
   commissionInstallments CommissionInstallment[]
 
   @@index([unitId])
@@ -1370,6 +1443,7 @@ model Lease {
   @@index([deletedAt])
   @@index([terminationDate])
   @@index([combinedDealRef])
+  @@index([brokerId])
   @@map("leases")
 }
 
@@ -1388,14 +1462,14 @@ model Lease {
 // ============================================================================
 
 model HistoricalRecordDeletion {
-  id      String  @id @default(cuid())
+  id            String    @id @default(cuid())
   // Polymorphic (R6, 2026-08-22) — exactly one of (leaseId, saleId), enforced by a DB
   // CHECK. Was lease-only; a backfilled Sale (R4) carries the same "typed in from
   // records nothing can regenerate" risk and needs the same Founder gate.
-  leaseId String?
-  lease   Lease?  @relation(fields: [leaseId], references: [id], onDelete: Cascade)
-  saleId  String?
-  sale    Sale?   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  leaseId       String?
+  lease         Lease?    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  saleId        String?
+  sale          Sale?     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   /// PENDING | APPROVED | REJECTED | CANCELLED | COMPLETED
   status        String    @default("PENDING")
   /// Mandatory. Same rule as BudgetRevision: a destructive act with no stated reason is
@@ -2043,6 +2117,21 @@ enum NotificationType {
   /// plus leadership; ACTION-tier because the schedule is frozen mid-move until somebody
   /// decides.
   MILESTONE_SLIP_PENDING_REVIEW
+  /// Global Update Board (Phase 2). A new post went up. FYI-tier by design — it is a
+  /// broadcast to every internal user, not a request addressed at one person, and
+  /// emailing the whole company on every post is the "filter the sender to a folder"
+  /// failure the tier system exists to prevent.
+  UPDATE_BOARD_POSTED
+  /// Someone was @mentioned in an Update Board chat reply. Distinct from COMMENT_MENTION
+  /// (which is Task/Unit/Project comments) so muting one board's mentions does not mute
+  /// the other's — but reuses the same resolveMentions() parser, not a second one.
+  UPDATE_BOARD_COMMENT_MENTION
+  /// Someone was tagged on an Update Board post. ACTION-tier like TASK_ASSIGNED: it names
+  /// one person and asks them to look at something.
+  UPDATE_BOARD_ASSIGNED
+  /// An Update Board post's due date is approaching or has passed. RECURRING — the daily
+  /// cron re-raises it for as long as the post stays open and undone.
+  UPDATE_BOARD_DUE_SOON
 }
 
 model Notification {
@@ -2446,7 +2535,10 @@ model CustomOption {
   isActive    Boolean  @default(true)
   createdById String
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  // @default(now()) as well as @updatedAt: the database carries the default and dropping it
+  // would leave a NOT NULL column with no value for any INSERT that does not go through
+  // Prisma (a migration backfill, a psql fix-up).
+  updatedAt   DateTime @default(now()) @updatedAt
 
   @@unique([category, value])
   @@index([category, isActive])
@@ -2465,12 +2557,69 @@ model CustomOption {
 // "construction_inspection_status") — same pattern as task_status/task_priority, so orgs can
 // relabel or add values without a schema change.
 
+/// ============================================================================
+/// Versioned checklist templates, keyed by work type (Phase 2).
+///
+/// The client's monday board seeds a unit's checklist by copying a list, and records
+/// NOTHING about where the copy came from. The result, measured on the live board:
+/// five different step lists in circulation — a 22-step interior list, an unnumbered
+/// misspelled twin of it, an 18-step shell list, a 16-step dot-numbered variant of THAT,
+/// and a fifth 14-step list that its automations actually create for every new unit. No
+/// one can tell which units are comparable, because nothing says which list they came from.
+///
+/// `ConstructionStageTemplateItem` below has the same hole: it is keyed to a Building,
+/// is unversioned, and its copy onto a unit is one-way and never reconciled. It survives
+/// as a per-building OVERRIDE (a building with genuinely bespoke stages), but the default
+/// path is now work type -> active template -> stamped onto the unit.
+///
+/// Templates are immutable once units point at them. Editing a live template mints a new
+/// VERSION and deactivates the old one; existing units keep their stamp and their stages.
+/// Same "past is immutable" rule as BudgetRevision and LeaseRentPeriod.
+/// ============================================================================
+model ChecklistTemplate {
+  id       String  @id @default(cuid())
+  name     String
+  /// CustomOption category "work_type" — 'SHELL' | 'INTERIOR_FINISHOUT' | 'PERMIT'.
+  workType String
+  version  Int
+  /// Exactly one active version per work type is the intended state, enforced in service
+  /// (a partial unique index can't be expressed in Prisma's schema language).
+  isActive Boolean @default(true)
+
+  createdById String?
+  createdBy   User?    @relation("ChecklistTemplateCreator", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steps ChecklistTemplateStep[]
+  units Unit[]
+
+  @@unique([workType, version])
+  @@index([workType, isActive])
+  @@map("checklist_templates")
+}
+
+model ChecklistTemplateStep {
+  templateId         String
+  template           ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  /// 1-based. The board encodes step order in the NAME ("01 - Framing"), which is why its
+  /// one unnumbered unit sorts correctly by luck and breaks every name-based join.
+  stepNo             Int
+  label              String
+  /// Drives whether the inspection columns are even offered on this stage. On the board
+  /// every stage carries them and 537 of 540 rows leave them empty.
+  requiresInspection Boolean           @default(false)
+
+  @@id([templateId, stepNo])
+  @@map("checklist_template_steps")
+}
+
 model ConstructionStageTemplateItem {
-  id         String   @id @default(cuid())
-  buildingId String
-  building   Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  sortOrder  Int
-  label      String
+  id          String   @id @default(cuid())
+  buildingId  String
+  building    Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  sortOrder   Int
+  label       String
   // Templates are append-only from the UI's perspective: adding a stage here only affects
   // units CREATED AFTER the change (see UnitsService) — existing units' checklists are
   // copied once and never retroactively resynced, same "past is immutable" rule used for
@@ -2484,22 +2633,47 @@ model ConstructionStageTemplateItem {
   @@map("construction_stage_template_items")
 }
 
+/// Photos attached directly to a checklist stage — "here is the rough electrical, signed
+/// off". Distinct from DailyLogPhoto, which belongs to a dated site update: this one is
+/// evidence for a step, not a record of a day. Same storage path shape and the same signed
+/// URL treatment on read.
+model UnitConstructionStagePhoto {
+  id           String                @id @default(cuid())
+  stageId      String
+  stage        UnitConstructionStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  storagePath  String
+  caption      String?
+  uploadedById String?
+  uploadedBy   User?                 @relation("StagePhotoUploader", fields: [uploadedById], references: [id])
+  uploadedAt   DateTime              @default(now())
+
+  @@index([stageId])
+  @@map("unit_construction_stage_photos")
+}
+
 model UnitConstructionStage {
-  id     String @id @default(cuid())
-  unitId String
-  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  id               String                       @id @default(cuid())
+  unitId           String
+  unit             Unit                         @relation(fields: [unitId], references: [id], onDelete: Cascade)
   sortOrder        Int
   label            String
-  status           String    @default("NOT_STARTED")
+  status           String                       @default("NOT_STARTED")
   ownerId          String?
-  owner            User?     @relation("UnitConstructionStageOwner", fields: [ownerId], references: [id])
+  owner            User?                        @relation("UnitConstructionStageOwner", fields: [ownerId], references: [id])
   inspectionStatus String?
   inspectionDate   DateTime?
+  // Per-stage scheduling. The board's subitem Timeline column is used on 17 of 540 rows —
+  // sparse, but real, unlike the parent-level Timeline column which is used on 0 of 25 and
+  // is deliberately not ported.
+  startsOn         DateTime?
+  endsOn           DateTime?
   notes            String?
+  dailyLogs        DailyLog[]
+  photos           UnitConstructionStagePhoto[]
   createdById      String?
-  createdBy        User?     @relation("UnitConstructionStageCreator", fields: [createdById], references: [id])
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdBy        User?                        @relation("UnitConstructionStageCreator", fields: [createdById], references: [id])
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
 
   @@index([unitId, sortOrder])
   @@map("unit_construction_stages")
@@ -2674,6 +2848,117 @@ model TaskAttachment {
 
   @@index([taskId])
   @@map("task_attachments")
+}
+
+// ---- Global Update Board ----
+//
+// An org-wide feed of updates/announcements — chat threads with status/priority/due date,
+// distinct from the per-project Construction Updates Board (Task with kind=CONSTRUCTION).
+// See docs/client-discovery/UPDATE_BOARD_DESIGN.md for why this is a NEW model rather than
+// a third Task.kind: Task.projectId is required and every permission/notification path in
+// that module assumes one, while this board is deliberately flat — visible to every
+// internal role regardless of project membership or staffing. Project/Building/Unit are
+// OPTIONAL TAGS for filtering/context only; they are not an access boundary the way Unit
+// XOR Building is for Sale/Lease/Loan.
+
+model UpdateBoardPost {
+  id         String    @id @default(cuid())
+  title      String
+  body       String?
+  // Free-text, CustomOption-backed. Deliberately reuses the "task_status"/"task_priority"
+  // categories (custom-options.service.ts) instead of new ones — zero extra config to seed,
+  // and orgs can still relabel either category independently since CustomOption values are
+  // looked up by category string, not by which model wrote them.
+  status     String    @default("TODO")
+  priority   String    @default("MEDIUM")
+  dueDate    DateTime?
+  // Leadership-only in practice: UpdateBoardService rejects a pinned:true from anyone
+  // whose role isn't SUPER_ADMIN/FOUNDER/EXECUTIVE, regardless of who created the post.
+  pinned     Boolean   @default(false)
+  // "Leadership Only" — hides the post from everyone except SUPER_ADMIN/FOUNDER/EXECUTIVE,
+  // its own creator, and anyone explicitly tagged on it (assignments). Anyone who can create
+  // a post can set this on their own; it only narrows the audience below what the post would
+  // otherwise reach. See UpdateBoardService.assertVisible.
+  restricted Boolean   @default(false)
+
+  projectId  String?
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  buildingId String?
+  building   Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  unitId     String?
+  unit       Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  // [{ url, label }] — plain links, no join table. A single JSON column (array-shaped),
+  // not a native Postgres array of Json: nothing else in this schema uses Json[], and a
+  // scalar column keeps the "read the whole small list, rewrite the whole small list" access
+  // pattern this field actually has.
+  links Json @default("[]")
+
+  createdById String
+  createdBy   User      @relation("UpdateBoardPostCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  // Soft delete, consistent with Project/Building/Unit elsewhere in this schema.
+  deletedAt   DateTime?
+
+  assignments UpdateBoardAssignment[]
+  attachments UpdateBoardAttachment[]
+  comments    UpdateBoardComment[]
+
+  @@index([projectId])
+  @@index([buildingId])
+  @@index([unitId])
+  @@index([status])
+  @@index([pinned, createdAt])
+  @@index([deletedAt])
+  @@index([restricted])
+  @@map("update_board_posts")
+}
+
+/// A person tagged on a post. Carries `notifiedAt` so re-saving a post does not re-notify
+/// everybody already on it — only somebody newly added hears about it. Same shape as
+/// TaskAssignment.
+model UpdateBoardAssignment {
+  postId     String
+  userId     String
+  post       UpdateBoardPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user       User            @relation("UpdateBoardAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedAt DateTime        @default(now())
+  notifiedAt DateTime?
+
+  @@id([postId, userId])
+  @@index([userId])
+  @@map("update_board_assignments")
+}
+
+model UpdateBoardAttachment {
+  id           String          @id @default(cuid())
+  postId       String
+  post         UpdateBoardPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  storagePath  String
+  fileName     String
+  mimeType     String?
+  uploadedById String
+  uploadedBy   User            @relation("UpdateBoardAttachmentUploader", fields: [uploadedById], references: [id])
+  createdAt    DateTime        @default(now())
+
+  @@index([postId])
+  @@map("update_board_attachments")
+}
+
+/// The chat thread on a post.
+model UpdateBoardComment {
+  id        String          @id @default(cuid())
+  postId    String
+  post      UpdateBoardPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User            @relation("UpdateBoardCommentAuthor", fields: [authorId], references: [id])
+  content   String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([postId, createdAt])
+  @@map("update_board_comments")
 }
 
 // Per-org configuration for thresholds and probabilities used by alerts and forecasts.
@@ -2964,19 +3249,44 @@ model DailyLog {
   unitId     String?
   unit       Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
   logDate    DateTime // the day being logged (distinct from createdAt)
-  authorId   String
-  author     User      @relation("DailyLogAuthor", fields: [authorId], references: [id])
-  notes      String // work done / summary
-  weather    String?
-  crewCount  Int?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  /// How this update arrived: WEB | MOBILE | EMAIL | WHATSAPP.
+  ///
+  /// Deliberately NOT a CustomOption and NOT settable by the caller. The values map to code
+  /// paths (an ingestion adapter each), not to an org taxonomy — adding a value here would
+  /// not create a way for updates to arrive. And the whole worth of an "arrived by email"
+  /// badge is that it cannot be claimed: the create endpoint ignores any client-supplied
+  /// value and the server stamps it, so Phase 6's ingestion is the only thing that can
+  /// produce EMAIL or WHATSAPP.
+  source     String    @default("WEB")
+
+  /// Threaded replies. One level only — a reply cannot itself be replied to (enforced in
+  /// service). Site updates are a conversation about one event, not a forum; arbitrary
+  /// nesting buys indentation and costs the ability to read a day at a glance.
+  parentId String?
+  parent   DailyLog?  @relation("DailyLogThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  DailyLog[] @relation("DailyLogThread")
+
+  /// Optionally pins the update to one checklist stage, so "waiting on the electrician"
+  /// hangs off Rough Electrical rather than floating in the feed. Nullable and expected to
+  /// stay mostly null: most updates are about the unit, not one step of it.
+  stageId   String?
+  stage     UnitConstructionStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  authorId  String
+  author    User                   @relation("DailyLogAuthor", fields: [authorId], references: [id])
+  notes     String // work done / summary
+  weather   String?
+  crewCount Int?
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
 
   photos DailyLogPhoto[]
 
   @@index([projectId, logDate])
   @@index([buildingId])
   @@index([unitId, logDate])
+  @@index([source])
+  @@index([parentId])
+  @@index([stageId])
   @@map("daily_logs")
 }
 
@@ -3014,9 +3324,9 @@ model Broker {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  leads  Lead[]
-  sales  Sale[]
-  leases Lease[]
+  leads                  Lead[]
+  sales                  Sale[]
+  leases                 Lease[]
   commissionInstallments CommissionInstallment[]
 
   @@index([isActive, deletedAt])
@@ -3040,24 +3350,24 @@ model Broker {
 // ============================================================================
 
 model CommissionInstallment {
-  id       String  @id @default(cuid())
+  id       String    @id @default(cuid())
   // Polymorphic — exactly one of (leaseId, saleId) is set, enforced by a CHECK constraint
   // (brand-new table, so unlike Sale's unit/building split there is no migration-era data
   // that needs the DB to tolerate both null).
   leaseId  String?
-  lease    Lease?  @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  lease    Lease?    @relation(fields: [leaseId], references: [id], onDelete: Cascade)
   saleId   String?
-  sale     Sale?   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  sale     Sale?     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   // Denormalized from the parent's brokerId at creation time (immutable after) so the
   // broker report can group/sum directly on this table, the same way it already groups
   // Lease/Sale rows by brokerId — a join-through-relation groupBy is not something Prisma
   // supports cleanly, and this table exists partly to make that report query correct.
   brokerId String
-  broker   Broker  @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  broker   Broker    @relation(fields: [brokerId], references: [id], onDelete: Cascade)
   // 1st, 2nd, … in the order they were agreed. Not unique per parent — a corrected entry
   // can reuse a sequence number; ordering for display is (sequence, createdAt).
-  sequence Int     @default(1)
-  amount   Decimal @db.Decimal(14, 2)
+  sequence Int       @default(1)
+  amount   Decimal   @db.Decimal(14, 2)
   // Null = not yet paid. This is the field the broker report now sums instead of treating
   // the whole commission as one paid/unpaid flag.
   paidAt   DateTime?

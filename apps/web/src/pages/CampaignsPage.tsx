@@ -305,6 +305,10 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
       addToast({ title: 'Name and channel are required', color: 'warning' });
       return;
     }
+    if (form.startDate && form.endDate && new Date(form.startDate) > new Date(form.endDate)) {
+      addToast({ title: 'End date must be after start date', color: 'warning' });
+      return;
+    }
     const shared = {
       name: form.name.trim(),
       channel: form.channel,
@@ -355,7 +359,7 @@ function CampaignFormModal({ isOpen, onClose, projects, campaign }: { isOpen: bo
             >
               {projects.map((p) => <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>)}
             </Select>
-            <Input size="sm" label="Planned budget" type="number" value={form.plannedBudget} onChange={(e) => set('plannedBudget', e.target.value)} />
+            <Input size="sm" label="Planned budget" type="number" min={0} value={form.plannedBudget} onChange={(e) => set('plannedBudget', e.target.value)} />
             <Select size="sm" label="Status" selectedKeys={new Set([form.status])} onSelectionChange={(k) => set('status', Array.from(k)[0] as string)}>
               {STATUSES.map((s) => <SelectItem key={s}>{s}</SelectItem>)}
             </Select>
@@ -410,7 +414,7 @@ function RecordSpendModal({ isOpen, onClose, campaign }: { isOpen: boolean; onCl
         <ModalHeader>Log spend · {campaign.name}</ModalHeader>
         <ModalBody>
           <div className="space-y-3">
-            <Input size="sm" label="Amount *" type="number" value={form.amount} onChange={(e) => set('amount', e.target.value)} />
+            <Input size="sm" label="Amount *" type="number" min={0} value={form.amount} onChange={(e) => set('amount', e.target.value)} />
             <Input size="sm" label="Date *" type="date" value={form.spentOn} onChange={(e) => set('spentOn', e.target.value)} />
             <Select size="sm" label="Source" selectedKeys={new Set([form.source])} onSelectionChange={(k) => set('source', Array.from(k)[0] as string)}>
               <SelectItem key="MANUAL">Manual entry</SelectItem>

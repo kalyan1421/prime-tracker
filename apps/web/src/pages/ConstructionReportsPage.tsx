@@ -7,9 +7,9 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import api from '../lib/api';
-import { usePortfolioReport, useProjects } from '../hooks/useApi';
+import { usePortfolioReport, useProjects, useConstructionRollup } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
-import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
+import { StatCard, StatusBadge, LoadingState, ErrorState, EmptyState } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
 function BudgetCostTab() {
@@ -243,6 +243,100 @@ function DrawRequestsTab() {
   );
 }
 
+/**
+ * Site Progress — the one report the site team can actually act on.
+ *
+ * Before this, CONSTRUCTION's entire Reports section was a single Milestone & Schedule
+ * tab: Budget & Cost and Draw Requests both self-gate on financial permissions they do
+ * not hold. Milestones are the project-level plan, not the per-unit checklist work the
+ * site team does every day, so the checklist existed only as a live board and never as
+ * something you could read across the portfolio or hand to someone.
+ *
+ * Reads the same rollup the checklist board uses, so the two cannot disagree: with no
+ * projectId the API scopes it to the viewer's own projects for a scoped role.
+ */
+function SiteProgressTab() {
+  const { data, isLoading, error } = useConstructionRollup();
+  if (isLoading) return <LoadingState message="Loading site progress..." />;
+  if (error) return <ErrorState />;
+
+  const rows: any[] = Array.isArray(data) ? data : [];
+  if (rows.length === 0) {
+    return <EmptyState title="No units on the checklist yet" message="Progress appears here once a unit has construction stages." />;
+  }
+
+  // Group by project so the report reads the way the portfolio does, and so a site lead
+  // running several projects can find their own without scanning every row.
+  const byProject = new Map<string, { name: string; units: any[] }>();
+  for (const r of rows) {
+    const proj = r.unit?.building?.project;
+    const key = proj?.id ?? '__none';
+    if (!byProject.has(key)) byProject.set(key, { name: proj?.name ?? 'Unassigned', units: [] });
+    byProject.get(key)!.units.push(r);
+  }
+
+  const totalStages = rows.reduce((n, r) => n + (r.totalStages || 0), 0);
+  const doneStages = rows.reduce((n, r) => n + (r.doneStages || 0), 0);
+  const complete = rows.filter((r) => r.totalStages > 0 && r.doneStages === r.totalStages).length;
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <StatCard label="Units tracked" value={String(rows.length)} />
+        <StatCard label="Units complete" value={String(complete)} />
+        <StatCard label="Steps done" value={`${doneStages} / ${totalStages}`} />
+        <StatCard label="Overall" value={totalStages ? `${Math.round((doneStages / totalStages) * 100)}%` : '\u2014'} />
+      </div>
+
+      {Array.from(byProject.entries()).map(([id, group]) => (
+        <Card key={id} shadow="sm" className="mb-6">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-3">
+              <p className="font-semibold text-sm text-gray-700">{group.name}</p>
+              <span className="text-xs text-gray-500">{group.units.length} units</span>
+            </div>
+          </CardHeader>
+          <CardBody className="pt-0 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
+                  <th className="py-2 pr-3 font-medium">Unit</th>
+                  <th className="py-2 pr-3 font-medium">Building</th>
+                  <th className="py-2 pr-3 font-medium">Progress</th>
+                  <th className="py-2 pr-3 font-medium">Next step</th>
+                </tr>
+              </thead>
+              <tbody>
+                {group.units.map((r: any) => {
+                  const pct = r.totalStages ? Math.round((r.doneStages / r.totalStages) * 100) : 0;
+                  return (
+                    <tr key={r.unit?.id} className="border-b border-gray-100 last:border-0">
+                      <td className="py-2 pr-3 font-medium text-gray-700">{r.unit?.unitNumber}</td>
+                      <td className="py-2 pr-3 text-gray-500">{r.unit?.building?.name ?? '\u2014'}</td>
+                      <td className="py-2 pr-3">
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-24 rounded-full bg-gray-200">
+                            <div
+                              className={`h-1.5 rounded-full ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className="text-xs tabular-nums text-gray-500">{r.doneStages}/{r.totalStages}</span>
+                        </div>
+                      </td>
+                      <td className="py-2 pr-3 text-gray-500">{r.nextStage?.label ?? 'All steps done'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </CardBody>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export default function ConstructionReportsPage() {
   const { user, hasPermission } = useAuthStore();
   const canViewFinancials = hasPermission('financial:view');
@@ -252,6 +346,7 @@ export default function ConstructionReportsPage() {
   // loan:view (financial data is deliberately Finance/Accounting-only — see
   // ROLE_PERMISSIONS), so without this gate the tab would render for them and then 403.
   const canViewLoans = hasPermission('loan:view');
+  const canViewChecklist = hasPermission('checklist:view');
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'Prime Tracker — Construction Reports' });
 
@@ -278,6 +373,11 @@ export default function ConstructionReportsPage() {
           {canViewFinancials && (
             <Tab key="budget" title="Budget & Cost">
               <BudgetCostTab />
+            </Tab>
+          )}
+          {canViewChecklist && (
+            <Tab key="site" title="Site Progress">
+              <SiteProgressTab />
             </Tab>
           )}
           <Tab key="milestones" title="Milestone & Schedule">

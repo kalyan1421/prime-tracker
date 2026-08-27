@@ -38,6 +38,19 @@ describe('BrokersService', () => {
       const res: any = await service.create({ name: 'Jane Broker', company: 'Acme Realty', commissionRate: 2.5 });
       expect(res).toMatchObject({ name: 'Jane Broker', company: 'Acme Realty', commissionRate: 2.5 });
     });
+
+    it('rejects a name that already exists, case-insensitively', async () => {
+      mockPrisma.broker.findFirst.mockResolvedValue({ id: 'b1', name: 'kalyan', email: null });
+      await expect(service.create({ name: 'Kalyan' } as any)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.broker.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects an email that already exists on a different broker', async () => {
+      mockPrisma.broker.findFirst.mockResolvedValue({ id: 'b1', name: 'Someone Else', email: 'ravi@example.com' });
+      await expect(
+        service.create({ name: 'Ravi', email: 'Ravi@example.com' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   describe('findById', () => {
@@ -82,7 +95,7 @@ describe('BrokersService', () => {
       });
     });
 
-    it('reports 0% conversion when a broker has no leads', async () => {
+    it('reports conversion as null (not applicable) when a broker has no leads', async () => {
       mockPrisma.broker.findMany.mockResolvedValue([{ id: 'b2', name: 'Bob', commissionRate: null, commissionFlat: 5000 }]);
       mockPrisma.lead.groupBy.mockResolvedValue([]);
       mockPrisma.sale.groupBy.mockResolvedValue([]);
@@ -90,7 +103,7 @@ describe('BrokersService', () => {
       mockPrisma.commissionInstallment.groupBy.mockResolvedValue([]);
 
       const rows = await service.report();
-      expect(rows[0]).toMatchObject({ leads: 0, closedSales: 0, closedValue: 0, commissionEarned: 0, conversionPct: 0 });
+      expect(rows[0]).toMatchObject({ leads: 0, closedSales: 0, closedValue: 0, commissionEarned: 0, conversionPct: null });
     });
 
     // Leasing commission is reported as its OWN pair of columns, not folded into the

@@ -1,10 +1,15 @@
 import { useState } from 'react';
 import { Button, Input } from '@heroui/react';
 import { FiLock, FiMail, FiEye, FiEyeOff } from 'react-icons/fi';
+import { FcGoogle } from 'react-icons/fc';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { DevQuickLogin } from '../components/DevQuickLogin';
-import api from '../lib/api';
+import api, { API_BASE_URL } from '../lib/api';
+
+/** GoogleAuthGuard's server-driven redirect flow (see auth.controller.ts) — a real
+ * navigation, not an API call, so this is a plain href rather than an onClick/axios call. */
+const GOOGLE_LOGIN_URL = `${API_BASE_URL}/api/auth/google`;
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -53,6 +58,23 @@ export default function LoginPage() {
 
         {/* Form */}
         <div className="px-5 py-6 sm:px-8 sm:py-8">
+          <Button
+            as="a"
+            href={GOOGLE_LOGIN_URL}
+            variant="bordered"
+            size="lg"
+            className="w-full font-semibold mb-4"
+            startContent={<FcGoogle className="text-lg" />}
+          >
+            Sign in with Google
+          </Button>
+
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 h-px bg-gray-200" />
+            <span className="text-xs text-gray-500 uppercase tracking-wide">or</span>
+            <div className="flex-1 h-px bg-gray-200" />
+          </div>
+
           <form onSubmit={handleLogin} className="flex flex-col gap-4">
             <Input
               type="email"

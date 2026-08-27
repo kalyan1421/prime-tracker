@@ -32,6 +32,10 @@ const TYPE_LABELS: Record<string, { label: string; description: string; group: s
   INTERIOR_PHASE_CHANGED:{ label: 'Interior Phase Change',      description: 'When a fit-out project moves to a new phase', group: 'Interiors' },
   INTERIOR_HANDOVER_DUE: { label: 'Interior Handover Due',      description: 'When a fit-out handover date is approaching', group: 'Interiors' },
   SNAG_OVERDUE:          { label: 'Snag Overdue',               description: 'When a snag/punch-list item passes its target date', group: 'Interiors' },
+  UPDATE_BOARD_POSTED:         { label: 'New Update Posted',       description: 'When someone posts a new item to the company Update Board', group: 'Update Board' },
+  UPDATE_BOARD_COMMENT_MENTION:{ label: 'Mentioned on an Update',  description: 'When you are @mentioned in an Update Board chat reply', group: 'Update Board' },
+  UPDATE_BOARD_ASSIGNED:       { label: 'Tagged on an Update',     description: 'When you are tagged on an Update Board post', group: 'Update Board' },
+  UPDATE_BOARD_DUE_SOON:       { label: 'Update Due Soon',         description: 'When an Update Board post you are tagged on is due within 3 days or overdue', group: 'Update Board' },
 };
 
 /**
@@ -54,6 +58,9 @@ export const TYPE_TIER: Record<string, 'ACTION' | 'FYI'> = {
   LEAD_ASSIGNED: 'ACTION',
   INTERIOR_HANDOVER_DUE: 'ACTION',
   SNAG_OVERDUE: 'ACTION',
+  UPDATE_BOARD_COMMENT_MENTION: 'ACTION',
+  UPDATE_BOARD_ASSIGNED: 'ACTION',
+  UPDATE_BOARD_DUE_SOON: 'ACTION',
   DRAW_REQUEST_APPROVED: 'FYI',
   DRAW_REQUEST_FUNDED: 'FYI',
   COMMENT_FINANCIAL: 'FYI',
@@ -61,6 +68,7 @@ export const TYPE_TIER: Record<string, 'ACTION' | 'FYI'> = {
   COMMENT_MARKETING: 'FYI',
   LEAD_STATUS_CHANGED: 'FYI',
   INTERIOR_PHASE_CHANGED: 'FYI',
+  UPDATE_BOARD_POSTED: 'FYI',
 };
 
 /** Whether a tier emails when the user hasn't overridden it. */

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Card, CardBody, Button, Input, Select, SelectItem, Chip, Avatar,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -14,7 +14,7 @@ import {
   useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useConvertLead,
   useLead, useAddLeadInterest, useRemoveLeadInterest, useBrokers, useCustomOptions,
 } from '../hooks/useApi';
-import { fmtDate } from '../utils/fmt';
+import { fmtDate, errMsg } from '../utils/fmt';
 import { LoadingState, ErrorState, EmptyState, Pagination } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { usePagination } from '../hooks/usePagination';
@@ -91,19 +91,22 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
       setNote('');
       setType('NOTE');
       setAdding(false);
-    } catch {
-      addToast({ title: 'Failed to add activity', color: 'danger' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to add activity'), color: 'danger' });
     }
   };
 
-  const ACTIVITY_ICONS: Record<string, string> = {
-    CALL: '📞',
-    EMAIL: '📧',
-    MEETING: '🤝',
-    SITE_VISIT: '🏗️',
-    FOLLOW_UP: '🔔',
-    NOTE: '📝',
-    STATUS_CHANGE: '🔄',
+  // Tinted Feather icons, matching every other icon on this page (FiHome, FiMail,
+  // FiBarChart2…) — raw emoji render differently per OS/browser and sit outside the
+  // app's color-token system.
+  const ACTIVITY_ICONS: Record<string, React.ReactNode> = {
+    CALL: <FiPhone className="w-3.5 h-3.5" />,
+    EMAIL: <FiMail className="w-3.5 h-3.5" />,
+    MEETING: <FiUsers className="w-3.5 h-3.5" />,
+    SITE_VISIT: <FiHome className="w-3.5 h-3.5" />,
+    FOLLOW_UP: <FiClock className="w-3.5 h-3.5" />,
+    NOTE: <FiMessageSquare className="w-3.5 h-3.5" />,
+    STATUS_CHANGE: <FiRefreshCw className="w-3.5 h-3.5" />,
   };
 
   return (
@@ -153,8 +156,8 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
       <div className="space-y-2">
         {(activities || []).map((act: any) => (
           <div key={act.id} className="flex gap-3 items-start">
-            <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm shrink-0">
-              {ACTIVITY_ICONS[act.type] || '📝'}
+            <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center shrink-0">
+              {ACTIVITY_ICONS[act.type] || <FiMessageSquare className="w-3.5 h-3.5" />}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -186,6 +189,10 @@ function ConvertToSaleModal({ isOpen, onClose, lead }: { isOpen: boolean; onClos
       addToast({ title: 'Unit, buyer name, and sale price are required', color: 'warning' });
       return;
     }
+    if (form.contractDate && form.closingDate && new Date(form.contractDate) > new Date(form.closingDate)) {
+      addToast({ title: 'Expected close date must be after contract date', color: 'warning' });
+      return;
+    }
     try {
       await convertLead.mutateAsync({
         id: lead.id,
@@ -194,8 +201,8 @@ function ConvertToSaleModal({ isOpen, onClose, lead }: { isOpen: boolean; onClos
       });
       addToast({ title: 'Lead converted to sale!', color: 'success' });
       onClose();
-    } catch {
-      addToast({ title: 'Failed to convert lead', color: 'danger' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to convert lead'), color: 'danger' });
     }
   };
 
@@ -217,7 +224,7 @@ function ConvertToSaleModal({ isOpen, onClose, lead }: { isOpen: boolean; onClos
               ))}
             </Select>
             <Input size="sm" label="Buyer Name *" value={form.buyer} onChange={(e) => setF('buyer', e.target.value)} />
-            <Input size="sm" label="Sale Price ($) *" type="number" value={form.salePrice} onChange={(e) => setF('salePrice', e.target.value)} />
+            <Input size="sm" label="Sale Price ($) *" type="number" min={0} value={form.salePrice} onChange={(e) => setF('salePrice', e.target.value)} />
             <Input size="sm" label="Contract Date" type="date" value={form.contractDate} onChange={(e) => setF('contractDate', e.target.value)} />
             <Input size="sm" label="Expected Close Date" type="date" value={form.closingDate} onChange={(e) => setF('closingDate', e.target.value)} />
           </div>
@@ -255,8 +262,8 @@ function LeadDetailPanel({ lead: selected }: { lead: any }) {
     try {
       await updateLead.mutateAsync({ id: lead.id, data: { status: next } });
       addToast({ title: `Moved to ${next.replace('_', ' ').toLowerCase()}`, color: 'success' });
-    } catch {
-      addToast({ title: 'Could not update status', color: 'danger' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not update status'), color: 'danger' });
     }
   };
 
@@ -380,8 +387,8 @@ function LeadInterests({ leadId, projectId }: { leadId: string; projectId: strin
       setPick('');
       setAdding(false);
       addToast({ title: 'Unit of interest added', color: 'success' });
-    } catch {
-      addToast({ title: 'Failed to add interest', color: 'danger' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to add interest'), color: 'danger' });
     }
   };
 
@@ -468,7 +475,10 @@ function LeadFormModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, lead?.id]);
 
-  const { data: formUnits } = useUnits(form.projectId || '');
+  // Scoped to the selected building once one is picked — otherwise every unit in the
+  // project showed up regardless of building, which made "pick a building, then a
+  // unit" read as if the building choice did nothing.
+  const { data: formUnits } = useUnits(form.projectId || '', form.buildingId || undefined);
   const { data: formBuildings } = useBuildings(form.projectId || '');
   // Campaign options: portfolio-wide campaigns (projectId null) + campaigns tied to
   // this project. The picker shows both so a lead on Spur Plaza can attribute to
@@ -497,8 +507,18 @@ function LeadFormModal({
   const set = (field: string, val: string) => {
     setForm((f) => {
       if (field === 'projectId' && val !== f.projectId) return { ...f, projectId: val, unitId: '', buildingId: '' };
-      if (field === 'unitId' && val) return { ...f, unitId: val, buildingId: '' };
-      if (field === 'buildingId' && val) return { ...f, buildingId: val, unitId: '' };
+      // A lead links to a unit OR a building, never both — same "exactly one of" rule
+      // Sale/Lease/Loan already enforce server-side. The helper text below the field
+      // says so too, but it's easy to miss a small caption after the fact; a toast at
+      // the moment of the switch is the same information delivered where it's seen.
+      if (field === 'unitId' && val) {
+        if (f.buildingId) addToast({ title: 'Switched to unit — building link cleared', color: 'default' });
+        return { ...f, unitId: val, buildingId: '' };
+      }
+      if (field === 'buildingId' && val) {
+        if (f.unitId) addToast({ title: 'Switched to building — unit link cleared', color: 'default' });
+        return { ...f, buildingId: val, unitId: '' };
+      }
       return { ...f, [field]: val };
     });
   };
@@ -542,8 +562,8 @@ function LeadFormModal({
         addToast({ title: 'Lead created', color: 'success' });
       }
       onClose();
-    } catch {
-      addToast({ title: `Failed to ${isEdit ? 'update' : 'create'} lead`, color: 'danger' });
+    } catch (e) {
+      addToast({ title: errMsg(e, `Failed to ${isEdit ? 'update' : 'create'} lead`), color: 'danger' });
     }
   };
 
@@ -572,7 +592,7 @@ function LeadFormModal({
             <Input size="sm" label="Name *" value={form.name} onChange={(e) => set('name', e.target.value)} isRequired />
             <Input size="sm" label="Email" type="email" value={form.email} onChange={(e) => set('email', e.target.value)} />
             <Input size="sm" label="Phone *" value={form.phone} onChange={(e) => set('phone', e.target.value)} isRequired />
-            <Input size="sm" label="Budget ($)" type="number" value={form.budget} onChange={(e) => set('budget', e.target.value)} />
+            <Input size="sm" label="Budget ($)" type="number" min={0} value={form.budget} onChange={(e) => set('budget', e.target.value)} />
             <Select
               size="sm"
               label="Source *"
@@ -701,6 +721,14 @@ export default function LeadsPage() {
   const LEAD_STATUS_LABELS: Record<string, string> = Object.fromEntries(leadStatusOpts.map((o) => [o.value, o.label]));
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Debounce search — otherwise every keystroke fires its own GET /leads. Same 300ms
+  // pattern ProjectsPage already uses for its search box.
+  const handleSearch = useCallback((val: string) => {
+    setSearch(val);
+    clearTimeout((handleSearch as any)._t);
+    (handleSearch as any)._t = setTimeout(() => setDebouncedSearch(val), 300);
+  }, []);
   // assignee filter: '' = all, 'mine' = current user, 'unassigned' = no assignee, else a user id
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [brokerFilter, setBrokerFilter] = useState('');
@@ -714,7 +742,7 @@ export default function LeadsPage() {
 
   const leadsQuery = {
     status: statusFilter || undefined,
-    search: search || undefined,
+    search: debouncedSearch || undefined,
     brokerId: brokerFilter || undefined,
     ...(assigneeFilter === 'mine' && user?.id ? { assignedTo: user.id } : {}),
     ...(assigneeFilter === 'unassigned' ? { unassigned: true } : {}),
@@ -731,8 +759,8 @@ export default function LeadsPage() {
       await deleteLead.mutateAsync(id);
       if (selectedLead?.id === id) setSelectedLead(null);
       addToast({ title: 'Lead deleted', color: 'success' });
-    } catch {
-      addToast({ title: 'Failed to delete lead', color: 'danger' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to delete lead'), color: 'danger' });
     }
   };
 
@@ -751,12 +779,18 @@ export default function LeadsPage() {
     onFormClose();
   };
 
-  const leadsArr = (leads as any[]) || [];
+  // Sorted most-stale-first — the header surfaces a stale count, so the list underneath
+  // should actually triage by it instead of rendering in raw API order. Non-stale/terminal
+  // leads (staleDays() === null) sort after every stale one, in their original relative order.
+  const leadsArr = useMemo(() => {
+    const arr = (leads as any[]) || [];
+    return arr.slice().sort((a, b) => (staleDays(b) ?? -1) - (staleDays(a) ?? -1));
+  }, [leads]);
 
   const { page, setPage, totalPages, paged: pagedLeads, total } = usePagination(
     leadsArr,
     PAGE_SIZE,
-    [search, statusFilter, assigneeFilter, brokerFilter],
+    [debouncedSearch, statusFilter, assigneeFilter, brokerFilter],
   );
 
   // Compute pipeline counts client-side from the (already-filtered-by-search) result set.
@@ -805,11 +839,11 @@ export default function LeadsPage() {
             size="sm"
             placeholder="Search name, email, phone…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearch(e.target.value)}
             startContent={<FiSearch className="text-gray-400" />}
             className="max-w-sm"
             isClearable
-            onClear={() => setSearch('')}
+            onClear={() => handleSearch('')}
             aria-label="Search leads"
           />
           <Select

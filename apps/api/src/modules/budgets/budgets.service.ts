@@ -39,9 +39,19 @@ export class BudgetsService {
     return line;
   }
 
-  async getFinancialSummary(projectId: string) {
+  async getFinancialSummary(projectId: string, canViewFinancial = true) {
     if (!projectId) throw new BadRequestException('projectId required');
-    return this.summarize(projectId, { projectId });
+    const summary = await this.summarize(projectId, { projectId });
+    if (canViewFinancial) return summary;
+    // The project-level totals here are shown to budget:view alone elsewhere (the
+    // Overview tab's Financial Snapshot, deliberately) — only the PER-CATEGORY
+    // breakdown is what FinancialsTab's chart/table gate behind financial:view, so
+    // that's the only thing redacted here. A budget:view-only caller (e.g.
+    // PROJECT_MANAGER) still gets budgetTotal and every category's planned amount.
+    return {
+      ...summary,
+      byCategory: summary.byCategory.map((c) => ({ category: c.category, budget: c.budget })),
+    };
   }
 
   // Building/unit summaries reuse the exact project-summary shape (budget, actual,

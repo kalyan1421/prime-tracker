@@ -36,8 +36,11 @@ export default function InvestorDetailPage() {
   const { isOpen: isDistOpen, onOpen: onDistOpen, onClose: onDistClose } = useDisclosure();
 
   const [posForm, setPosForm] = useState<Record<string, string>>({ projectId: '', pctOwnership: '', committedAmt: '' });
+  const [posFormErrors, setPosFormErrors] = useState<Record<string, string>>({});
   const [callForm, setCallForm] = useState<Record<string, string>>({ projectId: '', amount: '', dueDate: '', notes: '' });
+  const [callFormErrors, setCallFormErrors] = useState<Record<string, string>>({});
   const [distForm, setDistForm] = useState<Record<string, string>>({ projectId: '', amount: '', distDate: '', distType: 'RETURN_OF_CAPITAL', notes: '' });
+  const [distFormErrors, setDistFormErrors] = useState<Record<string, string>>({});
 
   const setPos = (f: string) => (e: any) => setPosForm((p) => ({ ...p, [f]: e.target.value }));
   const setCall = (f: string) => (e: any) => setCallForm((p) => ({ ...p, [f]: e.target.value }));
@@ -71,7 +74,20 @@ export default function InvestorDetailPage() {
   }, {});
   const distChartData = Object.entries(distByYear).sort().map(([year, amount]) => ({ year, amount }));
 
+  const validatePosForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!posForm.projectId) errs.projectId = 'Project is required';
+    const pct = parseFloat(posForm.pctOwnership);
+    if (!posForm.pctOwnership || isNaN(pct)) errs.pctOwnership = 'Ownership % is required';
+    else if (pct < 0 || pct > 100) errs.pctOwnership = 'Must be between 0 and 100';
+    const amt = parseFloat(posForm.committedAmt);
+    if (!posForm.committedAmt || isNaN(amt) || amt <= 0) errs.committedAmt = 'Committed amount is required';
+    setPosFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleAddPosition = async () => {
+    if (!validatePosForm()) return;
     try {
       await addPosition.mutateAsync({ investorId: inv.id, ...posForm, pctOwnership: parseFloat(posForm.pctOwnership), committedAmt: parseFloat(posForm.committedAmt) });
       addToast({ title: 'Position added', color: 'success' });
@@ -80,7 +96,18 @@ export default function InvestorDetailPage() {
     } catch (e) { addToast({ title: errMsg(e, 'Failed to add position'), color: 'danger' }); }
   };
 
+  const validateCallForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!callForm.projectId) errs.projectId = 'Project is required';
+    const amt = parseFloat(callForm.amount);
+    if (!callForm.amount || isNaN(amt) || amt <= 0) errs.amount = 'Amount is required';
+    if (!callForm.dueDate) errs.dueDate = 'Due date is required';
+    setCallFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleCreateCall = async () => {
+    if (!validateCallForm()) return;
     try {
       await createCall.mutateAsync({ investorId: inv.id, ...callForm, amount: parseFloat(callForm.amount) });
       addToast({ title: 'Capital call created', color: 'success' });
@@ -89,7 +116,18 @@ export default function InvestorDetailPage() {
     } catch (e) { addToast({ title: errMsg(e, 'Failed to create capital call'), color: 'danger' }); }
   };
 
+  const validateDistForm = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!distForm.projectId) errs.projectId = 'Project is required';
+    const amt = parseFloat(distForm.amount);
+    if (!distForm.amount || isNaN(amt) || amt <= 0) errs.amount = 'Amount is required';
+    if (!distForm.distDate) errs.distDate = 'Date is required';
+    setDistFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
   const handleCreateDist = async () => {
+    if (!validateDistForm()) return;
     try {
       await createDist.mutateAsync({ investorId: inv.id, ...distForm, amount: parseFloat(distForm.amount) });
       addToast({ title: 'Distribution recorded', color: 'success' });
@@ -138,7 +176,7 @@ export default function InvestorDetailPage() {
             <Card shadow="sm">
               <CardHeader className="flex justify-between items-center">
                 <span className="font-semibold text-sm">Equity Positions</span>
-                <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onPosOpen}>Add Position</Button>
+                <Button size="sm" color="primary" startContent={<FiPlus />} onPress={() => { setPosFormErrors({}); onPosOpen(); }}>Add Position</Button>
               </CardHeader>
               <CardBody className="p-0">
                 {positions.length === 0 ? <div className="p-4"><EmptyState message="No positions yet" /></div> : (
@@ -187,7 +225,7 @@ export default function InvestorDetailPage() {
         <Tab key="calls" title="Capital Calls">
           <div className="pt-4 space-y-4">
             <div className="flex justify-end">
-              <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onCallOpen}>New Capital Call</Button>
+              <Button size="sm" color="primary" startContent={<FiPlus />} onPress={() => { setCallFormErrors({}); onCallOpen(); }}>New Capital Call</Button>
             </div>
             <Card shadow="sm">
               <CardBody className="p-0">
@@ -229,7 +267,7 @@ export default function InvestorDetailPage() {
         <Tab key="distributions" title="Distributions">
           <div className="pt-4 space-y-4">
             <div className="flex justify-end">
-              <Button size="sm" color="primary" startContent={<FiPlus />} onPress={onDistOpen}>Record Distribution</Button>
+              <Button size="sm" color="primary" startContent={<FiPlus />} onPress={() => { setDistFormErrors({}); onDistOpen(); }}>Record Distribution</Button>
             </div>
 
             {distChartData.length > 0 && (
@@ -284,11 +322,11 @@ export default function InvestorDetailPage() {
         <ModalContent>
           <ModalHeader>Add Equity Position</ModalHeader>
           <ModalBody className="space-y-3">
-            <Select label="Project" selectedKeys={posForm.projectId ? [posForm.projectId] : []} onSelectionChange={(k) => setPosForm((p) => ({ ...p, projectId: Array.from(k)[0] as string }))}>
+            <Select label="Project" selectedKeys={posForm.projectId ? [posForm.projectId] : []} onSelectionChange={(k) => setPosForm((p) => ({ ...p, projectId: Array.from(k)[0] as string }))} isInvalid={!!posFormErrors.projectId} errorMessage={posFormErrors.projectId}>
               {(projects as any[]).map((pr: any) => <SelectItem key={pr.id}>{pr.name}</SelectItem>)}
             </Select>
-            <Input label="Ownership %" type="number" value={posForm.pctOwnership} onChange={setPos('pctOwnership')} endContent="%" />
-            <Input label="Committed Amount" type="number" value={posForm.committedAmt} onChange={setPos('committedAmt')} />
+            <Input label="Ownership %" type="number" min={0} max={100} value={posForm.pctOwnership} onChange={setPos('pctOwnership')} endContent="%" isInvalid={!!posFormErrors.pctOwnership} errorMessage={posFormErrors.pctOwnership} />
+            <Input label="Committed Amount" type="number" min={0} value={posForm.committedAmt} onChange={setPos('committedAmt')} isInvalid={!!posFormErrors.committedAmt} errorMessage={posFormErrors.committedAmt} />
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={onPosClose}>Cancel</Button>
@@ -302,11 +340,11 @@ export default function InvestorDetailPage() {
         <ModalContent>
           <ModalHeader>New Capital Call</ModalHeader>
           <ModalBody className="space-y-3">
-            <Select label="Project" selectedKeys={callForm.projectId ? [callForm.projectId] : []} onSelectionChange={(k) => setCallForm((p) => ({ ...p, projectId: Array.from(k)[0] as string }))}>
+            <Select label="Project" selectedKeys={callForm.projectId ? [callForm.projectId] : []} onSelectionChange={(k) => setCallForm((p) => ({ ...p, projectId: Array.from(k)[0] as string }))} isInvalid={!!callFormErrors.projectId} errorMessage={callFormErrors.projectId}>
               {(projects as any[]).map((pr: any) => <SelectItem key={pr.id}>{pr.name}</SelectItem>)}
             </Select>
-            <Input label="Amount" type="number" value={callForm.amount} onChange={setCall('amount')} />
-            <Input label="Due Date" type="date" value={callForm.dueDate} onChange={setCall('dueDate')} />
+            <Input label="Amount" type="number" min={0} value={callForm.amount} onChange={setCall('amount')} isInvalid={!!callFormErrors.amount} errorMessage={callFormErrors.amount} />
+            <Input label="Due Date" type="date" value={callForm.dueDate} onChange={setCall('dueDate')} isInvalid={!!callFormErrors.dueDate} errorMessage={callFormErrors.dueDate} />
             <Textarea label="Notes" value={callForm.notes} onChange={setCall('notes')} minRows={2} />
           </ModalBody>
           <ModalFooter>
@@ -321,11 +359,11 @@ export default function InvestorDetailPage() {
         <ModalContent>
           <ModalHeader>Record Distribution</ModalHeader>
           <ModalBody className="space-y-3">
-            <Select label="Project" selectedKeys={distForm.projectId ? [distForm.projectId] : []} onSelectionChange={(k) => setDistForm((p) => ({ ...p, projectId: Array.from(k)[0] as string }))}>
+            <Select label="Project" selectedKeys={distForm.projectId ? [distForm.projectId] : []} onSelectionChange={(k) => setDistForm((p) => ({ ...p, projectId: Array.from(k)[0] as string }))} isInvalid={!!distFormErrors.projectId} errorMessage={distFormErrors.projectId}>
               {(projects as any[]).map((pr: any) => <SelectItem key={pr.id}>{pr.name}</SelectItem>)}
             </Select>
-            <Input label="Amount" type="number" value={distForm.amount} onChange={setDist('amount')} />
-            <Input label="Distribution Date" type="date" value={distForm.distDate} onChange={setDist('distDate')} />
+            <Input label="Amount" type="number" min={0} value={distForm.amount} onChange={setDist('amount')} isInvalid={!!distFormErrors.amount} errorMessage={distFormErrors.amount} />
+            <Input label="Distribution Date" type="date" value={distForm.distDate} onChange={setDist('distDate')} isInvalid={!!distFormErrors.distDate} errorMessage={distFormErrors.distDate} />
             <Select label="Type" selectedKeys={[distForm.distType]} onSelectionChange={(k) => setDistForm((p) => ({ ...p, distType: Array.from(k)[0] as string }))}>
               {DIST_TYPES.map((t) => <SelectItem key={t}>{t.replace(/_/g, ' ')}</SelectItem>)}
             </Select>

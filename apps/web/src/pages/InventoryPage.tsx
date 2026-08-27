@@ -7,7 +7,7 @@ import {
 import { FiSearch, FiFilter, FiPackage, FiExternalLink, FiEdit2 } from 'react-icons/fi';
 import { useInventory, useProjects, useUpdateUnitStatus, useCustomOptions } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
-import { StatCard, StatusBadge, LoadingState } from '../components/ui';
+import { StatusBadge, LoadingState } from '../components/ui';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { useAuthStore } from '../store/authStore';
 
@@ -27,6 +27,11 @@ export default function InventoryPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('unit:edit');
+  // Matches the same fix already applied to the per-project Units tab: Asking Rent
+  // needs lease:view, Asking Price needs sales:view — unit:view alone (all this page
+  // requires) must not carry the money along for the ride.
+  const canSeeRentColumn = hasPermission('lease:view');
+  const canSeePriceColumns = hasPermission('sales:view');
   const { data: unitStatusOpts = [] } = useCustomOptions('unit_status');
   const { data: unitTypeOpts = [] } = useCustomOptions('unit_type');
   const UNIT_STATUSES = unitStatusOpts.map((o) => o.value);
@@ -108,7 +113,7 @@ export default function InventoryPage() {
             <FiPackage className="text-primary" />
             Unit Inventory
           </h1>
-          <p className="text-sm text-gray-500 mt-0.5">All units across all projects</p>
+          <p className="text-sm text-gray-500 mt-0.5">All units across all projects · {allUnits.length.toLocaleString()} total</p>
         </div>
         {hasFilters && (
           <Button size="sm" variant="flat" onPress={clearFilters}>Clear Filters</Button>
@@ -129,14 +134,6 @@ export default function InventoryPage() {
             <div className="text-xs mt-0.5 font-medium">{UNIT_STATUS_LABELS[s] || s.replace(/_/g, ' ')}</div>
           </button>
         ))}
-      </div>
-
-      {/* Summary stat */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total Units" value={allUnits.length.toString()} />
-        <StatCard label="Available" value={(statusCounts['AVAILABLE'] || 0).toString()} colorScheme="green" />
-        <StatCard label="Occupied / Leased" value={((statusCounts['OCCUPIED'] || 0) + (statusCounts['LEASED'] || 0)).toString()} colorScheme="teal" />
-        <StatCard label="Sold" value={(statusCounts['SOLD'] || 0).toString()} />
       </div>
 
       {/* Filters */}
@@ -211,10 +208,10 @@ export default function InventoryPage() {
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Building</th>
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Sqft</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Asking Rent</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Asking Price</th>
+                  {canSeeRentColumn && <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Asking Rent</th>}
+                  {canSeePriceColumns && <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Asking Price</th>}
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Tenant / Buyer</th>
+                  {(canSeeRentColumn || canSeePriceColumns) && <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Tenant / Buyer</th>}
                   <th className="py-2 px-3" />
                 </tr>
               </thead>
@@ -248,8 +245,8 @@ export default function InventoryPage() {
                         </span>
                       </td>
                       <td className="py-2 px-3 text-gray-600">{u.sqft ? u.sqft.toLocaleString() : '—'}</td>
-                      <td className="py-2 px-3">{u.askingRent ? `$${fmt(u.askingRent)}/mo` : '—'}</td>
-                      <td className="py-2 px-3">{u.askingPrice ? `$${fmt(u.askingPrice)}` : '—'}</td>
+                      {canSeeRentColumn && <td className="py-2 px-3">{u.askingRent ? `${fmt(u.askingRent)}/mo` : '—'}</td>}
+                      {canSeePriceColumns && <td className="py-2 px-3">{u.askingPrice ? fmt(u.askingPrice) : '—'}</td>}
                       <td className="py-2 px-3">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-1.5">
@@ -270,19 +267,21 @@ export default function InventoryPage() {
                           )}
                         </div>
                       </td>
-                      <td className="py-2 px-3 text-xs text-gray-600">
-                        {activeLease ? (
-                          <div>
-                            <div className="font-medium">{activeLease.tenantName}</div>
-                            <div className="text-gray-500">until {fmtDate(activeLease.leaseEnd)}</div>
-                          </div>
-                        ) : activeSale ? (
-                          <div>
-                            <div className="font-medium">{activeSale.buyer || '—'}</div>
-                            <div className="text-gray-500">{activeSale.status.replace(/_/g, ' ')}</div>
-                          </div>
-                        ) : '—'}
-                      </td>
+                      {(canSeeRentColumn || canSeePriceColumns) && (
+                        <td className="py-2 px-3 text-xs text-gray-600">
+                          {canSeeRentColumn && activeLease ? (
+                            <div>
+                              <div className="font-medium">{activeLease.tenantName}</div>
+                              <div className="text-gray-500">until {fmtDate(activeLease.leaseEnd)}</div>
+                            </div>
+                          ) : canSeePriceColumns && activeSale ? (
+                            <div>
+                              <div className="font-medium">{activeSale.buyer || '—'}</div>
+                              <div className="text-gray-500">{activeSale.status.replace(/_/g, ' ')}</div>
+                            </div>
+                          ) : '—'}
+                        </td>
+                      )}
                       <td className="py-2 px-3">
                         <Button
                           size="sm"

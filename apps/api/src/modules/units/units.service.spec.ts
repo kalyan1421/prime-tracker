@@ -5,7 +5,19 @@ import { UnitsService } from './units.service';
 const mockPrisma: any = {
   unit: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   building: { findUnique: jest.fn() },
-  $transaction: jest.fn((cb: any) => cb(mockPrisma)),
+  user: { findMany: jest.fn() },
+  customOption: { findFirst: jest.fn() },
+  unitAssignee: { deleteMany: jest.fn(), createMany: jest.fn(), findMany: jest.fn() },
+  // combine()/create() pass a callback; setAssignees() passes an ARRAY of operations.
+  $transaction: jest.fn((arg: any) => (typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg))),
+};
+
+// Only the categories the Site Tracker validates against — the real service holds many more.
+const mockCustomOptions = {
+  getSystemDefaults: () => ({
+    site_priority: [{ value: 'LOW' }, { value: 'MEDIUM' }, { value: 'HIGH' }],
+    work_type: [{ value: 'SHELL' }, { value: 'INTERIOR_FINISHOUT' }, { value: 'PERMIT' }],
+  }),
 };
 
 // Pass-through EncryptionService double: these suites mock Prisma, so rows already
@@ -32,6 +44,7 @@ function makeService() {
     { listProjectScope: async () => undefined } as any,
     mockEncryption as any,
     mockStatusEvents as any,
+    mockCustomOptions as any,
   );
 }
 
@@ -234,6 +247,7 @@ describe('UnitsService.findInventory', () => {
       { listProjectScope: async () => ['p1', 'p2'] } as any,
       mockEncryption as any,
       mockStatusEvents as any,
+      mockCustomOptions as any,
     );
 
     await scoped.findInventory({ viewer: { userId: 'u1', role: 'SALES' } });
@@ -319,5 +333,85 @@ describe('UnitsService.delete', () => {
       data: { deletedAt: expect.any(Date) },
     });
     expect(result.deletedAt).toBeInstanceOf(Date);
+  });
+});
+
+/**
+ * The build/commercial split behind `unit:editBuild`.
+ *
+ * PUT /units/:id is gated on the wider `unit:editBuild` so CONSTRUCTION can reach it at
+ * all; the real restriction is here, and these tests are what keep the route gate and
+ * the field allowlist from drifting apart — widening one without the other silently
+ * hands the site team the asking price.
+ */
+describe('UnitsService.update — unit:editBuild field allowlist', () => {
+  let service: UnitsService;
+  const CONSTRUCTION_PERMS = ['unit:view', 'unit:editBuild', 'checklist:edit'];
+  const PM_PERMS = ['unit:view', 'unit:edit', 'unit:editBuild'];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.unit.findUnique.mockResolvedValue({
+      id: 'u1', buildingId: 'b1', unitNumber: '101', status: 'AVAILABLE',
+      askingPrice: 480000, askingRent: 3200, deletedAt: null,
+      _count: { sales: 0, leases: 0, interiorProjects: 0 },
+    });
+    mockPrisma.unit.findFirst.mockResolvedValue(null);
+    mockPrisma.unit.update.mockImplementation(({ data }: any) => Promise.resolve({ id: 'u1', ...data }));
+  });
+
+  it.each(['askingPrice', 'askingRent', 'status', 'primeOwned'])(
+    'refuses %s without unit:edit', async (field) => {
+      const input: any = { [field]: field === 'status' ? 'SOLD' : field === 'primeOwned' ? true : 1 };
+      await expect(
+        service.update('u1', input, 'CONSTRUCTION' as UserRole, 'user-1', CONSTRUCTION_PERMS),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('names the offending fields so the caller knows what was refused', async () => {
+    await expect(
+      service.update('u1', { askingPrice: 1, askingRent: 2 } as any, 'CONSTRUCTION' as UserRole, 'user-1', CONSTRUCTION_PERMS),
+    ).rejects.toThrow(/askingPrice, askingRent/);
+  });
+
+  it.each(['unitNumber', 'unitType', 'sqft', 'notes'])(
+    'allows %s without unit:edit', async (field) => {
+      const input: any = { [field]: field === 'sqft' ? 1200 : 'x' };
+      await expect(
+        service.update('u1', input, 'CONSTRUCTION' as UserRole, 'user-1', CONSTRUCTION_PERMS),
+      ).resolves.toBeDefined();
+    },
+  );
+
+  it('leaves the commercial fields untouched — omission is not a wipe', async () => {
+    await service.update('u1', { sqft: 1250 } as any, 'CONSTRUCTION' as UserRole, 'user-1', CONSTRUCTION_PERMS);
+    const written = mockPrisma.unit.update.mock.calls[0][0].data;
+    expect(written).not.toHaveProperty('askingPrice');
+    expect(written).not.toHaveProperty('askingRent');
+    expect(written).not.toHaveProperty('status');
+  });
+
+  it('still lets a holder of unit:edit set the commercial fields', async () => {
+    await expect(
+      service.update('u1', { askingPrice: 500000 } as any, PM, 'user-1', PM_PERMS),
+    ).resolves.toBeDefined();
+  });
+
+  it('does not weaken the pre-existing SALES restriction', async () => {
+    // SALES holds unit:edit, so it clears the allowlist above and must still hit its own,
+    // narrower rule — status and notes only.
+    await expect(
+      service.update('u1', { askingPrice: 1 } as any, 'SALES' as UserRole, 'user-1', ['unit:edit', 'unit:editBuild']),
+    ).rejects.toThrow(/Sales role can only update unit status and notes/);
+  });
+
+  it('applies no field restriction to internal callers that pass no permissions', async () => {
+    // Back-compat: update() has callers that supply their own field set and no viewer.
+    await expect(
+      service.update('u1', { askingPrice: 1 } as any, PM, 'user-1'),
+    ).resolves.toBeDefined();
   });
 });

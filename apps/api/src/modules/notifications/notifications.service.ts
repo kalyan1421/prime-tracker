@@ -67,6 +67,13 @@ export const NOTIFICATION_TIERS = {
   // date in the cascade has not moved either. A digest entry read three days later is
   // three days of a schedule nobody can trust.
   MILESTONE_SLIP_PENDING_REVIEW: 'ACTION',
+  // Update Board — addressed at one named person, same reasoning as COMMENT_MENTION and
+  // TASK_ASSIGNED.
+  UPDATE_BOARD_COMMENT_MENTION: 'ACTION',
+  UPDATE_BOARD_ASSIGNED: 'ACTION',
+  // Update Board — a standing condition (due date approaching/passed) on an open item,
+  // same reasoning as PAYMENT_DUE_7/PAYMENT_OVERDUE.
+  UPDATE_BOARD_DUE_SOON: 'ACTION',
 
   // ---- FYI: awareness only ----
   LEASE_EXPIRING_30: 'FYI',
@@ -90,6 +97,10 @@ export const NOTIFICATION_TIERS = {
   // goes with it. In-app on every horizon; anyone who wants the early warnings by mail
   // sets emailEnabled: true for this one type.
   DOCUMENT_EXPIRING: 'FYI',
+  // FYI, deliberately: this is a broadcast to every internal user, not a request
+  // addressed at one person. Emailing the whole company on every post is exactly the
+  // "filter the sender to a folder" failure the tier system exists to prevent.
+  UPDATE_BOARD_POSTED: 'FYI',
 } as const satisfies Record<string, NotificationTier>;
 
 /**
@@ -183,6 +194,15 @@ export const RECURRING_TYPES = {
   LEASE_TERMINATED: false,
   LEASE_RENT_CHANGED: false,
   TI_DISBURSED: false,
+  // Discrete events, same reasoning as COMMENT_MENTION/TASK_ASSIGNED: a post going up, a
+  // mention, and a tagging each happen once.
+  UPDATE_BOARD_POSTED: false,
+  UPDATE_BOARD_COMMENT_MENTION: false,
+  UPDATE_BOARD_ASSIGNED: false,
+  // RECURRING: an open post's due date stays a live condition until it is done/cancelled
+  // or the date changes, so the daily cron must be able to re-raise it. dedupeKey ->
+  // `update-board:<postId>`.
+  UPDATE_BOARD_DUE_SOON: true,
 } as const satisfies Record<string, boolean>;
 
 /** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
@@ -1230,6 +1250,38 @@ export class NotificationsService {
         p.projectName ?? 'a project'
       } for ${this.month(p.periodMonth)} is ${p.daysOverdue} day(s) overdue.`,
       link: `/projects/${p.projectId}/revenue`,
+    });
+  }
+
+  // ---- Update Board (Phase 2) ----
+  //
+  // POSTED/COMMENT_MENTION/ASSIGNED are request-driven (fired inline from
+  // UpdateBoardService on create/comment/assign, same as TasksService.notifyAssigned/
+  // notifyMentions) and do not live here. DUE_SOON is the one CRON-driven trigger, so it
+  // gets a named method like every other scheduled check in this file — but unlike those,
+  // recipients are the post's own assignees/creator, not a role/project lookup, so this
+  // takes explicit userIds rather than going through sendToRoles.
+
+  async notifyUpdateBoardDueSoon(p: {
+    postId: string;
+    title: string;
+    userIds: string[];
+    dueDate: Date;
+    isOverdue: boolean;
+  }) {
+    if (p.userIds.length === 0) return;
+    await this.send({
+      userIds: p.userIds,
+      type: NotificationType.UPDATE_BOARD_DUE_SOON,
+      // RECURRING — this is what stops it firing every morning while the post stays open.
+      dedupeKey: `update-board:${p.postId}`,
+      title: p.isOverdue
+        ? `Update overdue: ${p.title}`
+        : `Update due ${this.date(p.dueDate)}: ${p.title}`,
+      body: p.isOverdue
+        ? `"${p.title}" was due ${this.date(p.dueDate)} and is still open.`
+        : `"${p.title}" is due ${this.date(p.dueDate)}.`,
+      link: '/updates',
     });
   }
 

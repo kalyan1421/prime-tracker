@@ -20,6 +20,7 @@ import { usePagination } from '../hooks/usePagination';
 import { Pagination } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { apiAssetUrl } from '../lib/api';
+import { errMsg } from '../utils/fmt';
 
 function statusColor(status: string) {
     switch (status) {
@@ -35,7 +36,10 @@ function priorityColor(priority: string) {
     switch (priority) {
         case 'LOW': return 'success';
         case 'MEDIUM': return 'warning';
-        case 'HIGH': return 'danger';
+        // HIGH and URGENT used to both be 'danger' — visually identical at a glance,
+        // which defeats the point of a priority color code. 'secondary' isn't used by
+        // this function or statusColor() above, so it doesn't collide with anything else.
+        case 'HIGH': return 'secondary';
         case 'URGENT': return 'danger';
         default: return 'default';
     }
@@ -426,8 +430,8 @@ function TaskSidePanel({
             });
             addToast({ title: 'Task updated', color: 'success' });
             setIsEditing(false);
-        } catch {
-            addToast({ title: 'Failed to update task', color: 'danger' });
+        } catch (e) {
+            addToast({ title: errMsg(e, 'Failed to update task'), color: 'danger' });
         }
     }
 
@@ -436,8 +440,8 @@ function TaskSidePanel({
             await deleteTask.mutateAsync(task.id);
             addToast({ title: 'Task deleted', color: 'success' });
             onDeleted();
-        } catch {
-            addToast({ title: 'Failed to delete task', color: 'danger' });
+        } catch (e) {
+            addToast({ title: errMsg(e, 'Failed to delete task'), color: 'danger' });
         }
     }
 
@@ -446,8 +450,8 @@ function TaskSidePanel({
         try {
             await createComment.mutateAsync({ taskId, content: commentText.trim() });
             setCommentText('');
-        } catch {
-            addToast({ title: 'Failed to post comment', color: 'danger' });
+        } catch (e) {
+            addToast({ title: errMsg(e, 'Failed to post comment'), color: 'danger' });
         }
     }
 
@@ -459,8 +463,8 @@ function TaskSidePanel({
         try {
             await uploadAttachment.mutateAsync({ taskId, formData: fd });
             addToast({ title: 'File attached', color: 'success' });
-        } catch {
-            addToast({ title: 'Upload failed', color: 'danger' });
+        } catch (err) {
+            addToast({ title: errMsg(err, 'Upload failed'), color: 'danger' });
         }
         e.target.value = '';
     }
@@ -468,8 +472,8 @@ function TaskSidePanel({
     async function handleStatusChange(newStatus: string) {
         try {
             await updateTask.mutateAsync({ id: task.id, data: { status: newStatus } });
-        } catch {
-            addToast({ title: 'Failed to update status', color: 'danger' });
+        } catch (e) {
+            addToast({ title: errMsg(e, 'Failed to update status'), color: 'danger' });
         }
     }
 
@@ -863,8 +867,8 @@ function CreateTaskModal({
                 dueDate: '',
                 assignedTo: currentUserId,
             });
-        } catch {
-            addToast({ title: 'Failed to create task', color: 'danger' });
+        } catch (e) {
+            addToast({ title: errMsg(e, 'Failed to create task'), color: 'danger' });
         }
     }
 

@@ -234,6 +234,16 @@ export const PERMISSIONS = {
   BUILDING_EDIT: 'building:edit',
   UNIT_VIEW: 'unit:view',
   UNIT_EDIT: 'unit:edit',
+  /**
+   * The build half of unit editing: unit number, type, size and notes — the physical
+   * facts a site team owns and corrects. Deliberately excludes asking price, asking rent
+   * and `status`, which are commercial/lifecycle fields and stay behind UNIT_EDIT.
+   *
+   * PUT /units/:id is gated on THIS permission, and the service then rejects the
+   * commercial fields for anyone who lacks UNIT_EDIT. Every role holding UNIT_EDIT also
+   * holds this, so the split widens who may edit without widening what they may edit.
+   */
+  UNIT_EDIT_BUILD: 'unit:editBuild',
 
   // Milestones
   MILESTONE_VIEW: 'milestone:view',
@@ -267,6 +277,18 @@ export const PERMISSIONS = {
   CHECKLIST_VIEW: 'checklist:view',
   CHECKLIST_EDIT: 'checklist:edit',
 
+  // Site Tracker — the cross-property construction status grid (blocker, site priority,
+  // work type, site assignees). Deliberately NOT folded into unit:edit: CONSTRUCTION, the
+  // role that actually knows whether a unit is blocked, does not hold unit:edit, while
+  // SALES and MARKETING do. Gating a blocker flag on unit:edit would put it in exactly the
+  // wrong hands. Mirrors the checklist:* holders instead.
+  SITE_TRACKER_VIEW: 'siteTracker:view',
+  SITE_TRACKER_EDIT: 'siteTracker:edit',
+
+  // Minting a new template VERSION is a different act from ticking a stage off: it changes
+  // what every future unit of that work type gets. Kept separate so Construction can run
+  // its checklists without being able to redefine them.
+
   // Brokers / referral tracking (internal-only)
   BROKER_VIEW: 'broker:view',
   BROKER_EDIT: 'broker:edit',
@@ -283,6 +305,10 @@ export const PERMISSIONS = {
   // Tasks (work tracking, per project/building/unit)
   TASK_VIEW: 'task:view',
   TASK_EDIT: 'task:edit',
+
+  // Global Update Board (org-wide chat/announcement feed, not project-scoped)
+  UPDATE_BOARD_VIEW: 'updateBoard:view',
+  UPDATE_BOARD_CREATE: 'updateBoard:create',
 
   // Investors
   INVESTOR_VIEW: 'investor:view',
@@ -354,13 +380,18 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.SALE_DISCOUNT_APPROVE,
     PERMISSIONS.DAILYLOG_VIEW,
     PERMISSIONS.CHECKLIST_VIEW,
+    PERMISSIONS.SITE_TRACKER_VIEW,
     PERMISSIONS.BROKER_VIEW,
     PERMISSIONS.SETTINGS_MANAGE,
+    // Founder-tier: can post to the global Update Board, not just read it.
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.FINANCE]: [
     PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
     PERMISSIONS.PROJECT_VIEW,
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
@@ -398,6 +429,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PAYMENT_LOG,
     PERMISSIONS.DAILYLOG_VIEW,
     PERMISSIONS.BROKER_VIEW,
+    // Finance/Accounting can now post their own updates (e.g. a payment-milestone or
+    // budget-variance note) — see UPDATE_BOARD_DESIGN.md §8. The board's own "Leadership
+    // Only" toggle is how a sensitive one stays out of the whole-company broadcast.
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.ACCOUNTING]: [
     // rent:collect is worthless without lease:view — the invoice list and
@@ -430,6 +465,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.PAYMENT_LOG,
     PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.AR_AP]: [
     // rent:collect is worthless without lease:view — the invoice list and
@@ -459,6 +496,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.PAYMENT_LOG,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.PROJECT_MANAGER]: [
     PERMISSIONS.TASK_VIEW,
@@ -470,6 +509,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BUILDING_EDIT,
     PERMISSIONS.UNIT_VIEW,
     PERMISSIONS.UNIT_EDIT,
+    PERMISSIONS.UNIT_EDIT_BUILD,
     // financial:view (actuals, cashflow, commitments, financial reports) is Finance-only.
     // PM keeps budget:view — needs the project budget to run the job — but not the
     // detailed financial module. See discovery: "financial data = Accounting + Finance".
@@ -497,6 +537,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DAILYLOG_EDIT,
     PERMISSIONS.CHECKLIST_VIEW,
     PERMISSIONS.CHECKLIST_EDIT,
+    PERMISSIONS.SITE_TRACKER_VIEW,
+    PERMISSIONS.SITE_TRACKER_EDIT,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.CONSTRUCTION]: [
     PERMISSIONS.TASK_VIEW,
@@ -504,6 +548,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PROJECT_VIEW,
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
+    PERMISSIONS.UNIT_EDIT_BUILD,
     // Construction is fully blind to financials — no financial:view (actuals/cashflow/
     // reports) and no budget:view (budget/spend/variance summary). Discovery: Construction
     // must not see financial data. Keeps draw:view for inspection/site-photo workflow.
@@ -520,6 +565,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DAILYLOG_EDIT,
     PERMISSIONS.CHECKLIST_VIEW,
     PERMISSIONS.CHECKLIST_EDIT,
+    PERMISSIONS.SITE_TRACKER_VIEW,
+    PERMISSIONS.SITE_TRACKER_EDIT,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.SALES]: [
     PERMISSIONS.TASK_VIEW,
@@ -528,6 +577,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
     PERMISSIONS.UNIT_EDIT,
+    PERMISSIONS.UNIT_EDIT_BUILD,
     PERMISSIONS.SALES_VIEW,
     PERMISSIONS.SALES_EDIT,
     PERMISSIONS.LEASE_VIEW,
@@ -549,6 +599,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BROKER_EDIT,
     // Q2 option b: Sales enters the historical record, a Founder approves deletion.
     PERMISSIONS.UNIT_HISTORY_BACKFILL,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.MARKETING]: [
     PERMISSIONS.TASK_VIEW,
@@ -557,6 +609,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
     PERMISSIONS.UNIT_EDIT,
+    PERMISSIONS.UNIT_EDIT_BUILD,
     PERMISSIONS.LEAD_VIEW,
     PERMISSIONS.LEAD_CREATE,
     PERMISSIONS.LEAD_EDIT,
@@ -579,6 +632,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.REPORT_REVENUE,
     PERMISSIONS.BROKER_VIEW,
     PERMISSIONS.BROKER_EDIT,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.LEGAL]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -595,6 +650,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.DOCUMENT_UPLOAD,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
+    PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.VIEWER]: [
     PERMISSIONS.PROJECT_VIEW,
@@ -603,6 +660,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.MILESTONE_VIEW,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.DAILYLOG_VIEW,
+    PERMISSIONS.UPDATE_BOARD_VIEW,
   ],
   // Buyer portal (Phase 2) — not built yet, so deliberately empty rather than granted any
   // of the internal-staff permissions above. A CLIENT account today can only reach the
@@ -726,6 +784,7 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'marketing', label: 'Marketing & Campaigns', permissions: ['campaign:view', 'campaign:create', 'campaign:edit', 'campaign:spend', 'campaign:delete'] },
   { key: 'milestones', label: 'Milestones', permissions: ['milestone:view', 'milestone:edit'] },
   { key: 'checklist', label: 'Construction Checklist', permissions: ['checklist:view', 'checklist:edit'] },
+  { key: 'site_tracker', label: 'Site Tracker', permissions: ['siteTracker:view', 'siteTracker:edit'] },
   { key: 'vendors', label: 'Vendors & Contracts', permissions: ['vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve'] },
   { key: 'documents', label: 'Documents', permissions: ['document:view', 'document:upload', 'document:delete'] },
   { key: 'investors', label: 'Investors', permissions: ['investor:view', 'investor:manage'] },

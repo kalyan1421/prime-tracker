@@ -13,6 +13,7 @@ import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
+import { UpdateSiteTrackerDto, SetUnitAssigneesDto } from './dto/site-tracker.dto';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('Units')
@@ -44,8 +45,16 @@ export class UnitsController {
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
     @CurrentUser('roles') roles?: string[],
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.findInventory({ status: status as any, unitType, projectId, search, viewer: userId && role ? { userId, role, roles } : undefined });
+    return this.service.findInventory({
+      status: status as any,
+      unitType,
+      projectId,
+      search,
+      viewer: userId && role ? { userId, role, roles } : undefined,
+      viewerPermissions: permissions ?? [],
+    });
   }
 
   @Get()
@@ -54,16 +63,17 @@ export class UnitsController {
   findByProject(
     @Query('projectId') projectId: string,
     @Query('buildingId') buildingId?: string,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    if (buildingId) return this.service.findByBuilding(buildingId);
-    return this.service.findByProject(projectId);
+    if (buildingId) return this.service.findByBuilding(buildingId, permissions ?? []);
+    return this.service.findByProject(projectId, permissions ?? []);
   }
 
   @Get(':id')
   @RequirePermissions('unit:view')
   @ApiOperation({ summary: 'Get unit by ID with leases and sales' })
-  findById(@Param('id') id: string) {
-    return this.service.findById(id);
+  findById(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.service.findById(id, permissions ?? []);
   }
 
   // Registered after `@Get(':id')` is fine — Nest matches the more specific literal
@@ -77,8 +87,8 @@ export class UnitsController {
       'gaps between leases, so the vacancy before the first lease and the one ' +
       'currently open both appear.',
   })
-  getHistory(@Param('id') id: string) {
-    return this.history.getHistory(id);
+  getHistory(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.history.getHistory(id, permissions ?? []);
   }
 
   @Post()
@@ -98,16 +108,23 @@ export class UnitsController {
     return this.service.combine(body, userRole);
   }
 
+  // Gated on the narrower `unit:editBuild`, not `unit:edit`. CONSTRUCTION owns the
+  // physical facts of a unit (number, type, size, notes) and was previously unable to
+  // correct any of them, while `unit:edit` also carries asking price and asking rent.
+  // Every role holding `unit:edit` also holds `unit:editBuild`, so this only widens who
+  // reaches the route; update() then rejects the commercial fields for callers without
+  // `unit:edit`, which is where the actual restriction lives.
   @Put(':id')
-  @RequirePermissions('unit:edit')
-  @ApiOperation({ summary: 'Update unit (Sales role: status only)' })
+  @RequirePermissions('unit:editBuild')
+  @ApiOperation({ summary: 'Update unit (Sales: status/notes only; without unit:edit: build fields only)' })
   update(
     @Param('id') id: string,
     @Body() body: UpdateUnitDto,
     @CurrentUser('role') userRole: UserRole,
+    @CurrentUser('permissions') permissions: string[],
     @CurrentUser('sub') userId?: string,
   ) {
-    return this.service.update(id, body, userRole, userId);
+    return this.service.update(id, body, userRole, userId, permissions ?? []);
   }
 
   @Patch(':id/status')
@@ -120,6 +137,32 @@ export class UnitsController {
     @CurrentUser('sub') userId?: string,
   ) {
     return this.service.updateStatus(id, body.status, userRole, userId);
+  }
+
+  // Site Tracker (Phase 1). `siteTracker:edit`, NOT `unit:edit` — CONSTRUCTION holds the
+  // former and not the latter, which is the right way round for a blocker flag.
+  // ProjectAccessGuard covers these automatically: UnitsController's `:id` resolves to the
+  // unit's project (project-access.service.ts CONTROLLER_ID_ENTITY).
+  @Patch(':id/site-tracker')
+  @RequirePermissions('siteTracker:edit')
+  @ApiOperation({ summary: 'Set blocker / site priority / work type on a unit' })
+  updateSiteTracker(
+    @Param('id') id: string,
+    @Body() body: UpdateSiteTrackerDto,
+    @CurrentUser('sub') userId?: string,
+  ) {
+    return this.service.updateSiteTracker(id, body, userId);
+  }
+
+  @Put(':id/assignees')
+  @RequirePermissions('siteTracker:edit')
+  @ApiOperation({ summary: 'Replace the unit\'s site owners (multi-assign; [] clears)' })
+  setAssignees(
+    @Param('id') id: string,
+    @Body() body: SetUnitAssigneesDto,
+    @CurrentUser('sub') userId?: string,
+  ) {
+    return this.service.setAssignees(id, body.userIds, userId);
   }
 
   @Delete(':id')

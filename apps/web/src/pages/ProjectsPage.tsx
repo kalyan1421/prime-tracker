@@ -38,8 +38,20 @@ function extractErr(err: any, fallback: string): string {
   return err?.message ?? fallback;
 }
 
-function BudgetHealthBar({ budget, actuals }: { budget: number; actuals: number }) {
-  if (!budget) return <p className="text-xs text-gray-500">No budget set</p>;
+function BudgetHealthBar({ budget, actuals, projectId, canEdit }: { budget: number; actuals: number; projectId: string; canEdit: boolean }) {
+  const navigate = useNavigate();
+  if (!budget) {
+    if (!canEdit) return <p className="text-xs text-gray-500">No budget set</p>;
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); navigate(`/projects/${projectId}/budget`); }}
+        className="text-xs text-blue-600 hover:underline"
+      >
+        No budget set — add one
+      </button>
+    );
+  }
   const pct = Math.min((actuals / budget) * 100, 100);
   const color = pct >= 100 ? 'danger' : pct >= 80 ? 'warning' : 'success';
   return (
@@ -77,10 +89,13 @@ function ProjectStat({ label, value, hint, emphasis }: {
   );
 }
 
-function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
+function ProjectCard({
+  p, onEdit, onDelete, canEdit, canDelete, health, canViewFinancials, canViewSales, canViewLeads,
+}: {
   p: any; onEdit: (p: any) => void; onDelete: (id: string) => void;
   canEdit: boolean; canDelete: boolean;
   health?: { score: number; breakdown: Record<string, { score: number; reason: string }> };
+  canViewFinancials: boolean; canViewSales: boolean; canViewLeads: boolean;
 }) {
   const navigate = useNavigate();
   const showActions = canEdit || canDelete;
@@ -91,8 +106,13 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
       }))
     : undefined;
   return (
-    <Card shadow="sm" className="cursor-pointer hover:shadow-md transition-shadow duration-150">
-      <CardBody onClick={() => navigate(`/projects/${p.id}`)}>
+    // isPressable/onPress (not a plain onClick div) — this is what makes the card a real,
+    // keyboard-focusable, Enter/Space-activatable control instead of only mouse-clickable.
+    // Nested interactive elements (health ring, Edit/Archive buttons) already call
+    // e.stopPropagation() in their own onClick, which still stops the card's press from
+    // firing — same native event bubbling either way.
+    <Card shadow="sm" isPressable onPress={() => navigate(`/projects/${p.id}`)} className="w-full text-left hover:shadow-md transition-shadow duration-150">
+      <CardBody>
         <div className="flex justify-between items-start mb-2 gap-2">
           <div className="flex items-start gap-2 flex-1 min-w-0">
             {/* Slice 2: Health score ring — at-a-glance triage. */}
@@ -126,8 +146,10 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
 
         {/* Type and phase sit together as chips. The phase used to own a labelled
             six-segment progress bar, which spent a third of the card restating one word
-            — the bar's fill never encoded anything the label did not already say. */}
-        <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+            — the bar's fill never encoded anything the label did not already say.
+            min-h reserves the chip row's height even when projectType is unset, so a
+            missing type doesn't shift this card shorter than its neighbors in the grid. */}
+        <div className="flex items-center gap-1.5 mb-2 flex-wrap min-h-[22px]">
           {p.projectType && (
             <Chip size="sm" variant="flat" color={TYPE_COLOR[p.projectType] || 'default'} className="text-[11px]">
               {p.projectType.replace(/_/g, ' ')}
@@ -136,7 +158,9 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
           {p.phase && <PhaseChip phase={p.phase} size="sm" />}
         </div>
 
-        <BudgetHealthBar budget={p.budgetTotal ?? 0} actuals={p.actualsTotal ?? 0} />
+        {canViewFinancials && (
+          <BudgetHealthBar budget={p.budgetTotal ?? 0} actuals={p.actualsTotal ?? 0} projectId={p.id} canEdit={canEdit} />
+        )}
 
         {/* The four numbers that answer "how is this project doing" without opening it.
             Tabular figures so they stay aligned as counts change.
@@ -144,22 +168,30 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
             2x2, not 1x4: at three-up on a laptop each card is ~230px wide, and four
             columns left ~55px per cell — enough to clip "Buildings" to "Buil…" and drop
             the "of 7" that makes the sales figure mean anything. Two columns give each
-            figure room for its label and its qualifier at any card width. */}
+            figure room for its label and its qualifier at any card width.
+
+            Sales/Leads are omitted entirely (not shown as 0) for a role without
+            sales:view/lead:view — a real 0 and "you can't see this" must never look
+            the same. */}
         <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-3 pt-2.5 border-t border-gray-100">
           <ProjectStat label="Buildings" value={p._count?.buildings ?? 0} />
           <ProjectStat label="Units" value={p.unitCount ?? 0} />
-          <ProjectStat
-            label="Sales"
-            value={p.soldCount ?? 0}
-            hint={p.unitCount ? `of ${p.unitCount}` : undefined}
-            emphasis={(p.soldCount ?? 0) > 0 ? 'text-green-700' : undefined}
-          />
-          <ProjectStat
-            label="Leads"
-            value={p.openLeadCount ?? 0}
-            hint={(p.openLeadCount ?? 0) > 0 ? 'open' : undefined}
-            emphasis={(p.openLeadCount ?? 0) > 0 ? 'text-blue-700' : undefined}
-          />
+          {canViewSales && (
+            <ProjectStat
+              label="Sales"
+              value={p.soldCount ?? 0}
+              hint={p.unitCount ? `of ${p.unitCount}` : undefined}
+              emphasis={(p.soldCount ?? 0) > 0 ? 'text-green-700' : undefined}
+            />
+          )}
+          {canViewLeads && (
+            <ProjectStat
+              label="Leads"
+              value={p.openLeadCount ?? 0}
+              hint={(p.openLeadCount ?? 0) > 0 ? 'open' : undefined}
+              emphasis={(p.openLeadCount ?? 0) > 0 ? 'text-blue-700' : undefined}
+            />
+          )}
         </div>
         {!showActions && null}
       </CardBody>
@@ -167,9 +199,9 @@ function ProjectCard({ p, onEdit, onDelete, canEdit, canDelete, health }: {
   );
 }
 
-function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete }: {
+function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete, canViewFinancials }: {
   p: any; onEdit: (p: any) => void; onDelete: (id: string) => void;
-  canEdit: boolean; canDelete: boolean;
+  canEdit: boolean; canDelete: boolean; canViewFinancials: boolean;
 }) {
   const navigate = useNavigate();
   const pct = p.budgetTotal ? Math.min(((p.actualsTotal ?? 0) / p.budgetTotal) * 100, 100) : 0;
@@ -199,12 +231,14 @@ function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete }: {
           <PhaseProgress current={p.phase || 'PRE_DEVELOPMENT'} />
         </div>
       </td>
-      <td className="py-3 px-4 text-right tabular-nums">
-        <p className="text-gray-800">{fmt(p.budgetTotal ?? 0)}</p>
-        {p.budgetTotal > 0 && (
-          <p className={`text-[11px] font-medium ${pctColor}`}>{pct.toFixed(0)}% spent</p>
-        )}
-      </td>
+      {canViewFinancials && (
+        <td className="py-3 px-4 text-right tabular-nums">
+          <p className="text-gray-800">{fmt(p.budgetTotal ?? 0)}</p>
+          {p.budgetTotal > 0 && (
+            <p className={`text-[11px] font-medium ${pctColor}`}>{pct.toFixed(0)}% spent</p>
+          )}
+        </td>
+      )}
       <td className="py-3 px-4"><StatusBadge status={p.status} /></td>
       <td className="py-3 px-4 text-center text-gray-600">{p._count?.buildings ?? 0} / {p.unitCount ?? 0}</td>
       <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
@@ -255,6 +289,9 @@ export default function ProjectsPage() {
   const canCreate = hasPermission('project:create');
   const canEdit = hasPermission('project:edit');
   const canDelete = hasPermission('project:delete');
+  const canViewFinancials = hasPermission('budget:view');
+  const canViewSales = hasPermission('sales:view');
+  const canViewLeads = hasPermission('lead:view');
   const canViewArchived = user?.role === 'SUPER_ADMIN' || user?.role === 'FOUNDER';
 
   const [search, setSearch] = useState('');
@@ -589,6 +626,9 @@ export default function ProjectsPage() {
               canEdit={canEdit}
               canDelete={canDelete}
               health={healthMap[p.id]}
+              canViewFinancials={canViewFinancials}
+              canViewSales={canViewSales}
+              canViewLeads={canViewLeads}
             />
           ))}
         </div>
@@ -603,7 +643,9 @@ export default function ProjectsPage() {
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Project</th>
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Type</th>
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Phase</th>
-                <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-right">Budget</th>
+                {canViewFinancials && (
+                  <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-right">Budget</th>
+                )}
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-center">Bldgs / Units</th>
                 <th className="py-2.5 px-4 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-right">Actions</th>
@@ -618,6 +660,7 @@ export default function ProjectsPage() {
                   onDelete={openDelete}
                   canEdit={canEdit}
                   canDelete={canDelete}
+                  canViewFinancials={canViewFinancials}
                 />
               ))}
             </tbody>

@@ -14,6 +14,7 @@ import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { ApiOperation } from '@nestjs/swagger';
 import { AddTaskUpdatePhotoDto, CreateTaskUpdateDto } from './dto/task-update.dto';
+import { CreateTaskDto, UpdateTaskDto } from './dto/create-task.dto';
 
 const UPLOADS_DIR = join(process.cwd(), 'uploads', 'tasks');
 
@@ -66,7 +67,7 @@ export class TasksController {
 
     @Post()
     @RequirePermissions('task:edit')
-    create(@Body() body: any, @CurrentUser('sub') userId: string) {
+    create(@Body() body: CreateTaskDto, @CurrentUser('sub') userId: string) {
         return this.tasksService.create(body, userId);
     }
 
@@ -74,7 +75,7 @@ export class TasksController {
     @RequirePermissions('task:edit')
     update(
         @Param('id') id: string,
-        @Body() body: any,
+        @Body() body: UpdateTaskDto,
         @CurrentUser('sub') userId: string,
         @CurrentUser('role') role: string,
     ) {

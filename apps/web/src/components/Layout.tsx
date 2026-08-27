@@ -8,7 +8,9 @@ import {
   FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield, FiUser,
   FiMenu, FiPieChart, FiBell, FiUsers, FiCheck, FiTarget, FiBriefcase,
   FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp, FiTrendingDown,
+  FiRss, FiTool, FiDollarSign, FiMessageSquare, FiFileText, FiColumns,
 } from 'react-icons/fi';
+import type { IconType } from 'react-icons';
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/authStore';
@@ -21,10 +23,12 @@ import { useNotifications, useMarkNotificationsRead, useNotificationsSocket } fr
 const BASE_NAV_ITEMS = [
   { label: 'Dashboard', icon: FiHome, pathKey: 'dashboard' },
   { label: 'Projects', icon: FiFolder, path: '/projects' },
+  { label: 'Updates', icon: FiRss, path: '/updates', permission: 'updateBoard:view' },
+  { label: 'Site Tracker', icon: FiColumns, path: '/site-tracker', permission: 'siteTracker:view' },
   { label: 'Inventory', icon: FiPackage, path: '/inventory' },
   { label: 'Interior', icon: FiGrid, path: '/interior', permission: 'interior:view' },
   { label: 'Cash Flow', icon: FiTrendingUp, path: '/cashflow', permission: 'financial:view' },
-  { label: 'Receivables', icon: FiTrendingDown, path: '/receivables', permission: 'interior:finance' },
+  { label: 'Receivables', icon: FiTrendingDown, path: '/receivables', permission: 'financial:view' },
   { label: 'Tasks', icon: FiCheckSquare, path: '/tasks' },
   { label: 'Leads', icon: FiTarget, path: '/leads', permission: 'lead:view' },
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
@@ -67,6 +71,31 @@ function getReportsPath(hasPermission: (p: string) => boolean) {
   return '/reports';
 }
 
+/**
+ * Notification rows carry one of ~35 `NotificationType` values (schema.prisma) — far too
+ * many to give each its own icon. Grouped into broad buckets by prefix instead, extending
+ * the same department-color convention the Comments feature already uses (MARKETING
+ * purple / SALES blue / FINANCIAL green, see CLAUDE.md) rather than inventing a new
+ * palette. Anything unmatched (a future type added here before this list is) falls back to
+ * a plain bell rather than breaking.
+ */
+const NOTIF_CATEGORIES: { test: (t: string) => boolean; icon: IconType; bg: string; fg: string }[] = [
+  { test: (t) => t.startsWith('MILESTONE') || t.startsWith('INTERIOR') || t.startsWith('SNAG'), icon: FiTool, bg: 'bg-amber-100', fg: 'text-amber-700' },
+  { test: (t) => t.startsWith('LOAN') || t.startsWith('DRAW') || t.startsWith('BUDGET') || t.startsWith('PAYMENT') || t === 'TI_DISBURSED', icon: FiDollarSign, bg: 'bg-green-100', fg: 'text-green-700' },
+  { test: (t) => t.startsWith('LEAD'), icon: FiTarget, bg: 'bg-purple-100', fg: 'text-purple-700' },
+  { test: (t) => t.startsWith('COMMENT'), icon: FiMessageSquare, bg: 'bg-gray-100', fg: 'text-gray-600' },
+  { test: (t) => t.startsWith('DOCUMENT'), icon: FiFileText, bg: 'bg-gray-200', fg: 'text-gray-700' },
+  { test: (t) => t.startsWith('UPDATE_BOARD'), icon: FiRss, bg: 'bg-indigo-100', fg: 'text-indigo-700' },
+  { test: (t) => t.startsWith('TASK'), icon: FiCheckSquare, bg: 'bg-teal-100', fg: 'text-teal-700' },
+  { test: (t) => t.startsWith('LEASE') || t.startsWith('UNIT') || t.startsWith('FREE_RENT') || t === 'DEPOSIT_OUTSTANDING' || t === 'RENT_OVERDUE', icon: FiHome, bg: 'bg-blue-100', fg: 'text-blue-700' },
+  { test: (t) => t.startsWith('HISTORY_DELETION'), icon: FiShield, bg: 'bg-red-100', fg: 'text-red-700' },
+];
+const DEFAULT_NOTIF_CATEGORY = { icon: FiBell, bg: 'bg-gray-100', fg: 'text-gray-500' };
+
+function notifCategory(type: string) {
+  return NOTIF_CATEGORIES.find((c) => c.test(type)) ?? DEFAULT_NOTIF_CATEGORY;
+}
+
 function NotificationPanel() {
   const { data } = useNotifications(20);
   const markRead = useMarkNotificationsRead();
@@ -104,28 +133,36 @@ function NotificationPanel() {
             <p className="text-sm">No notifications</p>
           </div>
         ) : (
-          notifications.map((n: any) => (
-            <div
-              key={n.id}
-              className={`px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${!n.readAt ? 'bg-blue-50/40' : ''}`}
-              onClick={() => {
-                if (!n.readAt) markRead.mutate([n.id]);
-                if (n.link) navigate(n.link);
-              }}
-            >
-              <div className="flex gap-2 items-start">
-                {!n.readAt && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-500" />}
-                {n.readAt && <span className="mt-1.5 h-2 w-2 shrink-0" />}
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-gray-800 leading-tight">{n.title}</p>
-                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    {new Date(n.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                  </p>
+          notifications.map((n: any) => {
+            const cat = notifCategory(n.type ?? '');
+            const CatIcon = cat.icon;
+            return (
+              <div
+                key={n.id}
+                className={`px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${!n.readAt ? 'bg-blue-50/40' : ''}`}
+                onClick={() => {
+                  if (!n.readAt) markRead.mutate([n.id]);
+                  if (n.link) navigate(n.link);
+                }}
+              >
+                <div className="flex gap-2.5 items-start">
+                  <span className={`flex items-center justify-center shrink-0 h-7 w-7 rounded-full ${cat.bg} ${cat.fg}`}>
+                    <CatIcon size={13} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs font-medium text-gray-800 leading-tight">{n.title}</p>
+                      {!n.readAt && <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {new Date(n.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
       <div className="px-4 py-2 border-t border-gray-100">
@@ -361,14 +398,19 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       <div className="flex items-center gap-1 sm:gap-2">
         <Popover placement="bottom-end" offset={8}>
           <PopoverTrigger>
-            <Button isIconOnly variant="light" size="sm" aria-label="Notifications">
+            <Button
+              isIconOnly
+              variant="light"
+              size="sm"
+              aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+            >
               <Badge
                 content={unreadCount > 0 ? (unreadCount > 9 ? '9+' : unreadCount) : undefined}
                 color="danger"
                 size="sm"
                 isInvisible={unreadCount === 0}
               >
-                <FiBell className="text-gray-600" />
+                <FiBell className={unreadCount > 0 ? 'text-blue-600' : 'text-gray-600'} fill={unreadCount > 0 ? 'currentColor' : 'none'} />
               </Badge>
             </Button>
           </PopoverTrigger>

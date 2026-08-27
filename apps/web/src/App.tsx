@@ -27,6 +27,8 @@ import SalesReportsPage from './pages/SalesReportsPage';
 import InvestorsPage from './pages/InvestorsPage';
 import InvestorDetailPage from './pages/InvestorDetailPage';
 import TasksPage from './pages/TasksPage';
+import UpdatesPage from './pages/UpdatesPage';
+import SiteTrackerPage from './pages/SiteTrackerPage';
 import InventoryPage from './pages/InventoryPage';
 import InteriorPortfolioPage from './pages/InteriorPortfolioPage';
 import InteriorProjectDetailPage from './pages/InteriorProjectDetailPage';
@@ -91,19 +93,25 @@ export default function App() {
         <Route path="projects/:id/rent-history-import" element={<ProtectedRoute permission="unit:history:backfill"><RentHistoryImportPage /></ProtectedRoute>} />
         <Route path="projects/:id/sale-history-import" element={<ProtectedRoute permission="unit:history:backfill"><SaleHistoryImportPage /></ProtectedRoute>} />
         <Route path="projects/:id/:tab" element={<ProjectDetailPage />} />
-        <Route path="reports" element={<ProtectedRoute permission={['financial:view', 'sales:view', 'lease:view', 'loan:view']}><ReportsPage /></ProtectedRoute>} />
+        {/* milestone:view is here so CONSTRUCTION/PROJECT_MANAGER can reach the hub at all.
+            The hub has no tab of its own for them — every tab needs a financial, sales,
+            lease or loan permission — so it forwards them to /reports/construction rather
+            than bouncing them to "/" the way this gate used to. */}
+        <Route path="reports" element={<ProtectedRoute permission={['financial:view', 'sales:view', 'lease:view', 'loan:view', 'milestone:view']}><ReportsPage /></ProtectedRoute>} />
         <Route path="leads" element={<ProtectedRoute permission="lead:view"><LeadsPage /></ProtectedRoute>} />
         {/* Unified into a single Leads section — old Lead Dashboard route now redirects. */}
         <Route path="leads/dashboard" element={<Navigate to="/leads" replace />} />
         <Route path="campaigns" element={<ProtectedRoute permission="campaign:view"><CampaignsPage /></ProtectedRoute>} />
         <Route path="reports/vacancy" element={<ProtectedRoute permission="sales:view"><VacancyReportPage /></ProtectedRoute>} />
         <Route path="tasks" element={<TasksPage />} />
+        <Route path="updates" element={<ProtectedRoute permission="updateBoard:view"><UpdatesPage /></ProtectedRoute>} />
+        <Route path="site-tracker" element={<ProtectedRoute permission="siteTracker:view"><SiteTrackerPage /></ProtectedRoute>} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="interior" element={<ProtectedRoute permission="interior:view"><InteriorPortfolioPage /></ProtectedRoute>} />
         <Route path="cashflow" element={<ProtectedRoute permission="financial:view"><CashflowPage /></ProtectedRoute>} />
         <Route path="interior/:id" element={<ProtectedRoute permission="interior:view"><InteriorProjectDetailPage /></ProtectedRoute>} />
         <Route path="brokers" element={<ProtectedRoute permission="broker:view"><BrokersPage /></ProtectedRoute>} />
-        <Route path="receivables" element={<ProtectedRoute permission="interior:finance"><ReceivablesPage /></ProtectedRoute>} />
+        <Route path="receivables" element={<ProtectedRoute permission="financial:view"><ReceivablesPage /></ProtectedRoute>} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings/notifications" element={<SettingsPage />} />
         <Route path="dashboard/founder" element={<ProtectedRoute permission="unit:view"><FounderDashboardPage /></ProtectedRoute>} />

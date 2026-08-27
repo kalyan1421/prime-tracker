@@ -50,6 +50,10 @@ export interface ProjectViewer {
   roles?: string[];
   /** Whether the viewer may see budget/spend aggregates (budget:view). */
   canViewFinancials?: boolean;
+  /** Whether the viewer may see the sold-units count (sales:view). */
+  canViewSales?: boolean;
+  /** Whether the viewer may see the open-lead count (lead:view). */
+  canViewLeads?: boolean;
 }
 
 /** ANY project-scoped role restricts the viewer; falls back to the primary role. */
@@ -170,6 +174,14 @@ export class ProjectsService {
       : [];
     const soldByBuilding = new Map(soldRows.map((r) => [r.buildingId, r._count._all]));
 
+    // Omitting `viewer` means an internal call (already gated elsewhere) — full
+    // visibility, matching `viewerIsScoped`'s own treatment of "no viewer" above.
+    // An actual viewer redacts per-field the same way findById does for its own
+    // financial/sales/lead sections, rather than trusting the frontend alone.
+    const showFinancials = !viewer || !!viewer.canViewFinancials;
+    const showSales = !viewer || !!viewer.canViewSales;
+    const showLeads = !viewer || !!viewer.canViewLeads;
+
     const projects = rawProjects.map((p) => {
       const unitCount = p.buildings.reduce((sum, b) => sum + b._count.units, 0);
       const soldCount = p.buildings.reduce((sum, b) => sum + (soldByBuilding.get(b.id) ?? 0), 0);
@@ -186,12 +198,12 @@ export class ProjectsService {
       return {
         ...rest,
         unitCount,
-        soldCount,
-        openLeadCount: p._count.leads,
-        budgetTotal,
-        actualsTotal,
+        soldCount: showSales ? soldCount : null,
+        openLeadCount: showLeads ? p._count.leads : null,
+        budgetTotal: showFinancials ? budgetTotal : null,
+        actualsTotal: showFinancials ? actualsTotal : null,
         /** Isolated fit-out spend — never part of actualsTotal, which pairs with budgetTotal. */
-        interiorActualsTotal,
+        interiorActualsTotal: showFinancials ? interiorActualsTotal : null,
       };
     });
 
@@ -216,8 +228,8 @@ export class ProjectsService {
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
-        // Soft-deleted buildings/units/loans/sales (archived, merged-away, etc.)
-        // must not leak into the project overview's counts and totals.
+        // Soft-deleted buildings/units/sales (archived, merged-away, etc.) must not
+        // leak into the project overview's counts and totals.
         buildings: {
           where: { deletedAt: null },
           include: { units: { where: { deletedAt: null } } },
@@ -226,16 +238,31 @@ export class ProjectsService {
         budgetLines: { where: { deletedAt: null }, orderBy: { category: 'asc' } },
         commitments: true,
         actuals: { orderBy: { txnDate: 'desc' } },
-        loans: { where: { deletedAt: null } },
         sales: { where: { deletedAt: null }, include: { unit: true } },
         kpiSnapshots: { orderBy: { snapshotDate: 'desc' }, take: 1 },
       },
     });
     if (!project) throw new NotFoundException('Project not found');
-    // GET /projects/:id feeds ProjectHealthHeader's loan total and the Overview loan
-    // list, both of which read principalAmt/currentBalance/lender straight off these
-    // rows — they now come back null unless rehydrated from the blob.
-    return { ...project, loans: this.encryption.decryptLoans(project.loans) };
+    // Loans are deliberately NOT included here (see /api/loans instead, correctly
+    // gated on loan:view) — omitted rather than redacted since nothing on this
+    // endpoint needs to show even an aggregate of them.
+    //
+    // budgetLines/commitments/actuals/kpiSnapshots (budget:view) and sales
+    // (sales:view) DO need redaction, not omission — the Overview tab everyone can
+    // open still needs the rest of `project`, so the whole endpoint can't be gated,
+    // and the frontend already relies on these keys existing (as `[]`) rather than
+    // being absent. Omitting `viewer` means an internal call — full visibility,
+    // same convention as findAll above.
+    const showFinancials = !viewer || !!viewer.canViewFinancials;
+    const showSales = !viewer || !!viewer.canViewSales;
+    return {
+      ...project,
+      budgetLines: showFinancials ? project.budgetLines : [],
+      commitments: showFinancials ? project.commitments : [],
+      actuals: showFinancials ? project.actuals : [],
+      kpiSnapshots: showFinancials ? project.kpiSnapshots : [],
+      sales: showSales ? project.sales : [],
+    };
   }
 
   async findBySlug(slug: string, viewer?: ProjectViewer) {
@@ -688,7 +715,7 @@ export class ProjectsService {
 
   // ─────── Project Activity Log ───────
 
-  async getActivity(projectId: string, page = 1, limit = 60) {
+  async getActivity(projectId: string, page = 1, limit = 60, viewerPermissions: string[] = []) {
     // Verify project exists first
     const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: { id: true } });
     if (!project) throw new NotFoundException('Project not found');
@@ -1045,13 +1072,36 @@ export class ProjectsService {
       });
     }
 
-    // Sort descending by timestamp
-    events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    // This endpoint is gated only on project:view — a permission nearly every role
+    // holds — but merges in document names, budget-line dollar amounts, lease/sale
+    // buyer and tenant names, etc., each of which has its OWN view permission
+    // elsewhere in the app. Drop any event whose category the viewer couldn't see
+    // through its real endpoint (GET /documents, /budgets, /leases…) before it ever
+    // reaches sort/paginate. Categories with no entry here (task, comment, member)
+    // are unchanged — already covered by project:view, or a separate, softer
+    // question about comment-type visibility that this fix doesn't attempt to settle.
+    const TYPE_PERMISSION: Record<string, string> = {
+      document: 'document:view',
+      milestone: 'milestone:view',
+      lead: 'lead:view',
+      sale: 'sales:view',
+      lease: 'lease:view',
+      building: 'building:view',
+      unit: 'unit:view',
+      budget: 'budget:view',
+    };
+    const visibleEvents = events.filter((e) => {
+      const needed = TYPE_PERMISSION[e.type];
+      return !needed || viewerPermissions.includes(needed);
+    });
 
-    const total = events.length;
+    // Sort descending by timestamp
+    visibleEvents.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    const total = visibleEvents.length;
     const skip = (page - 1) * limit;
     return {
-      events: events.slice(skip, skip + limit),
+      events: visibleEvents.slice(skip, skip + limit),
       total,
       page,
       limit,

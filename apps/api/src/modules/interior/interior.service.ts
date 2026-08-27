@@ -15,6 +15,7 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { canTransition, getPhaseGate, isSnagOpen } from './interior-state-machine';
+import { AddScopeItemDto, AddInteriorInvoiceDto } from './dto/scope-invoice.dto';
 
 /**
  * A snag is only closed once someone has photographed the fix. The "before" shot
@@ -57,8 +58,11 @@ export class InteriorService {
 
   // ─────── Reads ───────
 
-  findAll(filter: { unitId?: string; buildingId?: string; status?: InteriorStatus }) {
-    return this.prisma.interiorProject.findMany({
+  async findAll(
+    filter: { unitId?: string; buildingId?: string; status?: InteriorStatus },
+    viewerPermissions?: string[],
+  ) {
+    const projects = await this.prisma.interiorProject.findMany({
       where: {
         deletedAt: null,
         unitId: filter.unitId,
@@ -73,9 +77,16 @@ export class InteriorService {
         _count: { select: { snags: true, invoices: true, scopeItems: true } },
       },
     });
+    // No `select` above means Prisma returns every scalar column, including
+    // contractValue/ratePerSqft — the same interior:finance gate as findById/
+    // portfolio, just easy to miss here since nothing in the `include` block hints
+    // that money is riding along. Omitting `viewerPermissions` (internal calls) stays
+    // full trust, matching findById's convention.
+    if (!viewerPermissions || viewerPermissions.includes('interior:finance')) return projects;
+    return projects.map((p) => ({ ...p, contractValue: null, ratePerSqft: null }));
   }
 
-  async findById(id: string) {
+  async findById(id: string, viewerPermissions?: string[]) {
     const project = await this.prisma.interiorProject.findFirst({
       where: { id, deletedAt: null },
       include: {
@@ -100,14 +111,29 @@ export class InteriorService {
       },
     });
     if (!project) throw new NotFoundException('Interior project not found');
-    return project;
+    // TI contract value / scope pricing / sub-contractor invoices are `interior:finance`
+    // territory, not `interior:view` — this endpoint requires only the latter. Redact
+    // rather than 403 the whole endpoint since CONSTRUCTION still needs the phase/scope/
+    // snag data alongside it. Scope items keep their non-money fields (description,
+    // category, quantity) so the checklist-like BOQ is still readable, just priceless.
+    //
+    // Omitting `viewerPermissions` (internal calls like advancePhase, which only needs
+    // `phase`/`snags`) means full trust — the same convention ProjectsService uses.
+    if (!viewerPermissions || viewerPermissions.includes('interior:finance')) return project;
+    return {
+      ...project,
+      contractValue: null,
+      ratePerSqft: null,
+      scopeItems: project.scopeItems.map((s) => ({ ...s, unitPrice: null, total: null })),
+      invoices: [],
+    };
   }
 
   /**
    * Cross-project portfolio: phase, contract value, spend (sum of invoices), and
    * days-to-handover. Powers the InteriorPortfolioPage.
    */
-  async portfolio() {
+  async portfolio(viewerPermissions: string[] = []) {
     const projects = await this.prisma.interiorProject.findMany({
       where: { deletedAt: null, status: { not: 'CANCELLED' } },
       orderBy: { targetEnd: 'asc' },
@@ -119,6 +145,9 @@ export class InteriorService {
       },
     });
     const now = Date.now();
+    // Same interior:finance gate as findById — spend/contractValue are money, not
+    // available to an interior:view-only caller.
+    const canViewFinance = viewerPermissions.includes('interior:finance');
     return projects.map((p) => {
       const spend = p.invoices.reduce((sum, inv) => sum + Number(inv.amount), 0);
       const daysToHandover = p.targetEnd
@@ -127,8 +156,8 @@ export class InteriorService {
       const { invoices, ...rest } = p;
       return {
         ...rest,
-        contractValue: p.contractValue ? Number(p.contractValue) : null,
-        spend,
+        contractValue: canViewFinance && p.contractValue ? Number(p.contractValue) : null,
+        spend: canViewFinance ? spend : null,
         daysToHandover,
       };
     });
@@ -471,10 +500,7 @@ export class InteriorService {
 
   // ─────── Scope (BOQ) items ───────
 
-  async addScopeItem(
-    interiorProjectId: string,
-    input: { description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number },
-  ) {
+  async addScopeItem(interiorProjectId: string, input: AddScopeItemDto) {
     await this.findById(interiorProjectId);
     const { description, category, quantity, unit, unitPrice } = input;
     const total = quantity != null && unitPrice != null ? quantity * unitPrice : undefined;
@@ -497,10 +523,7 @@ export class InteriorService {
    * `InteriorInvoice.actualId`; TI is reported as a top-level category by joining actuals
    * through interior_invoices (never mixed into construction actuals).
    */
-  async addInvoice(
-    interiorProjectId: string,
-    input: { vendorId: string; amount: number; invoiceNo?: string; invoiceDate?: string },
-  ) {
+  async addInvoice(interiorProjectId: string, input: AddInteriorInvoiceDto) {
     if (!(input.amount > 0)) throw new BadRequestException('Invoice amount must be positive');
     const ip = await this.prisma.interiorProject.findFirst({
       where: { id: interiorProjectId, deletedAt: null },
