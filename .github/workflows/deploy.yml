@@ -97,6 +97,38 @@ jobs:
     env:
       GH_DEPLOY_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
     steps:
+      # The target is a t3.micro with 914 MiB of RAM. `nest build` there dies with
+      # "JavaScript heap out of memory" (SIGABRT, exit 134) — measured, not guessed — and
+      # raising --max-old-space-size only trades that for swap-thrashing a box that is
+      # also serving live traffic. The runner has the memory, so it does the compiling and
+      # ships the output; the box only installs runtime deps, migrates and restarts.
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build shared, API and web
+        # VITE_API_BASE_URL is intentionally empty in apps/web/.env.production: the client
+        # resolves to a same-origin /api, which nginx proxies to :3001 on the same box.
+        # Setting it to an absolute URL would break that and require CORS.
+        run: |
+          pnpm --filter @prime-tracker/shared build
+          pnpm --filter @prime-tracker/api run build
+          pnpm --filter @prime-tracker/web run build
+      - name: Pack build output
+        run: tar czf dist.tgz packages/shared/dist apps/api/dist apps/web/dist
+      - name: Copy build output to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: dist.tgz
+          target: /tmp
+
       - name: Deploy to EC2 over SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -126,13 +158,18 @@ jobs:
               cd "$REPO_DIR"
             fi
 
-            # ── 2. Install dependencies + build ───────────────────────────────
-            pnpm install --frozen-lockfile
-            pnpm --filter @prime-tracker/api run build
-            # VITE_API_BASE_URL is intentionally empty in apps/web/.env.production: the
-            # client resolves to a same-origin /api, which nginx proxies to :3001. Setting
-            # it to an absolute URL here would break that and require CORS.
-            pnpm --filter @prime-tracker/web run build
+            # ── 2. Runtime deps + unpack the build made on the runner ─────────
+            # CI=true keeps pnpm 10 from stopping at its interactive build-scripts prompt.
+            CI=true pnpm install --frozen-lockfile
+
+            # The Prisma engine cache lives under $HOME and a past root-run deploy left it
+            # root-owned, which makes `prisma generate` die with EPERM on utime.
+            sudo chown -R ubuntu:ubuntu /home/ubuntu/.cache /home/ubuntu/.local 2>/dev/null || true
+            # Regenerated here rather than shipped: the client is platform-specific.
+            pnpm --filter @prime-tracker/api exec prisma generate
+
+            tar xzf /tmp/dist.tgz -C "$REPO_DIR"
+            rm -f /tmp/dist.tgz
 
             # ── 3. Write apps/api/.env from SSM (instance role has ssm:GetParameter*) ─
             # Use GetParameter per name — GetParametersByPath requires the parent-path ARN
