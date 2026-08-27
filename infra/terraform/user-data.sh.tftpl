@@ -85,6 +85,11 @@ server {
     listen 80 default_server;
     server_name _;
     client_max_body_size 25m;
+    # The Google SSO callback redirects to /auth/callback carrying both JWTs and a
+    # double-encoded user object — ~5 KB for a FOUNDER, who holds 81 permissions. The
+    # browser then requests that URL from nginx, and the 8k default here has little
+    # headroom once cookies and user-agent are added; overflowing it is a 414.
+    large_client_header_buffers 4 32k;
 
     root /var/www/prime-web;
     index index.html;
@@ -99,6 +104,13 @@ server {
     location /api/ {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
+        # Same redirect, seen from the other side: that ~5 KB Location header overflows
+        # nginx's 4k default response buffer, which surfaces as a 502 with
+        # "upstream sent too big header while reading response header from upstream"
+        # in the error log. Google sign-in fails while the site looks otherwise healthy.
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 32k;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
