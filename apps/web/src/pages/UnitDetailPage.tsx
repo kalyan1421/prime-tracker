@@ -38,6 +38,7 @@ import {
   requiredBackfillFieldError, buildCollectionOverrides, backfillSuccessToast,
 } from '../components/TenancyBackfillFields';
 import { HistoricalRecordControls } from '../components/HistoricalRecordControls';
+import { TimelineRecordDelete } from '../components/TimelineRecordDelete';
 import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
 import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields, leaseToForm } from '../components/LeaseFormFields';
@@ -381,30 +382,32 @@ function UnitHistorySummary({ summary }: { summary: any }) {
 }
 
 /**
- * The delete control for one backfilled row of the timeline.
+ * The delete control for one row of the timeline.
  *
  * Until this existed the only way to remove a backfilled record was the Rent History
  * section (leases) or the sold-unit panel (sales) — and the latter renders only the
  * FIRST closed sale, so a unit that was imported twice had duplicate rows on this
- * timeline that no screen could delete. The timeline is where duplicates are actually
+ * timeline that no screen could delete. The timeline is where a wrong row is actually
  * noticed, so the control belongs on the row that shows the problem.
  *
- * A live record is deliberately left alone here: it is edited or ended through its own
- * card, where the consequences (ledger, unit status) are visible. Only the unregenerable
- * hand-entered ones get an erase button, and that button still goes through the Founder
- * gate — this widens who can *reach* the flow, not who can decide.
+ * Live records got one too (2026-09-01). Scoping it to backfilled rows was defensible in
+ * the abstract and wrong in practice: a lease typed in by mistake yesterday is exactly as
+ * wrong as one imported twice, and a timeline where some rows have the button and others
+ * do not reads as broken rather than principled. The two kinds keep different rules —
+ * Founder approval for the unregenerable ones, a confirmation for the rest — which is
+ * TimelineRecordDelete's job to tell apart.
  */
 function HistoricalEntryDelete({ entry }: { entry: any }) {
-  if (!entry?.isHistorical) return null;
-  const id = entry.kind === 'lease' ? entry.data?.leaseId : entry.data?.saleId;
+  const id = entry?.kind === 'lease' ? entry?.data?.leaseId : entry?.data?.saleId;
   if (!id) return null;
 
   return (
-    <HistoricalRecordControls
-      variant="inline"
+    <TimelineRecordDelete
       record={{
         kind: entry.kind,
         id,
+        isHistorical: !!entry.isHistorical,
+        isOngoing: !!entry.isOngoing,
         label: entry.title,
         dateRangeLabel: entry.isOngoing
           ? `${fmtDate(entry.startDate)} – present`
