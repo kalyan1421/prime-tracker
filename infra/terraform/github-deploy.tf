@@ -51,11 +51,23 @@ resource "aws_iam_role" "github_deploy" {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
-        # Scoped to one repo AND one branch. Without the ref condition any workflow in
-        # any branch — including one added by a pull request — could assume this role
-        # and deploy. `ref:refs/heads/main` is the whole security boundary here.
+        # Scoped to one repo and one ENVIRONMENT.
+        #
+        # Not `ref:refs/heads/main`, which is the obvious guess and does not work: the
+        # moment a job declares `environment:`, GitHub changes the OIDC subject claim
+        # from `repo:OWNER/REPO:ref:refs/heads/BRANCH` to
+        # `repo:OWNER/REPO:environment:NAME`. A ref-based condition therefore never
+        # matches and the assume fails with the singularly unhelpful "Not authorized to
+        # perform sts:AssumeRoleWithWebIdentity". Measured, not guessed — this cost a
+        # failed deploy run.
+        #
+        # The branch restriction is not lost, it moves: the `production` environment
+        # carries a deployment branch policy allowing only `main`, so only main-branch
+        # runs can obtain this subject at all. That is enforced by GitHub before the
+        # token is minted, and it is what makes this condition sufficient. If that
+        # policy is ever removed, any branch could deploy — the two are a pair.
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:production"
         }
       }
     }]
