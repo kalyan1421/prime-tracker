@@ -90,3 +90,45 @@ variable "enable_dns" {
   type        = bool
   default     = false
 }
+
+# ── Keyless GitHub Actions deploys over SSM (github-deploy.tf) ────────────────
+
+variable "enable_github_deploy" {
+  description = <<-EOT
+    Create the GitHub OIDC provider, the deploy role and the SSM deploy document.
+    Off by default: it grants a CI system the right to run a script as root on the
+    instance, which should be a deliberate act rather than something that appears
+    because someone ran apply.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "github_repository" {
+  description = "owner/repo allowed to assume the deploy role. Only its main branch can."
+  type        = string
+  default     = "kalyan1421/prime-tracker"
+}
+
+variable "enable_ssh" {
+  description = <<-EOT
+    Keep port 22 open to var.admin_cidr.
+
+    Set false once SSM deploys work: Session Manager gives a shell without an inbound
+    port, so 22 is then an open door nobody uses. Note that admin_cidr is one fixed
+    home IP — it stops being reachable the moment that address changes, which is its
+    own argument for not depending on it.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "app_origin" {
+  description = <<-EOT
+    Public origin the SPA is served from — written into the API's FRONTEND_URL,
+    CORS_ORIGINS and APP_BASE_URL at deploy time. Today the nip.io host derived from
+    the Elastic IP; a real domain once DNS is enabled.
+  EOT
+  type        = string
+  default     = "https://app.theprimedeveloper.com"
+}

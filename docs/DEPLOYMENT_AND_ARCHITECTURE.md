@@ -105,9 +105,25 @@ Gated on `vars.DEPLOY_ENABLED == 'true'` with `environment: production`.
 **Both are currently unset, so no push has ever deployed** — verified across the last 30+
 runs on `main`: 28 skipped, 2 cancelled, 0 executed. Releases today are manual (§4.2).
 
-To enable: create the `production` environment, set secrets `EC2_HOST` and `EC2_SSH_KEY`,
-then set `DEPLOY_ENABLED=true` **last** — the moment it is true, the next push to `main`
-goes to production. `GH_DEPLOY_TOKEN` is only needed for a first clone onto a fresh box.
+**Rewritten 2026-09-01 to deploy over SSM. Setup runbook:
+[`DEPLOY_SSM_SETUP.md`](DEPLOY_SSM_SETUP.md).**
+
+The previous scp/ssh job **could never have worked**, and it is worth understanding why
+before trusting any deploy job here. `security.tf` allowed port 22 from `var.admin_cidr` — a
+single home IP — and GitHub's hosted runners get a different address every run. The copy
+step would have hung until its 20-minute timeout. Nobody hit it because the job was always
+skipped, so arming it would have turned a silently-skipped job into a silently-hanging one.
+
+The runner now never connects to the box. It uploads the build to S3 and calls
+`ssm:SendCommand`; the agent already on the instance pulls the artifact and releases it,
+reaching outward rather than being reached. Credentials are GitHub OIDC — a short-lived
+token per run, scoped in IAM to this repo's `main` branch — so no AWS key is stored.
+Port 22 can then be closed entirely (`-var=enable_ssh=false`); Session Manager still gives
+a shell without an inbound port.
+
+Required afterwards: secrets `AWS_DEPLOY_ROLE`, `EC2_INSTANCE_ID`; variables `APP_BUCKET`,
+`DEPLOY_ENABLED` (**set last**), optionally `AWS_REGION` and `SSM_DEPLOY_DOCUMENT`.
+`EC2_HOST`, `EC2_SSH_KEY` and `GH_DEPLOY_TOKEN` are **no longer used**.
 
 The job does:
 
@@ -115,19 +131,25 @@ The job does:
    The target cannot compile this application: on a t3.micro (914 MiB) `nest build` dies
    with a V8 heap OOM (SIGABRT, exit 134). Raising `--max-old-space-size` only trades the
    crash for swap-thrashing a host that is also serving live traffic.
-2. `scp` the build output to the box.
-3. On the box: `chown` the tree and `~/.cache` to `ubuntu` (a past root-run deploy left
-   them root-owned, which breaks `git fetch`'s reflog write and makes `prisma generate`
-   fail `EPERM`), `CI=true pnpm install --frozen-lockfile` (without `CI=true`, pnpm 10
-   stops at an interactive build-scripts prompt), `prisma generate` (the client is
-   platform-specific, so it is generated here rather than shipped), unpack the artifacts.
-4. Write `apps/api/.env` from SSM via the instance role.
+2. Upload `dist.tgz` to `s3://<app-bucket>/releases/<sha>.tgz`, then `ssm send-command`
+   the `prime-tracker-deploy` document — **and poll until it finishes**. `send-command`
+   returns as soon as the command is *accepted*, so without the poll the job goes green on
+   a deploy that has not run.
+3. On the box, as `ubuntu` (SSM runs as root; a root-owned tree is what previously broke
+   `git fetch`'s reflog write and made `prisma generate` fail `EPERM` on the *next*
+   deploy): reset the checkout to `origin/main`, `CI=true pnpm install --frozen-lockfile`
+   (without `CI=true`, pnpm 10 stops at an interactive build-scripts prompt),
+   `prisma generate` (the client is platform-specific), download and unpack the artifact.
+4. Write `apps/api/.env` from SSM Parameter Store via the instance role.
 5. `prisma migrate deploy` against production.
 6. `pm2 restart prime-api`.
 7. Copy the SPA into `/var/www/prime-web` — **over the top, never `--delete`**. Vite
    fingerprints asset filenames so stale files are inert, and a half-finished delete would
    take the site down; overwriting `index.html` is the actual cutover.
-8. Health-check `:3001/api/health`, failing the deploy if it does not come up.
+8. Health-check `:3001/api/health` for 60s, failing the deploy if it does not come up —
+   otherwise a process that restarts into a crash loop reports success.
+9. Print the box's stdout/stderr **even when the job fails**; a red job with no log is a
+   red job nobody can act on.
 
 ### 4.2 Manual deploy (what is used today)
 
@@ -259,6 +281,11 @@ event falls back to the generic wording rather than showing a blank or a raw id.
    never runs.
 8. **Auto-deploy is off**, so every release is a hand-run SSH session with no record of who
    shipped what, and the CI that just proved the build is not the thing that delivers it.
+   The pipeline itself was rebuilt on 2026-09-01 (SSM, keyless, no port 22 — see
+   [`DEPLOY_SSM_SETUP.md`](DEPLOY_SSM_SETUP.md)) and is ready to arm; the gap now is
+   setting `DEPLOY_ENABLED`, not building the mechanism. Note the *old* mechanism was also
+   broken on paper — hosted runners could never have reached port 22 through a
+   single-home-IP security group — so "auto-deploy is off" was hiding a second problem.
 9. **Terraform state is a local file** on one machine (the S3 backend is commented out).
    No locking, no shared access, and losing that laptop means losing the ability to manage
    the stack cleanly.

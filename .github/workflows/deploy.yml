@@ -79,29 +79,49 @@ jobs:
       - name: Build web
         run: pnpm --filter @prime-tracker/web run build
 
-  # ── Deploys NestJS API to EC2. Arms when DEPLOY_ENABLED=true is set. ──────
-  # Required GitHub secrets: EC2_HOST, EC2_SSH_KEY, GH_DEPLOY_TOKEN
-  # Deploys BOTH halves, because both live on the same box: pm2 runs the API on :3001 and
-  # nginx serves the built SPA from /var/www/prime-web, proxying /api/ to it. The S3 app
-  # bucket exists but is empty and there is no CloudFront distribution, so the old
-  # "sync to S3" web job deployed into a void — the live site never changed. It is gone;
-  # restore it only alongside enable_dns=true and a real distribution.
+  # ── Deploys the API + SPA to EC2 over SSM. Arms when DEPLOY_ENABLED=true. ───
   #
-  # Required secrets: EC2_HOST, EC2_SSH_KEY, GH_DEPLOY_TOKEN. No AWS credentials are
-  # needed — the instance role reads its own config from SSM.
+  # No port 22, and no AWS keys stored in GitHub.
+  #
+  # The previous version used scp + ssh, which could never have worked: security.tf
+  # allows 22 from ONE address (var.admin_cidr, a home IP), and hosted runners get a
+  # different IP every run — the job would have hung at the copy step and timed out
+  # whatever secrets were set. Opening 22 to GitHub's published ranges would mean
+  # thousands of addresses, re-published without notice, on the port that grants a shell.
+  #
+  # So the runner never connects to the box. It uploads the build to S3 and asks SSM to
+  # run a document; the agent already on the instance pulls the artifact and releases it,
+  # reaching OUT to AWS rather than being reached. Credentials are OIDC — a short-lived
+  # token minted per run, scoped in IAM to this repo's main branch — so there is no
+  # long-lived key to leak.
+  #
+  # Required, all created by infra/terraform/github-deploy.tf (enable_github_deploy=true):
+  #   secret  AWS_DEPLOY_ROLE     role ARN the runner assumes
+  #   secret  EC2_INSTANCE_ID     i-… of the API host
+  #   var     DEPLOY_ENABLED      "true"
+  #   var     AWS_REGION          e.g. us-east-1        (optional, defaults below)
+  #   var     SSM_DEPLOY_DOCUMENT e.g. prime-tracker-deploy (optional, defaults below)
+  #   var     APP_BUCKET          prime-tracker-app-<account-id>
   deploy:
     needs: ci
     if: ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      # `id-token: write` is what lets the runner mint the OIDC token. Without it the
+      # AWS credentials step fails with a confusing "Not authorized to perform
+      # sts:AssumeRoleWithWebIdentity". `contents: read` is still needed for checkout.
+      id-token: write
+      contents: read
     env:
-      GH_DEPLOY_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      SSM_DOCUMENT: ${{ vars.SSM_DEPLOY_DOCUMENT || 'prime-tracker-deploy' }}
     steps:
-      # The target is a t3.micro with 914 MiB of RAM. `nest build` there dies with
-      # "JavaScript heap out of memory" (SIGABRT, exit 134) — measured, not guessed — and
-      # raising --max-old-space-size only trades that for swap-thrashing a box that is
-      # also serving live traffic. The runner has the memory, so it does the compiling and
-      # ships the output; the box only installs runtime deps, migrates and restarts.
+      # The target cannot compile this application: on a t3.micro (914 MiB) `nest build`
+      # dies with a V8 heap OOM (SIGABRT, exit 134) — measured, not guessed — and raising
+      # --max-old-space-size only trades the crash for swap-thrashing a host that is also
+      # serving live traffic. The runner has the memory; the box only installs runtime
+      # deps, migrates and restarts.
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
         with: { version: 10 }
@@ -110,6 +130,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
       - name: Build shared, API and web
         # VITE_API_BASE_URL is intentionally empty in apps/web/.env.production: the client
         # resolves to a same-origin /api, which nginx proxies to :3001 on the same box.
@@ -118,103 +139,70 @@ jobs:
           pnpm --filter @prime-tracker/shared build
           pnpm --filter @prime-tracker/api run build
           pnpm --filter @prime-tracker/web run build
+
       - name: Pack build output
         run: tar czf dist.tgz packages/shared/dist apps/api/dist apps/web/dist
-      - name: Copy build output to EC2
-        uses: appleboy/scp-action@v0.1.7
+
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: dist.tgz
-          target: /tmp
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
 
-      - name: Deploy to EC2 over SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          envs: GH_DEPLOY_TOKEN
-          # Timeout generous for first-run clone + full pnpm install
-          command_timeout: 20m
-          script: |
-            set -euo pipefail
-            REPO_DIR=/home/ubuntu/prime-tracker
+      - name: Upload the artifact
+        id: upload
+        run: |
+          set -euo pipefail
+          # Keyed by commit, so a redeploy of the same SHA is idempotent and the object
+          # name says exactly what is in it.
+          KEY="releases/${GITHUB_SHA}.tgz"
+          aws s3 cp dist.tgz "s3://${{ vars.APP_BUCKET }}/${KEY}"
+          echo "url=s3://${{ vars.APP_BUCKET }}/${KEY}" >> "$GITHUB_OUTPUT"
 
-            # A deploy that ran as root once leaves the tree root-owned, and every later
-            # run then fails on `git fetch` writing its reflog. Idempotent, and cheap.
-            [ -d "$REPO_DIR" ] && sudo chown -R ubuntu:ubuntu "$REPO_DIR" || true
-            REPO_URL="https://x-access-token:${GH_DEPLOY_TOKEN}@github.com/kalyan1421/prime-tracker.git"
+      - name: Release via SSM
+        id: ssm
+        run: |
+          set -euo pipefail
+          CMD=$(aws ssm send-command \
+            --document-name "$SSM_DOCUMENT" \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --parameters ArtifactUrl="${{ steps.upload.outputs.url }}",GitSha="${GITHUB_SHA}" \
+            --comment "GH run ${GITHUB_RUN_ID}" \
+            --query Command.CommandId --output text)
+          echo "Command: $CMD"
+          echo "id=$CMD" >> "$GITHUB_OUTPUT"
 
-            # ── 1. Clone (first deploy) or reset to latest main ───────────────
-            if [ -d "$REPO_DIR/.git" ]; then
-              cd "$REPO_DIR"
-              git remote set-url origin "$REPO_URL"
-              git fetch --depth=1 origin main
-              git reset --hard origin/main
-            else
-              git clone --depth=1 "$REPO_URL" "$REPO_DIR"
-              cd "$REPO_DIR"
-            fi
+          # send-command returns as soon as the command is ACCEPTED. Without waiting the
+          # job goes green on a deploy that has not run yet, let alone succeeded.
+          for i in $(seq 1 100); do
+            sleep 6
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD" --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "[$i] $STATUS"
+            case "$STATUS" in
+              Success) echo "done=success" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              Failed|Cancelled|TimedOut|Undeliverable|Terminated)
+                echo "::error::SSM deploy finished as $STATUS"
+                echo "done=$STATUS" >> "$GITHUB_OUTPUT"
+                exit 1 ;;
+            esac
+          done
+          echo "::error::SSM deploy still running after 10 minutes"
+          exit 1
 
-            # ── 2. Runtime deps + unpack the build made on the runner ─────────
-            # CI=true keeps pnpm 10 from stopping at its interactive build-scripts prompt.
-            CI=true pnpm install --frozen-lockfile
-
-            # The Prisma engine cache lives under $HOME and a past root-run deploy left it
-            # root-owned, which makes `prisma generate` die with EPERM on utime.
-            sudo chown -R ubuntu:ubuntu /home/ubuntu/.cache /home/ubuntu/.local 2>/dev/null || true
-            # Regenerated here rather than shipped: the client is platform-specific.
-            pnpm --filter @prime-tracker/api exec prisma generate
-
-            tar xzf /tmp/dist.tgz -C "$REPO_DIR"
-            rm -f /tmp/dist.tgz
-
-            # ── 3. Write apps/api/.env from SSM (instance role has ssm:GetParameter*) ─
-            # Use GetParameter per name — GetParametersByPath requires the parent-path ARN
-            # which is not in the current IAM policy (only /prime-tracker/* is allowed).
-            for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
-                     JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD; do
-              V=$(aws ssm get-parameter --name /prime-tracker/$P --with-decryption \
-                    --region us-east-1 --query Parameter.Value --output text 2>/dev/null || echo '')
-              echo "$P=$V"
-            done > apps/api/.env
-            # Append non-secret config (not in SSM)
-            printf 'NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=https://app.theprimedeveloper.com\nCORS_ORIGINS=https://app.theprimedeveloper.com\nAPP_BASE_URL=https://app.theprimedeveloper.com\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\n' >> apps/api/.env
-            # DIRECT_URL mirrors DATABASE_URL (Prisma accelerate not used)
-            printf 'DIRECT_URL=%s\n' "$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
-            chmod 600 apps/api/.env
-
-            # ── 4. Run pending migrations ─────────────────────────────────────
-            export DATABASE_URL
-            DATABASE_URL=$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)
-            pnpm --filter @prime-tracker/api exec prisma migrate deploy
-
-            # ── 5. Start (first time) or restart (subsequent) via PM2 ─────────
-            if pm2 describe prime-api >/dev/null 2>&1; then
-              pm2 restart prime-api --update-env
-            else
-              pm2 start apps/api/dist/main.js \
-                --name prime-api \
-                --cwd "$REPO_DIR/apps/api" \
-                --log /home/ubuntu/prime-api.log \
-                --time
-              pm2 save
-            fi
-
-            # ── 6. Publish the SPA nginx serves ───────────────────────────────
-            # Copied over the top rather than --delete'd: Vite fingerprints asset
-            # filenames, so stale files are inert, and a half-finished delete would take
-            # the site down. index.html is overwritten, which is what actually cuts over.
-            sudo cp -a apps/web/dist/. /var/www/prime-web/
-            sudo chown -R www-data:www-data /var/www/prime-web
-
-            # ── 7. Health check — fail deploy if API doesn't come up ──────────
-            for i in $(seq 1 6); do
-              sleep 5
-              if curl -sf http://localhost:3001/api/health >/dev/null 2>&1; then
-                echo "API healthy ✓"; break
-              fi
-              [ "$i" -eq 6 ] && { echo "ERROR: API did not become healthy in 30 s"; pm2 logs prime-api --lines 30; exit 1; }
-            done
+      # Runs even on failure — the box's output is the only way to see WHY a deploy
+      # failed, and a red job with no log is a red job nobody can act on.
+      - name: Deploy log
+        if: always() && steps.ssm.outputs.id != ''
+        run: |
+          aws ssm get-command-invocation \
+            --command-id "${{ steps.ssm.outputs.id }}" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query 'StandardOutputContent' --output text || true
+          echo "── stderr ──"
+          aws ssm get-command-invocation \
+            --command-id "${{ steps.ssm.outputs.id }}" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query 'StandardErrorContent' --output text || true

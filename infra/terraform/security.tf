@@ -17,12 +17,28 @@ resource "aws_security_group" "ec2" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  ingress {
-    description = "SSH (admin only)"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
+  # Port 22 is optional, and should be off once SSM deploys are working.
+  #
+  # Session Manager already gives a shell on this box (the instance role carries
+  # AmazonSSMManagedInstanceCore), and the deploy no longer connects inbound at all —
+  # it puts the build in S3 and the agent fetches it. That leaves 22 open for nobody,
+  # which is the definition of an unnecessary attack surface on the one port that
+  # grants a shell.
+  #
+  # The rule it replaces was also quietly broken as a deploy path: admin_cidr is a
+  # single home IP, so a hosted CI runner could never have reached it, and the address
+  # stops working the moment the ISP reassigns it.
+  #
+  #   aws ssm start-session --target <instance-id> --region us-east-1
+  dynamic "ingress" {
+    for_each = var.enable_ssh ? [1] : []
+    content {
+      description = "SSH (admin only)"
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = [var.admin_cidr]
+    }
   }
   egress {
     from_port   = 0
