@@ -405,3 +405,114 @@ describe('ConstructionChecklistService.addUnitStage — full field set', () => {
   });
 });
 
+
+/**
+ * Adding many stages in one request. The reason this exists rather than the frontend
+ * looping the single-stage route: the API throttles at 10 requests/second, so a
+ * seventeen-stage template sent as seventeen calls silently lands about half of them and
+ * leaves a checklist that looks complete and is not.
+ */
+describe('ConstructionChecklistService.addUnitStages', () => {
+  beforeEach(() => {
+    mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1', deletedAt: null });
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockPrisma.unitConstructionStage.createMany.mockResolvedValue({ count: 0 });
+  });
+
+  it('appends in the order given, continuing from the last stage', async () => {
+    mockPrisma.unitConstructionStage.findMany
+      .mockResolvedValueOnce([{ label: 'Existing', sortOrder: 4 }])
+      .mockResolvedValueOnce([]);
+    const service = makeService();
+    await service.addUnitStages('u1', ['Rebar', 'Columns', 'Roof'], 'user-1');
+
+    expect(mockPrisma.unitConstructionStage.createMany).toHaveBeenCalledWith({
+      data: [
+        { unitId: 'u1', label: 'Rebar', sortOrder: 5, createdById: 'user-1' },
+        { unitId: 'u1', label: 'Columns', sortOrder: 6, createdById: 'user-1' },
+        { unitId: 'u1', label: 'Roof', sortOrder: 7, createdById: 'user-1' },
+      ],
+    });
+  });
+
+  it('skips a label already on the unit rather than failing the whole batch', async () => {
+    // Selecting one stage twice is a slip; losing the other sixteen over it is not a fix.
+    mockPrisma.unitConstructionStage.findMany
+      .mockResolvedValueOnce([{ label: '  rebar ', sortOrder: 0 }])
+      .mockResolvedValueOnce([]);
+    const service = makeService();
+    const res = await service.addUnitStages('u1', ['Rebar', 'Columns'], 'user-1');
+
+    expect(res.added).toBe(1);
+    expect(res.skipped).toEqual(['Rebar']);
+    expect(mockPrisma.unitConstructionStage.createMany.mock.calls[0][0].data)
+      .toEqual([{ unitId: 'u1', label: 'Columns', sortOrder: 1, createdById: 'user-1' }]);
+  });
+
+  it('collapses the same label repeated within one request', async () => {
+    const service = makeService();
+    const res = await service.addUnitStages('u1', ['Rebar', 'rebar'], 'user-1');
+    expect(res.added).toBe(1);
+    expect(res.skipped).toEqual(['rebar']);
+  });
+
+  it('refuses an empty selection and a unit that does not exist', async () => {
+    const service = makeService();
+    await expect(service.addUnitStages('u1', ['  ', ''], 'user-1'))
+      .rejects.toThrow(BadRequestException);
+
+    mockPrisma.unit.findUnique.mockResolvedValue(null);
+    await expect(service.addUnitStages('nope', ['Rebar'], 'user-1'))
+      .rejects.toThrow(NotFoundException);
+  });
+
+  it('writes nothing when every label is already there', async () => {
+    mockPrisma.unitConstructionStage.findMany
+      .mockResolvedValueOnce([{ label: 'Rebar', sortOrder: 0 }])
+      .mockResolvedValueOnce([]);
+    const service = makeService();
+    const res = await service.addUnitStages('u1', ['Rebar'], 'user-1');
+    expect(res.added).toBe(0);
+    expect(mockPrisma.unitConstructionStage.createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConstructionChecklistService.reorderUnitStages', () => {
+  beforeEach(() => {
+    mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1', deletedAt: null });
+    mockPrisma.unitConstructionStage.update.mockImplementation((a: any) => a);
+  });
+
+  it('parks every stage out of range before settling it, so no two collide mid-move', async () => {
+    mockPrisma.unitConstructionStage.findMany
+      .mockResolvedValueOnce([{ id: 'a' }, { id: 'b' }, { id: 'c' }])
+      .mockResolvedValueOnce([]);
+    const service = makeService();
+    await service.reorderUnitStages('u1', ['c', 'a', 'b'], 'user-1');
+
+    const orders = mockPrisma.unitConstructionStage.update.mock.calls.map(
+      ([arg]: any) => [arg.where.id, arg.data.sortOrder],
+    );
+    expect(orders).toEqual([
+      ['c', -1], ['a', -2], ['b', -3],
+      ['c', 0], ['a', 1], ['b', 2],
+    ]);
+  });
+
+  it('refuses a partial list — it would have to invent positions for the rest', async () => {
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+    const service = makeService();
+    await expect(service.reorderUnitStages('u1', ['a'], 'user-1'))
+      .rejects.toThrow(/every stage on this unit exactly once/);
+    expect(mockPrisma.unitConstructionStage.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stage that is not on this unit, and a repeated one', async () => {
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+    const service = makeService();
+    await expect(service.reorderUnitStages('u1', ['a', 'zzz'], 'user-1'))
+      .rejects.toThrow(/every stage on this unit exactly once/);
+    await expect(service.reorderUnitStages('u1', ['a', 'a'], 'user-1'))
+      .rejects.toThrow(/more than once/);
+  });
+});

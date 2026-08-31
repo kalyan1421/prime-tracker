@@ -648,10 +648,17 @@ export function useDownloadSaleImportTemplate() {
 
 export function usePreviewSaleImport() {
   return useMutation({
-    mutationFn: ({ file, projectId }: { file: File; projectId: string }) => {
+    mutationFn: ({ file, projectId, overrides }: {
+      file: File;
+      projectId: string;
+      /** Per-row corrections typed into the review table, keyed by sheet row number (R11).
+       * Re-validated server-side by the same code that validates the file's own cells. */
+      overrides?: Record<number, Record<string, string>>;
+    }) => {
       const form = new FormData();
       form.append('file', file);
       form.append('projectId', projectId);
+      if (overrides && Object.keys(overrides).length > 0) form.append('overrides', JSON.stringify(overrides));
       return api.post('/sales/backfill/import/preview', form).then((r) => r.data);
     },
   });
@@ -2423,6 +2430,38 @@ export function useApplyConstructionTemplate() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
       qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+    },
+  });
+}
+
+/**
+ * Several stages in ONE request. Never loop useAddUnitConstructionStage to do this — the
+ * API throttles at 10 requests/second and quietly drops the rest, which on a seventeen-
+ * stage template leaves a checklist that looks finished and is missing half its steps.
+ */
+export function useAddUnitConstructionStages() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, labels }: { unitId: string; labels: string[] }) =>
+      api.post(`/construction-checklist/unit/${unitId}/stages`, { labels }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['missing-template-steps', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+    },
+  });
+}
+
+export function useReorderUnitConstructionStages() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, stageIds }: { unitId: string; stageIds: string[] }) =>
+      api.patch(`/construction-checklist/unit/${unitId}/stages/order`, { stageIds }).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
     },
   });
 }

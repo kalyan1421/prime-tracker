@@ -15,10 +15,13 @@ import {
   Button, Chip, Input, Select, SelectItem, Tooltip, Textarea, addToast,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
 } from '@heroui/react';
-import { FiPlus, FiTrash2, FiZap, FiCamera, FiX, FiMessageSquare } from 'react-icons/fi';
+import {
+  FiPlus, FiTrash2, FiZap, FiCamera, FiX, FiMessageSquare, FiChevronUp, FiChevronDown,
+} from 'react-icons/fi';
 import {
   useUnitConstructionStages, useConstructionTemplate, useApplyConstructionTemplate,
-  useAddUnitConstructionStage, useUpdateConstructionStage, useDeleteConstructionStage,
+  useAddUnitConstructionStage, useAddUnitConstructionStages, useUpdateConstructionStage,
+  useReorderUnitConstructionStages, useDeleteConstructionStage,
   useCustomOptions, useUsers, useAddStagePhoto, useRemoveStagePhoto, usePresignedUpload,
   useCreateDailyLog, useDailyLogs,
 } from '../hooks/useApi';
@@ -55,6 +58,7 @@ export function UnitConstructionChecklist({
   const addStage = useAddUnitConstructionStage();
   const updateStage = useUpdateConstructionStage();
   const deleteStage = useDeleteConstructionStage();
+  const reorder = useReorderUnitConstructionStages();
 
   const [adding, setAdding] = useState(false);
 
@@ -68,6 +72,26 @@ export function UnitConstructionChecklist({
       await updateStage.mutateAsync({ stageId, unitId, data });
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to update the stage'), color: 'danger' });
+    }
+  };
+
+  /**
+   * Swap a stage with its neighbour and send the whole resulting order.
+   *
+   * The endpoint takes the complete list rather than "move this one to index N" so the
+   * server never has to guess what happens to the rows in between — and so two people
+   * reordering at once collide loudly instead of interleaving into an order neither of
+   * them asked for.
+   */
+  const move = async (index: number, dir: -1 | 1) => {
+    const next = [...stages];
+    const target = index + dir;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    try {
+      await reorder.mutateAsync({ unitId, stageIds: next.map((s) => s.id) });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not reorder the stages'), color: 'danger' });
     }
   };
 
@@ -155,9 +179,37 @@ export function UnitConstructionChecklist({
             </tr>
           </thead>
           <tbody>
-            {stages.map((s) => (
+            {stages.map((s, i) => (
               <tr key={s.id} className="border-t border-gray-100">
-                <td className="px-3 py-2 tabular-nums text-gray-500">{s.sortOrder + 1}</td>
+                <td className="px-3 py-2 tabular-nums text-gray-500">
+                  {canEdit ? (
+                    // Arrows rather than drag-and-drop: this table scrolls sideways and is
+                    // read on a phone at a site, where a drag competes with the scroll.
+                    // Before this the only way to move a stage was to delete and re-add it,
+                    // which threw away its status, dates and notes to change its position.
+                    <div className="flex items-center gap-1">
+                      <span className="w-4">{i + 1}</span>
+                      <div className="flex flex-col">
+                        <button
+                          type="button" aria-label={`Move ${s.label} up`}
+                          disabled={i === 0 || reorder.isPending}
+                          onClick={() => move(i, -1)}
+                          className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:text-gray-500 leading-none"
+                        >
+                          <FiChevronUp size={11} />
+                        </button>
+                        <button
+                          type="button" aria-label={`Move ${s.label} down`}
+                          disabled={i === stages.length - 1 || reorder.isPending}
+                          onClick={() => move(i, 1)}
+                          className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:text-gray-500 leading-none"
+                        >
+                          <FiChevronDown size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : i + 1}
+                </td>
                 <td className="px-3 py-2 font-medium text-gray-800">{s.label}</td>
                 <td className="px-3 py-2 text-gray-700">
                   {s.owner?.name ?? <span className="text-gray-500">—</span>}
@@ -478,6 +530,7 @@ function AddStageModal({
   usedLabels?: string[];
 }) {
   const addStage = useAddUnitConstructionStage();
+  const addStages = useAddUnitConstructionStages();
 
   // A stage name used to be free text only, which is how one unit gets "Store Front Glass",
   // the next "Storefront glass" and a third "SF glass" — three names for one stage, and a
@@ -491,7 +544,9 @@ function AddStageModal({
   const available = template.filter((t) => !used.has(String(t.label).trim().toLowerCase()));
 
   const [mode, setMode] = useState<'template' | 'custom'>(available.length > 0 ? 'template' : 'custom');
-  const [picked, setPicked] = useState('');
+  // A set, not one value: seeding a checklist means taking most of the template at once,
+  // and doing that a stage at a time is seventeen trips through this modal.
+  const [picked, setPicked] = useState<string[]>([]);
   const [label, setLabel] = useState('');
   const [form, setForm] = useState<Record<string, string>>({
     ownerId: '', status: 'NOT_STARTED', inspectionStatus: '', inspectionDate: '',
@@ -500,32 +555,47 @@ function AddStageModal({
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
   const [err, setErr] = useState<string | null>(null);
 
-  const finalLabel = mode === 'template' ? picked.trim() : label.trim();
+  const toggle = (l: string) => setPicked((p) => (
+    p.includes(l) ? p.filter((x) => x !== l) : [...p, l]
+  ));
+  const allPicked = available.length > 0 && picked.length === available.length;
 
   const submit = async () => {
-    if (!finalLabel) {
-      setErr(mode === 'template' ? 'Pick a stage from the list.' : 'Give the stage a name.');
-      return;
-    }
-    // Catches the case the picker cannot: a typed name that matches a stage already here.
-    if (used.has(finalLabel.toLowerCase())) {
-      setErr(`"${finalLabel}" is already on this unit's checklist.`);
-      return;
-    }
     setErr(null);
     try {
-      await addStage.mutateAsync({
-        unitId,
-        label: finalLabel,
-        ownerId: form.ownerId || null,
-        status: form.status || undefined,
-        inspectionStatus: form.inspectionStatus || null,
-        inspectionDate: form.inspectionDate || null,
-        startsOn: form.startsOn || null,
-        endsOn: form.endsOn || null,
-        notes: form.notes.trim() || null,
-      });
-      addToast({ title: `Added "${finalLabel}"`, color: 'success' });
+      if (mode === 'template') {
+        if (picked.length === 0) { setErr('Pick at least one stage.'); return; }
+        // Added in template order regardless of the order they were ticked in — the
+        // template's order is the order the work happens in, and a checklist that came
+        // out shuffled because of the sequence someone clicked would be worse than
+        // useless. Reordering afterwards is a deliberate act, on the grid.
+        const labels = available.filter((t: any) => picked.includes(t.label)).map((t: any) => t.label);
+        const res = await addStages.mutateAsync({ unitId, labels });
+        addToast({
+          title: `Added ${res.added} stage${res.added === 1 ? '' : 's'}`,
+          color: 'success',
+        });
+      } else {
+        const finalLabel = label.trim();
+        if (!finalLabel) { setErr('Give the stage a name.'); return; }
+        // Catches what the picker cannot: a typed name matching a stage already here.
+        if (used.has(finalLabel.toLowerCase())) {
+          setErr(`"${finalLabel}" is already on this unit's checklist.`);
+          return;
+        }
+        await addStage.mutateAsync({
+          unitId,
+          label: finalLabel,
+          ownerId: form.ownerId || null,
+          status: form.status || undefined,
+          inspectionStatus: form.inspectionStatus || null,
+          inspectionDate: form.inspectionDate || null,
+          startsOn: form.startsOn || null,
+          endsOn: form.endsOn || null,
+          notes: form.notes.trim() || null,
+        });
+        addToast({ title: `Added "${finalLabel}"`, color: 'success' });
+      }
       onClose();
     } catch (e) {
       setErr(errMsg(e, 'Could not add the stage'));
@@ -566,15 +636,43 @@ function AddStageModal({
           )}
 
           {mode === 'template' && available.length > 0 ? (
-            <Select
-              size="sm" label="Stage" selectedKeys={picked ? new Set([picked]) : new Set()}
-              onSelectionChange={(k) => setPicked((Array.from(k)[0] as string) ?? '')}
-              description={`${available.length} of this building's ${template.length} template stages are not on this unit yet.`}
-            >
-              {available.map((t: any) => (
-                <SelectItem key={t.label} textValue={t.label}>{t.label}</SelectItem>
-              ))}
-            </Select>
+            <div className="rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                <span className="text-xs text-gray-500">
+                  {picked.length} of {available.length} selected
+                  <span className="text-gray-500">
+                    {' '}· {available.length} of this building's {template.length} template stages
+                    {' '}{available.length === 1 ? 'is' : 'are'} not on this unit yet
+                  </span>
+                </span>
+                <Button
+                  size="sm" variant="light"
+                  onPress={() => setPicked(allPicked ? [] : available.map((t: any) => t.label))}
+                >
+                  {allPicked ? 'Clear' : 'Select all'}
+                </Button>
+              </div>
+              <div className="max-h-56 overflow-y-auto p-1">
+                {available.map((t: any) => (
+                  <label
+                    key={t.label}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 accent-blue-600"
+                      checked={picked.includes(t.label)}
+                      onChange={() => toggle(t.label)}
+                    />
+                    <span>{t.label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-500">
+                Added in template order. Owner, status and dates are set per stage on the
+                checklist — a date that fits seventeen stages at once does not exist.
+              </p>
+            </div>
           ) : (
             <Input
               size="sm" label="Stage name" value={label} onValueChange={setLabel}
@@ -587,6 +685,10 @@ function AddStageModal({
             />
           )}
 
+          {/* Per-stage detail, so only for the single-stage path. These fields cannot
+              mean anything applied to a batch: one inspection date across seventeen
+              stages is not a shortcut, it is seventeen wrong dates. */}
+          {mode === 'custom' && (<>
           <div className="grid gap-2 sm:grid-cols-2">
             <Select
               size="sm" label="Owner" selectedKeys={form.ownerId ? new Set([form.ownerId]) : new Set()}
@@ -623,10 +725,16 @@ function AddStageModal({
 
           <Textarea size="sm" minRows={2} label="Note" value={form.notes}
             onValueChange={set('notes')} placeholder="Optional" />
+          </>)}
         </ModalBody>
         <ModalFooter>
           <Button size="sm" variant="light" onPress={onClose}>Cancel</Button>
-          <Button size="sm" color="primary" onPress={submit} isLoading={addStage.isPending}>Add stage</Button>
+          <Button
+            size="sm" color="primary" onPress={submit}
+            isLoading={addStage.isPending || addStages.isPending}
+          >
+            {mode === 'template' && picked.length > 1 ? `Add ${picked.length} stages` : 'Add stage'}
+          </Button>
         </ModalFooter>
       </ModalContent>
     </Modal>

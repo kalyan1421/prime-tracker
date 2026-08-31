@@ -7,7 +7,9 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { AddTemplateItemDto } from './dto/template-item.dto';
-import { AddUnitStageDto, UpdateUnitStageDto } from './dto/unit-stage.dto';
+import {
+  AddUnitStageDto, AddUnitStagesDto, ReorderUnitStagesDto, UpdateUnitStageDto,
+} from './dto/unit-stage.dto';
 
 @ApiTags('Construction Checklist')
 @ApiBearerAuth()
@@ -74,6 +76,36 @@ export class ConstructionChecklistController {
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.addUnitStage(unitId, body, userId);
+  }
+
+  // One request, not a loop of the route above: the 10 req/sec throttle silently truncates
+  // a seventeen-stage batch sent as seventeen calls.
+  @Post('unit/:unitId/stages')
+  @RequirePermissions('checklist:edit')
+  @ApiOperation({
+    summary: 'Add several stages to a unit at once',
+    description: 'Appended in the order given. Labels already on the unit are skipped, not rejected.',
+  })
+  addUnitStages(
+    @Param('unitId') unitId: string,
+    @Body() body: AddUnitStagesDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.addUnitStages(unitId, body.labels, userId);
+  }
+
+  @Patch('unit/:unitId/stages/order')
+  @RequirePermissions('checklist:edit')
+  @ApiOperation({
+    summary: "Reorder a unit's stages",
+    description: 'The payload must list every stage on the unit exactly once.',
+  })
+  reorderUnitStages(
+    @Param('unitId') unitId: string,
+    @Body() body: ReorderUnitStagesDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.reorderUnitStages(unitId, body.stageIds, userId);
   }
 
   @Patch('stage/:stageId')

@@ -148,6 +148,113 @@ export class ConstructionChecklistService {
   }
 
   /**
+   * Add SEVERAL stages in one call, appended in the order given.
+   *
+   * One request, one transaction, rather than the frontend looping addUnitStage: the API
+   * is rate limited at 10 requests/second, so a loop adding seventeen template stages
+   * silently lands about half of them and leaves a checklist that looks complete and is
+   * not. Picking "all of them" is the normal case here, so this cannot be the slow path.
+   *
+   * Unlike applyTemplate this does NOT require the unit to be empty — its whole purpose is
+   * topping up a checklist that already exists. Labels already on the unit are skipped
+   * rather than rejected: selecting a stage twice is a slip, not a reason to lose the
+   * other sixteen. What was skipped comes back so the caller can say so.
+   */
+  async addUnitStages(unitId: string, labels: string[], userId?: string) {
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: unitId },
+      select: { id: true, deletedAt: true },
+    });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    const cleaned = labels.map((l) => (l ?? '').trim()).filter(Boolean);
+    if (cleaned.length === 0) throw new BadRequestException('Pick at least one stage to add.');
+
+    const existing = await this.prisma.unitConstructionStage.findMany({
+      where: { unitId },
+      select: { label: true, sortOrder: true },
+    });
+    const taken = new Set(existing.map((s) => s.label.trim().toLowerCase()));
+
+    // Deduplicate within the request too, so the same label twice in one payload adds one.
+    const toAdd: string[] = [];
+    const skipped: string[] = [];
+    for (const label of cleaned) {
+      const key = label.toLowerCase();
+      if (taken.has(key)) { skipped.push(label); continue; }
+      taken.add(key);
+      toAdd.push(label);
+    }
+
+    if (toAdd.length > 0) {
+      const last = existing.reduce((max, s) => Math.max(max, s.sortOrder), -1);
+      await this.prisma.unitConstructionStage.createMany({
+        data: toAdd.map((label, i) => ({
+          unitId,
+          label,
+          sortOrder: last + 1 + i,
+          createdById: userId ?? null,
+        })),
+      });
+    }
+
+    return { added: toAdd.length, skipped, stages: await this.getUnitStages(unitId) };
+  }
+
+  /**
+   * Put this unit's stages in the given order.
+   *
+   * Checklists are built by picking stages, and picking never happens in the right order —
+   * a stage remembered late belonged at step three. Without this the only remedy was
+   * deleting rows and re-adding them, which throws away their status, inspection, dates and
+   * notes to fix nothing but position.
+   *
+   * The payload must name EVERY stage on the unit exactly once. A partial reorder would
+   * have to invent positions for the rest, and two clients each sending half a list would
+   * interleave into an order neither asked for. Rejecting is the honest failure.
+   */
+  async reorderUnitStages(unitId: string, stageIds: string[], userId?: string) {
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: unitId },
+      select: { id: true, deletedAt: true },
+    });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    const current = await this.prisma.unitConstructionStage.findMany({
+      where: { unitId },
+      select: { id: true },
+    });
+    const currentIds = new Set(current.map((s) => s.id));
+    const seen = new Set(stageIds);
+
+    if (seen.size !== stageIds.length) {
+      throw new BadRequestException('The same stage was listed more than once.');
+    }
+    if (stageIds.length !== currentIds.size || stageIds.some((id) => !currentIds.has(id))) {
+      throw new BadRequestException(
+        'The new order must list every stage on this unit exactly once. Reload the '
+        + 'checklist — it changed since this order was worked out.',
+      );
+    }
+
+    // Two passes through a negative range. sortOrder is not unique in the schema, but a
+    // single pass still walks rows through positions others currently hold, and the
+    // second pass reads cleanly as "nothing is left parked out of range".
+    await this.prisma.$transaction([
+      ...stageIds.map((id, i) => this.prisma.unitConstructionStage.update({
+        where: { id },
+        data: { sortOrder: -(i + 1) },
+      })),
+      ...stageIds.map((id, i) => this.prisma.unitConstructionStage.update({
+        where: { id },
+        data: { sortOrder: i },
+      })),
+    ]);
+
+    return this.getUnitStages(unitId);
+  }
+
+  /**
    * Ad-hoc stage on ONE unit — never affects the template or any other unit.
    *
    * Takes the whole field set rather than just a label: a stage is now created from a form

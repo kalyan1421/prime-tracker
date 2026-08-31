@@ -15,12 +15,12 @@
  *
  * The two AI columns from Phase 4 are not built yet. This page ships without them.
  */
-import { useMemo, useState, memo } from 'react';
+import { useEffect, useMemo, useState, memo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Button, Input, Select, SelectItem, Chip, Tooltip, CircularProgress,
   Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, addToast,
-  Modal, ModalContent, ModalHeader, ModalBody, useDisclosure,
+  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure,
 } from '@heroui/react';
 import {
   FiAlertTriangle, FiChevronDown, FiChevronRight, FiSearch, FiUsers, FiX, FiMessageSquare,
@@ -29,6 +29,7 @@ import {
 import {
   useSiteTracker, useUpdateSiteTracker, useSetUnitAssignees,
   useProjects, useCustomOptions, useAssignableUsers,
+  useConstructionTemplate, useAddUnitConstructionStages,
 } from '../hooks/useApi';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { useDebounced } from '../hooks/useDebounced';
@@ -129,6 +130,11 @@ export default function SiteTrackerPage() {
   // the common job (add a stage to a unit that already exists) and invisible to the role
   // that lives here. This is that job, as its own action.
   const addStage = useDisclosure();
+  // Bringing a unit that already exists ONTO the tracker. Distinct from creating one: a
+  // unit counts as tracked once it has any site work recorded, so this seeds a checklist
+  // rather than inventory. It is the action people were reaching for when they pressed
+  // "New unit" and got a duplicate.
+  const trackUnit = useDisclosure();
   const [editUnit, setEditUnit] = useState<Row | null>(null);
   const [feedUnit, setFeedUnit] = useState<Row | null>(null);
   const openFeed = (row: Row) => { setFeedUnit(row); feedModal.onOpen(); };
@@ -196,7 +202,12 @@ export default function SiteTrackerPage() {
           {/* Primary, because adding a stage to a unit already on the tracker is the
               everyday job here; creating inventory is the rare one. */}
           <PermissionGate permission="checklist:edit">
-            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={addStage.onOpen}>
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={trackUnit.onOpen}>
+              Track a unit
+            </Button>
+          </PermissionGate>
+          <PermissionGate permission="checklist:edit">
+            <Button size="sm" variant="flat" startContent={<FiPlus />} onPress={addStage.onOpen}>
               Add stage
             </Button>
           </PermissionGate>
@@ -304,6 +315,10 @@ export default function SiteTrackerPage() {
 
       {addStage.isOpen && (
         <AddStageToUnitModal rows={rows} onClose={addStage.onClose} />
+      )}
+
+      {trackUnit.isOpen && (
+        <TrackExistingUnitModal projects={projects} onClose={trackUnit.onClose} />
       )}
 
       {/* Unit feed, opened from the update count. Rendered once at page level rather than
@@ -739,6 +754,169 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
         ))}
       </DropdownMenu>
     </Dropdown>
+  );
+}
+
+/**
+ * Bring a unit that already exists onto the tracker.
+ *
+ * "On the tracker" is not "exists" — a portfolio of ~636 units has a dozen under active
+ * construction, and the grid deliberately lists only units with site work recorded against
+ * them. That left no way to say "this one is starting now": the only visible button was
+ * "New unit", so people used it, and got a second copy of a unit they already had.
+ *
+ * Seeding stages is what does it — a unit counts as tracked the moment it has a checklist —
+ * so this is a stage picker over the building's template, not a unit form. All of them is
+ * the common case and is preselected; a fit-out that only needs four steps unticks the rest.
+ * Order is the template's; it is changed afterwards on the checklist, in one place.
+ */
+function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClose: () => void }) {
+  const [projectId, setProjectId] = useState('');
+  const [unitId, setUnitId] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  // includeUntracked is the whole point: the default grid hides exactly the units this
+  // modal exists to find.
+  const { data, isLoading } = useSiteTracker({ projectId, includeUntracked: 'true' });
+  const untracked: Row[] = useMemo(
+    () => (data?.rows ?? []).filter((r: Row) => (r.totalStages ?? 0) === 0),
+    [data],
+  );
+  const unit = untracked.find((r) => r.id === unitId) ?? null;
+
+  const templateQ = useConstructionTemplate(unit?.building.id);
+  const template: any[] = Array.isArray(templateQ.data) ? templateQ.data : [];
+  const addStages = useAddUnitConstructionStages();
+
+  // Preselect everything the moment a unit resolves a template — "all of them" is what
+  // starting a build normally means, and unticking four is less work than ticking thirteen.
+  const templateKey = template.map((t: any) => t.label).join('|');
+  useEffect(() => {
+    setPicked(template.map((t: any) => t.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateKey]);
+
+  const allPicked = template.length > 0 && picked.length === template.length;
+
+  const submit = async () => {
+    if (!unit) { setErr('Pick a unit.'); return; }
+    if (picked.length === 0) { setErr('Pick at least one stage.'); return; }
+    setErr(null);
+    try {
+      const labels = template.filter((t: any) => picked.includes(t.label)).map((t: any) => t.label);
+      const res = await addStages.mutateAsync({ unitId: unit.id, labels });
+      addToast({
+        title: `${unit.unitNumber} is on the tracker with ${res.added} stage${res.added === 1 ? '' : 's'}`,
+        color: 'success',
+      });
+      onClose();
+    } catch (e) {
+      setErr(errMsg(e, 'Could not add the unit to the tracker'));
+    }
+  };
+
+  return (
+    <Modal isOpen onOpenChange={onClose} size="2xl" scrollBehavior="inside">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-0.5">
+          <span className="text-sm font-semibold">Track a unit</span>
+          <span className="text-[11px] font-normal text-gray-500">
+            An existing unit that is not on the tracker yet. Nothing new is created.
+          </span>
+        </ModalHeader>
+        <ModalBody className="pb-4 gap-3">
+          {err && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>
+          )}
+
+          <Select
+            size="sm" label="Property" aria-label="Filter by property"
+            selectedKeys={projectId ? [projectId] : []}
+            onChange={(e) => { setProjectId(e.target.value); setUnitId(''); }}
+          >
+            {projects.map((p: any) => (
+              <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>
+            ))}
+          </Select>
+
+          <Select
+            size="sm" label="Unit" aria-label="Pick a unit to track"
+            selectedKeys={unitId ? [unitId] : []}
+            onChange={(e) => setUnitId(e.target.value)}
+            isDisabled={isLoading || untracked.length === 0}
+            description={
+              isLoading
+                ? 'Loading units…'
+                : untracked.length === 0
+                  ? 'Every unit here is already on the tracker.'
+                  : `${untracked.length} unit${untracked.length === 1 ? '' : 's'} not on the tracker yet.`
+            }
+          >
+            {untracked.map((r) => (
+              <SelectItem key={r.id} textValue={`${r.unitNumber} · ${r.building.name}`}>
+                {r.unitNumber} · {r.building.name}
+              </SelectItem>
+            ))}
+          </Select>
+
+          {unit && template.length === 0 && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {unit.building.name} has no stage template yet, so there is nothing to seed from.
+              Set one up on the building, or open the unit and add stages by hand.
+            </p>
+          )}
+
+          {unit && template.length > 0 && (
+            <div className="rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                <span className="text-xs text-gray-500">
+                  {picked.length} of {template.length} stages from {unit.building.name}
+                </span>
+                <Button
+                  size="sm" variant="light"
+                  onPress={() => setPicked(allPicked ? [] : template.map((t: any) => t.label))}
+                >
+                  {allPicked ? 'Clear' : 'Select all'}
+                </Button>
+              </div>
+              <div className="max-h-64 overflow-y-auto p-1">
+                {template.map((t: any) => (
+                  <label
+                    key={t.label}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 accent-blue-600"
+                      checked={picked.includes(t.label)}
+                      onChange={() => setPicked((p) => (
+                        p.includes(t.label) ? p.filter((x) => x !== t.label) : [...p, t.label]
+                      ))}
+                    />
+                    <span>{t.label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-500">
+                Added in template order — reorder them on the checklist once the unit is on
+                the tracker.
+              </p>
+            </div>
+          )}
+        </ModalBody>
+        <ModalFooter>
+          <Button size="sm" variant="light" onPress={onClose}>Cancel</Button>
+          <Button
+            size="sm" color="primary" onPress={submit}
+            isDisabled={!unit || picked.length === 0}
+            isLoading={addStages.isPending}
+          >
+            {picked.length > 0 ? `Track with ${picked.length} stage${picked.length === 1 ? '' : 's'}` : 'Track unit'}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
 
