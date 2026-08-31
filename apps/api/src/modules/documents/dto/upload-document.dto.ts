@@ -18,6 +18,23 @@ export class UploadDocumentDto {
   @IsOptional() @IsString()
   unitId?: string;
 
+  /**
+   * Attach this document to a SALE.
+   *
+   * Without it the stage gate could not be satisfied by any route. The gate reads
+   * `document.saleId` (SalesService.assertStageDocumentsAttached), this DTO never carried
+   * the field, and the service never wrote it — so "upload the Deed, NOC and Possession
+   * Certificate to the sale" named a place the app had no way to put anything. Sales could
+   * see exactly why a deal would not close and could do nothing about it.
+   *
+   * A sale-linked document is ALSO linked to the sale's unit, in the service — see
+   * DocumentsService.create. The paperwork for a deal is paperwork about the unit, and
+   * filing it in one place and not the other is how a Deed becomes findable only by
+   * whoever remembers which sale it came in on.
+   */
+  @IsOptional() @IsString()
+  saleId?: string;
+
   @IsOptional() @IsString()
   interiorProjectId?: string;
 

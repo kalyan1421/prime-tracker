@@ -144,6 +144,22 @@ export class DocumentsService {
     return this.withSignedUrls(docs);
   }
 
+  /**
+   * Documents attached to one sale — the set the stage gate actually reads.
+   *
+   * Scoped to `saleId` alone, deliberately, even though every such document also carries
+   * the unit. The gate asks "what is on THIS sale", and a unit with two sales against it
+   * over the years must not let the first deal's Deed satisfy the second's.
+   */
+  async findBySale(saleId: string) {
+    const docs = await this.prisma.document.findMany({
+      where: { saleId, ...DocumentsService.LIVE },
+      include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return this.withSignedUrls(docs);
+  }
+
   async findByInteriorProject(interiorProjectId: string) {
     const docs = await this.prisma.document.findMany({
       where: { interiorProjectId, ...DocumentsService.LIVE },
@@ -158,6 +174,7 @@ export class DocumentsService {
     metadata: {
       projectId?: string;
       unitId?: string;
+      saleId?: string;
       interiorProjectId?: string;
       category?: string;
       displayName?: string;
@@ -170,6 +187,30 @@ export class DocumentsService {
     // orphaning an object in the bucket with no Document row pointing at it.
     const expiresAt = this.parseExpiry(metadata.expiresAt);
 
+    /**
+     * A document filed against a sale is also filed against that sale's unit and project.
+     *
+     * The links are independent columns, not an exactly-one-of, and this is the case that
+     * needs both. A Deed is evidence about the deal (the stage gate reads `saleId`) and
+     * evidence about the unit (whoever opens A-103 next year wants to see it, and will not
+     * know which sale it arrived on). Filing it once, in one of the two places, guarantees
+     * the other audience never finds it.
+     *
+     * Derived here rather than trusted from the caller: a client that sent a mismatched
+     * unitId would file a Deed against the wrong unit, and the sale already knows the
+     * right answer.
+     */
+    let { projectId, unitId } = metadata;
+    if (metadata.saleId) {
+      const sale = await this.prisma.sale.findUnique({
+        where: { id: metadata.saleId },
+        select: { id: true, projectId: true, unitId: true, deletedAt: true },
+      });
+      if (!sale || sale.deletedAt) throw new NotFoundException('Sale not found');
+      unitId = sale.unitId ?? unitId;
+      projectId = sale.projectId ?? projectId;
+    }
+
     // Custom display name (optional). Preserve the original file extension so
     // View/Download keep the right type even when the user renames it.
     const customName = metadata.displayName?.trim();
@@ -179,9 +220,9 @@ export class DocumentsService {
       ? (ext && !customName.toLowerCase().endsWith(ext.toLowerCase()) ? customName + ext : customName)
       : file.originalname;
     let projectName: string | undefined;
-    if (metadata.projectId) {
+    if (projectId) {
       const project = await this.prisma.project.findUnique({
-        where: { id: metadata.projectId },
+        where: { id: projectId },
         select: { name: true },
       });
       projectName = project?.name;
@@ -192,7 +233,7 @@ export class DocumentsService {
       file.mimetype,
       file.originalname,
       {
-        projectId: metadata.projectId,
+        projectId,
         projectName,
         category: metadata.category,
       },
@@ -200,8 +241,9 @@ export class DocumentsService {
 
     const created = await this.prisma.document.create({
       data: {
-        projectId: metadata.projectId || null,
-        unitId: metadata.unitId || null,
+        projectId: projectId || null,
+        unitId: unitId || null,
+        saleId: metadata.saleId || null,
         interiorProjectId: metadata.interiorProjectId || null,
         fileName,
         fileUrl: publicUrl,

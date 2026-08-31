@@ -832,3 +832,93 @@ describe('DocumentRetentionService — purge policy', () => {
     expect(recent.storagePath).toBeNull();
   });
 });
+
+// ============================================================================
+// Sale-attached documents — the stage gate's missing half
+// ============================================================================
+//
+// SalesService.assertStageDocumentsAttached reads `document.saleId` to decide whether a
+// sale may advance. Until this existed nothing could WRITE that column: the upload DTO had
+// no saleId and create() never set one. So "upload the Deed, NOC and Possession Certificate
+// to the sale's documents" named a place the app had no route to — the CLOSED gate was
+// unsatisfiable through the UI, and Sales could read exactly why a deal would not close and
+// do nothing about it.
+
+describe('DocumentsService.create — attaching to a sale', () => {
+  let service: DocumentsService;
+  let prisma: any;
+  let storage: any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma = {
+      project: { findUnique: jest.fn().mockResolvedValue({ name: 'Rio Ranch' }) },
+      sale: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 's1', projectId: 'pr-from-sale', unitId: 'u-from-sale', deletedAt: null,
+        }),
+      },
+      document: {
+        create: jest.fn((args: any) => Promise.resolve({ id: 'd1', category: DocCategory.DEED, ...args.data })),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    storage = {
+      upload: jest.fn().mockResolvedValue({ storagePath: 'p/deed.pdf', publicUrl: 'https://s3/deed.pdf' }),
+      signedUrl: jest.fn().mockResolvedValue('https://s3/signed'),
+    };
+    service = new DocumentsService(prisma, storage);
+  });
+
+  it('files the document against the sale AND its unit and project', async () => {
+    // Both, not either: a Deed is evidence about the deal (the gate reads saleId) and about
+    // the unit (whoever opens it next year will not know which sale it arrived on).
+    await service.create(file(), { saleId: 's1', category: 'DEED' }, 'user-1');
+
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      saleId: 's1',
+      unitId: 'u-from-sale',
+      projectId: 'pr-from-sale',
+      category: 'DEED',
+    });
+  });
+
+  it('derives the unit from the sale rather than trusting the caller', async () => {
+    // A client sending a mismatched unitId would otherwise file a Deed against the wrong
+    // unit. The sale already knows the right answer.
+    await service.create(
+      file(),
+      { saleId: 's1', unitId: 'some-other-unit', projectId: 'some-other-project', category: 'DEED' },
+      'user-1',
+    );
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      unitId: 'u-from-sale',
+      projectId: 'pr-from-sale',
+    });
+  });
+
+  it('refuses a sale that does not exist or was deleted, before touching storage', async () => {
+    prisma.sale.findUnique.mockResolvedValue(null);
+    await expect(service.create(file(), { saleId: 'nope' }, 'user-1'))
+      .rejects.toThrow(NotFoundException);
+    expect(storage.upload).not.toHaveBeenCalled();
+
+    prisma.sale.findUnique.mockResolvedValue({ id: 's1', projectId: 'p', unitId: 'u', deletedAt: new Date() });
+    await expect(service.create(file(), { saleId: 's1' }, 'user-1'))
+      .rejects.toThrow(NotFoundException);
+  });
+
+  it('leaves saleId null for an ordinary upload', async () => {
+    await service.create(file(), { projectId: 'pr1', unitId: 'u1' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      saleId: null, unitId: 'u1', projectId: 'pr1',
+    });
+    expect(prisma.sale.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('lists by sale alone, never widening to the unit', async () => {
+    // A unit that sold twice must not let the first deal's Deed answer for the second.
+    await service.findBySale('s1');
+    expect(prisma.document.findMany.mock.calls[0][0].where).toEqual({ saleId: 's1', deletedAt: null });
+  });
+});

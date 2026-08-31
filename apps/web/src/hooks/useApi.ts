@@ -1942,12 +1942,14 @@ export function useAddContractPayment() {
 }
 
 // ---- Documents ----
-export function useDocuments(params: { projectId?: string; unitId?: string; buildingId?: string; interiorProjectId?: string }) {
+export function useDocuments(params: {
+  projectId?: string; unitId?: string; buildingId?: string; saleId?: string; interiorProjectId?: string;
+}) {
   const can = useCan('document:view');
   return useQuery({
     queryKey: ['documents', params],
     queryFn: () => api.get('/documents', { params }).then((r) => r.data),
-    enabled: can && (!!(params.projectId || params.unitId || params.interiorProjectId)),
+    enabled: can && (!!(params.projectId || params.unitId || params.saleId || params.interiorProjectId)),
     staleTime: 0, // S3 signed URLs must always be fresh — never serve from cache
   });
 }

@@ -27,6 +27,7 @@ import { RentCollectionPanel } from '../components/RentCollectionPanel';
 import { CancelSaleModal } from '../components/CancelSaleModal';
 import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
+import { SaleGateDocuments } from '../components/SaleGateDocuments';
 import {
   useProject, useFinancialSummary, useBudgetByBuildingUnitReport, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useDeleteLoan, useCommitments, useBuildings,
@@ -4542,6 +4543,10 @@ function SalesTab({ projectId }: { projectId: string }) {
   const [saleFormError, setSaleFormError] = useState<string | null>(null);
   const handleSaleFormClose = () => { setSaleFormError(null); onFormClose(); };
   const [editId, setEditId] = useState<string | null>(null);
+  // The stage the sale is ALREADY in, kept apart from form.status (the target being
+  // chosen). The document gate is charged per rung CROSSED, so it needs both: a sale
+  // already Under Contract moving to Closed owes three documents, not five.
+  const [editStatus, setEditStatus] = useState('PROSPECT');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [paySale, setPaySale] = useState<any>(null);
   const [cancelSale, setCancelSale] = useState<any>(null);
@@ -4559,12 +4564,14 @@ function SalesTab({ projectId }: { projectId: string }) {
 
   const openCreate = () => {
     setEditId(null);
+    setEditStatus('PROSPECT');
     setForm({ ...EMPTY_SALE, unitId: units[0]?.id || '' });
     setSaleFormError(null);
     onFormOpen();
   };
   const openEdit = (s: any) => {
     setEditId(s.id);
+    setEditStatus(s.status || 'PROSPECT');
     setForm({
       unitId: s.unitId || s.unit?.id || '',
       buyer: s.buyer || s.buyerName || '',
@@ -4835,6 +4842,13 @@ function SalesTab({ projectId }: { projectId: string }) {
               setForm={setForm}
               unitOptions={units}
               formError={saleFormError}
+            />
+            {/* The gate's paperwork, where the refusal is read. Renders only when the
+                chosen stage actually owes something. */}
+            <SaleGateDocuments
+              saleId={editId ?? undefined}
+              currentStatus={editStatus}
+              targetStatus={form.status}
             />
           </ModalBody>
           <ModalFooter>

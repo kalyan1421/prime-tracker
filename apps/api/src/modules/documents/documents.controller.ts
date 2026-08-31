@@ -70,14 +70,19 @@ export class DocumentsController {
 
   @Get()
   @RequirePermissions('document:view')
-  @ApiOperation({ summary: 'List documents by projectId, buildingId, unitId, or interiorProjectId' })
+  @ApiOperation({ summary: 'List documents by projectId, buildingId, unitId, saleId, or interiorProjectId' })
   find(
     @Query('projectId') projectId: string,
     @Query('unitId') unitId: string,
     @Query('buildingId') buildingId?: string,
+    @Query('saleId') saleId?: string,
     @Query('interiorProjectId') interiorProjectId?: string,
   ) {
     if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId);
+    // Before unitId: a sale-scoped read must not widen to the unit's whole file. The stage
+    // gate asks what is on THIS sale, and a unit that sold twice would otherwise let the
+    // first deal's Deed answer for the second.
+    if (saleId) return this.service.findBySale(saleId);
     if (unitId) return this.service.findByUnit(unitId);
     if (buildingId) return this.service.findByBuilding(buildingId);
     return this.service.findByProject(projectId);
