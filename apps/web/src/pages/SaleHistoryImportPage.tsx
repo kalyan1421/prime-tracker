@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardBody, CardHeader, Button, Chip, Select, SelectItem, Input, addToast } from '@heroui/react';
-import { FiArrowLeft, FiDownload, FiUpload, FiCheckCircle, FiAlertTriangle } from 'react-icons/fi';
+import { FiArrowLeft, FiDownload, FiUpload, FiCheckCircle, FiAlertTriangle, FiEdit3, FiSkipForward } from 'react-icons/fi';
 import {
   useDownloadSaleImportTemplate, usePreviewSaleImport, useCommitSaleImport,
-  useBuildings, useCreateBuilding, useCreateUnit, useCustomOptions,
+  useBuildings, useCreateBuilding, useCreateUnit, useCustomOptions, useBrokers,
 } from '../hooks/useApi';
 import { errMsg, fmt, fmtDate } from '../utils/fmt';
 import {
@@ -18,11 +18,60 @@ import { BUILDING_TYPES } from '../components/BuildingFormModal';
  * (R1/R2). Same three-step shape: nothing is written until the preview is reviewed and
  * explicitly confirmed. See docs/client-discovery/HISTORICAL_DATA_SHEET_IMPORT_SPEC.md.
  *
+ * Missing values (R11): a row blocked only by a blank or wrong cell — no closing date, no
+ * price, an unmatched broker — is fixable in place. The Status cell renders an input for
+ * exactly the fields that row's errors name; "Apply corrections & re-check" re-runs the
+ * same preview endpoint with those values, so a typed-in date is validated (and a typed-in
+ * unit number resolved) by the very same server code that reads the cells. Nothing is
+ * written to the spreadsheet and nothing is written to the database until Import.
+ *
  * Missing buildings/units (R10): a row can fail to resolve because the unit doesn't
  * exist yet, or because its building doesn't. Both are offered as an explicit,
  * reviewed create step before re-checking the file — never silent, since a wrong guess
  * here (wrong building, wrong type) is real inventory a human then has to notice and fix.
  */
+/**
+ * Which blocked fields a reviewer can retype in place (R11), and how a row's error text
+ * maps to them. Matching on the error strings — rather than re-deriving "what's missing"
+ * from the row data — keeps the offer honest: an input appears only for a field the server
+ * itself has objected to, so a wording change on the server can never leave a stale editor
+ * behind that silently does nothing.
+ *
+ * Deliberately NOT offered: the optional payment/commission fields. A row is never blocked
+ * on them, and quietly typing a deposit into an import preview is a data-entry path nobody
+ * asked for — those belong on the sale itself after import.
+ */
+const FIXABLE_FIELDS: {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'date' | 'broker' | 'building';
+  matches: (err: string) => boolean;
+}[] = [
+  {
+    key: 'unitNumber', label: 'Unit Number', type: 'text',
+    matches: (e) => e.startsWith('Unit Number is required')
+      || e.includes('was not found in this project')
+      || e.includes('exists in more than one building'),
+  },
+  {
+    key: 'building', label: 'Building', type: 'building',
+    matches: (e) => e.includes('exists in more than one building') || e.includes('— not "'),
+  },
+  { key: 'buyer', label: 'Buyer', type: 'text', matches: (e) => e.startsWith('Buyer is required') },
+  {
+    key: 'purchasePrice', label: 'Purchase Price', type: 'number',
+    matches: (e) => e.startsWith('Purchase Price is required') || e.startsWith('Purchase Price "'),
+  },
+  {
+    key: 'closingDate', label: 'Closing Date', type: 'date',
+    matches: (e) => e.startsWith('Closing Date'),
+  },
+  {
+    key: 'brokerName', label: 'Broker', type: 'broker',
+    matches: (e) => e.startsWith('Broker "') || e.includes('no Broker Name was set'),
+  },
+];
+
 export default function SaleHistoryImportPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -37,6 +86,9 @@ export default function SaleHistoryImportPage() {
   const createBuilding = useCreateBuilding();
   const unitTypes = useCustomOptions('unit_type');
   const createUnit = useCreateUnit();
+  // Only for the inline broker fix — a user without broker:view gets a plain name input
+  // instead (the server resolves by name either way).
+  const brokers = useBrokers();
 
   const [fileName, setFileName] = useState<string | null>(null);
   const [preview, setPreview] = useState<any | null>(null);
@@ -45,27 +97,58 @@ export default function SaleHistoryImportPage() {
 
   // Per-missing-building-name Type choice, and per-missing-unit-number Building/Type/Sqft
   // choice — same shape and reasoning as RentHistoryImportPage's missing-unit step.
+  // Per-row typed-in corrections (R11), keyed by the sheet's own row number. `appliedEdits`
+  // is the serialized set the CURRENT preview was produced from — anything typed since is
+  // unchecked, which is why Import is held until it has been re-checked.
+  const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
+  /** Values in the fill-every-row bar — staging only; they do nothing until applied. */
+  const [bulkValues, setBulkValues] = useState<Record<string, string>>({});
+  const [appliedEdits, setAppliedEdits] = useState('{}');
+
   const [missingBuildingTypes, setMissingBuildingTypes] = useState<Record<string, string>>({});
   const [missingUnitDefaults, setMissingUnitDefaults] = useState<Record<string, { buildingId: string; unitType: string; sqft: string }>>({});
   const [creatingBuildings, setCreatingBuildings] = useState(false);
   const [creatingUnits, setCreatingUnits] = useState(false);
 
-  const handleFilePicked = async (file: File) => {
+  const runPreview = async (file: File, overrides: Record<number, Record<string, string>>) => {
     if (!projectId) return;
-    setFileName(file.name);
-    setResult(null);
-    setLastFile(file);
     try {
-      const data = await previewImport.mutateAsync({ file, projectId });
+      const data = await previewImport.mutateAsync({ file, projectId, overrides });
       setPreview(data);
+      setAppliedEdits(JSON.stringify(overrides));
     } catch (e) {
       addToast({ title: errMsg(e, 'Could not read this file'), color: 'danger' });
       setPreview(null);
     }
   };
 
-  const rerunPreview = async () => {
-    if (lastFile) await handleFilePicked(lastFile);
+  // A new file resets the corrections: they're keyed by row number, and row 7 of another
+  // file is a different sale.
+  const handleFilePicked = async (file: File) => {
+    if (!projectId) return;
+    setFileName(file.name);
+    setResult(null);
+    setLastFile(file);
+    setEdits({});
+    await runPreview(file, {});
+  };
+
+  /** Re-checks the same file, carrying whatever corrections have been typed so far. */
+  const rerunPreview = async (overrides = edits) => {
+    if (lastFile) await runPreview(lastFile, overrides);
+  };
+
+  const editsDirty = JSON.stringify(edits) !== appliedEdits;
+  const editedRowCount = Object.keys(edits).length;
+
+  const setEdit = (rowNumber: number, field: string, value: string) => {
+    setEdits((s) => ({ ...s, [rowNumber]: { ...s[rowNumber], [field]: value } }));
+  };
+
+  const clearEdits = async () => {
+    setEdits({});
+    setBulkValues({});
+    await rerunPreview({});
   };
 
   // Rows whose unit didn't resolve because the unit truly doesn't exist (not because of a
@@ -184,7 +267,9 @@ export default function SaleHistoryImportPage() {
       const data = await commitImport.mutateAsync(readyRows);
       setResult(data);
       addToast({
-        title: `Imported ${data.imported} sale${data.imported === 1 ? '' : 's'}${data.failed ? `, ${data.failed} failed` : ''}`,
+        title: `Imported ${data.imported} sale${data.imported === 1 ? '' : 's'}`
+          + `${data.skipped ? `, ${data.skipped} already recorded` : ''}`
+          + `${data.failed ? `, ${data.failed} failed` : ''}`,
         color: data.failed ? 'warning' : 'success',
       });
     } catch (e) {
@@ -199,7 +284,79 @@ export default function SaleHistoryImportPage() {
     setLastFile(null);
     setMissingBuildingTypes({});
     setMissingUnitDefaults({});
+    setEdits({});
+    setBulkValues({});
+    setAppliedEdits('{}');
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  /**
+   * One editor for one correctable field, used both per row and in the fill-every-row bar
+   * above the table — they must stay literally the same control, or "apply to all" would
+   * quietly accept a value the per-row box would have rejected.
+   *
+   * Both pickers list what the row is actually matched against, so a fix can't fail on a
+   * typo the way retyping a name would; each falls back to free text when its list is
+   * empty (a user without broker:view still gets to fix a row).
+   */
+  const renderFixInput = (
+    f: (typeof FIXABLE_FIELDS)[number],
+    value: string,
+    onValue: (v: string) => void,
+  ) => {
+    const options: string[] | null =
+      f.type === 'broker' ? ((brokers.data as any[]) || []).map((b: any) => b.name)
+        : f.type === 'building' ? ((buildings.data as any[]) || []).map((b: any) => b.name)
+          : null;
+    if (options && options.length > 0) {
+      const blank = f.type === 'broker' ? 'No broker' : 'Any building';
+      return (
+        <Select
+          key={f.key} size="sm" label={f.label} className="max-w-[180px]"
+          selectedKeys={value ? [value] : []}
+          onSelectionChange={(keys) => onValue((Array.from(keys)[0] as string) || '')}
+        >
+          {[
+            <SelectItem key="" textValue={blank}>{blank}</SelectItem>,
+            ...options.map((n: string) => <SelectItem key={n} textValue={n}>{n}</SelectItem>),
+          ]}
+        </Select>
+      );
+    }
+    return (
+      <Input
+        key={f.key}
+        size="sm"
+        label={f.label}
+        className={f.type === 'date' ? 'max-w-[170px]' : 'max-w-[160px]'}
+        type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}
+        value={value}
+        onChange={(e) => onValue(e.target.value)}
+      />
+    );
+  };
+
+  // Rows still blocked, and which correctable field each is waiting on. Drives both the
+  // fill-every-row bar and the plain-English "why is Import still 0" line — a 38-row file
+  // whose rows all need the same missing column should not be fixed 38 times by hand.
+  const blockedRows: any[] = preview ? preview.sales.filter((r: any) => r.status === 'error') : [];
+  const rowsNeeding = (f: (typeof FIXABLE_FIELDS)[number]) =>
+    blockedRows.filter((r: any) => r.errors.some(f.matches));
+  const bulkFields = FIXABLE_FIELDS.filter((f) => rowsNeeding(f).length >= 2);
+  // Blocked by something no input here can fix — a combined "812, 814" reference, a unit
+  // that has to be created first. Counted separately so the fixable count stays honest.
+  const unfixableCount = blockedRows.filter(
+    (r: any) => !FIXABLE_FIELDS.some((f) => r.errors.some(f.matches)),
+  ).length;
+
+  /** Fills one field on every row that is blocked on it, still editable per row after. */
+  const fillAll = (f: (typeof FIXABLE_FIELDS)[number], value: string) => {
+    const targets = rowsNeeding(f);
+    setEdits((s) => {
+      const next = { ...s };
+      for (const r of targets) next[r.rowNumber] = { ...next[r.rowNumber], [f.key]: value };
+      return next;
+    });
   };
 
   return (
@@ -276,15 +433,69 @@ export default function SaleHistoryImportPage() {
             <p className="font-semibold text-sm">3. Review before importing</p>
             <div className="flex gap-2 mt-1">
               <Chip size="sm" color="success" variant="flat">{preview.summary.ready} ready</Chip>
+              {preview.summary.duplicates > 0 && (
+                <Chip size="sm" variant="flat">{preview.summary.duplicates} already imported</Chip>
+              )}
               {preview.summary.errors > 0 && (
                 <Chip size="sm" color="danger" variant="flat">{preview.summary.errors} with errors</Chip>
               )}
               {preview.orphaned.length > 0 && (
                 <Chip size="sm" color="warning" variant="flat">{preview.orphaned.length} unmatched commission row(s)</Chip>
               )}
+              {editedRowCount > 0 && (
+                <Chip size="sm" variant="flat" startContent={<FiEdit3 className="w-3 h-3" />}>
+                  {editedRowCount} row{editedRowCount === 1 ? '' : 's'} corrected here
+                </Chip>
+              )}
             </div>
+            {preview.summary.errors > 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                A row missing only a value — a closing date, a price, a broker — can be filled in below
+                without touching the spreadsheet. Type it in, then re-check: your entries are validated the
+                same way the file's own cells are.
+              </p>
+            )}
           </CardHeader>
           <CardBody className="space-y-4">
+            {blockedRows.length > 0 && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+                {/* Says plainly why Import reads 0, instead of leaving it to be inferred
+                    from 38 identical red sentences. */}
+                <p className="text-xs text-gray-700">
+                  <span className="font-semibold">{blockedRows.length} row{blockedRows.length === 1 ? '' : 's'} still blocked:</span>{' '}
+                  {[
+                    ...FIXABLE_FIELDS
+                      .filter((f) => rowsNeeding(f).length > 0)
+                      .map((f) => `${rowsNeeding(f).length} ${rowsNeeding(f).length === 1 ? 'needs' : 'need'} a ${f.label}`),
+                    ...(unfixableCount > 0
+                      ? [`${unfixableCount} can't be fixed here — see the notes below the table`] : []),
+                  ].join(' · ')}
+                </p>
+                {bulkFields.length > 0 && (
+                  <>
+                    <p className="text-xs text-gray-500">
+                      Fill one in for every row that's missing it — each row stays editable afterwards, so a
+                      value that's right for most rows and wrong for two is still worth setting here.
+                    </p>
+                    <div className="flex flex-wrap items-end gap-2">
+                      {bulkFields.map((f) => (
+                        <div key={f.key} className="flex items-end gap-1.5">
+                          {renderFixInput(f, bulkValues[f.key] ?? '', (v) => setBulkValues((b) => ({ ...b, [f.key]: v })))}
+                          <Button
+                            size="sm" variant="flat"
+                            isDisabled={!bulkValues[f.key]}
+                            onPress={() => fillAll(f, bulkValues[f.key])}
+                          >
+                            Apply to {rowsNeeding(f).length}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="overflow-x-auto -mx-2">
               <table className="w-full text-xs">
                 <thead>
@@ -298,31 +509,70 @@ export default function SaleHistoryImportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.sales.map((s: any) => (
-                    <tr key={s.rowNumber} className="border-b border-gray-50">
-                      <td className="px-2 py-1.5 text-gray-500 tabular-nums">{s.rowNumber}</td>
-                      <td className="px-2 py-1.5">{s.unitNumber || '—'}</td>
-                      <td className="px-2 py-1.5">{s.buyer || '—'}</td>
-                      <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">
-                        {s.data.closingDate ? fmtDate(s.data.closingDate) : '—'}
-                      </td>
-                      <td className="px-2 py-1.5 tabular-nums">
-                        {s.data.salePrice != null ? fmt(s.data.salePrice) : '—'}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        {s.status === 'ready' ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-700">
-                            <FiCheckCircle className="w-3.5 h-3.5" /> Ready
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-start gap-1 text-rose-700">
-                            <FiAlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                            <span>{s.errors.join(' ')}</span>
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {preview.sales.map((s: any) => {
+                    const rowEdits = edits[s.rowNumber] ?? {};
+                    // An editor is shown for every field this row's errors name, plus any
+                    // field already corrected — so a value just typed stays adjustable
+                    // (and clearable) once the row goes green.
+                    const touched: string[] = [...Object.keys(rowEdits), ...(s.edited ?? [])];
+                    const fields = FIXABLE_FIELDS.filter(
+                      (f) => touched.includes(f.key) || s.errors.some(f.matches),
+                    );
+                    return (
+                      <tr key={s.rowNumber} className="border-b border-gray-50 align-top">
+                        <td className="px-2 py-1.5 text-gray-500 tabular-nums">{s.rowNumber}</td>
+                        <td className="px-2 py-1.5">{s.unitNumber || '—'}</td>
+                        <td className="px-2 py-1.5">{s.buyer || '—'}</td>
+                        <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">
+                          {s.data.closingDate ? fmtDate(s.data.closingDate) : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 tabular-nums">
+                          {s.data.salePrice != null ? fmt(s.data.salePrice) : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 space-y-2">
+                          {s.status === 'ready' && (
+                            <span className="inline-flex items-center gap-1 text-emerald-700">
+                              <FiCheckCircle className="w-3.5 h-3.5" /> Ready
+                            </span>
+                          )}
+                          {/* Not an error and not an action — this row is simply already
+                              done, which is what most of a re-uploaded sheet looks like. */}
+                          {s.status === 'duplicate' && (
+                            <span className="inline-flex items-center gap-1 text-gray-500">
+                              <FiSkipForward className="w-3.5 h-3.5" /> Already imported — will be skipped
+                            </span>
+                          )}
+                          {s.status === 'error' && (
+                            <span className="inline-flex items-start gap-1 text-rose-700">
+                              <FiAlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                              <span>{s.errors.join(' ')}</span>
+                            </span>
+                          )}
+                          {(s.warnings?.length ?? 0) > 0 && (
+                            <span className="inline-flex items-start gap-1 text-amber-700">
+                              <FiAlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                              <span>{s.warnings.join(' ')}</span>
+                            </span>
+                          )}
+                          {(s.edited?.length ?? 0) > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 ml-2">
+                              <FiEdit3 className="w-3 h-3" />
+                              {s.edited.length} value{s.edited.length === 1 ? '' : 's'} entered here, not from the file
+                            </span>
+                          )}
+                          {fields.length > 0 && (
+                            <div className="flex flex-wrap items-end gap-2">
+                              {fields.map((f) => renderFixInput(
+                                f,
+                                rowEdits[f.key] ?? '',
+                                (v) => setEdit(s.rowNumber, f.key, v),
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -513,18 +763,44 @@ export default function SaleHistoryImportPage() {
               </div>
             )}
 
+            {(editedRowCount > 0 || editsDirty) && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 flex flex-wrap items-center gap-2">
+                <p className="text-xs text-blue-800 flex-1 min-w-[240px]">
+                  {editsDirty
+                    ? 'Corrections typed above haven\'t been checked yet — re-check to validate them and see which rows turn green.'
+                    : 'These corrections have been applied to the preview. They live here only: your spreadsheet is untouched, and nothing is saved until you press Import.'}
+                </p>
+                <Button
+                  size="sm" color="primary" variant={editsDirty ? 'solid' : 'flat'}
+                  isLoading={previewImport.isPending}
+                  onPress={() => rerunPreview()}
+                >
+                  Apply corrections &amp; re-check
+                </Button>
+                <Button size="sm" variant="flat" isDisabled={previewImport.isPending} onPress={clearEdits}>
+                  Discard corrections
+                </Button>
+              </div>
+            )}
+
             {!result && (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="flat" onPress={startOver}>Start over</Button>
                 <Button
                   size="sm"
                   color="primary"
-                  isDisabled={preview.summary.ready === 0}
+                  // Held while an unchecked correction exists: the ready count and the rows
+                  // about to be committed are the ones the SERVER last validated, so
+                  // importing now would silently drop what was just typed.
+                  isDisabled={preview.summary.ready === 0 || editsDirty}
                   isLoading={commitImport.isPending}
                   onPress={handleCommit}
                 >
                   Import {preview.summary.ready} ready row{preview.summary.ready === 1 ? '' : 's'}
                 </Button>
+                {editsDirty && (
+                  <span className="text-xs text-gray-500">Re-check your corrections first.</span>
+                )}
               </div>
             )}
           </CardBody>
@@ -539,6 +815,9 @@ export default function SaleHistoryImportPage() {
           <CardBody className="space-y-3">
             <div className="flex gap-2">
               <Chip size="sm" color="success" variant="flat">{result.imported} imported</Chip>
+              {result.skipped > 0 && (
+                <Chip size="sm" variant="flat">{result.skipped} already recorded, skipped</Chip>
+              )}
               {result.failed > 0 && <Chip size="sm" color="danger" variant="flat">{result.failed} failed</Chip>}
             </div>
             {result.failed > 0 && (

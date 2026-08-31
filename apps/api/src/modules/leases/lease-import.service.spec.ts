@@ -668,6 +668,49 @@ describe('LeaseImportService.previewImport', () => {
       expect(preview.tenancies[1].status).toBe('error');
     });
 
+    it('re-points a row at the right unit when the sheet names the wrong one', async () => {
+      const file = await buildFile({ tenancies: [{ ...NO_BROKER, 'Unit Number': '9999' }] });
+      expect((await service.previewImport(file, 'p1')).tenancies[0].errors.join(' '))
+        .toMatch(/was not found in this project/);
+
+      const fixed = await service.previewImport(file, 'p1', { rowOverrides: { 2: { unitNumber: '701' } } });
+      expect(fixed.tenancies[0].status).toBe('ready');
+      expect(fixed.tenancies[0].data.unitId).toBe('u701');
+    });
+
+    it('clears a Building label that never matched, so the unit resolves on its number', async () => {
+      const file = await buildFile({ tenancies: [{ ...NO_BROKER, Building: 'Centro Plaza - Building A' }] });
+      expect((await service.previewImport(file, 'p1')).tenancies[0].errors.join(' '))
+        .toMatch(/as this row states/);
+
+      const fixed = await service.previewImport(file, 'p1', { rowOverrides: { 2: { building: null } } });
+      expect(fixed.tenancies[0].status).toBe('ready');
+      expect(fixed.tenancies[0].data.unitId).toBe('u300');
+    });
+
+    it('picks the right building when one unit number exists in two of them', async () => {
+      mockPrisma.unit.findMany.mockResolvedValue([
+        { id: 'uA', unitNumber: '300', building: { name: 'Building A' } },
+        { id: 'uB', unitNumber: '300', building: { name: 'Building B' } },
+      ]);
+      const file = await buildFile({ tenancies: [{ ...NO_BROKER, Building: null }] });
+      expect((await service.previewImport(file, 'p1')).tenancies[0].errors.join(' '))
+        .toMatch(/exists in more than one building/);
+
+      const fixed = await service.previewImport(file, 'p1', { rowOverrides: { 2: { building: 'Building B' } } });
+      expect(fixed.tenancies[0].status).toBe('ready');
+      expect(fixed.tenancies[0].data.unitId).toBe('uB');
+    });
+
+    it('ignores a malformed override rather than corrupting the parsed row', async () => {
+      const file = await buildFile({ tenancies: [NO_BROKER] });
+      const preview = await service.previewImport(file, 'p1', {
+        rowOverrides: { 2: { unitNumber: { nope: true }, tenantName: 42 } as any },
+      });
+      expect(preview.tenancies[0].status).toBe('ready');
+      expect(preview.tenancies[0].data.unitId).toBe('u300');
+    });
+
     /** A hand-entered rent is just another figure, so a combined deal splits it as usual. */
     it('splits a combined deal from a hand-entered total', async () => {
       const file = await buildFile({

@@ -279,6 +279,18 @@ export interface ImportPreview {
  */
 export interface RowOverride {
   brokerId?: string;
+  /** Which unit this row is about. Correctable here because the sheet's own reference can
+   * simply be wrong — a stale unit number, or a Building label ("Centro Plaza - Building
+   * 2") that never matched the building's real name — and neither is a reason to create
+   * new inventory. The corrected value is resolved by resolveUnit exactly as a parsed one
+   * is; the "create the missing unit/building" flow is untouched and still the answer when
+   * the unit genuinely doesn't exist. */
+  unitNumber?: string;
+  /** Unlike every other field here, an explicit `null` CLEARS the building rather than
+   * meaning "not supplied": dropping a wrong label so the row matches on unit number
+   * alone is a real fix, and the commonest one when a sheet prefixes the project name. */
+  building?: string | null;
+  tenantName?: string;
   leaseStart?: string;
   leaseEnd?: string;
   terminationDate?: string;
@@ -297,6 +309,12 @@ function applyRowOverrides(raw: RawTenancy[], overrides?: Record<number, RowOver
     if (!o) continue;
     // Only fields actually supplied are touched — an absent key must never blank a value
     // the sheet did provide, and '' is treated as "not supplied" for the same reason.
+    // Typed rather than trusted: the preview endpoints hand this map through as parsed
+    // JSON, so a malformed client payload must not reach .trim() (or overwrite a good
+    // sheet value with an object).
+    if (typeof o.unitNumber === 'string' && o.unitNumber.trim()) r.unitNumber = o.unitNumber.trim();
+    if (o.building !== undefined) r.building = typeof o.building === 'string' ? o.building.trim() : '';
+    if (typeof o.tenantName === 'string' && o.tenantName.trim()) r.tenantName = o.tenantName.trim();
     if (o.leaseStart) r.leaseStart = o.leaseStart;
     if (o.leaseEnd) r.leaseEnd = o.leaseEnd;
     if (o.terminationDate) r.terminationDate = o.terminationDate;

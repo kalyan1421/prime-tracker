@@ -18,9 +18,15 @@ import { HISTORICAL_REASONS } from '../components/TenancyBackfillFields';
 
 /** In-progress values typed into one preview row. All strings — parsed on apply. */
 type RowFix = {
+  unitNumber?: string; building?: string; tenantName?: string;
   leaseStart?: string; leaseEnd?: string; terminationDate?: string;
   terminationReason?: string; monthlyRent?: string; brokerId?: string; newBrokerName?: string;
 };
+
+/** Sentinel for the Building picker's "no building" choice, since '' is how HeroUI
+ * reports "nothing selected" — the two have to be told apart, because clearing a wrong
+ * Building label IS the fix when a sheet writes "Centro Plaza - Building 2". */
+const NO_BUILDING = '__none__';
 
 /**
  * Which fields this row can be fixed by hand, derived from the errors it actually has.
@@ -33,6 +39,14 @@ type RowFix = {
 function fixableFields(errors: string[]): Set<keyof RowFix> {
   const f = new Set<keyof RowFix>();
   const has = (fragment: string) => errors.some((e) => e.includes(fragment));
+  // A row can name the wrong unit, or the right unit under a building label that never
+  // matched — both are pointing errors, fixed by re-pointing the row, not by creating
+  // inventory. The "create the missing unit/building" panels below are unchanged and
+  // remain the answer when the unit genuinely isn't in the project.
+  if (has('Unit Number is required') || has('was not found in this project')
+    || has('exists in more than one building')) f.add('unitNumber');
+  if (has('exists in more than one building') || has('as this row states')) f.add('building');
+  if (has('Tenant Name is required')) f.add('tenantName');
   if (has('Lease Start is required')) f.add('leaseStart');
   if (has('Lease End is required')) f.add('leaseEnd');
   if (has('Monthly Rent is required')) f.add('monthlyRent');
@@ -40,6 +54,22 @@ function fixableFields(errors: string[]): Set<keyof RowFix> {
   if (has('Broker "') || has('no Broker Name was set')) f.add('brokerId');
   return f;
 }
+
+/**
+ * The subset of correctable fields worth filling for EVERY row that needs them. A source
+ * sheet that omits a column omits it for all 38 rows, and fixing that 38 times by hand is
+ * the difference between a usable tool and a spreadsheet with extra steps. Each row stays
+ * editable afterwards, so a value right for most rows and wrong for two is still worth
+ * setting here.
+ */
+const BULK_FIELDS: { key: keyof RowFix; label: string; type: 'date' | 'number' | 'reason' | 'building' }[] = [
+  { key: 'building', label: 'Building', type: 'building' },
+  { key: 'leaseStart', label: 'Lease Start', type: 'date' },
+  { key: 'leaseEnd', label: 'Lease End', type: 'date' },
+  { key: 'monthlyRent', label: 'Monthly Rent', type: 'number' },
+  { key: 'terminationReason', label: 'Why it ended', type: 'reason' },
+  { key: 'terminationDate', label: 'Moved out', type: 'date' },
+];
 
 /**
  * Bulk rent-history import (R1/R2/R8) — see
@@ -190,6 +220,26 @@ export default function RentHistoryImportPage() {
     (f) => Object.values(f).some((v) => typeof v === 'string' && v.trim()),
   );
 
+  /** Staging values for the fill-every-row bar — they do nothing until applied. */
+  const [bulkValues, setBulkValues] = useState<Record<string, string>>({});
+
+  const blockedRows: any[] = preview ? preview.tenancies.filter((t: any) => t.status === 'error') : [];
+  const rowsNeeding = (key: keyof RowFix) =>
+    blockedRows.filter((t: any) => fixableFields(t.errors).has(key));
+  const bulkFields = BULK_FIELDS.filter((f) => rowsNeeding(f.key).length >= 2);
+  // Blocked by something no input here can fix — a combined "812, 814" reference, a unit
+  // that has to be created first. Counted apart so the fixable tally stays honest.
+  const unfixableCount = blockedRows.filter((t: any) => fixableFields(t.errors).size === 0).length;
+
+  const fillAll = (key: keyof RowFix, value: string) => {
+    const targets = rowsNeeding(key);
+    setRowFixes((s) => {
+      const next = { ...s };
+      for (const t of targets) next[t.rowNumber] = { ...next[t.rowNumber], [key]: value };
+      return next;
+    });
+  };
+
   /**
    * Applies every typed-in fix at once and re-checks the file.
    *
@@ -222,6 +272,11 @@ export default function RentHistoryImportPage() {
         } else if (fix.brokerId) {
           patch.brokerId = fix.brokerId;
         }
+        if (fix.unitNumber?.trim()) patch.unitNumber = fix.unitNumber.trim();
+        // null, not '' — the server treats an explicit null as "clear this label" and an
+        // absent key as "the sheet's value stands".
+        if (fix.building) patch.building = fix.building === NO_BUILDING ? null : fix.building;
+        if (fix.tenantName?.trim()) patch.tenantName = fix.tenantName.trim();
         if (fix.leaseStart) patch.leaseStart = fix.leaseStart;
         if (fix.leaseEnd) patch.leaseEnd = fix.leaseEnd;
         if (fix.terminationDate) patch.terminationDate = fix.terminationDate;
@@ -427,6 +482,7 @@ export default function RentHistoryImportPage() {
     setMissingUnitDefaults({});
     setMissingBuildingTypes({});
     setRowOverrides({});
+    setBulkValues({});
     setRowFixes({});
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -644,6 +700,79 @@ export default function RentHistoryImportPage() {
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
+            {blockedRows.length > 0 && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+                {/* Says plainly what is holding the import back, instead of leaving it to
+                    be counted off a column of identical red sentences. */}
+                <p className="text-xs text-gray-700">
+                  <span className="font-semibold">
+                    {blockedRows.length} row{blockedRows.length === 1 ? '' : 's'} still blocked:
+                  </span>{' '}
+                  {[
+                    ...BULK_FIELDS
+                      .filter((f) => rowsNeeding(f.key).length > 0)
+                      .map((f) => `${rowsNeeding(f.key).length} ${rowsNeeding(f.key).length === 1 ? 'needs' : 'need'} a ${f.label}`),
+                    ...(rowsNeeding('brokerId').length > 0 ? [`${rowsNeeding('brokerId').length} need a Broker`] : []),
+                    ...(unfixableCount > 0
+                      ? [`${unfixableCount} can't be fixed here — see the notes below the table`] : []),
+                  ].join(' · ')}
+                </p>
+                {bulkFields.length > 0 && (
+                  <>
+                    <p className="text-xs text-gray-500">
+                      Fill one in for every row that's missing it — each row stays editable afterwards.
+                    </p>
+                    <div className="flex flex-wrap items-end gap-2">
+                      {bulkFields.map((f) => (
+                        <div key={f.key} className="flex items-end gap-1.5">
+                          {f.type === 'reason' ? (
+                            <Select
+                              size="sm" label={f.label} className="max-w-[190px]"
+                              selectedKeys={bulkValues[f.key] ? [bulkValues[f.key]] : []}
+                              onSelectionChange={(keys) => setBulkValues((b) => ({ ...b, [f.key]: (Array.from(keys)[0] as string) || '' }))}
+                            >
+                              {HISTORICAL_REASONS.map((r) => (
+                                <SelectItem key={r.key} textValue={r.label}>{r.label}</SelectItem>
+                              ))}
+                            </Select>
+                          ) : f.type === 'building' ? (
+                            <Select
+                              size="sm" label={f.label} className="max-w-[190px]"
+                              selectedKeys={bulkValues[f.key] ? [bulkValues[f.key]] : []}
+                              onSelectionChange={(keys) => setBulkValues((b) => ({ ...b, [f.key]: (Array.from(keys)[0] as string) || '' }))}
+                            >
+                              {[
+                                <SelectItem key={NO_BUILDING} textValue="No building — match by unit number">
+                                  No building — match by unit number
+                                </SelectItem>,
+                                ...((buildings.data as any[]) || []).map((b: any) => (
+                                  <SelectItem key={b.name} textValue={b.name}>{b.name}</SelectItem>
+                                )),
+                              ]}
+                            </Select>
+                          ) : (
+                            <Input
+                              size="sm" label={f.label} className={f.type === 'date' ? 'max-w-[160px]' : 'max-w-[140px]'}
+                              type={f.type === 'date' ? 'date' : 'number'}
+                              value={bulkValues[f.key] ?? ''}
+                              onChange={(e) => setBulkValues((b) => ({ ...b, [f.key]: e.target.value }))}
+                            />
+                          )}
+                          <Button
+                            size="sm" variant="flat"
+                            isDisabled={!bulkValues[f.key]}
+                            onPress={() => fillAll(f.key, bulkValues[f.key])}
+                          >
+                            Apply to {rowsNeeding(f.key).length}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="overflow-x-auto -mx-2">
               <table className="w-full text-xs">
                 <thead>
@@ -725,6 +854,35 @@ export default function RentHistoryImportPage() {
                                   setRowFixes((s) => ({ ...s, [t.rowNumber]: { ...s[t.rowNumber], ...patch } }));
                                 return (
                                   <div className="flex flex-wrap items-end gap-1.5 pt-1">
+                                    {fields.has('unitNumber') && (
+                                      <Input
+                                        size="sm" label="Unit Number" className="max-w-[130px]"
+                                        placeholder={t.unitNumber || undefined}
+                                        value={fix.unitNumber ?? ''} onChange={(e) => set({ unitNumber: e.target.value })}
+                                      />
+                                    )}
+                                    {fields.has('building') && (
+                                      <Select
+                                        size="sm" label="Building" className="max-w-[170px]"
+                                        selectedKeys={fix.building ? [fix.building] : []}
+                                        onSelectionChange={(keys) => set({ building: (Array.from(keys)[0] as string) || '' })}
+                                      >
+                                        {[
+                                          <SelectItem key={NO_BUILDING} textValue="No building — match by unit number">
+                                            No building — match by unit number
+                                          </SelectItem>,
+                                          ...((buildings.data as any[]) || []).map((b: any) => (
+                                            <SelectItem key={b.name} textValue={b.name}>{b.name}</SelectItem>
+                                          )),
+                                        ]}
+                                      </Select>
+                                    )}
+                                    {fields.has('tenantName') && (
+                                      <Input
+                                        size="sm" label="Tenant Name" className="max-w-[170px]"
+                                        value={fix.tenantName ?? ''} onChange={(e) => set({ tenantName: e.target.value })}
+                                      />
+                                    )}
                                     {fields.has('leaseStart') && (
                                       <Input
                                         size="sm" type="date" label="Lease Start" className="max-w-[150px]"

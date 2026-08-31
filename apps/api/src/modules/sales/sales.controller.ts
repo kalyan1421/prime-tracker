@@ -20,7 +20,7 @@ import { TransferSaleUnitDto } from './dto/transfer-sale-unit.dto';
 import { UserRole, SalePaymentTrigger } from '@prisma/client';
 import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
 import { SaleUnitTransferService } from './sale-unit-transfer.service';
-import { SaleImportService } from './sale-import.service';
+import { SaleImportService, normalizeSaleOverrides } from './sale-import.service';
 import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
 
 @ApiTags('Sales')
@@ -109,10 +109,24 @@ export class SalesController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Parse and validate an uploaded sale-history file — no writes' })
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
-  async previewImport(@UploadedFile() file: Express.Multer.File, @Body('projectId') projectId: string) {
+  async previewImport(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('projectId') projectId: string,
+    // Per-row corrections typed into the review UI (R11). Multipart bodies are strings, so
+    // this arrives as JSON text; it is re-validated field by field before being applied.
+    @Body('overrides') overridesJson?: string,
+  ) {
     if (!file) throw new BadRequestException('No file was received');
     if (!projectId) throw new BadRequestException('projectId is required');
-    return this.importService.previewImport(file.buffer, projectId);
+    let parsed: unknown = null;
+    if (overridesJson) {
+      try {
+        parsed = JSON.parse(overridesJson);
+      } catch {
+        throw new BadRequestException('overrides must be valid JSON');
+      }
+    }
+    return this.importService.previewImport(file.buffer, projectId, normalizeSaleOverrides(parsed));
   }
 
   @Post('backfill/import/commit')
