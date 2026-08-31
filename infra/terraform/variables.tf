@@ -114,13 +114,18 @@ variable "enable_ssh" {
   description = <<-EOT
     Keep port 22 open to var.admin_cidr.
 
-    Set false once SSM deploys work: Session Manager gives a shell without an inbound
-    port, so 22 is then an open door nobody uses. Note that admin_cidr is one fixed
-    home IP — it stops being reachable the moment that address changes, which is its
-    own argument for not depending on it.
+    Default is now FALSE: closed in the live account on 2026-09-01, once SSM deploys
+    were working end to end. Shell access is Session Manager, which needs no inbound
+    port; verified after closing that a root shell still works and the app still serves.
+
+    admin_cidr was a liability rather than a safeguard — one fixed home IP, unreachable
+    the moment the ISP reassigns it, and the fix under pressure is always to widen it.
+
+    Re-open only as a deliberate, temporary act:
+      terraform apply -var-file=client.tfvars -var=enable_ssh=true
   EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "app_origin" {

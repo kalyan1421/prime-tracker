@@ -116,16 +116,20 @@ assumption breaks** — the `git remote set-url` line in the document is what ha
 
 ---
 
-## 5. Close port 22
+## 5. Port 22 — closed 2026-09-01
 
-Once a deploy has succeeded end to end:
+**Already done.** The security group now allows only 80 and 443. Verified after the change:
+port 22 unreachable, a root shell over SSM still works, `/api/health` still 200.
+
+`enable_ssh` now defaults to `false`. To re-open temporarily:
 
 ```bash
 terraform apply -var-file=client.tfvars \
-  -var=enable_github_deploy=true -var=enable_ssh=false
+  -var=enable_github_deploy=true -var=enable_ssh=true
 ```
 
-You do not lose shell access — Session Manager gives you one without an inbound port:
+Shell access without it — note this needs `session-manager-plugin` installed locally
+(`brew install --cask session-manager-plugin`); `ssm send-command` works without it:
 
 ```bash
 aws ssm start-session --target i-… --region us-east-1 --profile prime-client
