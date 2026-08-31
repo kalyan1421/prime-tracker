@@ -9,8 +9,9 @@ Two properties, both deliberate:
   SSM to run a document; the agent already on the instance pulls the artifact and releases
   it. Traffic goes *outward* from the box, so there is no inbound path to leave open.
 - **No stored AWS keys.** GitHub mints a short-lived OIDC token per run and AWS trades it
-  for a session, scoped in IAM to this repository's `main` branch. There is no long-lived
-  credential to leak, rotate, or find in a screenshot.
+  for a session, scoped in IAM to this repository's `production` environment — which in
+  turn only `main` may deploy to. There is no long-lived credential to leak, rotate, or
+  find in a screenshot.
 
 ---
 
@@ -38,7 +39,7 @@ All of it in `infra/terraform/github-deploy.tf`, behind `enable_github_deploy`.
 | Resource | Purpose |
 |---|---|
 | `aws_iam_openid_connect_provider.github` | Trusts GitHub's OIDC issuer. **One per account** — import if it already exists (§6) |
-| `aws_iam_role.github_deploy` | What the runner assumes. Trust policy pins `repo:<owner>/<repo>:ref:refs/heads/main` |
+| `aws_iam_role.github_deploy` | What the runner assumes. Trust policy pins `repo:<owner>/<repo>:environment:production` — **not** the ref form, see §9 |
 | `aws_iam_role_policy.github_deploy` | `s3:PutObject` on `releases/*` only; `ssm:SendCommand` on **this document and this instance only**; read command results |
 | `aws_ssm_document.deploy` | The release script itself |
 | `aws_iam_role_policy.ec2_read_releases` | Lets the instance read the artifact it is told to fetch |
@@ -78,8 +79,14 @@ terraform output deploy_document_name     # → SSM_DEPLOY_DOCUMENT
 ## 4. GitHub → Settings → Secrets and variables → Actions
 
 **Environments** — create one named exactly `production` (Settings → Environments). The
-job declares `environment: production`; without it the job errors. Add a required reviewer
-here if you want every production deploy to need a human click.
+job declares `environment: production`; without it the job errors.
+
+Set its **deployment branch policy to `main` only**. This is not optional hardening: the
+IAM trust policy keys on `environment:production`, so the branch restriction lives here and
+nowhere else. Without it, a workflow on any branch could deploy to production.
+
+Add a required reviewer here too if you want every production deploy to need a human click
+— there is none by default, so a merge to `main` ships straight to the client's server.
 
 **Secrets** (2):
 
@@ -145,9 +152,19 @@ terraform import -var-file=client.tfvars \
 
 ## 7. Verify before arming
 
-Run these against the live account. **They were not run when this was written** — the
-`prime-client` SSO token had expired and the account was unreachable, so everything below
-is unverified against the running box.
+**Verified live 2026-09-01** against account `056836825737`. Results at the time:
+
+| Check | Result |
+|---|---|
+| SSM agent | `i-0412241c8f6d080a1` · **Online** · agent `3.3.4793.0` · Ubuntu |
+| OIDC assume from Actions | works (after the `sub` fix — see §9) |
+| Artifact upload | `s3://prime-tracker-app-056836825737/releases/<sha>.tgz` |
+| SSM document run | `Success`, migrations + pm2 restart + health check |
+| API after deploy | `/api/health` → 200 |
+| New routes live | `stage-library` → 401 (exists); unknown route → 404 |
+| Root shell via RunCommand | works |
+
+The commands below are how those were obtained; re-run them after any infra change.
 
 ```bash
 aws sso login --profile prime-client
@@ -205,7 +222,29 @@ containing a destructive migration is not rollback-safe by this route.
 
 ---
 
-## 9. Known limits
+## 9. Two things that failed on the way in
+
+Both cost a real failed deploy, and both are the kind of thing that reads as obvious only
+afterwards.
+
+**The OIDC subject is environment-scoped, not ref-scoped.** The natural trust condition is
+`repo:OWNER/REPO:ref:refs/heads/main`. It is wrong for any job that declares
+`environment:` — GitHub then issues the subject as `repo:OWNER/REPO:environment:NAME`, and
+the assume fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, which names
+neither claim. The branch restriction moves to the environment's deployment branch policy
+(set to `main` only); the two are a pair, and removing that policy would let any branch
+deploy.
+
+**SSM runs the script with `/bin/sh`, not bash.** `aws:runShellScript` writes `_script.sh`
+and executes it with dash on Ubuntu, so a top-level `set -euo pipefail` dies at line 1 with
+`Illegal option -o pipefail` before anything runs. Keep the top level POSIX; the `sudo … bash`
+heredoc is where bashisms belong. Note that checking the extracted script with `bash -n`
+proves nothing here — bash accepts the bashism — and `sh -n` does not catch it either, since
+`set` is a runtime builtin rather than syntax. Grep for it.
+
+---
+
+## 10. Known limits
 
 - **Migrations are not transactional across the deploy.** `prisma migrate deploy` runs
   before the restart; a migration that succeeds followed by an app that fails health check
