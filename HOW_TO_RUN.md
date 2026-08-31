@@ -78,3 +78,28 @@ pnpm --filter @prime-tracker/web dev      # Vite → http://localhost:5173
 - **DB connection refused** → run `pnpm run docker:up` first and wait for healthchecks.
 - **Prisma client out of date** → `cd apps/api && pnpm prisma generate`.
 - **Port already in use** → API on 3001, Web on 5173, Postgres on 5432, Redis on 6379.
+
+---
+
+## Reaching the live environment
+
+```bash
+aws sso login --profile prime-client
+cd infra/terraform && AWS_PROFILE=prime-client terraform output
+```
+
+That prints the current bucket names, Elastic IP, RDS endpoint and deploy role ARN.
+They are read from state rather than written down here on purpose: **this repository is
+public**, and an account id, a role ARN and a set of bucket names are reconnaissance
+material even though none of them is a credential. They also go stale the moment
+anything is rebuilt, and a stale endpoint pasted in a README is worse than no endpoint.
+
+A shell on the API host needs no SSH key and no open port:
+
+```bash
+aws ssm start-session --profile prime-client \
+  --target "$(cd infra/terraform && AWS_PROFILE=prime-client terraform output -raw deploy_instance_id)"
+```
+
+Deploys, monitoring and the runbooks: [`docs/DEPLOY_SSM_SETUP.md`](docs/DEPLOY_SSM_SETUP.md),
+[`docs/MONITORING.md`](docs/MONITORING.md).
