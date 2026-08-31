@@ -12,7 +12,7 @@ import {
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
   useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers, useUnitHistory,
   useTasks,
-  useLeaseRentInvoices, useBackfillTenancy,
+  useLeaseRentInvoices, useBackfillTenancy, useAddSalePayment, useBrokers,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 
@@ -1060,23 +1060,46 @@ export default function UnitDetailPage() {
   // covers the case where the unit's status was flipped to SOLD but nobody has
   // recorded the deal yet, mirroring the "+ Add Lease" fallback above.
   const [saleModalOpen, setSaleModalOpen] = useState(false);
+  /**
+   * The same field set as the historical-sales import template, so a deal typed in by hand
+   * and one loaded from a sheet record the same facts. It used to capture five of them —
+   * buyer, price, deposit, a closing date and notes — which meant every manually entered
+   * sale was missing the seller, the broker, the agreement date and when the money actually
+   * arrived, and nobody could tell whether those were unknown or never asked for.
+   *
+   * Unit / Building / Sqft are shown but not editable: the modal is opened from the unit,
+   * so they are context, not input. Price PSF is derived from price ÷ sqft rather than
+   * typed — it is a quotient, and two people can only disagree about it.
+   */
   const [saleForm, setSaleForm] = useState<Record<string, string>>({
-    buyer: '', salePrice: '', depositAmt: '', closingDate: '', notes: '',
+    seller: '', buyer: '', salePrice: '', depositAmt: '', depositDate: '',
+    secondPaymentAmt: '', secondPaymentDate: '', contractDate: '', closingDate: '',
+    brokerId: '', notes: '',
   });
   const createSale = useCreateSale();
+  const addSalePayment = useAddSalePayment();
+  const { data: brokerList } = useBrokers();
+  const brokers: any[] = Array.isArray(brokerList) ? brokerList : [];
 
   const openAddSale = () => {
-    setSaleForm({ buyer: '', salePrice: '', depositAmt: '', closingDate: '', notes: '' });
+    setSaleForm({
+      seller: '', buyer: '', salePrice: '', depositAmt: '', depositDate: '',
+      secondPaymentAmt: '', secondPaymentDate: '', contractDate: '', closingDate: '',
+      brokerId: '', notes: '',
+    });
     setSaleModalOpen(true);
   };
 
   const handleSaveSale = async () => {
+    if (!saleForm.buyer.trim()) {
+      return addToast({ title: 'Buyer is required', color: 'warning' });
+    }
     if (!saleForm.salePrice) {
       return addToast({ title: 'Sale price is required', color: 'warning' });
     }
     const toDate = (d: string) => (d ? new Date(`${d}T12:00:00.000Z`).toISOString() : undefined);
     try {
-      await createSale.mutateAsync({
+      const sale: any = await createSale.mutateAsync({
         projectId: projectId!,
         unitId: unitId!,
         // Recorded as UNDER_CONTRACT, not CLOSED. Closing is gated on the Deed, NOC and
@@ -1084,12 +1107,47 @@ export default function UnitDetailPage() {
         // to a sale that exists — so a sale cannot be born closed. This records the deal;
         // closing it is the second step, once the paperwork is on file.
         status: 'UNDER_CONTRACT',
+        seller: saleForm.seller.trim() || undefined,
         buyer: saleForm.buyer.trim() || undefined,
         salePrice: parseFloat(saleForm.salePrice),
         depositAmt: saleForm.depositAmt ? parseFloat(saleForm.depositAmt) : undefined,
+        contractDate: toDate(saleForm.contractDate),
         closingDate: toDate(saleForm.closingDate),
+        brokerId: saleForm.brokerId || undefined,
         notes: saleForm.notes.trim() || undefined,
       });
+
+      // Deposit and second payment become real installments on the sale's schedule rather
+      // than two more columns on Sale — that schedule already exists, already reports what
+      // is owed, and is where the import puts the same two figures.
+      //
+      // They are created DUE, not paid. The form asks when a payment is dated; it does not
+      // ask whether the money arrived, and recording cash as received on that basis is a
+      // claim the person filling this in never made. Marking it paid is one click on the
+      // schedule.
+      const installments = [
+        { label: 'Deposit', amount: saleForm.depositAmt, date: saleForm.depositDate },
+        { label: 'Second Payment', amount: saleForm.secondPaymentAmt, date: saleForm.secondPaymentDate },
+      ].filter((p) => p.amount);
+
+      for (const [i, p] of installments.entries()) {
+        try {
+          await addSalePayment.mutateAsync({
+            saleId: sale.id,
+            data: {
+              label: p.label,
+              amount: parseFloat(p.amount),
+              trigger: 'FIXED_DATE',
+              dueDate: toDate(p.date),
+              sequence: i + 1,
+            },
+          });
+        } catch (e) {
+          // The sale is already saved; losing an installment must not read as losing the
+          // deal. Name which one so it can be re-added rather than hunted for.
+          addToast({ title: errMsg(e, `Sale saved, but the ${p.label} installment did not`), color: 'warning' });
+        }
+      }
       addToast({
         title: 'Sale recorded as Under Contract',
         description: 'Attach the Deed, NOC and Possession Certificate to this sale in the project\'s '
@@ -1541,7 +1599,10 @@ export default function UnitDetailPage() {
       {/* Add Sale Modal — quick-add for a SOLD unit with no sale record yet.
           Broker attribution and further edits happen inside SoldUnitPanel once
           this exists. */}
-      <Modal isOpen={saleModalOpen} onClose={() => setSaleModalOpen(false)} size="md">
+      <Modal
+        isOpen={saleModalOpen} onClose={() => setSaleModalOpen(false)}
+        size="2xl" scrollBehavior="inside"
+      >
         <ModalContent>
           <ModalHeader>Add Sale</ModalHeader>
           <ModalBody>
@@ -1550,13 +1611,74 @@ export default function UnitDetailPage() {
               is marked sold when the sale moves to Closed, which needs its Deed, NOC and Possession Certificate
               attached first.
             </p>
+            {/* Context, not input — the modal was opened from this unit, so asking which
+                unit it is would be asking a question we already answered. */}
+            <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2 grid grid-cols-3 gap-2">
+              {[
+                { label: 'Unit', value: u.unitNumber },
+                { label: 'Building', value: u.building?.name ?? '—' },
+                { label: 'Sqft', value: u.sqft ? u.sqft.toLocaleString() : '—' },
+              ].map((f) => (
+                <div key={f.label}>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{f.label}</p>
+                  <p className="text-xs text-gray-800 truncate">{f.value}</p>
+                </div>
+              ))}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Input label="Buyer" size="sm" value={saleForm.buyer} onChange={setSale('buyer')} className="sm:col-span-2" />
-              <Input label="Sale Price ($)" size="sm" type="number" value={saleForm.salePrice} onChange={setSale('salePrice')} />
+              <Input label="Seller" size="sm" value={saleForm.seller} onChange={setSale('seller')} />
+              <Input label="Buyer" size="sm" isRequired value={saleForm.buyer} onChange={setSale('buyer')} />
+
+              <Input
+                label="Purchase Price ($)" size="sm" type="number" isRequired
+                value={saleForm.salePrice} onChange={setSale('salePrice')}
+              />
+              {/* Derived, never typed: price ÷ sqft is a quotient, and a field for it is
+                  only a way for the two to disagree. Matches the import, which treats PSF
+                  as informational and does not store it either. */}
+              <Input
+                label="Price PSF ($)" size="sm" isReadOnly
+                value={
+                  saleForm.salePrice && u.sqft
+                    ? (parseFloat(saleForm.salePrice) / u.sqft).toFixed(2)
+                    : ''
+                }
+                description={u.sqft ? 'From price ÷ sqft' : 'This unit has no sqft recorded'}
+              />
+
               <Input label="Deposit Amount ($)" size="sm" type="number" value={saleForm.depositAmt} onChange={setSale('depositAmt')} />
-              <Input label="Expected Closing Date" size="sm" type="date" value={saleForm.closingDate} onChange={setSale('closingDate')} className="sm:col-span-2" />
+              <Input label="Deposit Date" size="sm" type="date" value={saleForm.depositDate} onChange={setSale('depositDate')} />
+
+              <Input label="Second Payment Amount ($)" size="sm" type="number" value={saleForm.secondPaymentAmt} onChange={setSale('secondPaymentAmt')} />
+              <Input label="Second Payment Date" size="sm" type="date" value={saleForm.secondPaymentDate} onChange={setSale('secondPaymentDate')} />
+
+              <Input label="Sale Agreement / Executed Date" size="sm" type="date" value={saleForm.contractDate} onChange={setSale('contractDate')} />
+              <Input label="Expected Closing Date" size="sm" type="date" value={saleForm.closingDate} onChange={setSale('closingDate')} />
+
+              {/* A picker, not a name: the import matches broker names as text because a
+                  spreadsheet has no ids, but here the real broker is one click away and a
+                  typo would create no attribution at all. */}
+              <Select
+                label="Broker" size="sm" className="sm:col-span-2"
+                selectedKeys={saleForm.brokerId ? [saleForm.brokerId] : []}
+                onChange={(e) => setSaleForm((f) => ({ ...f, brokerId: e.target.value }))}
+                description="Commission is computed when the sale closes."
+              >
+                {brokers.map((b: any) => (
+                  <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+                ))}
+              </Select>
+
               <Input label="Notes" size="sm" value={saleForm.notes} onChange={setSale('notes')} className="sm:col-span-2" />
             </div>
+
+            {(saleForm.depositAmt || saleForm.secondPaymentAmt) && (
+              <p className="text-[11px] text-gray-500">
+                The deposit and second payment are added to this sale's payment schedule as
+                due on the dates given. Mark them received there once the money is in.
+              </p>
+            )}
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={() => setSaleModalOpen(false)}>Cancel</Button>

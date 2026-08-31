@@ -16,6 +16,10 @@ export class UpdateSaleDto extends SaleCancellationFieldsDto {
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;
 
+  /** Free text, mirroring the historical-sales sheet — see CreateSaleDto.seller. */
+  @IsOptional() @IsString() @MaxLength(200)
+  seller?: string;
+
   /**
    * Who the buyer is relative to the sitting tenant (S4/T1). Sent with the CLOSE, since
    * that is the request whose behaviour it changes: SITTING_TENANT ends the tenancy as

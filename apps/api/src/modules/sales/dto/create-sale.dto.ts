@@ -20,6 +20,17 @@ export class CreateSaleDto {
   buyer?: string;
 
   /**
+   * The selling entity. Free text, like the column it mirrors on the historical-sales
+   * sheet: Prime Tracker has no structured owning-entity/LLC model, and inventing one to
+   * hold a name somebody types once per deal would be the wrong end to start from.
+   *
+   * On the model and accepted by backfillSale since R4; it was simply never on this DTO,
+   * so a manually entered sale silently dropped it.
+   */
+  @IsOptional() @IsString() @MaxLength(200)
+  seller?: string;
+
+  /**
    * Who the buyer is relative to the sitting tenant. Decides what closing this sale does
    * to that tenancy: SITTING_TENANT ends it, THIRD_PARTY hands it over intact.
    *

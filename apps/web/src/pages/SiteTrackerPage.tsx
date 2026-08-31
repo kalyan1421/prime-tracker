@@ -35,7 +35,6 @@ import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { useDebounced } from '../hooks/useDebounced';
 import { LoadingState, ErrorState, EmptyState, PermissionGate, chipColor, type HeroColor } from '../components/ui';
 import { DailyLogFeed } from '../components/DailyLogFeed';
-import { NewUnitModal } from '../components/NewUnitModal';
 import { EditUnitModal } from '../components/EditUnitModal';
 import { UnitConstructionChecklist } from '../components/UnitConstructionChecklist';
 import { useAuthStore } from '../store/authStore';
@@ -124,16 +123,10 @@ export default function SiteTrackerPage() {
   // The update count used to be a dead number — it reported how many updates a unit had
   // and gave you no way to read them. This opens the unit's feed in place.
   const feedModal = useDisclosure();
-  const newUnit = useDisclosure();
-  // "New unit" was this page's only top-level action, and it is gated on unit:edit — which
-  // CONSTRUCTION does not hold. So the one button on the screen was both the wrong verb for
-  // the common job (add a stage to a unit that already exists) and invisible to the role
-  // that lives here. This is that job, as its own action.
-  const addStage = useDisclosure();
-  // Bringing a unit that already exists ONTO the tracker. Distinct from creating one: a
-  // unit counts as tracked once it has any site work recorded, so this seeds a checklist
-  // rather than inventory. It is the action people were reaching for when they pressed
-  // "New unit" and got a duplicate.
+  // Bringing a unit that already exists ONTO the tracker — this page's one create action.
+  // A unit counts as tracked once it has any site work recorded, so this seeds a checklist
+  // rather than inventory. It replaced a "New unit" button that made a second copy of a
+  // unit people already had.
   const trackUnit = useDisclosure();
   const [editUnit, setEditUnit] = useState<Row | null>(null);
   const [feedUnit, setFeedUnit] = useState<Row | null>(null);
@@ -198,22 +191,16 @@ export default function SiteTrackerPage() {
             Every unit under construction across all properties, its blocker, and where its checklist stands.
           </p>
         </div>
+        {/* One action, because there is one thing this page starts: putting a unit on the
+            tracker. "Add stage" duplicated what expanding a row already does better (with
+            the unit's own checklist in front of you), and "New unit" created inventory —
+            the wrong verb here, gated on a permission the site team does not hold, and the
+            button people pressed when they meant "track this one". Units are created in
+            Project Details, where the rest of the unit's details are set. */}
         <div className="flex items-center gap-2">
-          {/* Primary, because adding a stage to a unit already on the tracker is the
-              everyday job here; creating inventory is the rare one. */}
           <PermissionGate permission="checklist:edit">
             <Button size="sm" color="primary" startContent={<FiPlus />} onPress={trackUnit.onOpen}>
               Track a unit
-            </Button>
-          </PermissionGate>
-          <PermissionGate permission="checklist:edit">
-            <Button size="sm" variant="flat" startContent={<FiPlus />} onPress={addStage.onOpen}>
-              Add stage
-            </Button>
-          </PermissionGate>
-          <PermissionGate permission="unit:edit">
-            <Button size="sm" variant="flat" startContent={<FiPlus />} onPress={newUnit.onOpen}>
-              New unit
             </Button>
           </PermissionGate>
         </div>
@@ -304,17 +291,6 @@ export default function SiteTrackerPage() {
 
       {editUnit && (
         <EditUnitModal unit={editUnit} onClose={() => setEditUnit(null)} />
-      )}
-
-      {newUnit.isOpen && (
-        <NewUnitModal
-          projects={projects}
-          onClose={newUnit.onClose}
-        />
-      )}
-
-      {addStage.isOpen && (
-        <AddStageToUnitModal rows={rows} onClose={addStage.onClose} />
       )}
 
       {trackUnit.isOpen && (
@@ -921,70 +897,6 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
             {picked.length > 0 ? `Track with ${picked.length} stage${picked.length === 1 ? '' : 's'}` : 'Track unit'}
           </Button>
         </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-/**
- * Pick a unit already on the tracker, then add a stage to it.
- *
- * The missing half of this page. Everything needed to add a stage was here — the row, the
- * expanded checklist, the same editable grid the unit page uses — but only behind a row
- * chevron, which is not an affordance anyone finds when they are looking for "add". The
- * only visible button said "New unit", so that is what got clicked, and the result was new
- * inventory instead of a stage.
- *
- * Deliberately a two-step rather than a stage form of its own: step two mounts the very
- * same checklist component the unit page and the expanded row use, so there is still one
- * implementation of what a stage is and what may be typed into one. Picking the unit is
- * the only thing this modal actually adds.
- */
-function AddStageToUnitModal({ rows, onClose }: { rows: Row[]; onClose: () => void }) {
-  const [unitId, setUnitId] = useState('');
-  const picked = rows.find((r) => r.id === unitId) ?? null;
-
-  return (
-    <Modal isOpen onOpenChange={onClose} size="3xl" scrollBehavior="inside">
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-0.5">
-          <span className="text-sm font-semibold">Add a stage</span>
-          <span className="text-[11px] font-normal text-gray-500">
-            To a unit already on the tracker. Creating a unit is a separate action.
-          </span>
-        </ModalHeader>
-        <ModalBody className="pb-4 gap-3">
-          <Select
-            size="sm" label="Unit" aria-label="Pick a unit"
-            selectedKeys={unitId ? [unitId] : []}
-            onChange={(e) => setUnitId(e.target.value)}
-            description={`${rows.length} unit${rows.length === 1 ? '' : 's'} match the filters above.`}
-          >
-            {rows.map((r) => (
-              <SelectItem
-                key={r.id}
-                textValue={`${r.unitNumber} · ${r.building.name} · ${r.project.name}`}
-              >
-                {r.unitNumber} · {r.building.name} · {r.project.name}
-              </SelectItem>
-            ))}
-          </Select>
-
-          {picked ? (
-            <div className="rounded-lg border border-gray-200 p-3">
-              <UnitConstructionChecklist
-                unitId={picked.id}
-                buildingId={picked.building.id}
-                projectId={picked.project.id}
-                canEdit
-              />
-            </div>
-          ) : (
-            <p className="text-xs text-gray-500">
-              Pick a unit to see its checklist and add a stage to it.
-            </p>
-          )}
-        </ModalBody>
       </ModalContent>
     </Modal>
   );
