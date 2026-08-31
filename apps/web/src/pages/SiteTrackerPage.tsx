@@ -29,7 +29,7 @@ import {
 import {
   useSiteTracker, useUpdateSiteTracker, useSetUnitAssignees,
   useProjects, useCustomOptions, useAssignableUsers,
-  useConstructionTemplate, useAddUnitConstructionStages,
+  useStageLibrary, useAddUnitConstructionStages,
 } from '../hooks/useApi';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { useDebounced } from '../hooks/useDebounced';
@@ -785,15 +785,20 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
   );
   const unit = untracked.find((r) => r.id === unitId) ?? null;
 
-  const templateQ = useConstructionTemplate(unit?.building.id);
+  // The LIBRARY, not just this building's template: a building nobody has configured had
+  // nothing to offer, which is most of them, so the action dead-ended on exactly the units
+  // it exists to bring onto the tracker.
+  const templateQ = useStageLibrary(unit?.building.id, projectId || undefined);
   const template: any[] = Array.isArray(templateQ.data) ? templateQ.data : [];
   const addStages = useAddUnitConstructionStages();
 
-  // Preselect everything the moment a unit resolves a template — "all of them" is what
-  // starting a build normally means, and unticking four is less work than ticking thirteen.
-  const templateKey = template.map((t: any) => t.label).join('|');
+  // Preselect this building's OWN template, not the whole library — "all of them" means
+  // the list this building runs, and starting with forty stages ticked because some other
+  // building somewhere uses them would be worse than starting with none. Everything else
+  // is still listed, just unticked.
+  const templateKey = template.map((t: any) => `${t.source}:${t.label}`).join('|');
   useEffect(() => {
-    setPicked(template.map((t: any) => t.label));
+    setPicked(template.filter((t: any) => t.source === 'template').map((t: any) => t.label));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateKey]);
 
@@ -862,8 +867,9 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
 
           {unit && template.length === 0 && (
             <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              {unit.building.name} has no stage template yet, so there is nothing to seed from.
-              Set one up on the building, or open the unit and add stages by hand.
+              No stages have been recorded anywhere yet, so there is nothing to seed from.
+              Open the unit and add its first stages by hand — every unit can pick them from
+              then on.
             </p>
           )}
 
@@ -871,7 +877,7 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
             <div className="rounded-lg border border-gray-200">
               <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
                 <span className="text-xs text-gray-500">
-                  {picked.length} of {template.length} stages from {unit.building.name}
+                  {picked.length} of {template.length} stages
                 </span>
                 <Button
                   size="sm" variant="light"
@@ -899,8 +905,8 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
                 ))}
               </div>
               <p className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-500">
-                Added in template order — reorder them on the checklist once the unit is on
-                the tracker.
+                {unit.building.name}'s template first, then stages used elsewhere. Reorder
+                them on the checklist once the unit is on the tracker.
               </p>
             </div>
           )}

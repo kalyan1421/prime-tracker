@@ -148,6 +148,71 @@ export class ConstructionChecklistService {
   }
 
   /**
+   * Every stage name available to put on a unit — the building's template PLUS every
+   * label already in use on any unit the caller can see.
+   *
+   * The template alone was too narrow to be the picker's only source. Stage lists are set
+   * up per building, and a building someone had not got round to has none, so the picker
+   * offered nothing on a portfolio where the full eighteen-stage list was sitting on units
+   * one building over. The list Prime actually works from — Soil Compaction through Store
+   * front glass — existed on three units and was unreachable everywhere else.
+   *
+   * Drawing the library from stages in USE rather than a curated catalogue means there is
+   * nothing to seed and nothing to maintain: the first person to type a stage makes it
+   * available to everyone, and a name nobody uses quietly stops being offered. The trade is
+   * that a typo becomes selectable — hence `usedOn`, so a label used once reads differently
+   * from one used on forty units.
+   *
+   * Scoped the same way getProjectRollup is: a role that can only see its own projects only
+   * sees stage names from them.
+   */
+  async getStageLibrary(
+    opts: { buildingId?: string; projectId?: string },
+    userId?: string,
+    role?: string,
+  ) {
+    let projectFilter: Prisma.BuildingWhereInput = opts.projectId ? { projectId: opts.projectId } : {};
+    if (!opts.projectId && userId && this.access.isScoped(role)) {
+      const ids = await this.access.accessibleProjectIds(userId);
+      projectFilter = { projectId: { in: ids } };
+    }
+
+    const [templateItems, used] = await Promise.all([
+      opts.buildingId
+        ? this.prisma.constructionStageTemplateItem.findMany({
+          where: { buildingId: opts.buildingId },
+          orderBy: { sortOrder: 'asc' },
+          select: { label: true, sortOrder: true },
+        })
+        : Promise.resolve([]),
+      this.prisma.unitConstructionStage.groupBy({
+        by: ['label'],
+        where: { unit: { deletedAt: null, building: projectFilter } },
+        _count: { label: true },
+      }),
+    ]);
+
+    // The template wins the ordering it has; everything else sorts by name. The labels are
+    // numbered in practice ("01 - ", "02 - "), so by-name IS work order for the rest.
+    const out = new Map<string, { label: string; source: 'template' | 'library'; usedOn: number }>();
+    const countFor = (label: string) =>
+      used.find((u) => u.label.trim().toLowerCase() === label.trim().toLowerCase())?._count.label ?? 0;
+
+    for (const t of templateItems) {
+      out.set(t.label.trim().toLowerCase(), {
+        label: t.label, source: 'template', usedOn: countFor(t.label),
+      });
+    }
+    for (const u of [...used].sort((a, b) => a.label.localeCompare(b.label))) {
+      const key = u.label.trim().toLowerCase();
+      if (out.has(key)) continue;
+      out.set(key, { label: u.label, source: 'library', usedOn: u._count.label });
+    }
+
+    return Array.from(out.values());
+  }
+
+  /**
    * Add SEVERAL stages in one call, appended in the order given.
    *
    * One request, one transaction, rather than the frontend looping addUnitStage: the API

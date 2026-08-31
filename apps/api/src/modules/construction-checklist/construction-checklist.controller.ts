@@ -78,6 +78,21 @@ export class ConstructionChecklistController {
     return this.service.addUnitStage(unitId, body, userId);
   }
 
+  @Get('stage-library')
+  @RequirePermissions('checklist:view')
+  @ApiOperation({
+    summary: 'Stage names available to add to a unit',
+    description: "The building's template plus every label already in use on a visible unit.",
+  })
+  getStageLibrary(
+    @Query('buildingId') buildingId: string | undefined,
+    @Query('projectId') projectId: string | undefined,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    return this.service.getStageLibrary({ buildingId, projectId }, userId, role);
+  }
+
   // One request, not a loop of the route above: the 10 req/sec throttle silently truncates
   // a seventeen-stage batch sent as seventeen calls.
   @Post('unit/:unitId/stages')

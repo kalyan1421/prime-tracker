@@ -14,6 +14,7 @@ const mockPrisma: any = {
   checklistTemplate: { findUnique: jest.fn() },
   unitConstructionStagePhoto: { create: jest.fn(), findUnique: jest.fn(), delete: jest.fn() },
   unitConstructionStage: {
+    groupBy: jest.fn(),
     findMany: jest.fn(),
     findFirst: jest.fn(),
     count: jest.fn(),
@@ -514,5 +515,90 @@ describe('ConstructionChecklistService.reorderUnitStages', () => {
       .rejects.toThrow(/every stage on this unit exactly once/);
     await expect(service.reorderUnitStages('u1', ['a', 'a'], 'user-1'))
       .rejects.toThrow(/more than once/);
+  });
+});
+
+/**
+ * The picker's source. Keying it to the building's own template alone was too narrow:
+ * templates are configured per building, so a building nobody had set up offered nothing
+ * to pick — on a portfolio where the full stage list was already running on units one
+ * building over.
+ */
+describe('ConstructionChecklistService.getStageLibrary', () => {
+  beforeEach(() => {
+    mockAccess.isScoped.mockReturnValue(false);
+    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([]);
+    mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([]);
+  });
+
+  it("offers stages in use anywhere, not just this building's template", async () => {
+    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([
+      { label: '02 - Timeline Calendar', sortOrder: 0 },
+    ]);
+    mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([
+      { label: '17 - Store front glass', _count: { label: 3 } },
+      { label: '01 - Soil Compaction', _count: { label: 3 } },
+    ]);
+    const service = makeService();
+    const lib = await service.getStageLibrary({ buildingId: 'b1' }, 'u1', 'FOUNDER');
+
+    expect(lib.map((s: any) => s.label)).toEqual([
+      '02 - Timeline Calendar', '01 - Soil Compaction', '17 - Store front glass',
+    ]);
+    expect(lib[0]).toMatchObject({ source: 'template' });
+    expect(lib[1]).toMatchObject({ source: 'library', usedOn: 3 });
+  });
+
+  it('lists the template first and the rest by name — the labels are numbered', async () => {
+    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([
+      { label: '99 - Handover', sortOrder: 0 },
+      { label: '98 - Snagging', sortOrder: 1 },
+    ]);
+    mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([
+      { label: '02 - Rebar', _count: { label: 1 } },
+      { label: '01 - Grading', _count: { label: 2 } },
+    ]);
+    const service = makeService();
+    const lib = await service.getStageLibrary({ buildingId: 'b1' }, 'u1', 'FOUNDER');
+    expect(lib.map((s: any) => s.label)).toEqual([
+      '99 - Handover', '98 - Snagging', '01 - Grading', '02 - Rebar',
+    ]);
+  });
+
+  it('counts a template stage that is also in use, and never lists it twice', async () => {
+    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([
+      { label: '05 - Columns', sortOrder: 0 },
+    ]);
+    mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([
+      { label: '  05 - COLUMNS ', _count: { label: 7 } },
+    ]);
+    const service = makeService();
+    const lib = await service.getStageLibrary({ buildingId: 'b1' }, 'u1', 'FOUNDER');
+    expect(lib).toEqual([{ label: '05 - Columns', source: 'template', usedOn: 7 }]);
+  });
+
+  it('limits a scoped role to stage names from projects it can see', async () => {
+    mockAccess.isScoped.mockReturnValue(true);
+    mockAccess.accessibleProjectIds.mockResolvedValue(['p1', 'p2']);
+    const service = makeService();
+    await service.getStageLibrary({}, 'u1', 'CONSTRUCTION');
+
+    expect(mockPrisma.unitConstructionStage.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { unit: { deletedAt: null, building: { projectId: { in: ['p1', 'p2'] } } } },
+      }),
+    );
+  });
+
+  it('does not resolve the membership set when one project was named', async () => {
+    mockAccess.isScoped.mockReturnValue(true);
+    const service = makeService();
+    await service.getStageLibrary({ projectId: 'p9' }, 'u1', 'CONSTRUCTION');
+    expect(mockAccess.accessibleProjectIds).not.toHaveBeenCalled();
+    expect(mockPrisma.unitConstructionStage.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { unit: { deletedAt: null, building: { projectId: 'p9' } } },
+      }),
+    );
   });
 });

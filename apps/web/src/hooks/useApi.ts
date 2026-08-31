@@ -2391,6 +2391,25 @@ export function useConstructionTemplate(buildingId?: string) {
   });
 }
 
+/**
+ * Every stage name that can go on a unit: this building's template, plus every label
+ * already in use anywhere the caller can see.
+ *
+ * The template alone is not enough to pick from — stage lists are set up per building, so
+ * a building nobody has configured offers nothing even when the full list is on units one
+ * building over.
+ */
+export function useStageLibrary(buildingId?: string, projectId?: string) {
+  const can = useCan('checklist:view');
+  return useQuery({
+    queryKey: ['stage-library', buildingId, projectId],
+    queryFn: () => api
+      .get('/construction-checklist/stage-library', { params: { buildingId, projectId } })
+      .then((r) => r.data),
+    enabled: can,
+  });
+}
+
 export function useAddConstructionTemplateItem() {
   const qc = useQueryClient();
   return useMutation({
