@@ -1,4 +1,5 @@
-import { Controller, Get, HttpStatus, HttpCode } from '@nestjs/common';
+import { Controller, Get, HttpStatus, HttpCode, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -24,9 +25,15 @@ export class HealthController {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
+  /**
+   * Uptime monitors key on the STATUS CODE. This used to answer 200 with a body of
+   * `{"status":"degraded"}` when the database was unreachable — a total outage that
+   * every monitor in front of it would have reported as healthy. The code now matches
+   * what the docstring above always claimed.
+   */
   @Get('ready')
   @ApiOperation({ summary: 'Readiness probe — can the API serve traffic?' })
-  async readiness() {
+  async readiness(@Res({ passthrough: true }) res: Response) {
     const checks: Record<string, { ok: boolean; latencyMs?: number; error?: string }> = {};
 
     // DB check
@@ -43,6 +50,8 @@ export class HealthController {
     }
 
     const allOk = Object.values(checks).every((c) => c.ok);
+    res.status(allOk ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
+
     return {
       status: allOk ? 'ok' : 'degraded',
       timestamp: new Date().toISOString(),

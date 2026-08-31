@@ -137,3 +137,48 @@ variable "app_origin" {
   type        = string
   default     = "https://app.theprimedeveloper.com"
 }
+
+# ── Monitoring (monitoring.tf) ───────────────────────────────────────────────
+
+variable "alarm_sms_number" {
+  description = <<-EOT
+    Optional E.164 phone number (e.g. "+919876543210") subscribed to the alarm topic
+    by SMS, so an outage reaches someone who is not at a laptop. Empty = email only.
+
+    New AWS accounts are in the SNS SMS sandbox: until the number is verified under
+    SNS > Text messaging > Sandbox destination phone numbers (or production SMS
+    access is granted), the subscription exists and delivers nothing.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "enable_endpoint_monitor" {
+  description = <<-EOT
+    Create the Route 53 health check that calls /api/health/ready over HTTPS from
+    outside AWS's own network, and the alarm on it. This is the only check that sees
+    what a user sees — DNS, Elastic IP, nginx, TLS, Node and Postgres in one request.
+
+    On by default. It is the one piece of monitoring here that is not free: roughly
+    $2.50/month (an AWS-endpoint check at $0.50, plus $1 each for HTTPS and string
+    matching). Turning it off leaves the host and database alarms, which can explain
+    an outage but cannot detect one.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "enable_host_metrics" {
+  description = <<-EOT
+    Install and configure the CloudWatch agent on the API host via SSM Association,
+    and alarm on root-volume usage and memory. EC2 publishes neither natively — the
+    hypervisor cannot see inside the guest — and on a 20 GB / 914 MiB box both are
+    likely causes of an outage.
+
+    On by default. Costs roughly $1/month in custom metrics, and the associations
+    install software on the running production instance (a standard AWS package,
+    applied over SSM, restarting nothing the API depends on).
+  EOT
+  type        = bool
+  default     = true
+}

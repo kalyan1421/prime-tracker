@@ -49,3 +49,23 @@ output "database_url_for_ssm" {
   sensitive   = true
   value       = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/${var.db_name}?schema=public&connection_limit=5&pool_timeout=10"
 }
+
+output "alarm_topic_arn" {
+  description = <<-EOT
+    SNS topic every alarm publishes to. Check that it actually has a CONFIRMED
+    subscriber — an unconfirmed one is indistinguishable from no monitoring:
+      aws sns list-subscriptions-by-topic --topic-arn <this> \
+        --query 'Subscriptions[].[Protocol,Endpoint,SubscriptionArn]' --output table
+  EOT
+  value       = aws_sns_topic.alarms.arn
+}
+
+output "monitoring_dashboard_url" {
+  description = "One page showing the API health check, host, and database."
+  value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards/dashboard/${aws_cloudwatch_dashboard.main.dashboard_name}"
+}
+
+output "api_health_check_id" {
+  description = "Route 53 health check watching /api/health/ready (null when enable_endpoint_monitor = false)."
+  value       = one(aws_route53_health_check.api[*].id)
+}
