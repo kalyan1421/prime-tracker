@@ -586,11 +586,17 @@ export class UnitHistoryService {
          * hide. Rendered as a banner above the history.
          */
         dataWarnings: [
+          // The old wording said the tenant "may still be being billed". That was never
+          // true: NOT_ON_SOLD_UNIT takes these leases out of invoicing, the rent roll,
+          // cash flow and dunning, and has done since it was written. Warning about
+          // phantom billing sent people hunting for money that was never moving, and
+          // buried the real point — the two records disagree about what this unit is.
           ...(activeLeaseOnSoldUnit
             ? [
-                'This unit is marked SOLD but still has an ACTIVE lease. Rent invoices are ' +
-                'generated from lease status, so the tenant may still be being billed. ' +
-                'Terminate the lease, or correct the unit status.',
+                'This unit is marked SOLD but still carries an ACTIVE lease. Nothing is '
+                + 'being billed — a lease on a sold unit is left out of the rent roll, '
+                + 'invoicing and cash flow — but the two records disagree. End the tenancy '
+                + 'from the Tenant card, or correct the unit status.',
               ]
             : []),
           ...(vacantWithActiveLease

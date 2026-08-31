@@ -43,10 +43,97 @@ const COMMISSION_COLUMNS = [
   { key: 'paidAt', label: 'Paid Date', note: 'Optional — leave blank if this installment has not been paid yet.' },
 ] as const;
 
+/**
+ * Fields a reviewer may retype in the preview UI instead of fixing the spreadsheet and
+ * re-uploading (R11). Keyed by the sheet's own row number, which is stable across
+ * re-previews of the same file, so an edit made against one preview lands on the same row
+ * in the next one.
+ *
+ * Overrides are applied to the PARSED row before validation runs, deliberately: there is
+ * then exactly one validation path, and a typed-in closing date is checked for being in
+ * the future, a typed-in unit number is resolved against the project, and a typed-in
+ * buyer re-joins the Commission Installments sheet, all by the same code that handles
+ * values read from cells. Nothing here writes; the commit step is unchanged.
+ */
+const OVERRIDE_TEXT_FIELDS = ['unitNumber', 'building', 'buyer', 'seller', 'brokerName', 'notes'] as const;
+const OVERRIDE_NUMBER_FIELDS = ['purchasePrice', 'depositAmount', 'secondPaymentAmount'] as const;
+const OVERRIDE_DATE_FIELDS = ['closingDate', 'agreementDate', 'depositDate', 'secondPaymentDate'] as const;
+
+export type SaleOverrideField =
+  | (typeof OVERRIDE_TEXT_FIELDS)[number]
+  | (typeof OVERRIDE_NUMBER_FIELDS)[number]
+  | (typeof OVERRIDE_DATE_FIELDS)[number];
+
+/** Every value arrives as a string (the UI's inputs are strings); '' clears the field. */
+export type SaleRowOverride = Partial<Record<SaleOverrideField, string | number | null>>;
+export type SaleImportOverrides = Record<number, SaleRowOverride>;
+
+const OVERRIDE_LABELS: Record<SaleOverrideField, string> = Object.fromEntries(
+  SALE_COLUMNS.map((c) => [c.key, c.label]),
+) as Record<SaleOverrideField, string>;
+
+const ALL_OVERRIDE_FIELDS: SaleOverrideField[] = [
+  ...OVERRIDE_TEXT_FIELDS, ...OVERRIDE_NUMBER_FIELDS, ...OVERRIDE_DATE_FIELDS,
+];
+
+/**
+ * Rejects a malformed overrides payload up front rather than letting a stray key silently
+ * do nothing (or, worse, a stray field name quietly overwrite something adjacent). A
+ * client bug should be loud here — this is a financial import.
+ */
+export function normalizeSaleOverrides(input: unknown): SaleImportOverrides {
+  if (input == null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new BadRequestException('overrides must be an object keyed by row number');
+  }
+  const out: SaleImportOverrides = {};
+  for (const [rowKey, value] of Object.entries(input as Record<string, unknown>)) {
+    const rowNumber = Number(rowKey);
+    if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+      throw new BadRequestException(`overrides key "${rowKey}" is not a sheet row number`);
+    }
+    if (value == null) continue;
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      throw new BadRequestException(`overrides for row ${rowNumber} must be an object of field values`);
+    }
+    const row: SaleRowOverride = {};
+    for (const [field, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (!ALL_OVERRIDE_FIELDS.includes(field as SaleOverrideField)) {
+        throw new BadRequestException(`"${field}" is not a correctable field on row ${rowNumber}`);
+      }
+      if (raw == null) { row[field as SaleOverrideField] = ''; continue; }
+      if (typeof raw !== 'string' && typeof raw !== 'number') {
+        throw new BadRequestException(`overrides.${rowNumber}.${field} must be text or a number`);
+      }
+      row[field as SaleOverrideField] = raw;
+    }
+    if (Object.keys(row).length > 0) out[rowNumber] = row;
+  }
+  return out;
+}
+
+/** Same UTC re-anchoring as cellDateIso — a bare date string must not shift a day. */
+function overrideDateIso(value: string): string | undefined {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  const [y, m, d] = /^\d{4}-\d{2}-\d{2}/.test(value)
+    ? value.slice(0, 10).split('-').map(Number)
+    : [parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate()];
+  return new Date(Date.UTC(y, m - 1, d)).toISOString().slice(0, 10);
+}
+
 export interface SalePreviewRow {
   rowNumber: number;
-  status: 'ready' | 'error';
+  /**
+   * `duplicate` — this exact sale is already stored, which is what re-uploading a sheet
+   * that has grown by a few rows looks like. It is deliberately NOT an error: the row is
+   * fine, there is simply nothing to do with it, and calling it an error would push people
+   * to "fix" rows that are already correct. It is excluded from the commit.
+   */
+  status: 'ready' | 'error' | 'duplicate';
   errors: string[];
+  /** Non-blocking notes — e.g. the stored price disagrees with the sheet's. */
+  warnings: string[];
   unitNumber: string;
   /** Raw Building label from the sheet, not resolved — surfaced so a row whose unit
    * doesn't exist yet can offer creating both the building and the unit, pre-filled with
@@ -55,6 +142,10 @@ export interface SalePreviewRow {
   buyer: string;
   /** Sheet's own Sqft, same reasoning as building — pre-fills the "create this unit" form. */
   sqft?: number;
+  /** Field keys on this row whose value came from a correction typed into the review UI
+   * rather than from the file — the UI marks them so nobody mistakes a hand-entered
+   * closing date for one the spreadsheet actually contained. */
+  edited: SaleOverrideField[];
   data: BackfillSaleInput & { unitId: string | null };
 }
 
@@ -69,13 +160,22 @@ export interface OrphanedCommissionRow {
 export interface SaleImportPreview {
   sales: SalePreviewRow[];
   orphaned: OrphanedCommissionRow[];
-  summary: { total: number; ready: number; errors: number };
+  summary: { total: number; ready: number; errors: number; duplicates: number };
 }
 
 export interface SaleImportCommitResult {
   imported: number;
   failed: number;
-  results: Array<{ buyer: string; unitId: string | null; success: boolean; saleId?: string; error?: string }>;
+  /** Rows the commit itself found already stored — see commitImport. */
+  skipped: number;
+  results: Array<{
+    buyer: string;
+    unitId: string | null;
+    success: boolean;
+    skipped?: boolean;
+    saleId?: string;
+    error?: string;
+  }>;
 }
 
 @Injectable()
@@ -97,7 +197,7 @@ export class SaleImportService {
 
   // ─────── Preview (parse + validate, no writes) ───────
 
-  async previewImport(fileBuffer: Buffer, projectId: string): Promise<SaleImportPreview> {
+  async previewImport(fileBuffer: Buffer, projectId: string, overrides: SaleImportOverrides = {}): Promise<SaleImportPreview> {
     const wb = new ExcelJS.Workbook();
     try {
       await wb.xlsx.load(fileBuffer as any);
@@ -129,6 +229,7 @@ export class SaleImportService {
       brokerName: string;
       notes: string;
       errors: string[];
+      edited: SaleOverrideField[];
     };
     const raw: RawSale[] = [];
     saleSheet.eachRow((row, rowNumber) => {
@@ -154,8 +255,36 @@ export class SaleImportService {
         brokerName: cellText(get('brokerName')),
         notes: cellText(get('notes')),
         errors: [],
+        edited: [],
       });
     });
+
+    for (const r of raw) {
+      const override = overrides[r.rowNumber];
+      if (!override) continue;
+      for (const [field, rawValue] of Object.entries(override) as [SaleOverrideField, string | number | null][]) {
+        const text = rawValue == null ? '' : String(rawValue).trim();
+        const label = OVERRIDE_LABELS[field];
+        if ((OVERRIDE_TEXT_FIELDS as readonly string[]).includes(field)) {
+          (r as any)[field] = text;
+        } else if ((OVERRIDE_NUMBER_FIELDS as readonly string[]).includes(field)) {
+          if (!text) { (r as any)[field] = undefined; }
+          else {
+            const n = Number(text.replace(/[$,\s]/g, ''));
+            if (Number.isNaN(n)) { r.errors.push(`${label} "${text}" you entered isn't a number.`); continue; }
+            (r as any)[field] = n;
+          }
+        } else {
+          if (!text) { (r as any)[field] = undefined; }
+          else {
+            const iso = overrideDateIso(text);
+            if (!iso) { r.errors.push(`${label} "${text}" you entered isn't a valid date.`); continue; }
+            (r as any)[field] = iso;
+          }
+        }
+        r.edited.push(field);
+      }
+    }
 
     const units = await this.prisma.unit.findMany({
       where: { deletedAt: null, building: { projectId, deletedAt: null } },
@@ -165,11 +294,37 @@ export class SaleImportService {
       where: { deletedAt: null },
       select: { id: true, name: true },
     });
+    // Sales ALREADY on this project's units — the check the rent importer has had since
+    // it was written, and this one never got. Without it a re-uploaded sheet came back
+    // entirely green and wrote every previously-imported row a second time; a unit that
+    // was imported three times carried three identical sales, and only one of them was
+    // reachable by any delete UI. A sale has no date range, so unlike a lease there is no
+    // DB exclusion constraint underneath to catch what the preview misses.
+    const existingSales = await this.prisma.sale.findMany({
+      where: {
+        deletedAt: null,
+        unitId: { not: null },
+        unit: { deletedAt: null, building: { projectId, deletedAt: null } },
+      },
+      select: { unitId: true, buyer: true, salePrice: true, closingDate: true },
+    });
+    const existingByUnit = new Map<string, typeof existingSales>();
+    for (const s of existingSales) {
+      if (!s.unitId) continue;
+      const list = existingByUnit.get(s.unitId) ?? [];
+      list.push(s);
+      existingByUnit.set(s.unitId, list);
+    }
 
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
 
+    // Same identity within THIS file, caught before the DB ever sees it. A combined-deal
+    // sheet that lists one sale once per sub-unit is the common way this happens.
+    const seenInFile = new Map<string, number>();
+
     const sales: SalePreviewRow[] = raw.map((r) => {
       const errors = [...r.errors];
+      const warnings: string[] = [];
 
       if (!r.unitNumber) errors.push('Unit Number is required.');
       if (!r.buyer) errors.push('Buyer is required.');
@@ -193,14 +348,52 @@ export class SaleImportService {
       if (r.depositAmount != null) payments.push({ label: 'Deposit', amount: r.depositAmount, paidAt: r.depositDate });
       if (r.secondPaymentAmount != null) payments.push({ label: 'Second Payment', amount: r.secondPaymentAmount, paidAt: r.secondPaymentDate });
 
+      // ---- Already imported? ----
+      // Identity is (unit, buyer, closing day) — the same tuple backfillSale refuses at
+      // the write. Matching the two keeps the preview honest: what it calls a duplicate is
+      // exactly what the commit would decline, not a near-miss heuristic of its own.
+      let duplicateOfExisting = false;
+      if (unitId && r.closingDate && r.buyer) {
+        const key = `${unitId}|${r.buyer.trim().toLowerCase()}|${r.closingDate}`;
+        const firstSeenAt = seenInFile.get(key);
+        if (firstSeenAt != null) {
+          errors.push(`Same sale as row ${firstSeenAt} in this file — remove one of them.`);
+        } else {
+          seenInFile.set(key, r.rowNumber);
+        }
+
+        const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+        const match = (existingByUnit.get(unitId) ?? []).find(
+          (s) => day(s.closingDate) === r.closingDate
+            && !!s.buyer && s.buyer.trim().toLowerCase() === r.buyer.trim().toLowerCase(),
+        );
+        if (match) {
+          duplicateOfExisting = true;
+          // Skipping is normally the end of it — but not when the stored price differs
+          // from what the sheet now says. Silently skipping would leave the wrong number
+          // in the books with nothing to show it was ever questioned.
+          if (r.purchasePrice != null && Number(match.salePrice) !== r.purchasePrice) {
+            warnings.push(
+              `Already imported at ${Number(match.salePrice).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}, `
+              + `but this file says ${r.purchasePrice.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}. `
+              + 'An import never updates an existing sale — correct it by hand if the file is right.',
+            );
+          }
+        }
+      }
+
       return {
         rowNumber: r.rowNumber,
-        status: errors.length ? 'error' : 'ready',
+        // A duplicate only counts as such when nothing ELSE is wrong with the row —
+        // otherwise a row with real problems would be quietly filed as "already done".
+        status: errors.length ? 'error' : (duplicateOfExisting ? 'duplicate' : 'ready'),
         errors,
+        warnings,
         unitNumber: r.unitNumber,
         building: r.building,
         buyer: r.buyer,
         sqft: r.sqft,
+        edited: r.edited,
         data: {
           unitId,
           seller: r.seller || undefined,
@@ -267,6 +460,7 @@ export class SaleImportService {
         total: sales.length,
         ready: sales.filter((s) => s.status === 'ready').length,
         errors: sales.filter((s) => s.status === 'error').length,
+        duplicates: sales.filter((s) => s.status === 'duplicate').length,
       },
     };
   }
@@ -283,6 +477,15 @@ export class SaleImportService {
    * record at the closing date, so a unit's historical lease should be imported before its
    * historical sale (client-confirmed Q5 — a warning is sufficient, not hard enforcement;
    * the UI surfaces this, this method does not police it).
+   *
+   * Already-stored rows are SKIPPED, not failed. The preview marks them, but the rows
+   * posted here are whatever the client held from an earlier preview — and the way this
+   * duplicated data in the first place was a preview going stale between being generated
+   * and being committed (create the missing units, re-check the file, and every row that
+   * was already imported comes back green again). Re-checking at the write makes the
+   * commit idempotent whatever the client sends, which is the only place that guarantee
+   * can be made. A skip is a no-op, so it is reported apart from real failures rather than
+   * as an error somebody has to go and investigate.
    */
   async commitImport(rows: (BackfillSaleInput & { unitId: string | null })[], userId?: string): Promise<SaleImportCommitResult> {
     const results: SaleImportCommitResult['results'] = [];
@@ -294,6 +497,20 @@ export class SaleImportService {
         });
         continue;
       }
+      const closingDate = new Date(row.closingDate);
+      if (!Number.isNaN(closingDate.getTime())) {
+        const existing = await this.sales.findDuplicateHistoricalSale({
+          unitId: row.unitId, buildingId: null, buyer: row.buyer, closingDate,
+        });
+        if (existing) {
+          results.push({
+            buyer: row.buyer, unitId: row.unitId, success: false, skipped: true,
+            saleId: existing.id,
+            error: 'Already recorded on this unit — skipped.',
+          });
+          continue;
+        }
+      }
       try {
         const sale = await this.sales.backfillSale({ ...row, unitId: row.unitId }, userId);
         results.push({ buyer: row.buyer, unitId: row.unitId, success: true, saleId: sale.id });
@@ -303,7 +520,8 @@ export class SaleImportService {
     }
     return {
       imported: results.filter((r) => r.success).length,
-      failed: results.filter((r) => !r.success).length,
+      failed: results.filter((r) => !r.success && !r.skipped).length,
+      skipped: results.filter((r) => r.skipped).length,
       results,
     };
   }

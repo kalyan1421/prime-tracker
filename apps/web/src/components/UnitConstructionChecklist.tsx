@@ -114,6 +114,7 @@ export function UnitConstructionChecklist({
           <AddStageModal
             unitId={unitId} statusOptions={statusOptions} inspectionOptions={inspectionOptions}
             users={users} onClose={() => setAdding(false)}
+            template={template} usedLabels={stages.map((s) => s.label)}
           />
         )}
       </div>
@@ -229,6 +230,7 @@ export function UnitConstructionChecklist({
         <AddStageModal
           unitId={unitId} statusOptions={statusOptions} inspectionOptions={inspectionOptions}
           users={users} onClose={() => setAdding(false)}
+          template={template} usedLabels={stages.map((s) => s.label)}
         />
       )}
     </div>
@@ -461,14 +463,35 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPa
  * (pick it from the list and the wording matches everything else), or the work genuinely is
  * one-off (type it). Offering the whole template would mostly list steps already on the
  * checklist, so the dropdown shows only the gap.
+ *
+ * This docblock described the picker for some time before the picker existed — the modal
+ * was free-text only until 2026-09-01. Both halves are now real.
  */
-function AddStageModal({ unitId, statusOptions, inspectionOptions, users, onClose }: {
-  unitId: string; statusOptions: OptionLike[]; inspectionOptions: OptionLike[]; users: any[]; onClose: () => void;
+function AddStageModal({
+  unitId, statusOptions, inspectionOptions, users, onClose, template = [], usedLabels = [],
+}: {
+  unitId: string; statusOptions: OptionLike[]; inspectionOptions: OptionLike[]; users: any[];
+  onClose: () => void;
+  /** The building's stage template — the predefined list. Empty is normal, not an error. */
+  template?: any[];
+  /** Labels already on this unit, so the list offers the gap rather than the whole template. */
+  usedLabels?: string[];
 }) {
   const addStage = useAddUnitConstructionStage();
-  // The "from template" half of this modal is gone with the templates feature: a stage is
-  // always typed in now. Nothing else offered the template steps, so there is no mode to
-  // choose between any more.
+
+  // A stage name used to be free text only, which is how one unit gets "Store Front Glass",
+  // the next "Storefront glass" and a third "SF glass" — three names for one stage, and a
+  // rollup that can never group them. The building's template is the list everyone is
+  // supposed to be working from, so it is offered first.
+  //
+  // Typing one in is still allowed rather than removed. Genuinely one-off work exists, and
+  // a building whose template hasn't been set up yet would otherwise have no way to add
+  // anything at all — the picker simply doesn't appear when there is nothing to pick.
+  const used = new Set(usedLabels.map((l) => l.trim().toLowerCase()));
+  const available = template.filter((t) => !used.has(String(t.label).trim().toLowerCase()));
+
+  const [mode, setMode] = useState<'template' | 'custom'>(available.length > 0 ? 'template' : 'custom');
+  const [picked, setPicked] = useState('');
   const [label, setLabel] = useState('');
   const [form, setForm] = useState<Record<string, string>>({
     ownerId: '', status: 'NOT_STARTED', inspectionStatus: '', inspectionDate: '',
@@ -477,10 +500,18 @@ function AddStageModal({ unitId, statusOptions, inspectionOptions, users, onClos
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
   const [err, setErr] = useState<string | null>(null);
 
-  const finalLabel = label.trim();
+  const finalLabel = mode === 'template' ? picked.trim() : label.trim();
 
   const submit = async () => {
-    if (!finalLabel) { setErr('Give the stage a name.'); return; }
+    if (!finalLabel) {
+      setErr(mode === 'template' ? 'Pick a stage from the list.' : 'Give the stage a name.');
+      return;
+    }
+    // Catches the case the picker cannot: a typed name that matches a stage already here.
+    if (used.has(finalLabel.toLowerCase())) {
+      setErr(`"${finalLabel}" is already on this unit's checklist.`);
+      return;
+    }
     setErr(null);
     try {
       await addStage.mutateAsync({
@@ -515,7 +546,46 @@ function AddStageModal({ unitId, statusOptions, inspectionOptions, users, onClos
             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>
           )}
 
-          <Input size="sm" label="Stage name" value={label} onValueChange={setLabel} placeholder="e.g. Store Front Glass" autoFocus />
+          {available.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm" variant={mode === 'template' ? 'solid' : 'flat'}
+                color={mode === 'template' ? 'primary' : 'default'}
+                onPress={() => { setMode('template'); setErr(null); }}
+              >
+                From the template
+              </Button>
+              <Button
+                size="sm" variant={mode === 'custom' ? 'solid' : 'flat'}
+                color={mode === 'custom' ? 'primary' : 'default'}
+                onPress={() => { setMode('custom'); setErr(null); }}
+              >
+                One-off stage
+              </Button>
+            </div>
+          )}
+
+          {mode === 'template' && available.length > 0 ? (
+            <Select
+              size="sm" label="Stage" selectedKeys={picked ? new Set([picked]) : new Set()}
+              onSelectionChange={(k) => setPicked((Array.from(k)[0] as string) ?? '')}
+              description={`${available.length} of this building's ${template.length} template stages are not on this unit yet.`}
+            >
+              {available.map((t: any) => (
+                <SelectItem key={t.label} textValue={t.label}>{t.label}</SelectItem>
+              ))}
+            </Select>
+          ) : (
+            <Input
+              size="sm" label="Stage name" value={label} onValueChange={setLabel}
+              placeholder="e.g. Store Front Glass" autoFocus
+              description={
+                template.length === 0
+                  ? "This building has no stage template yet — stages added here are one-offs. Set the template up on the building to reuse them across units."
+                  : undefined
+              }
+            />
+          )}
 
           <div className="grid gap-2 sm:grid-cols-2">
             <Select

@@ -785,6 +785,40 @@ export class SalesService {
    * gating it behind today's discount threshold or document checklist would block
    * legitimate old data for reasons that have nothing to do with it.
    */
+  /**
+   * The identity of a historical sale, for duplicate detection: which unit (or building),
+   * who bought it, and the day it closed.
+   *
+   * Buyer is compared case- and whitespace-insensitively because the same name is retyped
+   * across spreadsheet revisions ("ARV Solutions LLC" / "arv solutions llc"), and a
+   * duplicate that only differs in capitalisation is still a duplicate. The date is
+   * compared as a whole UTC day, not an instant: backfill stores midnight UTC but a sale
+   * closed through the live path carries a real timestamp, and those are the same day's
+   * sale.
+   */
+  async findDuplicateHistoricalSale(target: {
+    unitId: string | null;
+    buildingId: string | null;
+    buyer: string;
+    closingDate: Date;
+  }) {
+    const buyer = target.buyer?.trim();
+    if (!buyer || (!target.unitId && !target.buildingId)) return null;
+
+    const dayStart = startOfUtcDay(target.closingDate);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+    return this.prisma.sale.findFirst({
+      where: {
+        deletedAt: null,
+        ...(target.unitId ? { unitId: target.unitId } : { buildingId: target.buildingId }),
+        buyer: { equals: buyer, mode: 'insensitive' },
+        closingDate: { gte: dayStart, lt: dayEnd },
+      },
+      select: { id: true, buyer: true, salePrice: true, closingDate: true, isHistorical: true },
+    });
+  }
+
   async backfillSale(input: BackfillSaleInput, userId?: string) {
     if (!input.unitId && !input.buildingId) {
       throw new BadRequestException('Sale must reference either a unit or a building');
@@ -826,6 +860,25 @@ export class SalesService {
       if (!building || building.deletedAt) throw new NotFoundException('Building not found');
       projectId = building.projectId;
       buildingId = input.buildingId!;
+    }
+
+    // Same unit, same buyer, same closing day is not a second sale — it is the same one
+    // arriving twice. Unlike a lease, a sale has no date range and so no DB exclusion
+    // constraint to catch this, which is how one unit ended up with three identical
+    // "Reig Venture LLC, Jan 7 2024, $1,908,450" rows: the sheet was re-uploaded and
+    // nothing anywhere compared a row against what was already stored.
+    //
+    // The guard lives HERE rather than only in the importer's preview because the preview
+    // is advisory — the client posts back rows it was handed earlier, and a stale preview
+    // (or a direct API call) would sail past it. This is the write path; it is the only
+    // place the check cannot be skipped.
+    const duplicate = await this.findDuplicateHistoricalSale({ unitId, buildingId, buyer: input.buyer, closingDate });
+    if (duplicate) {
+      throw new BadRequestException(
+        `This sale is already recorded: ${duplicate.buyer}, closed `
+        + `${closingDate.toISOString().slice(0, 10)}. Delete the existing record first if you `
+        + 'meant to replace it.',
+      );
     }
 
     const buyerType = input.buyerType ?? 'SITTING_TENANT';

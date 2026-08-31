@@ -124,6 +124,11 @@ export default function SiteTrackerPage() {
   // and gave you no way to read them. This opens the unit's feed in place.
   const feedModal = useDisclosure();
   const newUnit = useDisclosure();
+  // "New unit" was this page's only top-level action, and it is gated on unit:edit — which
+  // CONSTRUCTION does not hold. So the one button on the screen was both the wrong verb for
+  // the common job (add a stage to a unit that already exists) and invisible to the role
+  // that lives here. This is that job, as its own action.
+  const addStage = useDisclosure();
   const [editUnit, setEditUnit] = useState<Row | null>(null);
   const [feedUnit, setFeedUnit] = useState<Row | null>(null);
   const openFeed = (row: Row) => { setFeedUnit(row); feedModal.onOpen(); };
@@ -188,8 +193,15 @@ export default function SiteTrackerPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Primary, because adding a stage to a unit already on the tracker is the
+              everyday job here; creating inventory is the rare one. */}
+          <PermissionGate permission="checklist:edit">
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={addStage.onOpen}>
+              Add stage
+            </Button>
+          </PermissionGate>
           <PermissionGate permission="unit:edit">
-            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={newUnit.onOpen}>
+            <Button size="sm" variant="flat" startContent={<FiPlus />} onPress={newUnit.onOpen}>
               New unit
             </Button>
           </PermissionGate>
@@ -288,6 +300,10 @@ export default function SiteTrackerPage() {
           projects={projects}
           onClose={newUnit.onClose}
         />
+      )}
+
+      {addStage.isOpen && (
+        <AddStageToUnitModal rows={rows} onClose={addStage.onClose} />
       )}
 
       {/* Unit feed, opened from the update count. Rendered once at page level rather than
@@ -726,26 +742,88 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
   );
 }
 
+/**
+ * Pick a unit already on the tracker, then add a stage to it.
+ *
+ * The missing half of this page. Everything needed to add a stage was here — the row, the
+ * expanded checklist, the same editable grid the unit page uses — but only behind a row
+ * chevron, which is not an affordance anyone finds when they are looking for "add". The
+ * only visible button said "New unit", so that is what got clicked, and the result was new
+ * inventory instead of a stage.
+ *
+ * Deliberately a two-step rather than a stage form of its own: step two mounts the very
+ * same checklist component the unit page and the expanded row use, so there is still one
+ * implementation of what a stage is and what may be typed into one. Picking the unit is
+ * the only thing this modal actually adds.
+ */
+function AddStageToUnitModal({ rows, onClose }: { rows: Row[]; onClose: () => void }) {
+  const [unitId, setUnitId] = useState('');
+  const picked = rows.find((r) => r.id === unitId) ?? null;
+
+  return (
+    <Modal isOpen onOpenChange={onClose} size="3xl" scrollBehavior="inside">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-0.5">
+          <span className="text-sm font-semibold">Add a stage</span>
+          <span className="text-[11px] font-normal text-gray-500">
+            To a unit already on the tracker. Creating a unit is a separate action.
+          </span>
+        </ModalHeader>
+        <ModalBody className="pb-4 gap-3">
+          <Select
+            size="sm" label="Unit" aria-label="Pick a unit"
+            selectedKeys={unitId ? [unitId] : []}
+            onChange={(e) => setUnitId(e.target.value)}
+            description={`${rows.length} unit${rows.length === 1 ? '' : 's'} match the filters above.`}
+          >
+            {rows.map((r) => (
+              <SelectItem
+                key={r.id}
+                textValue={`${r.unitNumber} · ${r.building.name} · ${r.project.name}`}
+              >
+                {r.unitNumber} · {r.building.name} · {r.project.name}
+              </SelectItem>
+            ))}
+          </Select>
+
+          {picked ? (
+            <div className="rounded-lg border border-gray-200 p-3">
+              <UnitConstructionChecklist
+                unitId={picked.id}
+                buildingId={picked.building.id}
+                projectId={picked.project.id}
+                canEdit
+              />
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">
+              Pick a unit to see its checklist and add a stage to it.
+            </p>
+          )}
+        </ModalBody>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 function ChecklistPanel({ row, canEdit }: { row: Row; canEdit: boolean }) {
-  if (row.stages.length === 0) {
-    return (
-      <div className="text-xs text-gray-500">
-        No checklist on this unit yet. Apply one from the unit page.
-      </div>
-    );
-  }
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-baseline gap-2">
         <h3 className="text-xs font-semibold text-gray-900">Checklist</h3>
-        {row.template ? (
+        {/* A unit with no stages used to stop here with "Apply one from the unit page" —
+            a dead end on the screen the site team actually works from, and the reason
+            adding a stage looked like it needed a new unit. UnitConstructionChecklist has
+            always rendered its own empty state with Apply template / Add stage on it; it
+            was simply never reached. */}
+        {row.stages.length > 0 && (row.template ? (
           <span className="text-[11px] text-gray-600">
             {row.template.name} <span className="tabular-nums">v{row.template.stampedVersion ?? row.template.version}</span>
             {' '}· {row.stages.length} steps · stamped at creation
           </span>
         ) : (
           <Chip size="sm" color="warning" variant="flat" className="text-[11px]">No template recorded</Chip>
-        )}
+        ))}
       </div>
       {/* The full editable subitem grid — the same component the unit page uses, so a stage
           is edited in one place with one set of rules rather than two implementations that

@@ -380,6 +380,41 @@ function UnitHistorySummary({ summary }: { summary: any }) {
   );
 }
 
+/**
+ * The delete control for one backfilled row of the timeline.
+ *
+ * Until this existed the only way to remove a backfilled record was the Rent History
+ * section (leases) or the sold-unit panel (sales) — and the latter renders only the
+ * FIRST closed sale, so a unit that was imported twice had duplicate rows on this
+ * timeline that no screen could delete. The timeline is where duplicates are actually
+ * noticed, so the control belongs on the row that shows the problem.
+ *
+ * A live record is deliberately left alone here: it is edited or ended through its own
+ * card, where the consequences (ledger, unit status) are visible. Only the unregenerable
+ * hand-entered ones get an erase button, and that button still goes through the Founder
+ * gate — this widens who can *reach* the flow, not who can decide.
+ */
+function HistoricalEntryDelete({ entry }: { entry: any }) {
+  if (!entry?.isHistorical) return null;
+  const id = entry.kind === 'lease' ? entry.data?.leaseId : entry.data?.saleId;
+  if (!id) return null;
+
+  return (
+    <HistoricalRecordControls
+      variant="inline"
+      record={{
+        kind: entry.kind,
+        id,
+        label: entry.title,
+        dateRangeLabel: entry.isOngoing
+          ? `${fmtDate(entry.startDate)} – present`
+          : [fmtDate(entry.startDate), entry.endDate ? fmtDate(entry.endDate) : null]
+            .filter(Boolean).join(' – '),
+      }}
+    />
+  );
+}
+
 function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
   const { data, isLoading, error } = useUnitHistory(unitId);
   const [showRent, setShowRent] = useState(true);
@@ -444,6 +479,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                       {e.isOngoing ? 'Backfilled' : 'Historical'}
                     </span>
                   )}
+                  <HistoricalEntryDelete entry={e} />
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {fmtDate(e.startDate)} – {e.isOngoing ? 'present' : fmtDate(e.endDate)}
@@ -483,6 +519,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                       Historical
                     </span>
                   )}
+                  <HistoricalEntryDelete entry={e} />
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {fmtDate(e.startDate)}
@@ -1692,8 +1729,16 @@ export default function UnitDetailPage() {
       {constructionFirst && activitySection}
 
       <div id="section-overview" className="columns-1 lg:columns-2 gap-5 sm:gap-6 mb-5 sm:mb-6 [&>*]:break-inside-avoid [&>*]:mb-5 sm:[&>*]:mb-6">
-        {/* Active Lease / Tenant Profile — hidden for SOLD units */}
-        {u.status !== 'SOLD' && <Section
+        {/* Active Lease / Tenant Profile.
+            Shown for SOLD units too, since 2026-09-01. Hiding it did not prevent a
+            sold-and-tenanted unit — the API never blocked one, and units reached that
+            state anyway (a hand-flipped status, a tenancy that outlived the sale, a
+            backfill entered out of order). It only removed every means of looking at or
+            correcting the tenancy, while the history timeline went on warning about it
+            and pointing at controls that were not on the page. The billing rules are
+            unchanged: a lease on a SOLD unit stays out of the rent roll, invoicing,
+            cash flow and dunning. What changes is that it can now be seen and edited. */}
+        <Section
           icon={<FiHome className="w-4 h-4 text-blue-600" />}
           title="Tenant"
           action={canEditLease ? (
@@ -1873,7 +1918,17 @@ export default function UnitDetailPage() {
           ) : (
             <EmptyRow icon={<FiHome className="w-5 h-5" />} text="No active lease" />
           )}
-        </Section>}
+
+          {/* Said once, at the bottom, rather than as a banner over the card: on a sold
+              unit this is a standing condition of the record, not a problem to act on.
+              It is here so nobody reads a rent figure above and expects an invoice. */}
+          {u.status === 'SOLD' && (
+            <p className="mt-4 pt-3 border-t border-gray-100 text-[11px] text-gray-500 leading-snug">
+              This unit is sold. A tenancy recorded here is kept for the record — it stays out
+              of the rent roll, invoicing, cash flow and reminders, whatever its status says.
+            </p>
+          )}
+        </Section>
 
         {/* Construction — the site work covering this unit. Sits beside the tenant and
             rent history on purpose: "is anything happening to this unit" and "who is in

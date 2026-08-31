@@ -8,6 +8,10 @@ const mockPrisma: any = {
   sale: {
     findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn(),
     create: jest.fn(),
+    // backfillSale checks for an identical sale before writing. Defaults to "nothing like
+    // this is stored", which is what every existing backfill case assumes; the duplicate
+    // suite overrides it.
+    findFirst: jest.fn().mockResolvedValue(null),
   },
   unit: { findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), update: jest.fn() },
   building: { findUnique: jest.fn() },
@@ -1630,6 +1634,9 @@ describe('SalesService.backfillSale', () => {
     mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1', deletedAt: null, building: { projectId: 'p1' } });
     mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'LEASED' });
     mockPrisma.unit.update.mockResolvedValue({});
+    // clearAllMocks resets calls, not implementations — without this the duplicate suite's
+    // override would leak into every case that follows it.
+    mockPrisma.sale.findFirst.mockResolvedValue(null);
     mockPrisma.sale.create.mockImplementation(({ data }: any) => Promise.resolve({ id: 'sale-hist1', ...data }));
     mockPrisma.salePayment.create.mockResolvedValue({});
     mockPrisma.lease.findMany.mockResolvedValue([]); // no tenancy on the unit by default
@@ -1643,6 +1650,39 @@ describe('SalesService.backfillSale', () => {
     await expect(
       service.backfillSale({ ...PAST_SALE, closingDate: future.toISOString() } as any, 'user-1'),
     ).rejects.toThrow(/has not closed yet/);
+  });
+
+  // Unlike a lease, a sale carries no date range, so there is no exclusion constraint in
+  // the database to fall back on. This guard is the only thing standing between a
+  // re-uploaded spreadsheet and a second copy of every sale it contains.
+  describe('duplicate protection', () => {
+    it('refuses a sale already recorded on the unit for the same buyer and day', async () => {
+      mockPrisma.sale.findFirst.mockResolvedValue({
+        id: 'existing', buyer: 'Historical Buyer LLC', salePrice: 500000,
+        closingDate: new Date('2022-06-30'), isHistorical: true,
+      });
+      await expect(service.backfillSale(PAST_SALE as any, 'user-1'))
+        .rejects.toThrow(/already recorded/);
+      expect(mockPrisma.sale.create).not.toHaveBeenCalled();
+    });
+
+    it('compares the closing date as a whole day, not an instant', async () => {
+      // Backfill stores midnight UTC; a sale closed through the live path carries a real
+      // timestamp. Those are the same day's sale and must not both be written.
+      await service.backfillSale(PAST_SALE as any, 'user-1');
+      const where = mockPrisma.sale.findFirst.mock.calls[0][0].where;
+      expect(where.closingDate.gte.toISOString()).toBe('2022-06-30T00:00:00.000Z');
+      expect(where.closingDate.lt.toISOString()).toBe('2022-07-01T00:00:00.000Z');
+      expect(where.buyer).toEqual({ equals: 'Historical Buyer LLC', mode: 'insensitive' });
+      expect(where.deletedAt).toBeNull();
+    });
+
+    it('does not count a soft-deleted sale as the duplicate blocking a re-entry', async () => {
+      // Deleting a mistaken record and entering it again is the intended repair path.
+      await service.backfillSale(PAST_SALE as any, 'user-1');
+      expect(mockPrisma.sale.findFirst.mock.calls[0][0].where.deletedAt).toBeNull();
+      expect(mockPrisma.sale.create).toHaveBeenCalled();
+    });
   });
 
   it('requires exactly one of unitId/buildingId', async () => {
