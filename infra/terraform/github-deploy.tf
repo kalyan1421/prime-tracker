@@ -158,7 +158,15 @@ resource "aws_ssm_document" "deploy" {
       inputs = {
         timeoutSeconds = "1800"
         runCommand = [
-          "set -euo pipefail",
+          # `set -eu`, NOT `-euo pipefail`: SSM's aws:runShellScript writes the steps to
+          # _script.sh and runs it with /bin/sh, which on Ubuntu is dash. `pipefail` is a
+          # bashism and dash exits 2 with "Illegal option -o pipefail" before a single
+          # line of the deploy runs. Measured — it failed the first real deploy.
+          #
+          # The real work happens inside the `sudo … bash` heredoc below, which IS bash
+          # and does set pipefail. Keep everything at THIS level POSIX, and check it with
+          # `sh -n`, not `bash -n` — bash validates the bashism happily.
+          "set -eu",
           "exec 2>&1",
           # node/pnpm/pm2 come from NodeSource + `npm i -g` and live in /usr/bin; the
           # AWS CLI v2 installs to /usr/local/bin. Both are already in sudo's
