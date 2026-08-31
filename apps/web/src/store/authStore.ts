@@ -75,3 +75,20 @@ export const useAuthStore = create<AuthState>()(
     },
   ),
 );
+
+/**
+ * Adopt what another tab wrote.
+ *
+ * Tokens are persisted to localStorage but the store's state is per-tab, so two open tabs
+ * drift apart the moment either one refreshes — and because the server rotates refresh
+ * tokens, the tab holding the older copy would present a spent token at its own
+ * 15-minute mark and be logged out of a live session. A `storage` event fires only in the
+ * OTHER tabs, so re-reading on it is enough to keep every tab on the current pair. It also
+ * makes "log out" and "log in as someone else" propagate, instead of leaving a second tab
+ * apparently signed in as a user who is gone.
+ */
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'prime-tracker-auth') useAuthStore.persist.rehydrate();
+  });
+}

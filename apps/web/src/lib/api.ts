@@ -35,6 +35,65 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 // Handle 401 → refresh token
+//
+// Two things this has to get right, both learned from real sessions ending at the
+// 15-minute access-token mark:
+//
+//  1. The server ROTATES refresh tokens — using one revokes it. Two tabs each hold their
+//     own copy in memory, so the tab that refreshes second presents a token the first tab
+//     already spent, gets a 401, and would end a session that is perfectly alive. The
+//     newer token is sitting in localStorage; use it instead of logging out.
+//  2. Only an actual auth rejection means the session is over. A network blip, a 502 while
+//     the API restarts, a laptop waking up, a 429 — none of those say anything about the
+//     refresh token, and destroying the session over them is how a user gets thrown back
+//     to the login screen for no visible reason.
+const AUTH_STORAGE_KEY = 'prime-tracker-auth';
+
+/** The refresh token as another TAB may have just rewritten it — zustand's in-memory
+ * state is per-tab, so localStorage is the only shared view. */
+function persistedRefreshToken(): string | null {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? (JSON.parse(raw)?.state?.refreshToken ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Thrown only when the session genuinely cannot continue — the one case that logs out. */
+class SessionEndedError extends Error {
+  constructor() { super('Session ended'); }
+}
+
+async function postRefresh(refreshToken: string): Promise<string> {
+  const { data } = await axios.post(`${API_BASE_URL}/api/auth/refresh`, { refreshToken });
+  useAuthStore.getState().updateTokens(data.accessToken, data.refreshToken);
+  return data.accessToken as string;
+}
+
+async function requestNewAccessToken(): Promise<string> {
+  const attempted = useAuthStore.getState().refreshToken;
+  if (!attempted) throw new SessionEndedError();
+  try {
+    return await postRefresh(attempted);
+  } catch (e) {
+    const status = (e as AxiosError)?.response?.status;
+    if (status !== 401 && status !== 403) throw e; // not a verdict on the token — keep the session
+    const newer = persistedRefreshToken();
+    if (newer && newer !== attempted) {
+      // Another tab rotated first. Its token is the live one.
+      try {
+        return await postRefresh(newer);
+      } catch (retryError) {
+        const retryStatus = (retryError as AxiosError)?.response?.status;
+        if (retryStatus === 401 || retryStatus === 403) throw new SessionEndedError();
+        throw retryError;
+      }
+    }
+    throw new SessionEndedError();
+  }
+}
+
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: (t: string) => void; reject: (e: unknown) => void }> = [];
 
@@ -67,20 +126,18 @@ api.interceptors.response.use(
     isRefreshing = true;
 
     try {
-      const refreshToken = useAuthStore.getState().refreshToken;
-      if (!refreshToken) throw new Error('No refresh token');
-
-      const { data } = await axios.post(`${API_BASE_URL}/api/auth/refresh`, { refreshToken });
-      const { accessToken: newAccess, refreshToken: newRefresh } = data;
-      useAuthStore.getState().updateTokens(newAccess, newRefresh);
-
+      const newAccess = await requestNewAccessToken();
       originalRequest.headers.Authorization = `Bearer ${newAccess}`;
       processQueue(null, newAccess);
       return api(originalRequest);
     } catch (refreshError) {
       processQueue(refreshError);
-      useAuthStore.getState().logout();
-      window.location.href = '/login';
+      // Anything short of a rejected token leaves the session in place: the failed call
+      // surfaces its own error, and the next request tries the refresh again.
+      if (refreshError instanceof SessionEndedError) {
+        useAuthStore.getState().logout();
+        window.location.href = '/login';
+      }
       return Promise.reject(refreshError);
     } finally {
       isRefreshing = false;
