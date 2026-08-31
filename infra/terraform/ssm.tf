@@ -12,9 +12,20 @@ locals {
     "GOOGLE_CLIENT_SECRET",
     "REDIS_PASSWORD",
     "QB_CLIENT_SECRET",
+    # Moved from the plain list 2026-09-01 to match what is actually deployed.
+    # GOOGLE_CLIENT_ID was created as, or later promoted to, a SecureString in the live
+    # account; this file still called it String, so every plan proposed DOWNGRADING it
+    # (SecureString -> String). Terraform quietly undoing someone's hardening is worse
+    # than the hardening never having happened, because nobody is watching for it in a
+    # plan whose stated purpose is something else entirely.
+    #
+    # `ignore_changes` covers `value`, not `type`, so this could not have been caught
+    # there. A client id is only semi-secret — it travels in the browser OAuth flow —
+    # but matching reality costs nothing and a downgrade buys nothing.
+    "GOOGLE_CLIENT_ID",
   ]
   ssm_plain_params = [
-    "GOOGLE_CLIENT_ID",
+    # Genuinely String in the live account, and left that way.
     "QB_CLIENT_ID",
   ]
 }
@@ -39,4 +50,17 @@ resource "aws_ssm_parameter" "plain" {
   lifecycle {
     ignore_changes = [value]
   }
+}
+
+# GOOGLE_CLIENT_ID moved from the plain list to the secure one (see above).
+#
+# Without this block Terraform reads that as "destroy one resource, create another" —
+# and since `value` is only ignored AFTER creation, the new parameter would be created
+# holding the literal "REPLACE_ME". That silently breaks Google sign-in, which is a far
+# worse outcome than the SecureString/String mismatch being corrected. The moved block
+# says it is the same object, so the change becomes an in-place type update and the real
+# value is left alone.
+moved {
+  from = aws_ssm_parameter.plain["GOOGLE_CLIENT_ID"]
+  to   = aws_ssm_parameter.secure["GOOGLE_CLIENT_ID"]
 }
