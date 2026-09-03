@@ -214,13 +214,15 @@ export class SiteTrackerService {
       };
     });
 
-    // Search runs last, over the shaped row, so it can match a tenant or the current stage
-    // and not only the columns that happen to live on the Unit table.
+    // Search runs last, over the shaped row, so it can match a tenant or a stage and not
+    // only the columns that happen to live on the Unit table. Matches ANY of the unit's
+    // stages, not just the current one — searching for an already-finished stage's name
+    // used to silently return nothing, because only `currentStage.label` was checked.
     if (filters.search?.trim()) {
       const q = filters.search.trim().toLowerCase();
       rows = rows.filter((r) => [
         r.unitNumber, r.tenantName, r.building.name, r.project.name,
-        r.currentStage?.label, r.blockerReason,
+        r.blockerReason, ...r.stages.map((s: any) => s.label),
       ].some((v) => v && String(v).toLowerCase().includes(q)));
     }
 

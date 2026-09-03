@@ -171,10 +171,16 @@ export class ConstructionChecklistService {
     userId?: string,
     role?: string,
   ) {
-    let projectFilter: Prisma.BuildingWhereInput = opts.projectId ? { projectId: opts.projectId } : {};
+    // Same archived-project gap as getProjectRollup — deletedAt: null on both the
+    // building and its project, not just the unit.
+    let projectFilter: Prisma.BuildingWhereInput = {
+      deletedAt: null,
+      project: { deletedAt: null },
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    };
     if (!opts.projectId && userId && this.access.isScoped(role)) {
       const ids = await this.access.accessibleProjectIds(userId);
-      projectFilter = { projectId: { in: ids } };
+      projectFilter = { ...projectFilter, projectId: { in: ids } };
     }
 
     const [templateItems, used] = await Promise.all([
@@ -426,10 +432,19 @@ export class ConstructionChecklistService {
     // No projectId means "every project I can see" — for a scoped role (Construction/PM)
     // that's their membership set, resolved the same way DashboardService.memberScope does
     // for its own cross-project aggregates; unscoped roles get no filter at all.
-    let projectFilter: Prisma.BuildingWhereInput = projectId ? { projectId } : {};
+    // deletedAt: null on both the building and its project — archiving a project soft-
+    // deletes the PROJECT ROW ONLY (ProjectsService.archive), buildings/units keep
+    // deletedAt: null forever, so without the project-level check an archived project's
+    // checklist rows kept surfacing here (and from there, into ConstructionReportsPage for
+    // any unscoped role) even after Site Tracker and everything else stopped showing it.
+    let projectFilter: Prisma.BuildingWhereInput = {
+      deletedAt: null,
+      project: { deletedAt: null },
+      ...(projectId ? { projectId } : {}),
+    };
     if (!projectId && userId && this.access.isScoped(role)) {
       const ids = await this.access.accessibleProjectIds(userId);
-      projectFilter = { projectId: { in: ids } };
+      projectFilter = { ...projectFilter, projectId: { in: ids } };
     }
 
     const stages = await this.prisma.unitConstructionStage.findMany({

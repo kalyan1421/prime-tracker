@@ -192,6 +192,20 @@ describe('SiteTrackerService.grid — derived columns', () => {
     const out = await make().grid({ search: 'electrical' }, viewer(['siteTracker:view']));
     expect(out.rows).toHaveLength(1);
   });
+
+  it('searches every stage, not only the current one', async () => {
+    // Used to check only `currentStage.label` (the first BLOCKED-or-incomplete stage), so
+    // a search for an already-finished stage silently returned nothing even though the
+    // stage is right there on the unit.
+    mockPrisma.unit.findMany.mockResolvedValue([unitRow({
+      constructionStages: [
+        stage('Site Survey', 'DONE'),
+        stage('Rough Electrical', 'NOT_STARTED'),
+      ],
+    })]);
+    const out = await make().grid({ search: 'site survey' }, viewer(['siteTracker:view']));
+    expect(out.rows).toHaveLength(1);
+  });
 });
 
 describe('SiteTrackerService.grid — what counts as "on the tracker"', () => {

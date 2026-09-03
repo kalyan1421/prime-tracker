@@ -283,7 +283,12 @@ describe('ConstructionChecklistService.getProjectRollup', () => {
     expect(mockAccess.accessibleProjectIds).toHaveBeenCalledWith('user1');
     expect(mockPrisma.unitConstructionStage.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { unit: { building: { projectId: { in: ['p1', 'p2'] } }, deletedAt: null } },
+        where: {
+          unit: {
+            building: { deletedAt: null, project: { deletedAt: null }, projectId: { in: ['p1', 'p2'] } },
+            deletedAt: null,
+          },
+        },
       }),
     );
   });
@@ -298,7 +303,31 @@ describe('ConstructionChecklistService.getProjectRollup', () => {
     expect(mockAccess.accessibleProjectIds).not.toHaveBeenCalled();
     expect(mockPrisma.unitConstructionStage.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { unit: { building: {}, deletedAt: null } },
+        where: {
+          unit: { building: { deletedAt: null, project: { deletedAt: null } }, deletedAt: null },
+        },
+      }),
+    );
+  });
+
+  it('excludes an archived project — deletedAt: null applies to the project, not just the building', async () => {
+    // Found live: getProjectRollup filtered on the building/unit only, so an archived
+    // project's checklist rows kept surfacing in ConstructionReportsPage for any unscoped
+    // role, after Site Tracker and everything else had already stopped showing it.
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockAccess.isScoped.mockReturnValue(false);
+    const service = makeService();
+
+    await service.getProjectRollup('p1', 'user1', 'FOUNDER');
+
+    expect(mockPrisma.unitConstructionStage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          unit: {
+            building: { deletedAt: null, project: { deletedAt: null }, projectId: 'p1' },
+            deletedAt: null,
+          },
+        },
       }),
     );
   });

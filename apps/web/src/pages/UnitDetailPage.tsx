@@ -1,4 +1,4 @@
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch, Tooltip,
@@ -10,7 +10,7 @@ import {
   useUnit, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
   useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
-  useLeaseRentPeriods, useUnitObligationSummary, useAssignableUsers, useUnitHistory,
+  useLeaseRentPeriods, useUnitObligationSummary, useUnitHistory,
   useTasks,
   useLeaseRentInvoices, useBackfillTenancy, useAddSalePayment, useBrokers,
 } from '../hooks/useApi';
@@ -910,6 +910,7 @@ export default function UnitDetailPage() {
   const canViewBudget = hasPermission('budget:view');
   const canViewChecklist = hasPermission('checklist:view');
   const canEditChecklist = hasPermission('checklist:edit');
+  const canViewSiteTracker = hasPermission('siteTracker:view');
   /**
    * A construction-focused viewer: runs checklists, cannot read leases. That is the
    * Construction role exactly — a PM holds lease:view too. For them the page led with an
@@ -1357,13 +1358,27 @@ export default function UnitDetailPage() {
   );
   return (
     <div className="max-w-[1200px] mx-auto">
-      <button
-        className="inline-flex items-center gap-1.5 text-gray-500 text-sm font-medium mb-4 cursor-pointer hover:text-blue-600 transition-colors"
-        onClick={() => navigate(`/projects/${projectId}/units`)}
-      >
-        <FiArrowLeft className="w-4 h-4" />
-        Back to Units
-      </button>
+      <div className="flex items-center gap-4 mb-4">
+        <button
+          className="inline-flex items-center gap-1.5 text-gray-500 text-sm font-medium cursor-pointer hover:text-blue-600 transition-colors"
+          onClick={() => navigate(`/projects/${projectId}/units`)}
+        >
+          <FiArrowLeft className="w-4 h-4" />
+          Back to Units
+        </button>
+        {/* Site Tracker links here (row → unit) but had no way back — the only route was
+            re-navigating through the project. Project-filtered rather than unit-filtered:
+            the board has no single-unit view to land on. */}
+        {canViewSiteTracker && (
+          <Link
+            to={`/site-tracker?projectId=${projectId}`}
+            className="inline-flex items-center gap-1.5 text-gray-500 text-sm font-medium hover:text-blue-600 transition-colors"
+          >
+            <FiTarget className="w-4 h-4" />
+            View in Site Tracker
+          </Link>
+        )}
+      </div>
 
       {/* Header */}
       <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white mb-5 sm:mb-6">
@@ -1407,6 +1422,25 @@ export default function UnitDetailPage() {
               )}
               {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime Owned</Chip>}
             </div>
+            {/* Site owners — the Site Tracker board has held this since it shipped, but
+                this page never rendered it (a leftover `useAssignableUsers` import was the
+                only trace anything had been planned here). Read-only: assignment stays a
+                Site Tracker action, this just answers "who's on this" while looking at the
+                unit itself. */}
+            {(u.siteAssignees?.length ?? 0) > 0 && (
+              <div className="flex items-center gap-1.5 mt-2">
+                <FiUsers className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                <div className="flex -space-x-1.5">
+                  {u.siteAssignees.map((a: any) => (
+                    <Tooltip key={a.user.id} size="sm" content={a.user.name ?? a.user.email}>
+                      <span>
+                        <Avatar size="sm" name={a.user.name ?? a.user.email} className="w-6 h-6 text-xs ring-2 ring-white" />
+                      </span>
+                    </Tooltip>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           {/* `canEditUnit` was computed and used in four other places on this page but not
               here, so Construction, Viewer, Legal and Finance — none of whom hold unit:edit —

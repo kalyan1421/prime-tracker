@@ -139,6 +139,14 @@ export class UnitsService {
         },
         // Provenance for combined units — which source units were merged in.
         mergedFrom: { select: { id: true, unitNumber: true } },
+        // Who's assigned to the site work. Same shape SiteTrackerService.grid returns;
+        // not gated by any extra permission there (unit:view is enough), so not gated
+        // here either. Unit Detail had a `useAssignableUsers` import for this that was
+        // never wired up — the field simply wasn't in this include.
+        siteAssignees: {
+          select: { user: { select: { id: true, name: true, email: true } } },
+          orderBy: { assignedAt: 'asc' },
+        },
         // Blast radius for the delete dialog — every live record that goes dark with the
         // unit. `loans` was missing, so a unit carrying debt looked free to archive.
         _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } }, loans: { where: { deletedAt: null } } } },

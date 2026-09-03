@@ -171,10 +171,16 @@ const BuildingSection = memo(function BuildingSection({
         </span>
         <span className="flex items-center gap-3 text-xs shrink-0">
           {stats.blocked > 0 && (
-            <span className="flex items-center gap-1 text-red-700 font-medium">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
-              {stats.blocked} blocked
-            </span>
+            // "Blocked" here means a checklist STAGE is in a Blocked status — a different,
+            // narrower thing from the Site Tracker's unit-level blocker call (Unit.blockerStatus),
+            // which this rollup doesn't read at all. Same word, different signal; the tooltip
+            // says so rather than silently letting the two get conflated across screens.
+            <Tooltip content="A checklist stage is marked Blocked — not the same as a unit's Site Tracker blocker flag">
+              <span className="flex items-center gap-1 text-red-700 font-medium cursor-default">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                {stats.blocked} stage blocked
+              </span>
+            </Tooltip>
           )}
           <span className="text-gray-500">{stats.avgPct}% avg</span>
         </span>

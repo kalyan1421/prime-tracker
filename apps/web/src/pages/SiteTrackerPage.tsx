@@ -433,8 +433,17 @@ const GroupSection = memo(function GroupSection({
             >
               {open ? <FiChevronDown className="text-gray-500" /> : <FiChevronRight className="text-gray-500" />}
               {group.building.name}
-              <span className="font-normal text-[11px] text-gray-500">· {group.project.name}</span>
             </button>
+            {/* The only way back to the project from here used to be opening a unit first.
+                Project Detail already links forward to this page filtered by project
+                (?projectId=); this closes the loop the other direction. */}
+            <Link
+              to={`/projects/${group.project.id}/construction`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-[11px] text-gray-500 hover:text-blue-600 hover:underline"
+            >
+              {group.project.name}
+            </Link>
             <span className="text-[11px] text-gray-500">
               {group.units.length} unit{group.units.length === 1 ? '' : 's'}
             </span>
@@ -533,7 +542,7 @@ function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEd
 
         <td className="px-3 py-2">
           <InlineOption
-            value={u.sitePriority} options={priorityOpts} canEdit={canEdit}
+            value={u.sitePriority} options={priorityOpts} canEdit={canEdit} pending={update.isPending}
             placeholder="Set priority" onChange={(v: string | null) => save({ sitePriority: v })}
           />
         </td>
@@ -621,8 +630,8 @@ function BlockerCell({ row, canEdit, isOpen, setOpen, onSave, pending }: any) {
             "blocked for 11 days" is the half of this cell that actually drives action. */}
         <Chip
           size="sm" color="danger" variant="flat" startContent={<FiAlertTriangle size={11} />}
-          className="text-[11px] cursor-pointer"
-          onClick={canEdit ? () => onSave({ blockerStatus: 'NO' }) : undefined}
+          className={`text-[11px] ${canEdit && !pending ? 'cursor-pointer' : ''}`}
+          onClick={canEdit && !pending ? () => onSave({ blockerStatus: 'NO' }) : undefined}
         >
           Blocked{u.blockerDays !== null && <> · <span className="tabular-nums">{u.blockerDays}d</span></>}
         </Chip>
@@ -637,8 +646,8 @@ function BlockerCell({ row, canEdit, isOpen, setOpen, onSave, pending }: any) {
   return (
     <Chip
       size="sm" variant="flat" color={u.blockerStatus === 'NO' ? 'success' : 'default'}
-      className={`text-[11px] ${canEdit ? 'cursor-pointer' : ''}`}
-      onClick={canEdit ? () => setOpen(true) : undefined}
+      className={`text-[11px] ${canEdit && !pending ? 'cursor-pointer' : ''}`}
+      onClick={canEdit && !pending ? () => setOpen(true) : undefined}
     >
       {label}
     </Chip>
@@ -646,7 +655,7 @@ function BlockerCell({ row, canEdit, isOpen, setOpen, onSave, pending }: any) {
 }
 
 /** A chip that becomes a picker on click — the grid's inline-edit primitive. */
-function InlineOption({ value, options, canEdit, placeholder, onChange }: any) {
+function InlineOption({ value, options, canEdit, placeholder, onChange, pending }: any) {
   const current = options.find((o: any) => o.value === value);
   if (!canEdit) {
     return current
@@ -654,14 +663,14 @@ function InlineOption({ value, options, canEdit, placeholder, onChange }: any) {
       : <span className="text-[11px] text-gray-500">—</span>;
   }
   return (
-    <Dropdown>
+    <Dropdown isDisabled={pending}>
       <DropdownTrigger>
         {current ? (
-          <Chip size="sm" variant="flat" color={chipColor(current.color)} className="text-[11px] cursor-pointer">
+          <Chip size="sm" variant="flat" color={chipColor(current.color)} className={`text-[11px] ${pending ? '' : 'cursor-pointer'}`}>
             {current.label}
           </Chip>
         ) : (
-          <button type="button" className="text-[11px] text-gray-500 hover:text-blue-600 underline decoration-dotted">
+          <button type="button" disabled={pending} className="text-[11px] text-gray-500 hover:text-blue-600 underline decoration-dotted disabled:opacity-50">
             {placeholder}
           </button>
         )}
@@ -704,12 +713,18 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
 
   if (!canEdit) return stack;
 
-  // Multi-assign, one PUT with the whole set — never a write per person. A per-item loop
-  // here would hit the API's 10-req/sec throttle and silently drop assignees.
+  // Each checkbox toggle fires the full-set PUT (see the comment above) — with no guard,
+  // ticking two boxes quickly sends two overlapping requests whose responses can resolve
+  // out of order, letting the first click's set win over the second. Disabling the trigger
+  // while one is in flight closes that window the same way BlockerCell/InlineOption do.
   return (
-    <Dropdown closeOnSelect={false}>
+    <Dropdown closeOnSelect={false} isDisabled={setAssignees.isPending}>
       <DropdownTrigger>
-        <button type="button" className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-gray-100" aria-label="Change owners">
+        <button
+          type="button" disabled={setAssignees.isPending}
+          className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-gray-100 disabled:opacity-50"
+          aria-label="Change owners"
+        >
           {stack}
           <FiUsers className="text-gray-400" size={12} />
         </button>
@@ -719,6 +734,7 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
         selectionMode="multiple"
         selectedKeys={new Set(row.assignees.map((a) => a.id))}
         onSelectionChange={(keys) => {
+          if (setAssignees.isPending) return;
           const userIds = Array.from(keys as Set<string>);
           setAssignees.mutate({ unitId: row.id, userIds }, {
             onError: (e) => addToast({ title: errMsg(e, 'Could not update owners'), color: 'danger' }),
