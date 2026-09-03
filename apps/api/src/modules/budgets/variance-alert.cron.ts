@@ -31,8 +31,12 @@ export class VarianceAlertCron {
     // can be a follow-up once we have multi-org users.
     const DEFAULT_THRESHOLD_PCT = 10;
 
+    // Archiving a project sets deletedAt without touching status — a CANCELLED-status
+    // filter alone doesn't catch it, so an archived project kept getting checked daily
+    // and could still fire budget.varianceExceeded notifications for a project nobody
+    // is looking at any more.
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null },
       select: { id: true },
     });
 

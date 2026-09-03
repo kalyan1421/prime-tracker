@@ -241,22 +241,37 @@ export class CashflowEngineService {
   }
 
   // ---- Project-scope filters (shapes differ per model's relation to Project) ----
+  //
+  // `deletedAt: null` on the Project relation (and, for the polymorphic ones, on the
+  // Building relation too) is applied UNCONDITIONALLY here — not only when a projectId/
+  // projectIds scope was given. Archiving a project soft-deletes the PROJECT ROW ONLY, so
+  // Sale/Commitment/CashFlowEntry/Lease/Loan/InteriorInvoice rows under it stay
+  // deletedAt: null forever; without this, an archived project's sale payments, lease
+  // income, draw schedule, manual entries, loan payments, commitments, TI invoices and
+  // commissions all kept flowing into the portfolio-wide cashflow forecast exactly as if
+  // the project were still live. Same gap already fixed on Site Tracker, the exceptions
+  // feed, the construction rollup, leads, and tasks.
 
   /** For models with a direct projectId (Sale, Commitment, CashFlowEntry). */
   private projectFilter(opts: BuildOpts) {
-    if (opts.projectId) return { projectId: opts.projectId };
-    if (opts.projectIds) return { projectId: { in: opts.projectIds } };
-    return {};
+    const base = { project: { deletedAt: null } };
+    if (opts.projectId) return { ...base, projectId: opts.projectId };
+    if (opts.projectIds) return { ...base, projectId: { in: opts.projectIds } };
+    return base;
   }
 
   /** For models anchored polymorphically to unit/building (Lease). */
   private assetProjectFilter(pf: any) {
     const idClause = pf.projectId;
-    if (!idClause) return {};
+    const buildingScope = {
+      deletedAt: null,
+      project: { deletedAt: null },
+      ...(idClause ? { projectId: idClause } : {}),
+    };
     return {
       OR: [
-        { unit: { building: { projectId: idClause } } },
-        { building: { projectId: idClause } },
+        { unit: { building: buildingScope } },
+        { building: buildingScope },
       ],
     };
   }
@@ -264,19 +279,29 @@ export class CashflowEngineService {
   /** Loan is projectId? or building.projectId. */
   private loanProjectFilter(pf: any) {
     const idClause = pf.projectId;
-    if (!idClause) return {};
-    return { OR: [{ projectId: idClause }, { building: { projectId: idClause } }] };
+    return {
+      OR: [
+        { project: { deletedAt: null }, ...(idClause ? { projectId: idClause } : {}) },
+        {
+          building: { deletedAt: null, project: { deletedAt: null }, ...(idClause ? { projectId: idClause } : {}) },
+        },
+      ],
+    };
   }
 
   /** InteriorProject is anchored to unit/building/sale. */
   private interiorProjectFilter(pf: any) {
     const idClause = pf.projectId;
-    if (!idClause) return {};
+    const buildingScope = {
+      deletedAt: null,
+      project: { deletedAt: null },
+      ...(idClause ? { projectId: idClause } : {}),
+    };
     return {
       OR: [
-        { unit: { building: { projectId: idClause } } },
-        { building: { projectId: idClause } },
-        { sale: { projectId: idClause } },
+        { unit: { building: buildingScope } },
+        { building: buildingScope },
+        { sale: { deletedAt: null, project: { deletedAt: null }, ...(idClause ? { projectId: idClause } : {}) } },
       ],
     };
   }

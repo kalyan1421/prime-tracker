@@ -73,7 +73,10 @@ export class TasksService {
         viewer?: { userId: string; role: string; roles?: string[] };
     } = {}) {
         const { projectId, buildingId, unitId, assignedTo, status, priority, search, kind, viewer } = params;
-        const where: Prisma.TaskWhereInput = {};
+        // Archiving a project soft-deletes the PROJECT ROW ONLY, so a Task under it stays
+        // deletedAt: null forever — without this, an archived project's tasks kept
+        // showing in the cross-project /api/tasks list. Mirrors LeadsService.findAll.
+        const where: Prisma.TaskWhereInput = { project: { deletedAt: null } };
 
         if (projectId) where.projectId = projectId;
         else {

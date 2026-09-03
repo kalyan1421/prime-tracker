@@ -28,8 +28,12 @@ export class KpiPrecomputeService {
   }
 
   async recomputeAll() {
+    // deletedAt: null alongside the status check — archiving sets deletedAt without
+    // touching status, so an archived project was still getting a nightly snapshot
+    // recomputed for no reader (KpiSnapshot has no cross-project consumer today, but
+    // there's no reason to keep spending the compute on a project nobody's looking at).
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null },
       select: { id: true, name: true },
     });
 

@@ -433,7 +433,13 @@ export class DashboardService {
       userId && role ? { userId, role } : undefined,
     );
     const leads = await this.prisma.lead.findMany({
-      where: leadScopeIds ? { projectId: { in: leadScopeIds } } : undefined,
+      // project.deletedAt: null on top of the scope filter — an archived project's leads
+      // otherwise kept surfacing in this dashboard's activity/stats. Same gap already
+      // fixed on LeadsService.findAll, SiteTrackerService.grid, and the exceptions feed.
+      where: {
+        project: { deletedAt: null },
+        ...(leadScopeIds ? { projectId: { in: leadScopeIds } } : {}),
+      },
       include: { project: { select: { id: true, name: true } } },
       orderBy: { updatedAt: 'desc' },
     });

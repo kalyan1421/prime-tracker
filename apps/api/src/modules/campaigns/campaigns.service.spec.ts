@@ -194,7 +194,9 @@ describe('CampaignsService', () => {
 
       expect(mockPrisma.campaign.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ projects: { some: { projectId: { in: ['p1'] } } } }),
+          where: expect.objectContaining({
+            projects: { some: { projectId: { in: ['p1'] }, project: { deletedAt: null } } },
+          }),
         }),
       );
     });
@@ -206,7 +208,9 @@ describe('CampaignsService', () => {
 
       expect(mockPrisma.campaign.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ projects: { some: { projectId: 'p9' } } }),
+          where: expect.objectContaining({
+            projects: { some: { projectId: 'p9', project: { deletedAt: null } } },
+          }),
         }),
       );
     });

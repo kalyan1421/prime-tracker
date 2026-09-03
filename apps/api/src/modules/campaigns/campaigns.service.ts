@@ -23,10 +23,15 @@ export class CampaignsService {
 
   async findAll(params: { projectId?: string; status?: CampaignStatus; channel?: CampaignChannel; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) where.projects = { some: { projectId: params.projectId } };
-    else {
+    // `project: { deletedAt: null }` alongside the projectId match — a campaign linked
+    // only to an archived project otherwise kept showing in the filtered/scoped views.
+    // (A campaign with no project link at all, or one also linked to a live project, is
+    // unaffected — this only narrows the `some` match itself.)
+    if (params.projectId) {
+      where.projects = { some: { projectId: params.projectId, project: { deletedAt: null } } };
+    } else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds } } };
+      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds }, project: { deletedAt: null } } };
     }
     if (params.status) where.status = params.status;
     if (params.channel) where.channel = params.channel;
@@ -283,10 +288,15 @@ export class CampaignsService {
    */
   async spendByCampaign(params: { projectId?: string; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) where.projects = { some: { projectId: params.projectId } };
-    else {
+    // `project: { deletedAt: null }` alongside the projectId match — a campaign linked
+    // only to an archived project otherwise kept showing in the filtered/scoped views.
+    // (A campaign with no project link at all, or one also linked to a live project, is
+    // unaffected — this only narrows the `some` match itself.)
+    if (params.projectId) {
+      where.projects = { some: { projectId: params.projectId, project: { deletedAt: null } } };
+    } else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds } } };
+      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds }, project: { deletedAt: null } } };
     }
 
     const campaigns = await this.prisma.campaign.findMany({
@@ -314,10 +324,15 @@ export class CampaignsService {
    */
   async performance(params: { projectId?: string; from?: string; to?: string; viewer?: { userId: string; role: string; roles?: string[] } } = {}) {
     const where: Prisma.CampaignWhereInput = { deletedAt: null };
-    if (params.projectId) where.projects = { some: { projectId: params.projectId } };
-    else {
+    // `project: { deletedAt: null }` alongside the projectId match — a campaign linked
+    // only to an archived project otherwise kept showing in the filtered/scoped views.
+    // (A campaign with no project link at all, or one also linked to a live project, is
+    // unaffected — this only narrows the `some` match itself.)
+    if (params.projectId) {
+      where.projects = { some: { projectId: params.projectId, project: { deletedAt: null } } };
+    } else {
       const scopeIds = await this.access.listProjectScope(params.viewer, params.projectId);
-      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds } } };
+      if (scopeIds) where.projects = { some: { projectId: { in: scopeIds }, project: { deletedAt: null } } };
     }
 
     const campaigns = await this.prisma.campaign.findMany({

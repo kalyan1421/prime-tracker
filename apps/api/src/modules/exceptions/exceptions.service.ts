@@ -89,8 +89,15 @@ export class ExceptionsService {
 
   /** Compute exceptions, scoped to one project or the whole portfolio. */
   private async compute(projectId?: string): Promise<ExceptionItem[]> {
-    const projectFilter = projectId ? { projectId } : {};
-    const projectFilterUnit = projectId ? { building: { projectId } } : {};
+    // `project: { deletedAt: null }` always applies, portfolio-wide or not — archiving a
+    // project soft-deletes the PROJECT ROW ONLY, so without this an archived project's
+    // overdue milestones, stale units, draws, leases and cold sales kept firing into the
+    // portfolio-wide "Needs Attention" feed forever, on the same schedule as when it was
+    // live. Same gap already fixed on SiteTrackerService.grid and getProjectRollup.
+    const projectFilter = { project: { deletedAt: null }, ...(projectId ? { projectId } : {}) };
+    const projectFilterUnit = {
+      building: { deletedAt: null, project: { deletedAt: null }, ...(projectId ? { projectId } : {}) },
+    };
     const out: ExceptionItem[] = [];
 
     // ─── Overdue milestones ───

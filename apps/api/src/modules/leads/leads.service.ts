@@ -21,7 +21,11 @@ export class LeadsService {
   } = {}) {
     const { projectId, status, assignedTo, unassigned, unitId, buildingId, campaignId, brokerId, search, viewer } = params;
 
-    const where: Prisma.LeadWhereInput = {};
+    // Archiving a project soft-deletes the PROJECT ROW ONLY, so a Lead under it stays
+    // deletedAt: null forever — without this, an archived project's leads kept showing in
+    // the cross-project /api/leads list (same gap already fixed on Site Tracker, the
+    // exceptions feed, and the construction rollup).
+    const where: Prisma.LeadWhereInput = { project: { deletedAt: null } };
     if (projectId) where.projectId = projectId;
     else {
       // Scoped field roles (Sales/Marketing/PM) only see leads in their member projects.

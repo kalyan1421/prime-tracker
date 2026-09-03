@@ -11,11 +11,20 @@ export class InvestorsService {
   constructor(private prisma: PrismaService) {}
 
   async findAll() {
+    // project: { deletedAt: null } on all three — archiving a project soft-deletes the
+    // PROJECT ROW ONLY, so its EquityPosition/CapitalCall/Distribution rows stayed
+    // deletedAt: null forever and kept rolling into these portfolio totals as if the
+    // project were still live. findById (the investor's own detail page) is deliberately
+    // left showing full history, same as a Unit's lease/sale timeline — this is only the
+    // cross-investor aggregate.
     const investors = await this.prisma.investor.findMany({
       include: {
-        positions: { include: { project: { select: { id: true, name: true } } } },
-        capitalCalls: true,
-        distributions: true,
+        positions: {
+          where: { project: { deletedAt: null } },
+          include: { project: { select: { id: true, name: true } } },
+        },
+        capitalCalls: { where: { project: { deletedAt: null } } },
+        distributions: { where: { project: { deletedAt: null } } },
       },
       orderBy: { name: 'asc' },
     });
@@ -52,6 +61,7 @@ export class InvestorsService {
     const investors = await this.findAll();
     const projects = await this.prisma.equityPosition.groupBy({
       by: ['projectId'],
+      where: { project: { deletedAt: null } },
       _sum: { committedAmt: true, calledAmt: true },
     });
 
