@@ -914,7 +914,7 @@ model Loan {
   buildingId      String?
   building        Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   unitId          String?
-  unit            Unit?     @relation(fields: [unitId], references: [id])
+  unit            Unit?     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   // Free-text key backed by CustomOption (category="loan_type") — same pattern as
   // BudgetLine.category. Was a hardcoded LoanType enum; converted so orgs can add their
   // own types (e.g. "SBA 504") without a schema change. The 5 former enum values are
@@ -1275,9 +1275,9 @@ model Lease {
   // Polymorphic asset link — exactly one of (unitId, buildingId) is set.
   // Service-layer enforcement; DB allows both null only during migration.
   unitId                 String?
-  unit                   Unit?     @relation(fields: [unitId], references: [id])
+  unit                   Unit?     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   buildingId             String?
-  building               Building? @relation(fields: [buildingId], references: [id])
+  building               Building? @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   // tenantName: legacy field — kept populated for backwards compatibility with existing
   // queries and reporting. New rows should also populate `tenantLegalName` (the LLC /
   // legal entity that signs the lease) and `tenantBrand` (the doing-business-as / brand
@@ -2398,9 +2398,9 @@ model Client {
   saleId      String       @unique
   sale        Sale         @relation(fields: [saleId], references: [id], onDelete: Cascade)
   projectId   String
-  project     Project      @relation(fields: [projectId], references: [id])
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   unitId      String
-  unit        Unit         @relation(fields: [unitId], references: [id])
+  unit        Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
   status      ClientStatus @default(ONBOARDING)
   invitedAt   DateTime?
   activatedAt DateTime?
@@ -2459,7 +2459,7 @@ model CapitalCall {
   investorId String
   investor   Investor          @relation(fields: [investorId], references: [id])
   projectId  String
-  project    Project           @relation(fields: [projectId], references: [id])
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   amount     Float
   dueDate    DateTime
   paidDate   DateTime?
@@ -2477,7 +2477,7 @@ model Distribution {
   investorId String
   investor   Investor @relation(fields: [investorId], references: [id])
   projectId  String
-  project    Project  @relation(fields: [projectId], references: [id])
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   amount     Float
   distDate   DateTime
   distType   String
@@ -3036,9 +3036,9 @@ model InteriorProject {
   id                String                   @id @default(cuid())
   // Anchor — exactly one of (unitId, buildingId); service-enforced (mirrors Sale/Loan).
   unitId            String?
-  unit              Unit?                    @relation(fields: [unitId], references: [id])
+  unit              Unit?                    @relation(fields: [unitId], references: [id], onDelete: Cascade)
   buildingId        String?
-  building          Building?                @relation(fields: [buildingId], references: [id])
+  building          Building?                @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   // Optional context links — "interior is part of the contract agreement".
   saleId            String?
   sale              Sale?                    @relation(fields: [saleId], references: [id])

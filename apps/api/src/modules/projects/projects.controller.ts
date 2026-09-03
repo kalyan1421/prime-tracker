@@ -137,9 +137,23 @@ export class ProjectsController {
 
   @Delete(':id')
   @RequirePermissions('project:delete')
-  @ApiOperation({ summary: 'Archive project (soft-delete: status → CANCELLED)' })
-  delete(@Param('id') id: string) {
-    return this.projectsService.delete(id);
+  @ApiOperation({ summary: 'Archive project — reversible, hides it everywhere but keeps every row (see /:id/restore)' })
+  archive(@Param('id') id: string) {
+    return this.projectsService.archive(id);
+  }
+
+  @Post(':id/restore')
+  @RequirePermissions('project:delete')
+  @ApiOperation({ summary: 'Un-archive a project' })
+  restore(@Param('id') id: string) {
+    return this.projectsService.restore(id);
+  }
+
+  @Delete(':id/hard')
+  @RequirePermissions('project:hardDelete')
+  @ApiOperation({ summary: 'Permanently delete a project and everything under it — irreversible' })
+  hardDelete(@Param('id') id: string) {
+    return this.projectsService.hardDelete(id);
   }
 
   // ---- Team Members ----

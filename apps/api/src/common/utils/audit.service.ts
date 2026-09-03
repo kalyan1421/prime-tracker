@@ -283,6 +283,15 @@ const ACTIVITY_SUBJECTS: Record<string, { model: string; select: any; build: (r:
   },
 };
 
+/**
+ * Which ACTIVITY_SUBJECTS keys resolve against a model that actually has `deletedAt`.
+ * Deliberately a conservative allowlist rather than every key: filtering on a column a
+ * model doesn't have throws, and that would take down subject resolution for every row in
+ * the page, not just the one entity — worse than the stale-link bug this exists to fix.
+ * Extend as more entities are confirmed to carry the column.
+ */
+const SOFT_DELETABLE_ACTIVITY_ENTITIES = new Set(['Projects', 'Units', 'Buildings', 'Sales', 'Sale', 'Leases', 'Lease', 'Interior']);
+
 // Sales and leases are audited under BOTH a plural and a singular entity name, written by
 // different code paths. The plural rows carry no entityId — they are the list-level
 // operations — while the singular ones are the per-record writes and are the rows worth
@@ -536,7 +545,15 @@ export class AuditService {
         const cfg = ACTIVITY_SUBJECTS[entity];
         try {
           const found: any[] = await (this.prisma as any)[cfg.model].findMany({
-            where: { id: { in: Array.from(ids) } },
+            // Excludes soft-deleted rows so a since-deleted/archived record falls back to
+            // the generic summary below rather than resolving a live-looking name and link
+            // to something that no longer shows anywhere else in the app. Scoped to the
+            // entities confirmed to carry `deletedAt` — applying it blindly to one that
+            // doesn't would 500 the whole feed instead of degrading one row.
+            where: {
+              id: { in: Array.from(ids) },
+              ...(SOFT_DELETABLE_ACTIVITY_ENTITIES.has(entity) ? { deletedAt: null } : {}),
+            },
             select: cfg.select,
           });
           for (const row of found) {

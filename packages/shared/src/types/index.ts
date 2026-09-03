@@ -173,6 +173,8 @@ export const PERMISSIONS = {
   PROJECT_CREATE: 'project:create',
   PROJECT_EDIT: 'project:edit',
   PROJECT_DELETE: 'project:delete',
+  /** Permanent, unrecoverable delete — distinct from PROJECT_DELETE, which archives. */
+  PROJECT_HARD_DELETE: 'project:hardDelete',
 
   // Financial
   FINANCIAL_VIEW: 'financial:view',
@@ -776,7 +778,7 @@ export const PROJECT_MEMBER_ROLE_META: Record<ProjectMemberRole, { label: string
 // ---- Permission Categories (for Role Management UI) ----
 
 export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: string[] }[] = [
-  { key: 'projects', label: 'Projects', permissions: ['project:view', 'project:create', 'project:edit', 'project:delete'] },
+  { key: 'projects', label: 'Projects', permissions: ['project:view', 'project:create', 'project:edit', 'project:delete', 'project:hardDelete'] },
   { key: 'buildings', label: 'Buildings & Units', permissions: ['building:view', 'building:edit', 'unit:view', 'unit:edit'] },
   { key: 'financial', label: 'Financial', permissions: ['financial:view', 'financial:edit', 'financial:export', 'budget:view', 'budget:edit', 'actual:view', 'actual:edit'] },
   { key: 'loans', label: 'Loans & Draws', permissions: ['loan:view', 'loan:edit', 'draw:view', 'draw:edit', 'draw:approve'] },

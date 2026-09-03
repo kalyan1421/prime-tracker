@@ -242,7 +242,12 @@ export class ProjectsService {
         kpiSnapshots: { orderBy: { snapshotDate: 'desc' }, take: 1 },
       },
     });
-    if (!project) throw new NotFoundException('Project not found');
+    // An archived project 200'd here in full — name, milestones, financials, everything —
+    // regardless of who linked to it. That's the bug behind "I archived it and can still
+    // open it": findAll/dashboard/site-tracker/etc. all correctly filter deletedAt, but the
+    // single-record read never did. Archived projects are managed from the "Show Archived"
+    // list (restore / hard-delete), not from this endpoint.
+    if (!project || project.deletedAt) throw new NotFoundException('Project not found');
     // Loans are deliberately NOT included here (see /api/loans instead, correctly
     // gated on loan:view) — omitted rather than redacted since nothing on this
     // endpoint needs to show even an aggregate of them.
@@ -390,12 +395,43 @@ export class ProjectsService {
     });
   }
 
-  async delete(id: string) {
+  /**
+   * Archive — reversible. Hides the project from every list, dashboard, and single-record
+   * read (findById now 404s on `deletedAt`), but keeps every row: buildings, units,
+   * financials, sales, leases, everything. Restorable via `restore()`.
+   */
+  async archive(id: string) {
     await this.findById(id);
     return this.prisma.project.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
+  }
+
+  /** Reverses archive(). The project and everything under it were never touched. */
+  async restore(id: string) {
+    const project = await this.prisma.project.findUnique({ where: { id }, select: { id: true, deletedAt: true } });
+    if (!project) throw new NotFoundException('Project not found');
+    if (!project.deletedAt) throw new ConflictException('This project is not archived');
+    return this.prisma.project.update({ where: { id }, data: { deletedAt: null } });
+  }
+
+  /**
+   * Hard delete — irreversible. Permanently removes the project row, which cascades at the
+   * database level through every table that hangs off it: buildings, units, sales, leases,
+   * loans, draws, budgets, documents, milestones, tasks, leads, comments, investor capital
+   * calls and distributions tied to this project — everything. There is no undo, and no
+   * trace survives beyond the audit-log entry recording that it happened (audit_events
+   * carries no FK to Project, by design, so it cannot itself be cascaded away).
+   *
+   * Callers should confirm intent above this layer (name-match confirmation etc.) — this
+   * method does exactly what it's told, on any project regardless of archive state.
+   */
+  async hardDelete(id: string) {
+    const project = await this.prisma.project.findUnique({ where: { id }, select: { id: true, name: true } });
+    if (!project) throw new NotFoundException('Project not found');
+    await this.prisma.project.delete({ where: { id } });
+    return { deleted: true, name: project.name };
   }
 
   // ---- Team Members ----

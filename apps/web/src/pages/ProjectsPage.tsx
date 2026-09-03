@@ -5,11 +5,14 @@ import {
 } from '@heroui/react';
 import {
   FiMapPin, FiPlus, FiEdit2, FiTrash2, FiSearch,
-  FiGrid, FiList, FiArrowUp, FiArrowDown, FiInbox,
+  FiGrid, FiList, FiArrowUp, FiArrowDown, FiInbox, FiRotateCcw, FiAlertTriangle,
 } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 import { useState, useMemo, useCallback } from 'react';
-import { useProjects, useCreateProject, useUpdateProject, useDeleteProject, useProjectHealthBulk } from '../hooks/useApi';
+import {
+  useProjects, useCreateProject, useUpdateProject, useDeleteProject,
+  useRestoreProject, useHardDeleteProject, useProjectHealthBulk,
+} from '../hooks/useApi';
 import { HealthScoreRing } from '../components/HealthScoreRing';
 import { fmt } from '../utils/fmt';
 import { StatusBadge, PhaseProgress, ErrorState } from '../components/ui';
@@ -90,14 +93,17 @@ function ProjectStat({ label, value, hint, emphasis }: {
 }
 
 function ProjectCard({
-  p, onEdit, onDelete, canEdit, canDelete, health, canViewFinancials, canViewSales, canViewLeads,
+  p, onEdit, onDelete, onRestore, onHardDelete, canEdit, canDelete, canHardDelete,
+  health, canViewFinancials, canViewSales, canViewLeads,
 }: {
   p: any; onEdit: (p: any) => void; onDelete: (id: string) => void;
-  canEdit: boolean; canDelete: boolean;
+  onRestore: (id: string) => void; onHardDelete: (p: any) => void;
+  canEdit: boolean; canDelete: boolean; canHardDelete: boolean;
   health?: { score: number; breakdown: Record<string, { score: number; reason: string }> };
   canViewFinancials: boolean; canViewSales: boolean; canViewLeads: boolean;
 }) {
   const navigate = useNavigate();
+  const archived = !!p.deletedAt;
   const showActions = canEdit || canDelete;
   const breakdown = health?.breakdown
     ? Object.entries(health.breakdown).map(([k, v]) => ({
@@ -111,12 +117,16 @@ function ProjectCard({
     // Nested interactive elements (health ring, Edit/Archive buttons) already call
     // e.stopPropagation() in their own onClick, which still stops the card's press from
     // firing — same native event bubbling either way.
-    <Card shadow="sm" isPressable onPress={() => navigate(`/projects/${p.id}`)} className="w-full text-left hover:shadow-md transition-shadow duration-150">
+    <Card
+      shadow="sm" isPressable
+      onPress={() => (archived ? undefined : navigate(`/projects/${p.id}`))}
+      className={`w-full text-left transition-shadow duration-150 ${archived ? 'opacity-60' : 'hover:shadow-md'}`}
+    >
       <CardBody>
         <div className="flex justify-between items-start mb-2 gap-2">
           <div className="flex items-start gap-2 flex-1 min-w-0">
             {/* Slice 2: Health score ring — at-a-glance triage. */}
-            {health && (
+            {health && !archived && (
               <div onClick={(e) => e.stopPropagation()} className="shrink-0 mt-0.5">
                 <HealthScoreRing score={health.score} size="sm" breakdown={breakdown} />
               </div>
@@ -130,17 +140,41 @@ function ProjectCard({
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-            <StatusBadge status={p.status} />
-            {canEdit && (
-              <Button size="sm" variant="light" isIconOnly onPress={() => onEdit(p)} aria-label="Edit project">
-                <FiEdit2 className="text-gray-400 text-xs" />
-              </Button>
-            )}
-            {canDelete && !p.deletedAt && (
-              <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onDelete(p.id)} aria-label="Archive project">
-                <FiTrash2 className="text-xs" />
-              </Button>
-            )}
+            {archived
+              ? (
+                <>
+                  <Chip size="sm" variant="flat" color="warning" className="text-[11px]">Archived</Chip>
+                  {canDelete && (
+                    <Tooltip content="Restore">
+                      <Button size="sm" variant="light" color="success" isIconOnly onPress={() => onRestore(p.id)} aria-label="Restore project">
+                        <FiRotateCcw className="text-xs" />
+                      </Button>
+                    </Tooltip>
+                  )}
+                  {canHardDelete && (
+                    <Tooltip content="Delete permanently — cannot be undone">
+                      <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onHardDelete(p)} aria-label="Delete project permanently">
+                        <FiAlertTriangle className="text-xs" />
+                      </Button>
+                    </Tooltip>
+                  )}
+                </>
+              )
+              : (
+                <>
+                  <StatusBadge status={p.status} />
+                  {canEdit && (
+                    <Button size="sm" variant="light" isIconOnly onPress={() => onEdit(p)} aria-label="Edit project">
+                      <FiEdit2 className="text-gray-400 text-xs" />
+                    </Button>
+                  )}
+                  {canDelete && (
+                    <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onDelete(p.id)} aria-label="Archive project">
+                      <FiTrash2 className="text-xs" />
+                    </Button>
+                  )}
+                </>
+              )}
           </div>
         </div>
 
@@ -199,17 +233,19 @@ function ProjectCard({
   );
 }
 
-function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete, canViewFinancials }: {
+function ProjectRow({ p, onEdit, onDelete, onRestore, onHardDelete, canEdit, canDelete, canHardDelete, canViewFinancials }: {
   p: any; onEdit: (p: any) => void; onDelete: (id: string) => void;
-  canEdit: boolean; canDelete: boolean; canViewFinancials: boolean;
+  onRestore: (id: string) => void; onHardDelete: (p: any) => void;
+  canEdit: boolean; canDelete: boolean; canHardDelete: boolean; canViewFinancials: boolean;
 }) {
   const navigate = useNavigate();
+  const archived = !!p.deletedAt;
   const pct = p.budgetTotal ? Math.min(((p.actualsTotal ?? 0) / p.budgetTotal) * 100, 100) : 0;
   const pctColor = pct >= 100 ? 'text-red-700' : pct >= 80 ? 'text-amber-700' : 'text-green-700';
   return (
     <tr
-      className="border-b border-gray-100 hover:bg-gray-50 transition-colors cursor-pointer text-sm"
-      onClick={() => navigate(`/projects/${p.id}`)}
+      className={`border-b border-gray-100 transition-colors text-sm ${archived ? 'opacity-60' : 'hover:bg-gray-50 cursor-pointer'}`}
+      onClick={() => (archived ? undefined : navigate(`/projects/${p.id}`))}
     >
       <td className="py-3 px-4">
         <p className="font-medium text-gray-900">{p.name}</p>
@@ -239,21 +275,45 @@ function ProjectRow({ p, onEdit, onDelete, canEdit, canDelete, canViewFinancials
           )}
         </td>
       )}
-      <td className="py-3 px-4"><StatusBadge status={p.status} /></td>
+      <td className="py-3 px-4">
+        {archived ? <Chip size="sm" variant="flat" color="warning" className="text-[11px]">Archived</Chip> : <StatusBadge status={p.status} />}
+      </td>
       <td className="py-3 px-4 text-center text-gray-600">{p._count?.buildings ?? 0} / {p.unitCount ?? 0}</td>
       <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex gap-1 justify-end">
-          {canEdit && (
-            <Button size="sm" variant="light" isIconOnly onPress={() => onEdit(p)} aria-label="Edit">
-              <FiEdit2 className="text-xs text-gray-400" />
-            </Button>
+          {archived ? (
+            <>
+              {canDelete && (
+                <Tooltip content="Restore">
+                  <Button size="sm" variant="light" color="success" isIconOnly onPress={() => onRestore(p.id)} aria-label="Restore">
+                    <FiRotateCcw className="text-xs" />
+                  </Button>
+                </Tooltip>
+              )}
+              {canHardDelete && (
+                <Tooltip content="Delete permanently — cannot be undone">
+                  <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onHardDelete(p)} aria-label="Delete permanently">
+                    <FiAlertTriangle className="text-xs" />
+                  </Button>
+                </Tooltip>
+              )}
+              {!canDelete && !canHardDelete && <span className="text-gray-300 text-xs">—</span>}
+            </>
+          ) : (
+            <>
+              {canEdit && (
+                <Button size="sm" variant="light" isIconOnly onPress={() => onEdit(p)} aria-label="Edit">
+                  <FiEdit2 className="text-xs text-gray-400" />
+                </Button>
+              )}
+              {canDelete && (
+                <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onDelete(p.id)} aria-label="Archive">
+                  <FiTrash2 className="text-xs" />
+                </Button>
+              )}
+              {!canEdit && !canDelete && <span className="text-gray-300 text-xs">—</span>}
+            </>
           )}
-          {canDelete && !p.deletedAt && (
-            <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => onDelete(p.id)} aria-label="Archive">
-              <FiTrash2 className="text-xs" />
-            </Button>
-          )}
-          {!canEdit && !canDelete && <span className="text-gray-300 text-xs">—</span>}
         </div>
       </td>
     </tr>
@@ -289,6 +349,7 @@ export default function ProjectsPage() {
   const canCreate = hasPermission('project:create');
   const canEdit = hasPermission('project:edit');
   const canDelete = hasPermission('project:delete');
+  const canHardDelete = hasPermission('project:hardDelete');
   const canViewFinancials = hasPermission('budget:view');
   const canViewSales = hasPermission('sales:view');
   const canViewLeads = hasPermission('lead:view');
@@ -329,14 +390,19 @@ export default function ProjectsPage() {
   const createProject = useCreateProject();
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
+  const restoreProject = useRestoreProject();
+  const hardDeleteProject = useHardDeleteProject();
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
+  const { isOpen: isHardDeleteOpen, onOpen: onHardDeleteOpen, onClose: onHardDeleteClose } = useDisclosure();
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_PROJECT);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [hardDeleteTarget, setHardDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [hardDeleteConfirmText, setHardDeleteConfirmText] = useState('');
 
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -365,6 +431,33 @@ export default function ProjectsPage() {
   };
 
   const openDelete = (id: string) => { setDeleteId(id); onDeleteOpen(); };
+
+  const handleRestore = async (id: string) => {
+    try {
+      await restoreProject.mutateAsync(id);
+      addToast({ title: 'Project restored', color: 'success' });
+    } catch (err: any) {
+      addToast({ title: extractErr(err, 'Failed to restore project'), color: 'danger' });
+    }
+  };
+
+  const openHardDelete = (p: any) => {
+    setHardDeleteTarget({ id: p.id, name: p.name });
+    setHardDeleteConfirmText('');
+    onHardDeleteOpen();
+  };
+
+  const handleHardDelete = async () => {
+    if (!hardDeleteTarget) return;
+    try {
+      await hardDeleteProject.mutateAsync(hardDeleteTarget.id);
+      addToast({ title: `${hardDeleteTarget.name} permanently deleted`, color: 'success' });
+      onHardDeleteClose();
+      setHardDeleteTarget(null);
+    } catch (err: any) {
+      addToast({ title: extractErr(err, 'Failed to permanently delete project'), color: 'danger' });
+    }
+  };
 
   const validateForm = (): boolean => {
     const errs: Record<string, string> = {};
@@ -623,8 +716,11 @@ export default function ProjectsPage() {
               p={p}
               onEdit={openEdit}
               onDelete={openDelete}
+              onRestore={handleRestore}
+              onHardDelete={openHardDelete}
               canEdit={canEdit}
               canDelete={canDelete}
+              canHardDelete={canHardDelete}
               health={healthMap[p.id]}
               canViewFinancials={canViewFinancials}
               canViewSales={canViewSales}
@@ -658,8 +754,11 @@ export default function ProjectsPage() {
                   p={p}
                   onEdit={openEdit}
                   onDelete={openDelete}
+                  onRestore={handleRestore}
+                  onHardDelete={openHardDelete}
                   canEdit={canEdit}
                   canDelete={canDelete}
+                  canHardDelete={canHardDelete}
                   canViewFinancials={canViewFinancials}
                 />
               ))}
@@ -760,20 +859,53 @@ export default function ProjectsPage() {
       {/* Archive Confirmation */}
       <Modal isOpen={isDeleteOpen} onClose={onDeleteClose} isDismissable={false} size="sm">
         <ModalContent>
-          <ModalHeader>Remove Project</ModalHeader>
+          <ModalHeader>Archive Project</ModalHeader>
           <ModalBody>
             <p className="text-sm text-gray-600">
-              This project will be removed from the project list. All buildings, units, financials, and
-              historical data are preserved — it will no longer appear in dashboards or reports.
+              This project will be removed from the project list, dashboards, and reports. All buildings,
+              units, financials, and historical data are preserved and untouched — nothing is deleted.
             </p>
             <p className="text-xs text-gray-500 mt-2">
-              Founders and admins can view removed projects via the "Show Archived" toggle.
+              Founders and admins can view archived projects via the "Show Archived" toggle, and restore
+              this one from there at any time.
             </p>
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={onDeleteClose}>Go Back</Button>
             <Button size="sm" color="danger" onPress={handleDelete} isLoading={deleteProject.isPending}>
-              Yes, Remove
+              Yes, Archive
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Hard Delete Confirmation — irreversible, so it needs more friction than a click. */}
+      <Modal isOpen={isHardDeleteOpen} onClose={onHardDeleteClose} isDismissable={false} size="sm">
+        <ModalContent>
+          <ModalHeader className="text-danger">Permanently Delete Project</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-gray-700">
+              This permanently destroys <span className="font-semibold">{hardDeleteTarget?.name}</span> and
+              everything under it — every building, unit, sale, lease, loan, budget, document, milestone,
+              task, lead, and any investor capital call or distribution tied to this project.
+            </p>
+            <p className="text-sm font-semibold text-danger">
+              There is no undo. Nothing is recoverable after this.
+            </p>
+            <Input
+              size="sm" label={`Type "${hardDeleteTarget?.name}" to confirm`} labelPlacement="outside"
+              value={hardDeleteConfirmText} onValueChange={setHardDeleteConfirmText}
+              placeholder={hardDeleteTarget?.name}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={onHardDeleteClose}>Go Back</Button>
+            <Button
+              size="sm" color="danger" onPress={handleHardDelete}
+              isLoading={hardDeleteProject.isPending}
+              isDisabled={hardDeleteConfirmText !== hardDeleteTarget?.name}
+            >
+              Delete Permanently
             </Button>
           </ModalFooter>
         </ModalContent>
