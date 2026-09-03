@@ -165,6 +165,22 @@ export class UnitsController {
     return this.service.setAssignees(id, body.userIds, userId);
   }
 
+  // Both permissions, not one: this clears the board fields (siteTracker:edit) AND deletes
+  // the unit's checklist (checklist:edit). Construction and PM hold both; nobody reaches it
+  // who could not already do each half separately.
+  @Delete(':id/site-tracker')
+  @RequirePermissions('siteTracker:edit', 'checklist:edit')
+  @ApiOperation({
+    summary: 'Take a unit off the site tracker',
+    description:
+      'Clears the checklist, blocker, priority, work type and owners — every signal that puts '
+      + 'a unit on the board. The unit itself is untouched and stays in inventory. Site updates '
+      + 'are kept.',
+  })
+  untrackFromSiteTracker(@Param('id') id: string) {
+    return this.service.untrackFromSiteTracker(id);
+  }
+
   @Delete(':id')
   @RequirePermissions('unit:edit')
   @ApiOperation({ summary: 'Archive (soft-delete) a unit — blocked if leases/sales exist unless force=true' })

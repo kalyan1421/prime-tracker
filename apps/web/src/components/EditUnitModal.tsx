@@ -40,6 +40,9 @@ export function EditUnitModal({ unit, onClose }: { unit: any; onClose: () => voi
 
   const submit = async () => {
     if (!form.unitNumber.trim()) { setErr('A unit needs a number.'); return; }
+    for (const [field, label] of [['sqft', 'Size'], ['askingPrice', 'Asking price'], ['askingRent', 'Asking rent']] as const) {
+      if (form[field] && Number(form[field]) <= 0) { setErr(`${label} must be greater than zero.`); return; }
+    }
     setErr(null);
     try {
       await update.mutateAsync({
@@ -99,7 +102,10 @@ export function EditUnitModal({ unit, onClose }: { unit: any; onClose: () => voi
               </>
             )}
           </div>
-          <Textarea size="sm" minRows={2} label="Notes" value={form.notes} onValueChange={set('notes')} />
+          <Textarea size="sm" minRows={2} maxLength={2000} label="Notes" value={form.notes} onValueChange={set('notes')} />
+          <p className={`-mt-1 text-right text-[11px] ${form.notes.length > 1900 ? 'text-red-700' : 'text-gray-500'}`}>
+            {form.notes.length}/2000
+          </p>
           <p className="text-[11px] text-gray-500">
             Status, blocker and priority are set on the board itself, not here.
           </p>

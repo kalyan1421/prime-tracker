@@ -2087,6 +2087,11 @@ enum NotificationType {
   /// person and asks them to do something, so it is not filed under a department feed.
   /// Assigning work told nobody at all before this existed.
   TASK_ASSIGNED
+  /// A unit on the Site Tracker has gone quiet — no site update for a week, counted from
+  /// the last update or, for a unit nobody has ever posted about, from when it joined the
+  /// tracker. STALE_DAYS lived only inside the grid's summary before this, so the one
+  /// number the board asks people to act on could only be seen by opening the page.
+  SITE_UPDATE_STALE
   /// Somebody asked to delete a backfilled tenancy (R27). Leadership-routed: the whole
   /// point of the gate is that a second person looks before history is erased.
   HISTORY_DELETION_REQUESTED
@@ -2648,7 +2653,15 @@ model UnitConstructionStage {
   unitId           String
   unit             Unit                         @relation(fields: [unitId], references: [id], onDelete: Cascade)
   sortOrder        Int
+  /// Display name, kept as a MIRROR of the catalogue entry rather than the identity.
+  /// Every rollup, the Site Tracker grid and the exports already read `label`, so keeping
+  /// it populated means renaming a stage does not require rewriting any of them — the
+  /// rename updates the CustomOption and re-syncs this column for the linked rows.
   label            String
+  /// The stable grouping key: a `construction_stage` CustomOption `value`. Null for a
+  /// one-off stage typed through the escape hatch, and for any legacy row whose label
+  /// matched no catalogue entry — both are surfaced in Admin as ad-hoc stages to promote.
+  stageValue       String?
   status           String                       @default("NOT_STARTED")
   ownerId          String?
   owner            User?                        @relation("UnitConstructionStageOwner", fields: [ownerId], references: [id])
@@ -2668,6 +2681,7 @@ model UnitConstructionStage {
   updatedAt        DateTime                     @updatedAt
 
   @@index([unitId, sortOrder])
+  @@index([stageValue])
   @@map("unit_construction_stages")
 }
 

@@ -2,9 +2,10 @@ import { useRef, useState } from 'react';
 import {
   Card, CardBody, CardHeader, Button, Input, Textarea, Avatar, Chip, Select, SelectItem, addToast,
 } from '@heroui/react';
-import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage, FiHome, FiGrid, FiSmartphone, FiCornerDownRight, FiCheckSquare } from 'react-icons/fi';
+import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage, FiHome, FiGrid, FiSmartphone, FiCornerDownRight, FiCheckSquare, FiEdit2 } from 'react-icons/fi';
 import {
-  useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useAddDailyLogPhoto, useRemoveDailyLogPhoto,
+  useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useUpdateDailyLog,
+  useAddDailyLogPhoto, useRemoveDailyLogPhoto,
   usePresignedUpload, useBuildings, useUnitConstructionStages,
 } from '../hooks/useApi';
 import { fmtDate, errMsg } from '../utils/fmt';
@@ -280,6 +281,16 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
 }) {
   const del = useDeleteDailyLog();
   const create = useCreateDailyLog();
+  // Editing an update, rather than deleting and re-posting it.
+  //
+  // PATCH /daily-logs/:id existed with a DTO covering notes, weather and crew, and no
+  // screen reached it — so fixing a typo meant deleting the update and writing it again,
+  // which loses its place in the feed and takes its photos with it. This is the feature
+  // people use on a phone, on site, one-handed.
+  const update = useUpdateDailyLog();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [editErr, setEditErr] = useState<string | null>(null);
   const [replying, setReplying] = useState(false);
   const [replyText, setReplyText] = useState('');
   const addPhoto = useAddDailyLogPhoto();
@@ -312,13 +323,54 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
           </div>
         </div>
         <PermissionGate permission="dailylog:edit">
-          <Button size="sm" variant="light" color="danger" isIconOnly className="h-6 w-6 min-w-6" onPress={() => del.mutate(log.id)}>
-            <FiTrash2 className="text-xs" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            <Button
+              size="sm" variant="light" isIconOnly className="h-6 w-6 min-w-6"
+              aria-label="Edit this update"
+              onPress={() => { setEditing(true); setDraft(log.notes ?? ''); setEditErr(null); }}
+            >
+              <FiEdit2 className="text-xs" />
+            </Button>
+            <Button size="sm" variant="light" color="danger" isIconOnly className="h-6 w-6 min-w-6" aria-label="Delete this update" onPress={() => del.mutate(log.id)}>
+              <FiTrash2 className="text-xs" />
+            </Button>
+          </div>
         </PermissionGate>
       </div>
 
-      <p className="text-sm text-gray-700 whitespace-pre-wrap mt-2">{log.notes}</p>
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          <FormError message={editErr} />
+          <Textarea
+            size="sm" minRows={2} value={draft} onValueChange={setDraft} autoFocus
+            aria-label="Update text"
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm" color="primary" isLoading={update.isPending}
+              onPress={async () => {
+                const notes = draft.trim();
+                // The DTO rejects an empty string; say so here rather than letting a
+                // 400 come back for something the form can see.
+                if (!notes) { setEditErr('An update needs some text. Delete it instead if it should go.'); return; }
+                if (notes === (log.notes ?? '')) { setEditing(false); return; }
+                try {
+                  await update.mutateAsync({ id: log.id, data: { notes } });
+                  setEditing(false);
+                  addToast({ title: 'Update edited', color: 'success' });
+                } catch (err) {
+                  setEditErr(errMsg(err, 'Could not save the edit'));
+                }
+              }}
+            >
+              Save
+            </Button>
+            <Button size="sm" variant="light" onPress={() => setEditing(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-700 whitespace-pre-wrap mt-2">{log.notes}</p>
+      )}
 
       {/* Chips: building tag + weather + crew */}
       <div className="flex flex-wrap gap-1.5 mt-2">

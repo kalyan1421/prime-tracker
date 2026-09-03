@@ -8,15 +8,15 @@
 
 import { useRef, useState } from 'react';
 import {
-  Button, Chip, Input, Progress, Select, SelectItem,
-  Textarea, Tooltip, addToast,
+  Button, Chip, Input, Modal, ModalBody, ModalContent, ModalHeader, Progress,
+  Select, SelectItem, Textarea, Tooltip, addToast,
 } from '@heroui/react';
 import {
-  FiAlertCircle, FiCheckCircle, FiClock, FiFilter,
-  FiPlus, FiUser, FiMapPin,
+  FiAlertCircle, FiCalendar, FiCheckCircle, FiClock, FiFilter, FiImage,
+  FiPlus, FiRotateCcw, FiUser, FiMapPin, FiPaperclip,
 } from 'react-icons/fi';
 import { useAddSnag, useResolveSnag, useUpdateSnag, useAssignableUsers, usePresignedUpload } from '../hooks/useApi';
-import { errMsg } from '../utils/fmt';
+import { errMsg, fmtDate } from '../utils/fmt';
 import { FormError } from './FormError';
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -31,6 +31,19 @@ interface Snag {
   status: SnagStatus;
   createdAt?: string;
   resolvedAt?: string;
+  /** Target date for the fix — also what the daily SNAG_OVERDUE check reads. */
+  dueDate?: string | null;
+  /** Signed URLs from the API; the raw *Path fields are bucket keys and unusable here. */
+  photoUrl?: string | null;
+  afterPhotoUrl?: string | null;
+}
+
+/** Days until `due`, negative when it has already passed. Null when there is no date. */
+function daysUntil(due?: string | null): number | null {
+  if (!due) return null;
+  const d = new Date(due);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.ceil((d.getTime() - Date.now()) / 86_400_000);
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -45,7 +58,7 @@ const STATUS_META: Record<SnagStatus, {
   RESOLVED:    { label: 'Resolved',    color: 'success', icon: <FiCheckCircle className="text-green-500" /> },
 };
 
-const EMPTY_FORM = { description: '', room: '', assigneeId: '' };
+const EMPTY_FORM = { description: '', room: '', assigneeId: '', dueDate: '' };
 
 // ─── main component ───────────────────────────────────────────────────────────
 
@@ -73,6 +86,14 @@ export function SnagPanel({
   const [adding, setAdding] = useState(false);
   const [form, setForm]     = useState(EMPTY_FORM);
   const [snagErr, setSnagErr] = useState<string | null>(null);
+  // "Before" shot staged on the add form: uploaded immediately (so the storage key exists)
+  // and attached when the snag is created. `beforeName` is only for showing what was picked.
+  const [beforePath, setBeforePath] = useState('');
+  const [beforeName, setBeforeName] = useState('');
+  const [beforeBusy, setBeforeBusy] = useState(false);
+  const beforeInputRef = useRef<HTMLInputElement>(null);
+  // Photo the user clicked, shown full-size. Null = closed.
+  const [lightbox, setLightbox] = useState<{ url: string; label: string } | null>(null);
 
   const set = (f: keyof typeof EMPTY_FORM) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -103,9 +124,12 @@ export function SnagPanel({
           description: form.description.trim(),
           room:        form.room.trim() || undefined,
           assigneeId:  form.assigneeId || undefined,
+          dueDate:     form.dueDate || undefined,
+          photoPath:   beforePath || undefined,
         },
       });
       setForm(EMPTY_FORM);
+      setBeforePath(''); setBeforeName('');
       setAdding(false);
       addToast({ title: 'Snag added', color: 'success' });
     } catch (e) {
@@ -140,6 +164,38 @@ export function SnagPanel({
   const pickAndResolve = (id: string) => {
     pendingSnagId.current = id;
     fileInputRef.current?.click();
+  };
+
+  /**
+   * The defect shot. Uploaded as soon as it is picked rather than held until submit, so the
+   * create call carries a storage key like every other photo path in the app — and so a
+   * failed upload is reported while the user is still looking at the form.
+   */
+  const handleBeforePhoto = async (file: File) => {
+    setBeforeBusy(true);
+    try {
+      const { storagePath } = await uploadPhoto.mutateAsync({ file, projectId });
+      setBeforePath(storagePath);
+      setBeforeName(file.name);
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Photo upload failed'), color: 'danger' });
+    } finally {
+      setBeforeBusy(false);
+    }
+  };
+
+  /**
+   * Reopen a resolved snag — the fix did not hold. The API retires the proof-of-fix photo
+   * with it, so the next resolve needs a new one rather than passing the gate on a picture
+   * of a repair that demonstrably failed.
+   */
+  const handleReopen = async (id: string) => {
+    try {
+      await update.mutateAsync({ id, data: { status: 'OPEN' } });
+      addToast({ title: 'Snag reopened — its proof-of-fix photo was cleared', color: 'warning' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Failed to reopen'), color: 'danger' });
+    }
   };
 
   const handleSetWIP = async (id: string) => {
@@ -195,7 +251,7 @@ export function SnagPanel({
           <Button
             size="sm" variant="flat" color="primary"
             startContent={<FiPlus size={13} />}
-            onPress={() => { setAdding((v) => !v); setSnagErr(null); setForm(EMPTY_FORM); }}
+            onPress={() => { setAdding((v) => !v); setSnagErr(null); setForm(EMPTY_FORM); setBeforePath(''); setBeforeName(''); }}
           >
             Add snag
           </Button>
@@ -248,8 +304,41 @@ export function SnagPanel({
               ))}
             </Select>
           </div>
+
+          <div className="flex gap-2 items-end">
+            {/* A due date is what the daily overdue check reads. Without one a snag can sit
+                open indefinitely and never chase anybody, which is how punch lists rot. */}
+            <Input
+              size="sm" type="date" label="Target date"
+              value={form.dueDate} onChange={set('dueDate')}
+              startContent={<FiCalendar size={13} className="text-gray-400" />}
+              className="flex-1"
+            />
+            <div className="flex-1">
+              <input
+                ref={beforeInputRef}
+                type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) void handleBeforePhoto(f);
+                }}
+              />
+              <Button
+                size="sm" variant="flat" className="w-full"
+                startContent={<FiPaperclip size={13} />}
+                isLoading={beforeBusy}
+                onPress={() => beforeInputRef.current?.click()}
+              >
+                {beforePath ? 'Replace defect photo' : 'Attach defect photo'}
+              </Button>
+              {beforeName && (
+                <p className="text-[11px] text-gray-500 mt-1 truncate">{beforeName}</p>
+              )}
+            </div>
+          </div>
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="light" onPress={() => { setAdding(false); setForm(EMPTY_FORM); setSnagErr(null); }}>
+            <Button size="sm" variant="light" onPress={() => { setAdding(false); setForm(EMPTY_FORM); setSnagErr(null); setBeforePath(''); setBeforeName(''); }}>
               Cancel
             </Button>
             <Button size="sm" color="primary" isLoading={add.isPending} onPress={handleAdd}>
@@ -324,7 +413,43 @@ export function SnagPanel({
                           <FiUser size={10} /> {snag.assignee}
                         </span>
                       )}
+                      {snag.dueDate && (() => {
+                        const d = daysUntil(snag.dueDate);
+                        const late = snag.status !== 'RESOLVED' && d !== null && d < 0;
+                        const soon = snag.status !== 'RESOLVED' && d !== null && d >= 0 && d <= 3;
+                        return (
+                          <span
+                            className={`flex items-center gap-1 text-xs ${
+                              late ? 'text-red-700 font-medium' : soon ? 'text-amber-700' : 'text-gray-500'
+                            }`}
+                          >
+                            <FiCalendar size={10} />
+                            {fmtDate(snag.dueDate)}
+                            {late && ` · ${Math.abs(d!)}d overdue`}
+                          </span>
+                        );
+                      })()}
                     </div>
+
+                    {/* Before / after. The proof-of-fix rule only means anything if the
+                        proof can be looked at — until this rendered, both shots were
+                        write-only. */}
+                    {(snag.photoUrl || snag.afterPhotoUrl) && (
+                      <div className="flex items-center gap-2 mt-2">
+                        {snag.photoUrl && (
+                          <PhotoThumb
+                            url={snag.photoUrl} label="Defect"
+                            onOpen={() => setLightbox({ url: snag.photoUrl!, label: 'Defect (before)' })}
+                          />
+                        )}
+                        {snag.afterPhotoUrl && (
+                          <PhotoThumb
+                            url={snag.afterPhotoUrl} label="Proof of fix"
+                            onOpen={() => setLightbox({ url: snag.afterPhotoUrl!, label: 'Proof of fix (after)' })}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -342,6 +467,19 @@ export function SnagPanel({
                         aria-label="Mark in progress"
                       >
                         <FiClock size={13} className="text-amber-500" />
+                      </Button>
+                    </Tooltip>
+                  )}
+
+                  {snag.status === 'RESOLVED' && (
+                    <Tooltip content="Reopen — clears the proof-of-fix photo">
+                      <Button
+                        size="sm" isIconOnly variant="light"
+                        onPress={() => handleReopen(snag.id)}
+                        isLoading={update.isPending}
+                        aria-label="Reopen snag"
+                      >
+                        <FiRotateCcw size={13} className="text-gray-500" />
                       </Button>
                     </Tooltip>
                   )}
@@ -367,6 +505,34 @@ export function SnagPanel({
           );
         })}
       </div>
+
+      {/* Full-size viewer */}
+      <Modal isOpen={!!lightbox} onClose={() => setLightbox(null)} size="2xl">
+        <ModalContent>
+          <ModalHeader className="text-sm">{lightbox?.label}</ModalHeader>
+          <ModalBody className="pb-5">
+            {lightbox && (
+              <img src={lightbox.url} alt={lightbox.label} className="w-full rounded-xl object-contain max-h-[70vh]" />
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
     </div>
+  );
+}
+
+/** Small clickable photo tile with a caption underneath. */
+function PhotoThumb({ url, label, onOpen }: { url: string; label: string; onOpen: () => void }) {
+  return (
+    <button type="button" onClick={onOpen} className="group text-left" aria-label={`View ${label} photo`}>
+      <img
+        src={url}
+        alt={label}
+        className="w-14 h-14 rounded-lg object-cover border border-gray-200 group-hover:border-blue-400 transition-colors"
+      />
+      <span className="mt-0.5 flex items-center gap-1 text-[11px] text-gray-500">
+        <FiImage size={9} /> {label}
+      </span>
+    </button>
   );
 }

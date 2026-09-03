@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardBody, CardHeader, Button, Chip, Select, SelectItem, Input, addToast } from '@heroui/react';
+import { ImportStepRail, FileDropZone } from '../components/ImportFlow';
 import { FiArrowLeft, FiDownload, FiUpload, FiCheckCircle, FiAlertTriangle, FiEdit3, FiSkipForward } from 'react-icons/fi';
 import {
   useDownloadSaleImportTemplate, usePreviewSaleImport, useCommitSaleImport,
@@ -359,8 +360,19 @@ export default function SaleHistoryImportPage() {
     });
   };
 
+  /**
+   * Which of the three steps the page is on. Drives the rail at the top, and the
+   * placeholder that stands in for step 3 before a file has been read.
+   *
+   * The page used to be three stacked full-width cards on a max-w-6xl column, two of
+   * which held a single small button — so most of a 1150px-wide screen was empty and
+   * there was no sign that a third step existed at all until a file happened to parse.
+   * It read as a broken page rather than as step 1 of 3.
+   */
+  const step: 1 | 2 | 3 = result ? 3 : preview ? 3 : fileName ? 2 : 1;
+
   return (
-    <div className="p-6 space-y-4 max-w-6xl mx-auto">
+    <div className="space-y-5 max-w-3xl mx-auto pb-6">
       <div>
         <Link
           to={projectId ? `/projects/${projectId}/revenue` : '/projects'}
@@ -377,17 +389,23 @@ export default function SaleHistoryImportPage() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-col items-start gap-1">
-          <p className="font-semibold text-sm">1. Download the template</p>
+      <ImportStepRail
+        current={step}
+        labels={['Get the template', 'Upload the file', 'Review & import']}
+      />
+
+      <Card shadow="none" className="border border-gray-200">
+        <CardHeader className="flex flex-col items-start gap-1 pb-2">
+          <p className="font-semibold text-sm text-gray-800">1. Download the template</p>
           <p className="text-xs text-gray-500">
             Two tabs: Sales, and Commission Installments. Fill in Sales at minimum.
           </p>
         </CardHeader>
-        <CardBody>
+        <CardBody className="pt-0">
           <Button
             size="sm"
             variant="flat"
+            className="w-fit"
             startContent={<FiDownload />}
             isLoading={downloadTemplate.isPending}
             onPress={() => downloadTemplate.mutate()}
@@ -397,35 +415,36 @@ export default function SaleHistoryImportPage() {
         </CardBody>
       </Card>
 
-      <Card>
-        <CardHeader className="flex flex-col items-start gap-1">
-          <p className="font-semibold text-sm">2. Upload your filled-in file</p>
+      <Card shadow="none" className="border border-gray-200">
+        <CardHeader className="flex flex-col items-start gap-1 pb-2">
+          <p className="font-semibold text-sm text-gray-800">2. Upload your filled-in file</p>
           <p className="text-xs text-gray-500">Nothing is saved yet — this only parses and checks the file.</p>
         </CardHeader>
-        <CardBody className="flex flex-row items-center gap-3">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFilePicked(file);
-            }}
-          />
-          <Button
-            size="sm"
-            color="primary"
-            variant="flat"
-            startContent={<FiUpload />}
+        <CardBody className="pt-0">
+          <FileDropZone
+            inputRef={fileInputRef}
+            onFile={handleFilePicked}
+            fileName={fileName}
             isLoading={previewImport.isPending}
-            onPress={() => fileInputRef.current?.click()}
-          >
-            {fileName ? 'Choose a different file' : 'Choose file'}
-          </Button>
-          {fileName && <span className="text-xs text-gray-500">{fileName}</span>}
+            hint="Only the file is read — nothing is saved yet"
+          />
         </CardBody>
       </Card>
+
+      {/* Step 3 exists before there is anything to put in it. Without this the page just
+          stopped after step 2 and the reader had no way to know a review stage was
+          coming. */}
+      {!preview && !result && (
+        <Card shadow="none" className="border border-dashed border-gray-200 bg-gray-50/40">
+          <CardBody className="py-6 text-center">
+            <p className="text-sm font-medium text-gray-500">3. Review &amp; import</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Every row, with its errors, appears here once a file is read. You confirm
+              before anything is written.
+            </p>
+          </CardBody>
+        </Card>
+      )}
 
       {preview && (
         <Card>

@@ -17,7 +17,7 @@ export class CommentsController {
   constructor(private service: CommentsService) {}
 
   @Get()
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:view')
   @ApiOperation({ summary: 'List comments for a unit or project' })
   findComments(
     @Query('unitId') unitId?: string,
@@ -29,7 +29,7 @@ export class CommentsController {
   }
 
   @Get('recent')
-  @RequirePermissions('unit:view')
+  @RequirePermissions('comment:view')
   @ApiOperation({ summary: 'Recent comments across all projects (grouped by type)' })
   findRecent(@Query('limit') limit?: string) {
     return this.service.findRecent(limit ? parseInt(limit) : 20);

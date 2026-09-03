@@ -57,6 +57,24 @@ export function preservesRentLedger(reason: TerminationReason | string | undefin
   return LEDGER_PRESERVING_REASONS.includes(reason as TerminationReason);
 }
 
+/**
+ * Reasons that ARE a completed sale, whether or not they preserve the ledger.
+ *
+ * TENANT_BOUGHT correctly destroys the ledger (the tenant now owns the unit — there is no
+ * one left to owe Prime rent) while LEASE_TRANSFERRED_WITH_SALE correctly preserves it (a
+ * third party owns it and the tenancy continues under them); the two modes differ, but
+ * both are consequences of the SAME fact — a sale actually closing — and neither is safe
+ * to record by hand before that fact is true. SalesService.closeSale always satisfies this:
+ * it flips the unit to SOLD earlier in the same transaction, so the read below sees it.
+ * Recording TENANT_BOUGHT manually while the deal is only UNDER_CONTRACT would run the
+ * destructive cap/void path immediately, on a sale that has not actually happened yet —
+ * unrecoverable if it later falls through.
+ */
+const REQUIRES_SOLD_UNIT: readonly TerminationReason[] = [
+  'TENANT_BOUGHT',
+  'LEASE_TRANSFERRED_WITH_SALE',
+];
+
 /** What happens to the security deposit. See LeasesService.settleDeposit. */
 export const DEPOSIT_DISPOSITIONS = ['REFUND', 'FORFEIT', 'TRANSFER', 'DECIDE_LATER'] as const;
 export type DepositDisposition = (typeof DEPOSIT_DISPOSITIONS)[number];
@@ -340,15 +358,15 @@ export class LeasesService {
     //
     // The sale path always satisfies this: SalesService flips the unit to SOLD earlier in
     // the same transaction, so the read below sees SOLD.
-    if (preserveLedger) {
+    if (REQUIRES_SOLD_UNIT.includes(input.terminationReason as TerminationReason)) {
       const unit = before.unitId
         ? await tx.unit.findUnique({ where: { id: before.unitId }, select: { status: true } })
         : null;
       if (!unit || unit.status !== 'SOLD') {
         throw new BadRequestException(
-          'A tenancy can only be recorded as transferred with the sale on a unit that has ' +
-          'been SOLD. Close the sale — that hands the tenancy over as part of the same ' +
-          'transaction — rather than ending the tenancy by hand.',
+          `A tenancy can only be recorded as "${input.terminationReason === 'TENANT_BOUGHT' ? 'tenant bought the unit' : 'transferred with the sale'}" ` +
+          'on a unit that has been SOLD. Close the sale — that hands the tenancy over as ' +
+          'part of the same transaction — rather than ending the tenancy by hand.',
         );
       }
     }

@@ -1444,11 +1444,27 @@ describe('LeasesService.endTenancy — tenancy transferred with the sale', () =>
 
     await service.endTenancy('l1', {
       terminationDate: '2026-06-30',
-      terminationReason: 'TENANT_BOUGHT',
+      terminationReason: 'EXPIRED',
     });
 
     expect(mockRentPeriods.capAtTermination).toHaveBeenCalledWith('l1', new Date('2026-06-30'), tx);
     expect(mockInvoices.voidAfter).toHaveBeenCalled();
+  });
+
+  it('refuses TENANT_BOUGHT before the unit has actually been sold', async () => {
+    // TENANT_BOUGHT destroys the ledger (correct once the sale is real — the tenant now
+    // owns the unit, so nobody owes Prime rent) but that is only safe as a FACT of a
+    // completed sale, not a thing to record by hand. Recording it while the deal is only
+    // UNDER_CONTRACT would delete rent history for a sale that has not happened yet — and
+    // if it later falls through, that history cannot be reconstructed.
+    tx.unit.findUnique.mockResolvedValue({ status: 'UNDER_CONTRACT' });
+
+    await expect(
+      service.endTenancy('l1', { ...transferInput, terminationReason: 'TENANT_BOUGHT' }),
+    ).rejects.toThrow(/can only be recorded.*on a unit that has been SOLD/);
+
+    expect(mockRentPeriods.capAtTermination).not.toHaveBeenCalled();
+    expect(mockInvoices.voidAfter).not.toHaveBeenCalled();
   });
 });
 

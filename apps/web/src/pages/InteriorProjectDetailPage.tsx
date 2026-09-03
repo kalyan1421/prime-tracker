@@ -11,14 +11,16 @@ import {
 } from 'react-icons/fi';
 import {
   useInteriorProject, useAdvanceInteriorPhase, useApproveInterior, useUpdateInterior,
-  useDeleteInterior, useAddInteriorInvoice, useVendors,
+  useDeleteInterior, useAddInteriorInvoice, useUpdateInteriorInvoice, useVoidInteriorInvoice,
+  useVendors,
 } from '../hooks/useApi';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { LoadingState, ErrorState } from '../components/ui';
+import { isShellComplete, anchorBuildingPhase } from '../constants/interior';
 import { SnagPanel } from '../components/SnagPanel';
 import { InteriorBOQPanel } from '../components/InteriorBOQPanel';
 import { InteriorDocumentsPanel } from '../components/InteriorDocumentsPanel';
-import { DocumentGateBanner } from '../components/DocumentGateChip';
+import { DocumentGateBanner, INTERIOR_PHASE_DOCS } from '../components/DocumentGateChip';
 import { useAuthStore } from '../store/authStore';
 
 const PHASE_ORDER = [
@@ -31,12 +33,30 @@ const PHASE_LABEL: Record<string, string> = {
   PROCUREMENT: 'Procurement', EXECUTION: 'Execution', SNAGGING: 'Snagging', HANDOVER: 'Handover',
 };
 
-/** Gate requirements for ENTERING a phase — mirrors interior-state-machine.ts on the backend. */
-const ENTER_GATE: Partial<Record<Phase, { shell?: boolean; doc?: string }>> = {
-  PROCUREMENT: { shell: true },
-  EXECUTION: { shell: true, doc: 'CITY_APPROVAL' },
-  HANDOVER: { doc: 'HANDOVER_CERTIFICATE' },
+/**
+ * Shell requirement for ENTERING a phase — mirrors interior-state-machine.ts PHASE_GATES.
+ * The DOCUMENT half of the same gate is not repeated here: it comes from
+ * INTERIOR_PHASE_DOCS, the one web-side mirror of the server's rules, so the page and the
+ * Documents tab cannot disagree about which paperwork is missing.
+ */
+const ENTER_SHELL_GATE: Partial<Record<Phase, boolean>> = {
+  PROCUREMENT: true,
+  EXECUTION: true,
 };
+
+function enterGate(phase: Phase): { shell?: boolean; doc?: string } {
+  return { shell: ENTER_SHELL_GATE[phase], doc: INTERIOR_PHASE_DOCS[phase]?.[0] };
+}
+
+const CONTRACT_TYPES = ['PER_SQFT', 'FIXED', 'COST_PLUS'] as const;
+
+/**
+ * PER_SQFT derives its contract value from rate x area on the server; FIXED and COST_PLUS
+ * are entered by hand (client, 2026-09-01). The API honours an explicit contractValue over
+ * the derived one, so a form that echoes a stored value back on a PER_SQFT job freezes the
+ * total at its old figure — hence this guard rather than always sending the field.
+ */
+const derivesOwnValue = (contractType: string) => contractType === 'PER_SQFT';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
   NOT_STARTED: 'default', IN_PROGRESS: 'primary', ON_HOLD: 'warning',
@@ -60,7 +80,7 @@ export default function InteriorProjectDetailPage() {
   const editModal = useDisclosure();
   const deleteModal = useDisclosure();
   const handoverModal = useDisclosure();
-  const [signoff, setSignoff] = useState({ handoverSignedBy: '', handoverNotes: '' });
+  const [signoff, setSignoff] = useState({ handoverSignedBy: '', handoverNotes: '', forceReason: '' });
 
   const p: any = project;
   const documents: any[] = p?.documents ?? [];
@@ -78,10 +98,18 @@ export default function InteriorProjectDetailPage() {
   const phase: Phase = p.phase;
   const idx = PHASE_ORDER.indexOf(phase);
   const next: Phase | null = idx >= 0 && idx < PHASE_ORDER.length - 1 ? PHASE_ORDER[idx + 1] : null;
-  const gate = next ? ENTER_GATE[next] : undefined;
+  const gate = next ? enterGate(next) : undefined;
   const docCats = new Set(documents.map((d) => d.category));
   const docBlocked = !!gate?.doc && !docCats.has(gate.doc);
+  // The shell gate is a real state, not a standing warning. It used to be shown whenever
+  // the next phase happened to have a shell requirement — whether or not the shell was
+  // actually finished — because the API did not return the anchor building's phase.
+  const shellComplete = isShellComplete(p);
+  const shellBlocked = !!gate?.shell && !shellComplete;
   const isTerminal = p.status === 'COMPLETED' || p.status === 'CANCELLED';
+  // The handover gate counts anything not RESOLVED as still open — IN_PROGRESS included,
+  // matching OPEN_SNAG_STATUSES on the server. Work started is not work finished.
+  const openSnags: any[] = (p.snags ?? []).filter((sn: any) => sn.status !== 'RESOLVED');
 
   const anchorLabel = p.unit
     ? `Unit ${p.unit.unitNumber}`
@@ -100,14 +128,28 @@ export default function InteriorProjectDetailPage() {
   };
 
   const doHandover = async () => {
+    // Open punch-list items block handover unless the override is used. The API demands a
+    // reason with `force`, so refuse locally rather than sending a request that 400s.
+    const forcing = openSnags.length > 0;
+    if (forcing && !signoff.forceReason.trim()) {
+      addToast({ title: 'A reason is required to hand over with open punch-list items', color: 'warning' });
+      return;
+    }
     try {
       await advance.mutateAsync({
         id: p.id,
         target: 'HANDOVER',
         handoverSignedBy: signoff.handoverSignedBy.trim() || undefined,
         handoverNotes: signoff.handoverNotes.trim() || undefined,
+        force: forcing || undefined,
+        forceReason: forcing ? signoff.forceReason.trim() : undefined,
       });
-      addToast({ title: 'Fit-out handed over', color: 'success' });
+      addToast({
+        title: forcing
+          ? `Handed over with ${openSnags.length} open item${openSnags.length === 1 ? '' : 's'} — reason recorded`
+          : 'Fit-out handed over',
+        color: 'success',
+      });
       handoverModal.onClose();
     } catch (e) {
       addToast({ title: errMsg(e, 'Cannot complete handover'), color: 'danger' });
@@ -149,10 +191,33 @@ export default function InteriorProjectDetailPage() {
               </div>
               <h1 className="text-xl sm:text-2xl font-bold break-words mt-1">{p.name}</h1>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
-                {p.unit ? (
-                  <Link to={`/inventory`} className="text-blue-600 hover:underline">{anchorLabel}</Link>
+                {/* Anchor links, now that findById returns the owning project for both anchor
+                    shapes. The unit link used to point at /inventory — a cross-project list —
+                    which is not the unit and made the fit-out a dead end. */}
+                {p.unit?.building?.projectId ? (
+                  <Link
+                    to={`/projects/${p.unit.building.projectId}/units/${p.unit.id}`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {anchorLabel}
+                  </Link>
+                ) : p.building?.projectId ? (
+                  <Link
+                    to={`/projects/${p.building.projectId}/buildings/${p.building.id}`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {anchorLabel}
+                  </Link>
                 ) : (
                   <span>{anchorLabel}</span>
+                )}
+                {(p.unit?.building?.projectId || p.building?.projectId) && (
+                  <Link
+                    to={`/projects/${p.unit?.building?.projectId ?? p.building?.projectId}`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    Project
+                  </Link>
                 )}
                 {p.pm?.name && <span>PM: {p.pm.name}</span>}
                 {p.sale?.buyer && <span>Buyer: {p.sale.buyer}</span>}
@@ -204,10 +269,15 @@ export default function InteriorProjectDetailPage() {
             {!isTerminal && next && gate?.doc && docBlocked && (
               <DocumentGateBanner docs={documents} required={[gate.doc]} stageName={PHASE_LABEL[next]} />
             )}
-            {!isTerminal && next && gate?.shell && (
+            {!isTerminal && next && shellBlocked && (
               <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 flex items-start gap-2 text-xs text-amber-700">
                 <FiAlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={14} />
-                <span><strong>{PHASE_LABEL[next]}</strong> requires the unit/building shell to be complete (no parallel fit-out before shell completion).</span>
+                <span>
+                  <strong>{PHASE_LABEL[next]}</strong> requires the shell to be complete — the
+                  building is still in{' '}
+                  <strong>{(anchorBuildingPhase(p) ?? 'an unknown phase').replace(/_/g, ' ').toLowerCase()}</strong>.
+                  No parallel fit-out before shell completion.
+                </span>
               </div>
             )}
 
@@ -217,8 +287,8 @@ export default function InteriorProjectDetailPage() {
                 <Button
                   size="sm" color={next === 'HANDOVER' ? 'success' : 'primary'}
                   endContent={next === 'HANDOVER' ? <FiFlag className="w-3.5 h-3.5" /> : <FiArrowRight className="w-3.5 h-3.5" />}
-                  isDisabled={docBlocked} isLoading={advance.isPending}
-                  onPress={next === 'HANDOVER' ? () => { setSignoff({ handoverSignedBy: '', handoverNotes: '' }); handoverModal.onOpen(); } : doAdvance}
+                  isDisabled={docBlocked || shellBlocked} isLoading={advance.isPending}
+                  onPress={next === 'HANDOVER' ? () => { setSignoff({ handoverSignedBy: '', handoverNotes: '', forceReason: '' }); handoverModal.onOpen(); } : doAdvance}
                 >
                   {next === 'HANDOVER' ? 'Complete handover' : `Advance to ${PHASE_LABEL[next]}`}
                 </Button>
@@ -327,11 +397,40 @@ export default function InteriorProjectDetailPage() {
       {/* Handover sign-off modal */}
       <Modal isOpen={handoverModal.isOpen} onClose={handoverModal.onClose} size="sm">
         <ModalContent>
-          <ModalHeader>Complete handover</ModalHeader>
+          <ModalHeader>{openSnags.length > 0 ? 'Hand over with open items?' : 'Complete handover'}</ModalHeader>
           <ModalBody className="space-y-3">
             <p className="text-sm text-gray-600">
               Record the client sign-off. This marks the fit-out COMPLETED and flips the client's TI installment to due.
             </p>
+
+            {/* Open punch-list items normally block handover. The override exists for the
+                real case — an agreed handover held up by a cosmetic snag whose contractor
+                has left site — and it costs a written reason, kept beside the sign-off. */}
+            {openSnags.length > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                  <FiAlertTriangle size={13} />
+                  {openSnags.length} punch-list item{openSnags.length === 1 ? '' : 's'} still open
+                </p>
+                <ul className="text-xs text-amber-800 list-disc pl-4 space-y-0.5 max-h-24 overflow-y-auto">
+                  {openSnags.slice(0, 6).map((sn: any) => (
+                    <li key={sn.id} className="truncate">{sn.description}</li>
+                  ))}
+                  {openSnags.length > 6 && <li className="italic">…and {openSnags.length - 6} more</li>}
+                </ul>
+                <Input
+                  size="sm"
+                  isRequired
+                  label="Reason for handing over anyway"
+                  placeholder="e.g. Client accepted; contractor returns 12 Sep for the skirting"
+                  value={signoff.forceReason}
+                  onChange={(e) => setSignoff((st) => ({ ...st, forceReason: e.target.value }))}
+                />
+                <p className="text-[11px] text-amber-700">
+                  Recorded on the fit-out and in the audit log.
+                </p>
+              </div>
+            )}
             <Input
               label="Signed off by (client representative)"
               placeholder="e.g. Priya Menon"
@@ -350,8 +449,16 @@ export default function InteriorProjectDetailPage() {
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={handoverModal.onClose}>Cancel</Button>
-            <Button size="sm" color="success" isLoading={advance.isPending} onPress={doHandover}>
-              Confirm handover
+            <Button
+              size="sm"
+              color={openSnags.length > 0 ? 'warning' : 'success'}
+              isLoading={advance.isPending}
+              isDisabled={openSnags.length > 0 && !signoff.forceReason.trim()}
+              onPress={doHandover}
+            >
+              {openSnags.length > 0
+                ? `Hand over with ${openSnags.length} open item${openSnags.length === 1 ? '' : 's'}`
+                : 'Confirm handover'}
             </Button>
           </ModalFooter>
         </ModalContent>
@@ -504,8 +611,16 @@ function InvoicesPanel({ projectId, invoices, spend, canFinance }: {
                 {inv.invoiceDate && <span className="text-gray-500 text-xs ml-2">{fmtDate(inv.invoiceDate)}</span>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {inv.paidAt && <span className="text-[11px] text-gray-500">paid {fmtDate(inv.paidAt)}</span>}
                 <Chip size="sm" variant="flat" color={STATUS_COLOR_INV[inv.status] ?? 'default'} className="text-[11px]">{inv.status}</Chip>
                 <span className="tabular-nums font-semibold">{fmt(Number(inv.amount))}</span>
+                {canFinance && (
+                  <InvoiceActions
+                    projectId={projectId}
+                    invoice={inv}
+                    onChanged={() => undefined}
+                  />
+                )}
               </div>
             </div>
           ))}
@@ -522,22 +637,31 @@ function InvoicesPanel({ projectId, invoices, spend, canFinance }: {
 function EditInteriorModal({ project, onClose, update }: { project: any; onClose: () => void; update: ReturnType<typeof useUpdateInterior> }) {
   const [form, setForm] = useState({
     name: project.name ?? '',
+    contractType: project.contractType ?? 'PER_SQFT',
     ratePerSqft: project.ratePerSqft != null ? String(project.ratePerSqft) : '',
     area: project.area != null ? String(project.area) : '',
+    contractValue: project.contractValue != null ? String(project.contractValue) : '',
     targetEnd: project.targetEnd ? String(project.targetEnd).slice(0, 10) : '',
   });
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
+  const derived = derivesOwnValue(form.contractType);
 
   const submit = async () => {
     if (!form.name.trim()) return addToast({ title: 'Name is required', color: 'warning' });
+    if (!derived && form.contractValue && Number(form.contractValue) < 0) {
+      return addToast({ title: 'Contract value cannot be negative', color: 'warning' });
+    }
     try {
       await update.mutateAsync({
         id: project.id,
         data: {
           name: form.name.trim(),
+          contractType: form.contractType || undefined,
           ratePerSqft: form.ratePerSqft ? Number(form.ratePerSqft) : undefined,
           area: form.area ? Number(form.area) : undefined,
+          // Only for the types with no formula — see derivesOwnValue.
+          contractValue: derived ? undefined : form.contractValue ? Number(form.contractValue) : undefined,
           targetEnd: form.targetEnd || undefined,
         },
       });
@@ -554,12 +678,31 @@ function EditInteriorModal({ project, onClose, update }: { project: any; onClose
         <ModalHeader>Edit fit-out</ModalHeader>
         <ModalBody className="space-y-3">
           <Input label="Name" value={form.name} onChange={set('name')} />
+          <Select
+            label="Contract type"
+            selectedKeys={[form.contractType]}
+            onChange={(e) => setForm((f) => ({ ...f, contractType: e.target.value }))}
+          >
+            {CONTRACT_TYPES.map((ct) => (
+              <SelectItem key={ct} textValue={ct}>{ct.replace('_', ' ')}</SelectItem>
+            ))}
+          </Select>
           <div className="flex gap-3">
             <Input type="number" label="Rate / sqft" value={form.ratePerSqft} onChange={set('ratePerSqft')} />
             <Input type="number" label="Area (sqft)" value={form.area} onChange={set('area')} />
           </div>
-          {form.ratePerSqft && form.area && (
-            <p className="text-xs text-gray-500">Contract value ≈ {fmt(Number(form.ratePerSqft) * Number(form.area))}</p>
+          {derived ? (
+            form.ratePerSqft && form.area ? (
+              <p className="text-xs text-gray-500">Contract value ≈ {fmt(Number(form.ratePerSqft) * Number(form.area))}</p>
+            ) : null
+          ) : (
+            <Input
+              type="number"
+              label={form.contractType === 'COST_PLUS' ? 'Contract value ($) — cost plus' : 'Fixed contract value ($)'}
+              description="Entered manually — this contract type has no rate x area formula."
+              value={form.contractValue}
+              onChange={set('contractValue')}
+            />
           )}
           <Input type="date" label="Target handover" value={form.targetEnd} onChange={set('targetEnd')} />
         </ModalBody>
@@ -569,5 +712,94 @@ function EditInteriorModal({ project, onClose, update }: { project: any; onClose
         </ModalFooter>
       </ModalContent>
     </Modal>
+  );
+}
+
+/**
+ * PENDING -> APPROVED -> PAID, plus void (client, 2026-09-01).
+ *
+ * Until this existed the status column was a decoration: nothing could change it, so every
+ * invoice ever logged read PENDING for the rest of its life. Void is destructive — it also
+ * reverses the Actual that carries this invoice into the TI spend figures — so it confirms.
+ */
+function InvoiceActions({ projectId, invoice, onChanged }: {
+  projectId: string; invoice: any; onChanged: () => void;
+}) {
+  const update = useUpdateInteriorInvoice();
+  const voidInv = useVoidInteriorInvoice();
+  const [confirmingVoid, setConfirmingVoid] = useState(false);
+
+  const move = async (status: string) => {
+    try {
+      await update.mutateAsync({ id: projectId, invoiceId: invoice.id, data: { status } });
+      addToast({ title: `Invoice ${status.toLowerCase()}`, color: 'success' });
+      onChanged();
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not update the invoice'), color: 'danger' });
+    }
+  };
+
+  const doVoid = async () => {
+    try {
+      await voidInv.mutateAsync({ id: projectId, invoiceId: invoice.id });
+      addToast({ title: 'Invoice voided — recorded spend reversed', color: 'success' });
+      setConfirmingVoid(false);
+      onChanged();
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not void the invoice'), color: 'danger' });
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-1">
+        {invoice.status === 'PENDING' && (
+          <Button size="sm" variant="flat" className="h-6 min-w-0 px-2 text-[11px]"
+            isLoading={update.isPending} onPress={() => move('APPROVED')}>
+            Approve
+          </Button>
+        )}
+        {invoice.status === 'APPROVED' && (
+          <>
+            <Button size="sm" variant="flat" color="success" className="h-6 min-w-0 px-2 text-[11px]"
+              isLoading={update.isPending} onPress={() => move('PAID')}>
+              Mark paid
+            </Button>
+            <Tooltip content="Undo approval">
+              <Button size="sm" isIconOnly variant="light" className="h-6 w-6 min-w-0"
+                aria-label="Undo approval" onPress={() => move('PENDING')}>
+                <FiArrowLeft className="w-3 h-3 text-gray-400" />
+              </Button>
+            </Tooltip>
+          </>
+        )}
+        <Tooltip content="Void invoice">
+          <Button size="sm" isIconOnly variant="light" color="danger" className="h-6 w-6 min-w-0"
+            aria-label="Void invoice" onPress={() => setConfirmingVoid(true)}>
+            <FiTrash2 className="w-3 h-3" />
+          </Button>
+        </Tooltip>
+      </div>
+
+      <Modal isOpen={confirmingVoid} onClose={() => setConfirmingVoid(false)} size="sm">
+        <ModalContent>
+          <ModalHeader>Void this invoice?</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-gray-600">
+              {invoice.vendor?.name ?? 'Vendor'}{invoice.invoiceNo ? ` · #${invoice.invoiceNo}` : ''} ·{' '}
+              <span className="font-semibold">{fmt(Number(invoice.amount))}</span>
+            </p>
+            <p className="text-sm text-gray-600">
+              This deletes the invoice <strong>and</strong> reverses the spend it recorded, so
+              the TI budget, cashflow and fit-out report all stop counting it.
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={() => setConfirmingVoid(false)}>Cancel</Button>
+            <Button size="sm" color="danger" isLoading={voidInv.isPending} onPress={doVoid}>Void invoice</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+    </>
   );
 }

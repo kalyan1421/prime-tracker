@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardBody, CardHeader, Button, Chip, Select, SelectItem, Input, addToast } from '@heroui/react';
+import { ImportStepRail, FileDropZone } from '../components/ImportFlow';
 import { FiArrowLeft, FiDownload, FiUpload, FiCheckCircle, FiAlertTriangle } from 'react-icons/fi';
 import {
   useDownloadImportTemplate, usePreviewLeaseImport, useCommitLeaseImport,
@@ -487,8 +488,18 @@ export default function RentHistoryImportPage() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  /**
+   * Which rung of the current mode's flow we are on — see ImportStepRail. The two modes
+   * have different middle steps, so this is read against whichever labels are rendered.
+   */
+  const templateStep: number = result || preview
+    ? 3
+    : mode === 'generic'
+      ? (analyzeResult ? 2 : 1)
+      : (fileName ? 2 : 1);
+
   return (
-    <div className="p-6 space-y-4 max-w-6xl mx-auto">
+    <div className="space-y-5 max-w-3xl mx-auto pb-6">
       <div>
         <Link
           to={projectId ? `/projects/${projectId}/revenue` : '/projects'}
@@ -523,9 +534,18 @@ export default function RentHistoryImportPage() {
         </Button>
       </div>
 
+      {/* One rail per mode: the two paths genuinely have different steps — the template
+          path has a download first, the generic path has a column-mapping stage instead. */}
+      <ImportStepRail
+        current={templateStep}
+        labels={mode === 'template'
+          ? ['Get the template', 'Upload the file', 'Review & import']
+          : ['Upload the spreadsheet', 'Map the columns', 'Review & import']}
+      />
+
       {mode === 'template' ? (
         <>
-          <Card>
+          <Card shadow="none" className="border border-gray-200">
             <CardHeader className="flex flex-col items-start gap-1">
               <p className="font-semibold text-sm">1. Download the template</p>
               <p className="text-xs text-gray-500">
@@ -546,68 +566,40 @@ export default function RentHistoryImportPage() {
             </CardBody>
           </Card>
 
-          <Card>
-            <CardHeader className="flex flex-col items-start gap-1">
-              <p className="font-semibold text-sm">2. Upload your filled-in file</p>
+          <Card shadow="none" className="border border-gray-200">
+            <CardHeader className="flex flex-col items-start gap-1 pb-2">
+              <p className="font-semibold text-sm text-gray-800">2. Upload your filled-in file</p>
               <p className="text-xs text-gray-500">Nothing is saved yet — this only parses and checks the file.</p>
             </CardHeader>
-            <CardBody className="flex flex-row items-center gap-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleFilePicked(file);
-                }}
-              />
-              <Button
-                size="sm"
-                color="primary"
-                variant="flat"
-                startContent={<FiUpload />}
+            <CardBody className="pt-0">
+              <FileDropZone
+                inputRef={fileInputRef}
+                onFile={handleFilePicked}
+                fileName={fileName}
                 isLoading={previewImport.isPending}
-                onPress={() => fileInputRef.current?.click()}
-              >
-                {fileName ? 'Choose a different file' : 'Choose file'}
-              </Button>
-              {fileName && <span className="text-xs text-gray-500">{fileName}</span>}
+                hint="Only the file is read — nothing is saved yet"
+              />
             </CardBody>
           </Card>
         </>
       ) : (
         <>
-          <Card>
-            <CardHeader className="flex flex-col items-start gap-1">
-              <p className="font-semibold text-sm">1. Upload the client's spreadsheet as-is</p>
+          <Card shadow="none" className="border border-gray-200">
+            <CardHeader className="flex flex-col items-start gap-1 pb-2">
+              <p className="font-semibold text-sm text-gray-800">1. Upload the client's spreadsheet as-is</p>
               <p className="text-xs text-gray-500">
                 Any column layout — we'll guess which column is which and let you correct it
                 before anything is checked or saved.
               </p>
             </CardHeader>
-            <CardBody className="flex flex-row items-center gap-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleGenericFilePicked(file);
-                }}
-              />
-              <Button
-                size="sm"
-                color="primary"
-                variant="flat"
-                startContent={<FiUpload />}
+            <CardBody className="pt-0">
+              <FileDropZone
+                inputRef={fileInputRef}
+                onFile={handleGenericFilePicked}
+                fileName={fileName}
                 isLoading={analyzeGeneric.isPending}
-                onPress={() => fileInputRef.current?.click()}
-              >
-                {fileName ? 'Choose a different file' : 'Choose file'}
-              </Button>
-              {fileName && <span className="text-xs text-gray-500">{fileName}</span>}
+                hint="We read the columns first and ask you to confirm them"
+              />
             </CardBody>
           </Card>
 

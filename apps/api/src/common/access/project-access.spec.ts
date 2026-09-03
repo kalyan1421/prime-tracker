@@ -11,6 +11,8 @@ const prisma: any = {
   leaseObligation: { findUnique: jest.fn() },
   leaseObligationPayment: { findUnique: jest.fn() },
   leaseRentInvoice: { findUnique: jest.fn() },
+  unitConstructionStagePhoto: { findUnique: jest.fn() },
+  dailyLogPhoto: { findUnique: jest.fn() },
 };
 
 // The two shapes a lease can take: hung off a Unit, or straight off a Building.
@@ -57,6 +59,27 @@ describe('ProjectAccessService.resolveProjectIds', () => {
     prisma.unit.findUnique.mockResolvedValue(null);
     const ids = await svc.resolveProjectIds('UnitsController', { params: { id: 'gone' } });
     expect(ids).toEqual([]);
+  });
+
+  // These two used to have no entry in CONTROLLER_KEY_ENTITY at all — a scoped role
+  // (Construction/PM) could DELETE any stage or daily-log photo by id regardless of
+  // which project it belonged to, since with no resolvable id the guard's isMember loop
+  // never ran.
+  it('resolves :photoId on ConstructionChecklistController via stage → unit → building → project', async () => {
+    prisma.unitConstructionStagePhoto.findUnique.mockResolvedValue({
+      stage: { unit: { building: { projectId: 'pStage' } } },
+    });
+    const ids = await svc.resolveProjectIds('ConstructionChecklistController', { params: { photoId: 'ph1' } });
+    expect(prisma.unitConstructionStagePhoto.findUnique).toHaveBeenCalled();
+    expect(ids).toEqual(['pStage']);
+  });
+
+  it('resolves :photoId on DailyLogsController via dailyLog → project, distinct from the checklist one', async () => {
+    prisma.dailyLogPhoto.findUnique.mockResolvedValue({ dailyLog: { projectId: 'pLog' } });
+    const ids = await svc.resolveProjectIds('DailyLogsController', { params: { photoId: 'ph2' } });
+    expect(prisma.dailyLogPhoto.findUnique).toHaveBeenCalled();
+    expect(prisma.unitConstructionStagePhoto.findUnique).not.toHaveBeenCalled();
+    expect(ids).toEqual(['pLog']);
   });
 
   it('resolves :obligationId via obligation → lease → unit → building → project', async () => {

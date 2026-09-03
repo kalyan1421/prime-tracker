@@ -6,13 +6,14 @@ import {
   Input, Select, SelectItem, Textarea, useDisclosure, addToast,
 } from '@heroui/react';
 import { PieChart, Pie, Cell, Tooltip, BarChart, Bar, XAxis, YAxis, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { FiArrowLeft, FiPlus } from 'react-icons/fi';
+import { FiArrowLeft, FiPlus, FiEdit2 } from 'react-icons/fi';
 import {
   useInvestor, useAddPosition, useCreateCapitalCall, useMarkCapitalCallPaid,
-  useCreateDistribution, useProjects,
+  useCreateDistribution, useProjects, useUpdateInvestor,
 } from '../hooks/useApi';
 import { fmt, fmtDate, fmtPct, errMsg } from '../utils/fmt';
-import { StatCard, LoadingState, ErrorState, EmptyState } from '../components/ui';
+import { StatCard, LoadingState, ErrorState, EmptyState, PermissionGate } from '../components/ui';
+import { FormError } from '../components/FormError';
 
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6'];
@@ -27,6 +28,10 @@ export default function InvestorDetailPage() {
   const { data: investor, isLoading, error } = useInvestor(id!);
   const { data: projects = [] } = useProjects();
   const addPosition = useAddPosition();
+  const updateInvestor = useUpdateInvestor();
+  const editModal = useDisclosure();
+  const [editForm, setEditForm] = useState({ name: '', entityName: '', email: '', phone: '' });
+  const [editErr, setEditErr] = useState<string | null>(null);
   const createCall = useCreateCapitalCall();
   const markPaid = useMarkCapitalCallPaid();
   const createDist = useCreateDistribution();
@@ -154,13 +159,84 @@ export default function InvestorDetailPage() {
       </button>
 
       <div className="mb-4 sm:mb-6">
-        <h1 className="text-xl sm:text-2xl font-bold break-words">{inv.name}</h1>
+        <div className="flex items-start gap-2">
+          <h1 className="text-xl sm:text-2xl font-bold break-words">{inv.name}</h1>
+          {/* Investors were create-only: positions, capital calls and distributions could
+              all be recorded against one, and the investor's own record could never be
+              corrected. PUT /investors/:id existed the whole time — a misspelled name was
+              simply permanent. */}
+          <PermissionGate permission="investor:manage">
+            <Button
+              size="sm" variant="light" isIconOnly aria-label="Edit investor details"
+              className="mt-1"
+              onPress={() => {
+                setEditForm({
+                  name: inv.name ?? '', entityName: inv.entityName ?? '',
+                  email: inv.email ?? '', phone: inv.phone ?? '',
+                });
+                setEditErr(null);
+                editModal.onOpen();
+              }}
+            >
+              <FiEdit2 />
+            </Button>
+          </PermissionGate>
+        </div>
         {inv.entityName && <p className="text-gray-500 text-sm mt-0.5">{inv.entityName}</p>}
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 mt-1">
           {inv.email && <span className="break-all">{inv.email}</span>}
           {inv.phone && <span>{inv.phone}</span>}
         </div>
       </div>
+
+      <Modal isOpen={editModal.isOpen} onOpenChange={editModal.onOpenChange} size="md">
+        <ModalContent>
+          <ModalHeader className="text-base">Edit investor</ModalHeader>
+          <ModalBody className="gap-3 pb-2">
+            <FormError message={editErr} />
+            <Input
+              size="sm" label="Name" isRequired value={editForm.name}
+              onValueChange={(v) => setEditForm((f) => ({ ...f, name: v }))}
+            />
+            <Input
+              size="sm" label="Entity / LLC Name" value={editForm.entityName}
+              onValueChange={(v) => setEditForm((f) => ({ ...f, entityName: v }))}
+            />
+            <Input
+              size="sm" label="Email" type="email" value={editForm.email}
+              onValueChange={(v) => setEditForm((f) => ({ ...f, email: v }))}
+            />
+            <Input
+              size="sm" label="Phone" value={editForm.phone}
+              onValueChange={(v) => setEditForm((f) => ({ ...f, phone: v }))}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={editModal.onClose}>Cancel</Button>
+            <Button
+              size="sm" color="primary" isLoading={updateInvestor.isPending}
+              onPress={async () => {
+                if (!editForm.name.trim()) { setEditErr('An investor needs a name.'); return; }
+                try {
+                  await updateInvestor.mutateAsync({
+                    id: inv.id,
+                    name: editForm.name.trim(),
+                    entityName: editForm.entityName.trim() || null,
+                    email: editForm.email.trim() || null,
+                    phone: editForm.phone.trim() || null,
+                  });
+                  editModal.onClose();
+                  addToast({ title: 'Investor updated', color: 'success' });
+                } catch (e) {
+                  setEditErr(errMsg(e, 'Could not update this investor'));
+                }
+              }}
+            >
+              Save
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total Committed" value={fmt(totalCommitted)} variant="construction" />

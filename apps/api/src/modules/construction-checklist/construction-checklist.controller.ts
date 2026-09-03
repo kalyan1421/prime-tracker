@@ -78,19 +78,23 @@ export class ConstructionChecklistController {
     return this.service.addUnitStage(unitId, body, userId);
   }
 
-  @Get('stage-library')
+  // Stage names themselves come from GET /custom-options?category=construction_stage now,
+  // the same catalogue that already backs status and inspection status on the same form.
+  @Get('ad-hoc-stages')
   @RequirePermissions('checklist:view')
   @ApiOperation({
-    summary: 'Stage names available to add to a unit',
-    description: "The building's template plus every label already in use on a visible unit.",
+    summary: 'Stage names in use that the catalogue does not offer',
+    description:
+      'Labels recorded on visible units that are not an active construction_stage option — '
+      + 'one-off stages and retired legacy names. Admin promotes the useful ones.',
   })
-  getStageLibrary(
+  getAdHocStages(
     @Query('buildingId') buildingId: string | undefined,
     @Query('projectId') projectId: string | undefined,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
   ) {
-    return this.service.getStageLibrary({ buildingId, projectId }, userId, role);
+    return this.service.getAdHocStages({ buildingId, projectId }, userId, role);
   }
 
   // One request, not a loop of the route above: the 10 req/sec throttle silently truncates
@@ -153,6 +157,21 @@ export class ConstructionChecklistController {
   @ApiOperation({ summary: 'Remove a stage from a unit\'s checklist' })
   deleteStage(@Param('stageId') stageId: string) {
     return this.service.deleteStage(stageId);
+  }
+
+  // One request, not a loop of the route above — same reason the bulk add exists: the
+  // throttle truncates a forty-stage teardown sent as forty calls, leaving half of a
+  // checklist that was meant to be gone.
+  @Delete('unit/:unitId/stages')
+  @RequirePermissions('checklist:edit')
+  @ApiOperation({
+    summary: "Clear a unit's whole checklist",
+    description:
+      'Deletes every stage on the unit and the photos attached to them. Site updates pinned '
+      + 'to a stage are kept and lose only the pin. Returns what was removed.',
+  })
+  clearUnitStages(@Param('unitId') unitId: string) {
+    return this.service.clearUnitStages(unitId);
   }
 
   // ── Rollup ──────────────────────────────────────────────────────────────────

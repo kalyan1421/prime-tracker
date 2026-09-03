@@ -494,15 +494,6 @@ export function useEndTenancy() {
   });
 }
 
-/** The tenant-assignment chain for a lease, oldest first. */
-export function useLeaseAssignments(leaseId?: string) {
-  return useQuery({
-    queryKey: ['lease-assignments', leaseId],
-    queryFn: () => api.get(`/leases/${leaseId}/assignments`).then((r) => r.data),
-    enabled: !!leaseId,
-  });
-}
-
 /**
  * Assign a lease to a new tenant. Unlike ending a tenancy this touches nothing but the
  * tenant's identity — but the unit timeline and the lease list both display the name,
@@ -1070,6 +1061,7 @@ export function useSetApprovedBudget() {
   });
 }
 
+/** Archives a project — reversible, see useRestoreProject. */
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
@@ -1690,16 +1682,6 @@ export function useQBSync() {
   });
 }
 
-// ---- Cash Flow ----
-export function useCashFlow(projectId: string) {
-  const can = useCan('financial:view');
-  return useQuery({
-    queryKey: ['cashflow', projectId],
-    queryFn: () => api.get('/cashflow', { params: { projectId } }).then((r) => r.data),
-    enabled: can && (!!projectId),
-  });
-}
-
 export function useCashFlowForecast(projectId: string, months?: number) {
   const can = useCan('financial:view');
   return useQuery({
@@ -1788,23 +1770,6 @@ export function useUpdateDraw() {
       notes?: string;
     }) =>
       api.patch(`/loans/draws/${id}`, data).then((r) => r.data),
-    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
-  });
-}
-
-export function useUpdateDrawStatus() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id, status, approvedAmount, rejectionReason,
-    }: {
-      id: string;
-      status: string;
-      projectId: string;
-      approvedAmount?: number;
-      rejectionReason?: string;
-    }) =>
-      api.patch(`/loans/draws/${id}/status`, { status, approvedAmount, rejectionReason }).then((r) => r.data),
     onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['draws', v.projectId] }),
   });
 }
@@ -1966,13 +1931,18 @@ export function useAddContractPayment() {
 
 // ---- Documents ----
 export function useDocuments(params: {
-  projectId?: string; unitId?: string; buildingId?: string; saleId?: string; interiorProjectId?: string;
+  projectId?: string; unitId?: string; buildingId?: string; saleId?: string; leadId?: string;
+  interiorProjectId?: string;
 }) {
   const can = useCan('document:view');
   return useQuery({
     queryKey: ['documents', params],
     queryFn: () => api.get('/documents', { params }).then((r) => r.data),
-    enabled: can && (!!(params.projectId || params.unitId || params.saleId || params.interiorProjectId)),
+    // buildingId belongs in this list. Leaving it out meant `useDocuments({ buildingId })`
+    // — the building's whole Documents card — never issued a request at all, so the card
+    // read "No documents attached to this building" no matter what was filed against it.
+    enabled: can && (!!(params.projectId || params.unitId || params.buildingId || params.saleId
+      || params.leadId || params.interiorProjectId)),
     staleTime: 0, // S3 signed URLs must always be fresh — never serve from cache
   });
 }
@@ -2027,6 +1997,19 @@ export function useReplaceDocument() {
       }).then((r) => r.data);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+// GET /documents/:id/versions is what `replaceFile` has been archiving into all along —
+// this was the one caller-less half of that feature, so a superseded version was
+// unrecoverable from the UI even though the API had kept it the whole time.
+export function useDocumentVersions(documentId: string | undefined, enabled = false) {
+  const can = useCan('document:view');
+  return useQuery({
+    queryKey: ['documents', documentId, 'versions'],
+    queryFn: () => api.get(`/documents/${documentId}/versions`).then((r) => r.data),
+    enabled: can && !!documentId && enabled,
+    staleTime: 0, // signed URLs must always be fresh
   });
 }
 
@@ -2417,20 +2400,32 @@ export function useConstructionTemplate(buildingId?: string) {
 }
 
 /**
- * Every stage name that can go on a unit: this building's template, plus every label
- * already in use anywhere the caller can see.
+ * The stage names a unit can be given — the `construction_stage` option catalogue, the
+ * same mechanism behind Project Status, Project Phase and Unit Type, edited in
+ * Admin -> Options.
  *
- * The template alone is not enough to pick from — stage lists are set up per building, so
- * a building nobody has configured offers nothing even when the full list is on units one
- * building over.
+ * This replaced a list DERIVED from stages already recorded in the same project. Deriving
+ * it meant the picker was empty on every project that had not used the feature yet (which
+ * was six of eight), so "Add a stage" fell back to a bare text box and "Track a unit"
+ * dead-ended — while where it HAD been used, free text had produced four rival numbering
+ * schemes that no rollup could group.
  */
-export function useStageLibrary(buildingId?: string, projectId?: string) {
+export function useStageCatalogue() {
+  return useCustomOptions('construction_stage');
+}
+
+/**
+ * Stage names running on real units that the catalogue does not offer: one-offs typed
+ * through the escape hatch, plus the legacy names the catalogue migration retired.
+ * Admin lists them so a useful one can be promoted; nothing here is offered in a picker.
+ */
+export function useAdHocStages(buildingId?: string, projectId?: string) {
   const can = useCan('checklist:view');
   return useQuery({
-    queryKey: ['stage-library', buildingId, projectId],
+    queryKey: ['ad-hoc-stages', buildingId, projectId],
     queryFn: () => api
-      .get('/construction-checklist/stage-library', { params: { buildingId, projectId } })
-      .then((r) => r.data),
+      .get('/construction-checklist/ad-hoc-stages', { params: { buildingId, projectId } })
+      .then((r) => r.data as { label: string; usedOn: number }[]),
     enabled: can,
   });
 }
@@ -2571,6 +2566,48 @@ export function useDeleteConstructionStage() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
       qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      // The Site Tracker renders this same checklist inside an expanded row and reads its
+      // own copy of the counts. Without this the grid keeps showing 7/18 after the row it
+      // is displaying has been deleted underneath it.
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+    },
+  });
+}
+
+/** Delete every stage on a unit in one request — see the note on the bulk add. */
+export function useClearUnitChecklist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId }: { unitId: string }) =>
+      api.delete(`/construction-checklist/unit/${unitId}/stages`).then((r) => r.data as {
+        deleted: number; photosDeleted: number; updatesUnpinned: number;
+      }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+      qc.invalidateQueries({ queryKey: ['unit', vars.unitId] });
+    },
+  });
+}
+
+/**
+ * Take a unit off the Site Tracker. The unit itself is not deleted — see
+ * UnitsService.untrackFromSiteTracker.
+ */
+export function useUntrackUnit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId }: { unitId: string }) =>
+      api.delete(`/units/${unitId}/site-tracker`).then((r) => r.data as {
+        stagesDeleted: number; photosDeleted: number; updatesUnpinned: number;
+        assigneesCleared: number; blockerCleared: boolean;
+      }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+      qc.invalidateQueries({ queryKey: ['construction-stages', vars.unitId] });
+      qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      qc.invalidateQueries({ queryKey: ['unit', vars.unitId] });
     },
   });
 }
@@ -2590,7 +2627,10 @@ export function useConstructionRollup(projectId?: string) {
 // The cross-property construction grid. `siteTracker:view` is a narrower gate than
 // `unit:view` on purpose — see the permission comment in packages/shared.
 
-export function useSiteTracker(filters: Record<string, string | undefined>) {
+export function useSiteTracker(
+  filters: Record<string, string | undefined>,
+  opts?: { enabled?: boolean },
+) {
   const can = useCan('siteTracker:view');
   // Only the keys that are actually set take part in the query key, so an untouched
   // filter never splits the cache into a second identical entry.
@@ -2600,7 +2640,9 @@ export function useSiteTracker(filters: Record<string, string | undefined>) {
   return useQuery({
     queryKey: ['site-tracker', active],
     queryFn: () => api.get('/site-tracker', { params: active }).then((r) => r.data),
-    enabled: can,
+    // `enabled` is how a caller says "not yet" — Track a unit waits for a property to be
+    // chosen rather than pulling every unit in the portfolio to fill a disabled dropdown.
+    enabled: can && (opts?.enabled ?? true),
   });
 }
 
@@ -2644,14 +2686,6 @@ export function useOrganizations() {
   });
 }
 
-export function useOrganization(id: string) {
-  return useQuery({
-    queryKey: ['organizations', id],
-    queryFn: () => api.get(`/organizations/${id}`).then((r) => r.data),
-    enabled: !!id,
-  });
-}
-
 /**
  * Org-level tuning (sale-stage probabilities and the alert thresholds).
  *
@@ -2684,57 +2718,6 @@ export function useUpdateOrgSettings() {
   });
 }
 
-export function useCreateOrganization() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      api.post('/organizations', data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
-  });
-}
-
-export function useUpdateOrganization() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, ...data }: { id: string } & Record<string, unknown>) =>
-      api.put(`/organizations/${id}`, data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
-  });
-}
-
-export function useDeactivateOrganization() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) =>
-      api.patch(`/organizations/${id}/deactivate`).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
-  });
-}
-
-export function useAddOrgMember() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ orgId, ...data }: { orgId: string; userId: string; orgRole: string }) =>
-      api.post(`/organizations/${orgId}/members`, data).then((r) => r.data),
-    onSuccess: (_d, vars) => {
-      qc.invalidateQueries({ queryKey: ['organizations'] });
-      qc.invalidateQueries({ queryKey: ['organizations', vars.orgId] });
-    },
-  });
-}
-
-export function useRemoveOrgMember() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ orgId, userId }: { orgId: string; userId: string }) =>
-      api.delete(`/organizations/${orgId}/members/${userId}`).then((r) => r.data),
-    onSuccess: (_d, vars) => {
-      qc.invalidateQueries({ queryKey: ['organizations'] });
-      qc.invalidateQueries({ queryKey: ['organizations', vars.orgId] });
-    },
-  });
-}
-
 // ─────────── Slice 5: Budget Revisions ───────────
 export function useBudgetRevisions(budgetLineId: string | undefined) {
   return useQuery({
@@ -2750,21 +2733,6 @@ export function useProjectBudgetRevisions(projectId: string | undefined) {
     queryKey: ['budget-revisions', 'project', projectId],
     queryFn: () => api.get('/budgets/revisions', { params: { projectId } }).then((r) => r.data),
     enabled: can && (!!projectId),
-  });
-}
-export function useCreateBudgetRevision() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ budgetLineId, ...data }: {
-      budgetLineId: string; amount: number; reason: string;
-      changeReason: 'SCOPE_ADD' | 'COST_INCREASE' | 'REALLOCATION' | 'ESTIMATE_REFINED' | 'CHANGE_ORDER' | 'OTHER';
-    }) => api.post(`/budgets/${budgetLineId}/revisions`, data).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['budget-revisions', v.budgetLineId] });
-      qc.invalidateQueries({ queryKey: ['budgets'] });
-      qc.invalidateQueries({ queryKey: ['project-health'] });
-      qc.invalidateQueries({ queryKey: ['project-health-bulk'] });
-    },
   });
 }
 export function useApproveBudgetRevision() {
@@ -2799,13 +2767,6 @@ export function useSetMilestoneDependency() {
     mutationFn: ({ id, dependsOnId }: { id: string; dependsOnId: string | null }) =>
       api.patch(`/milestones/${id}/depends-on`, { dependsOnId }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones'] }),
-  });
-}
-export function useMilestoneCanStart(milestoneId: string | undefined) {
-  return useQuery({
-    queryKey: ['milestone-can-start', milestoneId],
-    queryFn: () => api.get(`/milestones/${milestoneId}/can-start`).then((r) => r.data as { allowed: boolean; reason?: string }),
-    enabled: !!milestoneId,
   });
 }
 
@@ -3018,7 +2979,7 @@ export function useProjectDrawSchedules(projectId: string | undefined) {
 // Interior / Fit-Out module (Phase 1)
 // ============================================================================
 
-export function useInteriorProjects(params?: { unitId?: string; buildingId?: string; status?: string }) {
+export function useInteriorProjects(params?: { unitId?: string; buildingId?: string; projectId?: string; status?: string }) {
   const can = useCan('interior:view');
   return useQuery({
     queryKey: ['interior', params],
@@ -3065,11 +3026,24 @@ export function useUpdateInterior() {
   });
 }
 
+/**
+ * Advance a fit-out one phase.
+ *
+ * `force` + `forceReason` hand over despite open punch-list items — the client's own
+ * 2026-08-14 escape hatch for a real handover held up by one cosmetic snag whose
+ * contractor has left site. The API demands the reason, stamps it onto handoverNotes and
+ * records the request in the audit log; it refuses `force` without one. Until these two
+ * fields were passed the backend override existed but nothing could reach it, so an open
+ * snag was an unconditional dead end in the UI.
+ */
 export function useAdvanceInteriorPhase() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, target, handoverSignedBy, handoverNotes }: { id: string; target: string; handoverSignedBy?: string; handoverNotes?: string }) =>
-      api.post(`/interior/${id}/advance`, { target, handoverSignedBy, handoverNotes }).then((r) => r.data),
+    mutationFn: ({ id, target, handoverSignedBy, handoverNotes, force, forceReason }: {
+      id: string; target: string; handoverSignedBy?: string; handoverNotes?: string;
+      force?: boolean; forceReason?: string;
+    }) =>
+      api.post(`/interior/${id}/advance`, { target, handoverSignedBy, handoverNotes, force, forceReason }).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
   });
 }
@@ -3141,6 +3115,34 @@ export function useAddInteriorInvoice() {
     mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
       api.post(`/interior/${id}/invoices`, data).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+/**
+ * Move an invoice through PENDING -> APPROVED -> PAID, or correct its number/date.
+ * Approval is reversible; PAID is not — void instead (see useVoidInteriorInvoice).
+ */
+export function useUpdateInteriorInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, invoiceId, data }: { id: string; invoiceId: string; data: Record<string, any> }) =>
+      api.patch(`/interior/${id}/invoices/${invoiceId}`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+/** Void an invoice. The API also reverses the Actual that mirrors it into TI spend. */
+export function useVoidInteriorInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, invoiceId }: { id: string; invoiceId: string }) =>
+      api.delete(`/interior/${id}/invoices/${invoiceId}`).then((r) => r.data),
+    onSuccess: () => {
+      invalidateInterior(qc);
+      // The void deletes a paired Actual, so anything reading project spend is now stale.
+      qc.invalidateQueries({ queryKey: ['actuals'] });
+      qc.invalidateQueries({ queryKey: ['report-interior'] });
+    },
   });
 }
 
@@ -3470,13 +3472,6 @@ export function useCustomOptions(category: string) {
   });
 }
 
-export function useCustomOptionsCategories() {
-  return useQuery({
-    queryKey: ['custom-options-categories'],
-    queryFn: () => api.get('/custom-options/categories').then((r) => r.data as string[]),
-  });
-}
-
 export function useCreateCustomOption() {
   const qc = useQueryClient();
   return useMutation({
@@ -3494,6 +3489,22 @@ export function useUpdateCustomOption() {
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string; label?: string; color?: string; sortOrder?: number }) =>
       api.patch(`/custom-options/${id}`, data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-options'] }),
+  });
+}
+
+/**
+ * Reorder a whole category at once.
+ *
+ * Not a swap-two-rows call: a swap is two writes, and between them both rows hold the same
+ * sortOrder, so the list re-sorts under the person clicking and a quick second click acts
+ * on stale positions. Send the order you want; the API applies it in one transaction.
+ */
+export function useReorderCustomOptions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ category, ids }: { category: string; ids: string[] }) =>
+      api.patch('/custom-options/reorder', { category, ids }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['custom-options'] }),
   });
 }
@@ -3568,6 +3579,20 @@ export function useGenerateRentPeriods() {
 }
 
 /** Re-cut only the not-yet-started periods, leaving billed history intact. */
+/**
+ * DELIBERATELY UNEXPOSED — do not "wire these up" without asking first.
+ *
+ * The four rent-period hooks below (correct / corrections / add-manual / regenerate-future)
+ * all had UI once. `6e0318e` cut LeaseRentSchedule from 802 lines to 44 and removed the
+ * period table, "Add rent change", "Regenerate future" and the correction flow with it —
+ * see that component's docblock, which records the decision and notes the endpoints are
+ * unaffected.
+ *
+ * So an audit that finds them uncalled is finding a product decision, not a bug. They are
+ * kept because the endpoints are real and the UI may come back; restoring any of them is
+ * Prime's call. `lease:history:correct` in particular is the only permission in the system
+ * that can rewrite a figure a tenant was already invoiced for.
+ */
 export function useRegenerateFutureRentPeriods() {
   const qc = useQueryClient();
   return useMutation({
@@ -3746,15 +3771,6 @@ export function useLeaseRentInvoices(leaseId?: string) {
     queryKey: ['lease-rent-invoices', leaseId],
     queryFn: () => api.get(`/leases/${leaseId}/rent-invoices`).then((r) => r.data),
     enabled: !!leaseId,
-  });
-}
-
-/** Every invoice across all leases on a unit — the unit's collection history. */
-export function useUnitRentInvoices(unitId?: string) {
-  return useQuery({
-    queryKey: ['rent-invoices', 'unit', unitId],
-    queryFn: () => api.get(`/leases/rent-invoices/unit/${unitId}`).then((r) => r.data),
-    enabled: !!unitId,
   });
 }
 

@@ -113,6 +113,36 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
     });
     return i?.building?.projectId ?? i?.unit?.building?.projectId ?? i?.sale?.projectId;
   },
+  interiorInvoice: async (p, id) => {
+    const inv = await p.interiorInvoice.findUnique({
+      where: { id },
+      select: {
+        interiorProject: {
+          select: {
+            building: { select: { projectId: true } },
+            unit: { select: { building: { select: { projectId: true } } } },
+          },
+        },
+      },
+    });
+    const ip = inv?.interiorProject;
+    return ip?.building?.projectId ?? ip?.unit?.building?.projectId;
+  },
+  snag: async (p, id) => {
+    const sn = await p.snagItem.findUnique({
+      where: { id },
+      select: {
+        interiorProject: {
+          select: {
+            building: { select: { projectId: true } },
+            unit: { select: { building: { select: { projectId: true } } } },
+          },
+        },
+      },
+    });
+    const ip = sn?.interiorProject;
+    return ip?.building?.projectId ?? ip?.unit?.building?.projectId;
+  },
   constructionStageTemplateItem: async (p, id) =>
     (await p.constructionStageTemplateItem.findUnique({
       where: { id },
@@ -123,6 +153,20 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
       where: { id },
       select: { unit: { select: { building: { select: { projectId: true } } } } },
     }))?.unit?.building?.projectId,
+  // DELETE .../photos/:photoId on ConstructionChecklistController had no entry here at
+  // all — a scoped role (Construction/PM) could delete any stage photo by id, on any
+  // project, since the guard's isMember loop only runs over ids it actually resolves.
+  unitConstructionStagePhoto: async (p, id) =>
+    (await p.unitConstructionStagePhoto.findUnique({
+      where: { id },
+      select: { stage: { select: { unit: { select: { building: { select: { projectId: true } } } } } } },
+    }))?.stage?.unit?.building?.projectId,
+  // Same gap on DailyLogsController's DELETE .../photos/:photoId.
+  dailyLogPhoto: async (p, id) =>
+    (await p.dailyLogPhoto.findUnique({
+      where: { id },
+      select: { dailyLog: { select: { projectId: true } } },
+    }))?.dailyLog?.projectId,
   document: async (p, id) => {
     const d = await p.document.findUnique({
       where: { id },
@@ -183,6 +227,21 @@ const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
   ConstructionChecklistController: {
     templateItemId: 'constructionStageTemplateItem',
     stageId: 'unitConstructionStage',
+    photoId: 'unitConstructionStagePhoto',
+  },
+  // ":photoId" is a DailyLogPhoto here and a UnitConstructionStagePhoto on
+  // ConstructionChecklistController — scoped for the same collision reason as the
+  // other entries in this map.
+  DailyLogsController: {
+    photoId: 'dailyLogPhoto',
+  },
+  // ":invoiceId" is a LeaseRentInvoice on LeasesController and an InteriorInvoice here —
+  // the collision this map exists for. ":snagId" is scoped for the same reason: it is
+  // specific enough today, but a global entry would quietly become wrong the moment
+  // anything else grew snags.
+  InteriorController: {
+    invoiceId: 'interiorInvoice',
+    snagId: 'snag',
   },
 };
 

@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { UnitStatus } from '@prisma/client';
 import {
   buildOccupancyWindows,
@@ -9,6 +10,8 @@ import {
   tenancyEndEntries,
   assignmentEntries,
   activeLeaseCoversNow,
+  unitCanBeVacant,
+  UnitHistoryService,
 } from './unit-history.service';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
@@ -21,6 +24,21 @@ function ev(toStatus: UnitStatus, effective: string, recorded?: string) {
     recordedAt: d(recorded ?? effective),
   };
 }
+
+describe('unitCanBeVacant — vacancy is a leasing fact', () => {
+  it('is false once the unit is SOLD', () => {
+    // Not Prime's to let any more, so the gaps between its old tenancies are not lost
+    // rent — the timeline drops those entries and the summary zeroes the days to match.
+    expect(unitCanBeVacant('SOLD')).toBe(false);
+  });
+
+  it('is true for every status the unit can still be let from', () => {
+    for (const s of ['AVAILABLE', 'LEASED', 'OCCUPIED', 'UNDER_CONTRACT',
+      'LEASE_PENDING', 'UNDER_CONSTRUCTION'] as UnitStatus[]) {
+      expect(unitCanBeVacant(s)).toBe(true);
+    }
+  });
+});
 
 describe('classifyStatus', () => {
   it('collapses the seven unit statuses into what the unit was doing', () => {
@@ -506,5 +524,40 @@ describe('assignmentEntries', () => {
     expect(e.data.documentId).toBeNull();
     expect(e.data.documentFiled).toBe(false);
     expect(e.data.documentRemoved).toBe(false);
+  });
+});
+
+describe('UnitHistoryService.getHistory — archived-chain guard', () => {
+  // Deleting a project soft-deletes the project, not its units or buildings, so a unit
+  // under an archived project (or an archived building) stayed openable by direct URL
+  // and returned a full history for something the rest of the app treats as gone.
+  const baseUnit = {
+    id: 'u1',
+    unitNumber: '101',
+    status: 'AVAILABLE',
+    sqft: 500,
+    createdAt: new Date('2026-01-01'),
+    availableSince: null,
+    deletedAt: null,
+  };
+
+  function svcWith(unit: any) {
+    const prisma: any = { unit: { findUnique: jest.fn().mockResolvedValue(unit) } };
+    return new UnitHistoryService(prisma);
+  }
+
+  it('rejects a soft-deleted unit', async () => {
+    const svc = svcWith({ ...baseUnit, deletedAt: new Date(), building: { id: 'b1', name: 'B', projectId: 'p1', deletedAt: null, project: { deletedAt: null } } });
+    await expect(svc.getHistory('u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects a unit whose building has been archived', async () => {
+    const svc = svcWith({ ...baseUnit, building: { id: 'b1', name: 'B', projectId: 'p1', deletedAt: new Date(), project: { deletedAt: null } } });
+    await expect(svc.getHistory('u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects a unit whose project has been archived, even though the unit and building are untouched', async () => {
+    const svc = svcWith({ ...baseUnit, building: { id: 'b1', name: 'B', projectId: 'p1', deletedAt: null, project: { deletedAt: new Date() } } });
+    await expect(svc.getHistory('u1')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

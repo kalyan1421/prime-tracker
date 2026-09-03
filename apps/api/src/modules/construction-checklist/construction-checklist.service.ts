@@ -112,6 +112,23 @@ export class ConstructionChecklistService {
    * template provenance. `Unit.templateId` / `templateVersion` still hold the stamp for
    * the units seeded before the removal; nothing writes them any more.
    */
+  /**
+   * Map stage labels onto their `construction_stage` catalogue entry.
+   *
+   * `stageValue` is the identity a stage is grouped and reported by; `label` is only the
+   * wording shown for it. A label that matches nothing active resolves to null rather than
+   * failing: the one-off escape hatch is meant to work, and a stage typed there is simply
+   * ad-hoc until somebody promotes it in Admin.
+   */
+  private async resolveStageValues(labels: string[]): Promise<Map<string, string | null>> {
+    const options = await this.prisma.customOption.findMany({
+      where: { category: 'construction_stage', isActive: true },
+      select: { value: true, label: true },
+    });
+    const byLabel = new Map(options.map((o) => [o.label.trim().toLowerCase(), o.value]));
+    return new Map(labels.map((l) => [l, byLabel.get(l.trim().toLowerCase()) ?? null]));
+  }
+
   async applyTemplate(unitId: string, userId?: string) {
     const unit = await this.prisma.unit.findUnique({
       where: { id: unitId },
@@ -136,11 +153,13 @@ export class ConstructionChecklistService {
 
     // Building-override path: no provenance to stamp, and the drift report says so plainly
     // rather than pretending the checklist came from a template.
+    const templateValues = await this.resolveStageValues(buildingTemplate.map((t) => t.label));
     await this.prisma.unitConstructionStage.createMany({
       data: buildingTemplate.map((t) => ({
         unitId,
         sortOrder: t.sortOrder,
         label: t.label,
+        stageValue: templateValues.get(t.label) ?? null,
         createdById: userId ?? null,
       })),
     });
@@ -148,25 +167,24 @@ export class ConstructionChecklistService {
   }
 
   /**
-   * Every stage name available to put on a unit — the building's template PLUS every
-   * label already in use on any unit the caller can see.
+   * Stage names in use that the catalogue does not offer.
    *
-   * The template alone was too narrow to be the picker's only source. Stage lists are set
-   * up per building, and a building someone had not got round to has none, so the picker
-   * offered nothing on a portfolio where the full eighteen-stage list was sitting on units
-   * one building over. The list Prime actually works from — Soil Compaction through Store
-   * front glass — existed on three units and was unreachable everywhere else.
+   * This endpoint used to BE the picker — it returned the building's template unioned with
+   * every label already recorded nearby, and the pickers chose from that. Deriving the
+   * options from whatever had been typed meant a project nobody had used the feature on
+   * had no options at all, and it meant a typo became a permanent, selectable option the
+   * moment it was saved. Stage names now come from the `construction_stage` CustomOption
+   * category instead, seeded and edited in Admin like every other option list.
    *
-   * Drawing the library from stages in USE rather than a curated catalogue means there is
-   * nothing to seed and nothing to maintain: the first person to type a stage makes it
-   * available to everyone, and a name nobody uses quietly stops being offered. The trade is
-   * that a typo becomes selectable — hence `usedOn`, so a label used once reads differently
-   * from one used on forty units.
+   * What is still worth knowing is the inverse: which labels are running on real units
+   * while sitting outside the active catalogue. That is the one-off escape hatch's
+   * exhaust, plus the legacy rival numbering schemes the migration retired. Admin lists
+   * them so a genuinely useful one can be promoted and the rest can be left alone.
    *
-   * Scoped the same way getProjectRollup is: a role that can only see its own projects only
-   * sees stage names from them.
+   * Scoped the same way getProjectRollup is: a role that can only see its own projects
+   * only sees stage names from them.
    */
-  async getStageLibrary(
+  async getAdHocStages(
     opts: { buildingId?: string; projectId?: string },
     userId?: string,
     role?: string,
@@ -183,39 +201,37 @@ export class ConstructionChecklistService {
       projectFilter = { ...projectFilter, projectId: { in: ids } };
     }
 
-    const [templateItems, used] = await Promise.all([
-      opts.buildingId
-        ? this.prisma.constructionStageTemplateItem.findMany({
-          where: { buildingId: opts.buildingId },
-          orderBy: { sortOrder: 'asc' },
-          select: { label: true, sortOrder: true },
-        })
-        : Promise.resolve([]),
+    const [active, used] = await Promise.all([
+      this.prisma.customOption.findMany({
+        where: { category: 'construction_stage', isActive: true },
+        select: { value: true },
+      }),
       this.prisma.unitConstructionStage.groupBy({
-        by: ['label'],
-        where: { unit: { deletedAt: null, building: projectFilter } },
+        by: ['label', 'stageValue'],
+        where: {
+          unit: {
+            deletedAt: null,
+            building: projectFilter,
+            ...(opts.buildingId ? { buildingId: opts.buildingId } : {}),
+          },
+        },
         _count: { label: true },
       }),
     ]);
 
-    // The template wins the ordering it has; everything else sorts by name. The labels are
-    // numbered in practice ("01 - ", "02 - "), so by-name IS work order for the rest.
-    const out = new Map<string, { label: string; source: 'template' | 'library'; usedOn: number }>();
-    const countFor = (label: string) =>
-      used.find((u) => u.label.trim().toLowerCase() === label.trim().toLowerCase())?._count.label ?? 0;
+    const offered = new Set(active.map((o) => o.value));
 
-    for (const t of templateItems) {
-      out.set(t.label.trim().toLowerCase(), {
-        label: t.label, source: 'template', usedOn: countFor(t.label),
-      });
-    }
-    for (const u of [...used].sort((a, b) => a.label.localeCompare(b.label))) {
+    // Collapse by label: the same wording on two rows is one thing to promote, even if
+    // one row was linked to a since-retired entry and the other never linked at all.
+    const out = new Map<string, { label: string; usedOn: number }>();
+    for (const u of used) {
+      if (u.stageValue && offered.has(u.stageValue)) continue;
       const key = u.label.trim().toLowerCase();
-      if (out.has(key)) continue;
-      out.set(key, { label: u.label, source: 'library', usedOn: u._count.label });
+      const prev = out.get(key);
+      out.set(key, { label: prev?.label ?? u.label, usedOn: (prev?.usedOn ?? 0) + u._count.label });
     }
 
-    return Array.from(out.values());
+    return Array.from(out.values()).sort((a, b) => b.usedOn - a.usedOn || a.label.localeCompare(b.label));
   }
 
   /**
@@ -258,11 +274,13 @@ export class ConstructionChecklistService {
     }
 
     if (toAdd.length > 0) {
+      const values = await this.resolveStageValues(toAdd);
       const last = existing.reduce((max, s) => Math.max(max, s.sortOrder), -1);
       await this.prisma.unitConstructionStage.createMany({
         data: toAdd.map((label, i) => ({
           unitId,
           label,
+          stageValue: values.get(label) ?? null,
           sortOrder: last + 1 + i,
           createdById: userId ?? null,
         })),
@@ -363,6 +381,7 @@ export class ConstructionChecklistService {
       data: {
         unitId,
         label,
+        stageValue: (await this.resolveStageValues([label])).get(label) ?? null,
         sortOrder: (last?.sortOrder ?? -1) + 1,
         createdById: userId ?? null,
         ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
@@ -420,6 +439,43 @@ export class ConstructionChecklistService {
   }
 
   /**
+   * Remove every stage from a unit's checklist at once.
+   *
+   * The way out of a checklist seeded from the wrong list. applyTemplate is one-time only,
+   * so a unit that inherited another building's forty stages had no remedy but forty trash
+   * clicks — and forty deletes is forty requests against a 10 req/sec throttle, which stops
+   * partway through and leaves half a wrong checklist behind.
+   *
+   * What survives: site updates pinned to a stage. DailyLog.stageId is SetNull, so the notes
+   * stay on the unit's feed and lose only their pin — the record of what was said is not
+   * this action's to destroy. What does not: stage photos, which cascade with their stage.
+   * Both counts come back so the caller can state what happened rather than imply it.
+   */
+  async clearUnitStages(unitId: string) {
+    const unit = await this.prisma.unit.findUnique({
+      where: { id: unitId },
+      select: { id: true, deletedAt: true },
+    });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    const stages = await this.prisma.unitConstructionStage.findMany({
+      where: { unitId },
+      select: { id: true },
+    });
+    // Idempotent rather than a 400: "there is no checklist" is the state being asked for.
+    if (stages.length === 0) return { deleted: 0, photosDeleted: 0, updatesUnpinned: 0 };
+
+    const stageIds = stages.map((s) => s.id);
+    const [photosDeleted, updatesUnpinned] = await Promise.all([
+      this.prisma.unitConstructionStagePhoto.count({ where: { stageId: { in: stageIds } } }),
+      this.prisma.dailyLog.count({ where: { stageId: { in: stageIds } } }),
+    ]);
+
+    await this.prisma.unitConstructionStage.deleteMany({ where: { unitId } });
+    return { deleted: stages.length, photosDeleted, updatesUnpinned };
+  }
+
+  /**
    * Project rollup: every unit with a checklist, its progress count, the first
    * incomplete stage, and the full ordered stage list — the "what's next, and who's
    * behind" view for PM/Founder, and the source for the per-unit stage-progress strip
@@ -432,6 +488,7 @@ export class ConstructionChecklistService {
     // No projectId means "every project I can see" — for a scoped role (Construction/PM)
     // that's their membership set, resolved the same way DashboardService.memberScope does
     // for its own cross-project aggregates; unscoped roles get no filter at all.
+    //
     // deletedAt: null on both the building and its project — archiving a project soft-
     // deletes the PROJECT ROW ONLY (ProjectsService.archive), buildings/units keep
     // deletedAt: null forever, so without the project-level check an archived project's

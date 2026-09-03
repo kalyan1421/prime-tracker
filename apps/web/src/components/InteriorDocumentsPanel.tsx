@@ -17,6 +17,9 @@ import { useInteriorDocuments, useUploadDocument, useDeleteDocument } from '../h
 import { fmtDate, errMsg } from '../utils/fmt';
 import { apiAssetUrl } from '../lib/api';
 
+import { INTERIOR_PHASE_DOCS } from './DocumentGateChip';
+import { INTERIOR_PHASES } from '../constants/interior';
+
 // ─── types & config ───────────────────────────────────────────────────────────
 
 type InteriorDocCategory =
@@ -38,11 +41,25 @@ const CAT_META: Record<InteriorDocCategory, { label: string; color: string; requ
 
 const ALL_CATS = Object.keys(CAT_META) as InteriorDocCategory[];
 
-/** Categories required before certain phase gates can pass */
-const PHASE_REQUIRED_DOCS: Record<string, InteriorDocCategory[]> = {
-  CITY_APPROVAL: ['DRAWING'],
-  HANDOVER:      ['CITY_APPROVAL', 'HANDOVER_CERTIFICATE'],
-};
+/**
+ * Which documents the NEXT phase needs.
+ *
+ * This used to be a third, hand-written copy of the gate rules and it disagreed with the
+ * server: it invented a DRAWING requirement for CITY_APPROVAL that nothing enforces, and
+ * hung the CITY_APPROVAL document on HANDOVER when the server actually wants it to enter
+ * EXECUTION. So the red "required" dots pointed at the wrong documents in both directions.
+ *
+ * `INTERIOR_PHASE_DOCS` is the single web-side mirror of
+ * `apps/api/src/modules/interior/interior-state-machine.ts` (see the note on its
+ * declaration for why the rules are mirrored rather than imported from the API). It is
+ * keyed by the phase being ENTERED, so the current phase is stepped forward first.
+ */
+function requiredForNextPhase(currentPhase?: string): InteriorDocCategory[] {
+  if (!currentPhase) return [];
+  const i = INTERIOR_PHASES.indexOf(currentPhase as (typeof INTERIOR_PHASES)[number]);
+  const next = i >= 0 && i < INTERIOR_PHASES.length - 1 ? INTERIOR_PHASES[i + 1] : undefined;
+  return next ? ((INTERIOR_PHASE_DOCS[next] ?? []) as InteriorDocCategory[]) : [];
+}
 
 function docIcon(mime = '') {
   if (mime.startsWith('image/')) return <FiImage className="text-pink-400" />;
@@ -76,8 +93,7 @@ export function InteriorDocumentsPanel({
 
   // ── gate summary ─────────────────────────────────────────────────────────────
   const uploadedCats = new Set(docs.map((d) => d.category as InteriorDocCategory));
-  const requiredForPhase: InteriorDocCategory[] =
-    currentPhase ? (PHASE_REQUIRED_DOCS[currentPhase] ?? []) : [];
+  const requiredForPhase: InteriorDocCategory[] = requiredForNextPhase(currentPhase);
   const missingRequired = requiredForPhase.filter((c) => !uploadedCats.has(c));
 
   // ── filtered list ─────────────────────────────────────────────────────────────

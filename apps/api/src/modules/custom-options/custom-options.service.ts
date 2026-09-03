@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable, NotFoundException, ForbiddenException, BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCustomOptionDto, UpdateCustomOptionDto } from './dto/create-custom-option.dto';
 
@@ -149,6 +151,18 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'MEDIUM', label: 'Medium', color: 'warning' },
     { value: 'HIGH',   label: 'High',   color: 'danger'  },
   ],
+  // Deliberately EMPTY, and deliberately present.
+  //
+  // Present so the category is discoverable — findAllCategories() reads these keys, so
+  // registering it here is what puts "Construction Stage" in Admin -> Options even on a
+  // database where nobody has added one yet.
+  //
+  // Empty because system defaults are frozen: they are synthesised on read with `sys_`
+  // ids, so update() cannot find them and remove() refuses them — they can never be
+  // renamed, reordered or retired. Stage names are the client's own vocabulary and the
+  // sequence is theirs to change, so the eighteen ship as ordinary rows from the
+  // 20260902000000_construction_stage_catalogue migration instead.
+  construction_stage: [],
 };
 
 @Injectable()
@@ -196,7 +210,66 @@ export class CustomOptionsService {
   async update(id: string, data: UpdateCustomOptionDto) {
     const opt = await this.prisma.customOption.findUnique({ where: { id } });
     if (!opt) throw new NotFoundException('Custom option not found');
-    return this.prisma.customOption.update({ where: { id }, data });
+
+    const updated = await this.prisma.customOption.update({ where: { id }, data });
+
+    // Renaming a construction stage has to reach the rows that use it.
+    //
+    // UnitConstructionStage stores `stageValue` as the identity and `label` as a mirror,
+    // because the rollup, the Site Tracker grid, the daily-log joins and the exports all
+    // read `label` — mirroring it is one UPDATE here instead of a join in every one of
+    // them. The mirror is only true if a rename re-syncs it, which is this.
+    //
+    // Building templates carry the same name for the same reason.
+    if (opt.category === 'construction_stage' && data.label && data.label !== opt.label) {
+      await this.prisma.$transaction([
+        this.prisma.unitConstructionStage.updateMany({
+          where: { stageValue: opt.value },
+          data: { label: data.label },
+        }),
+        this.prisma.constructionStageTemplateItem.updateMany({
+          where: { label: opt.label },
+          data: { label: data.label },
+        }),
+      ]);
+    }
+
+    return updated;
+  }
+
+  /**
+   * Put one category's options in the given order, in a single transaction.
+   *
+   * Takes every option in the category exactly once. A partial list would have to invent
+   * positions for the rest, and a two-row swap — the obvious alternative — is worse: it is
+   * two writes, and between them both rows carry the same sortOrder, so the list re-sorts
+   * under whoever is clicking and a quick second click acts on indices that have moved.
+   *
+   * One pass is enough here. sortOrder carries no unique constraint on custom_options, so
+   * rows can pass through each other without colliding — unlike unit_construction_stages,
+   * which needs the two-pass negative shuffle.
+   */
+  async reorder(category: string, ids: string[]) {
+    const existing = await this.prisma.customOption.findMany({
+      where: { category, isActive: true },
+      select: { id: true },
+    });
+    const known = new Set(existing.map((o) => o.id));
+    const unique = new Set(ids);
+    if (unique.size !== ids.length) {
+      throw new BadRequestException('The same option was listed more than once.');
+    }
+    if (ids.length !== known.size || ids.some((id) => !known.has(id))) {
+      throw new BadRequestException(
+        'Send every option in this category exactly once — a partial order would have to '
+        + 'invent positions for the rest.',
+      );
+    }
+
+    await this.prisma.$transaction(
+      ids.map((id, i) => this.prisma.customOption.update({ where: { id }, data: { sortOrder: i } })),
+    );
+    return this.findByCategory(category);
   }
 
   async remove(id: string) {

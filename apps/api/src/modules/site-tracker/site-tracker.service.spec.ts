@@ -103,6 +103,24 @@ describe('SiteTrackerService.grid — project scoping', () => {
     expect(whereOf().deletedAt).toBeNull();
     expect((whereOf().building as any).deletedAt).toBeNull();
   });
+
+  it('excludes units whose PROJECT was archived, not just their own row', async () => {
+    // Archiving a project soft-deletes the project row alone — its buildings and units
+    // keep deletedAt: null. Without this the grid kept showing a deleted project's units.
+    mockPrisma.unit.findMany.mockResolvedValue([]);
+    await make().grid({}, viewer(['siteTracker:view']));
+    expect((whereOf().building as any).project).toEqual({ deletedAt: null });
+  });
+
+  it('keeps the archived-project filter alongside an explicit project filter', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([]);
+    await make().grid({ projectId: 'p1' }, viewer(['siteTracker:view']));
+    expect(whereOf().building).toMatchObject({
+      deletedAt: null,
+      projectId: 'p1',
+      project: { deletedAt: null },
+    });
+  });
 });
 
 describe('SiteTrackerService.grid — blocker filter', () => {
@@ -178,11 +196,59 @@ describe('SiteTrackerService.grid — derived columns', () => {
     expect(out.summary.awaitingInspection).toBe(2);
   });
 
-  it('treats a unit that has never been posted about as stale', async () => {
-    mockPrisma.unit.findMany.mockResolvedValue([unitRow({ dailyLogs: [], _count: { dailyLogs: 0 } })]);
+  /**
+   * `staleDays` is the age of the SILENCE, not of the last update.
+   *
+   * It used to be null whenever a unit had no updates, and the summary counted null as
+   * stale — so a unit put on the tracker minutes ago landed in a tile labelled "no update
+   * 7d+". Measured against live data that tile read 15 while the number of units genuinely
+   * a week quiet was 0.
+   */
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
+  it('ages a never-updated unit from when it joined the tracker, not from nothing', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([unitRow({
+      dailyLogs: [], _count: { dailyLogs: 0 },
+      constructionStages: [stage('a', 'NOT_STARTED', { createdAt: daysAgo(30) })],
+    })]);
     const out = await make().grid({}, viewer(['siteTracker:view', 'dailylog:view']));
-    expect(out.rows[0].staleDays).toBeNull();
+    expect(out.rows[0].lastUpdateAt).toBeNull();
+    expect(out.rows[0].staleDays).toBe(30);
     expect(out.summary.stale).toBe(1);
+  });
+
+  it('does not call a unit tracked today stale', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([unitRow({
+      dailyLogs: [], _count: { dailyLogs: 0 },
+      constructionStages: [stage('a', 'NOT_STARTED', { createdAt: new Date() })],
+    })]);
+    const out = await make().grid({}, viewer(['siteTracker:view', 'dailylog:view']));
+    expect(out.rows[0].staleDays).toBe(0);
+    expect(out.summary.stale).toBe(0);
+  });
+
+  it('falls back to the unit itself when it is tracked without a checklist', async () => {
+    // Tracked by a blocker alone — there is no stage to date the silence from.
+    mockPrisma.unit.findMany.mockResolvedValue([unitRow({
+      dailyLogs: [], _count: { dailyLogs: 0 },
+      constructionStages: [],
+      blockerStatus: 'YES',
+      createdAt: daysAgo(9),
+    })]);
+    const out = await make().grid({}, viewer(['siteTracker:view', 'dailylog:view']));
+    expect(out.rows[0].staleDays).toBe(9);
+    expect(out.summary.stale).toBe(1);
+  });
+
+  it('measures from the last update once there is one', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([unitRow({
+      dailyLogs: [{ id: 'd1', logDate: daysAgo(2), notes: 'poured', author: null, stage: null }],
+      _count: { dailyLogs: 1 },
+      constructionStages: [stage('a', 'NOT_STARTED', { createdAt: daysAgo(200) })],
+    })]);
+    const out = await make().grid({}, viewer(['siteTracker:view', 'dailylog:view']));
+    expect(out.rows[0].staleDays).toBe(2);
+    expect(out.summary.stale).toBe(0);
   });
 
   it('searches the current stage label, not just the unit columns', async () => {
@@ -315,5 +381,104 @@ describe('SiteTrackerService.grid — sold units', () => {
     await make().grid({ includeUntracked: true }, viewer(['siteTracker:view']));
     expect(whereOf().status).toEqual({ not: 'SOLD' });
     expect(whereOf().OR).toBeUndefined();
+  });
+});
+
+/**
+ * "On the tracker" has ONE definition, and both directions of the question use it.
+ *
+ * Track a unit used to ask for every unit and keep the ones with no stages — a different
+ * question. A unit with a blocker and no checklist IS tracked, sits on the grid, and was
+ * offered in the modal anyway; tracking it appended a second checklist to a unit the board
+ * was already showing.
+ */
+describe('SiteTrackerService.grid — untrackedOnly', () => {
+  beforeEach(() => mockPrisma.unit.findMany.mockResolvedValue([]));
+
+  it('requires every tracked signal to be absent, not just the checklist', async () => {
+    await make().grid({ untrackedOnly: true }, viewer(['siteTracker:view']));
+    expect(whereOf()).toMatchObject({
+      constructionStages: { none: {} },
+      blockerStatus: null,
+      sitePriority: null,
+      siteAssignees: { none: {} },
+    });
+    // The tracked OR is the other direction of the same question — never both at once.
+    expect(whereOf().OR).toBeUndefined();
+  });
+
+  it('ignores filters that contradict it rather than returning nothing', async () => {
+    // An untracked unit has no blocker or priority by definition. Letting a
+    // stale filter through would pin blockerStatus to two values at once and silently
+    // return an empty list.
+    await make().grid(
+      { untrackedOnly: true, blockerStatus: 'YES', sitePriority: 'HIGH' },
+      viewer(['siteTracker:view']),
+    );
+    expect(whereOf().blockerStatus).toBeNull();
+    expect(whereOf().sitePriority).toBeNull();
+  });
+
+  it('still applies those filters in the normal direction', async () => {
+    await make().grid({ blockerStatus: 'YES' }, viewer(['siteTracker:view']));
+    expect(whereOf().blockerStatus).toBe('YES');
+  });
+});
+
+/**
+ * A sold unit reports no tenant, whatever its lease rows say.
+ *
+ * The unit page states the rule outright — a tenancy kept on a sold unit "stays out of the
+ * rent roll, invoicing, cash flow and reminders, whatever its status says" — and 23 ACTIVE
+ * leases are backfilled history. The grid feeds a tenant search, so disagreeing here would
+ * quietly resurrect exactly the tenancies the rest of the app treats as inert.
+ */
+describe('SiteTrackerService.grid — tenant on a sold unit', () => {
+  it('reports no tenant for a SOLD unit that still carries an active lease', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unitRow({ status: 'SOLD', leases: [{ id: 'l1', tenantName: 'Fixture Tenant Co' }] }),
+    ]);
+    const out = await make().grid({}, viewer(['siteTracker:view', 'lease:view', 'sales:view']));
+    expect(out.rows[0].tenantName).toBeNull();
+  });
+
+  it('is not searchable by that tenant either', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unitRow({ status: 'SOLD', leases: [{ id: 'l1', tenantName: 'Fixture Tenant Co' }] }),
+    ]);
+    const out = await make().grid(
+      { search: 'Fixture' },
+      viewer(['siteTracker:view', 'lease:view', 'sales:view']),
+    );
+    expect(out.rows).toHaveLength(0);
+  });
+
+  it('still reports the tenant of a unit that is not sold', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unitRow({ status: 'LEASED', leases: [{ id: 'l1', tenantName: 'Qamaria Coffee' }] }),
+    ]);
+    const out = await make().grid({}, viewer(['siteTracker:view', 'lease:view']));
+    expect(out.rows[0].tenantName).toBe('Qamaria Coffee');
+  });
+});
+
+/** An unknown blocker start date is not "blocked today". */
+describe('SiteTrackerService.grid — oldest blocker', () => {
+  it('reports null rather than zero when no blocked unit has a start date', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unitRow({ blockerStatus: 'YES', blockerSince: null }),
+    ]);
+    const out = await make().grid({}, viewer(['siteTracker:view']));
+    expect(out.summary.blocked).toBe(1);
+    expect(out.summary.oldestBlockerDays).toBeNull();
+  });
+
+  it('ignores the undated one when another blocker is dated', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unitRow({ id: 'a', blockerStatus: 'YES', blockerSince: null }),
+      unitRow({ id: 'b', blockerStatus: 'YES', blockerSince: new Date(Date.now() - 11 * 86_400_000) }),
+    ]);
+    const out = await make().grid({}, viewer(['siteTracker:view']));
+    expect(out.summary.oldestBlockerDays).toBe(11);
   });
 });

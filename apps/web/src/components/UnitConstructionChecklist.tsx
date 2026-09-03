@@ -16,12 +16,12 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
 } from '@heroui/react';
 import {
-  FiPlus, FiTrash2, FiZap, FiCamera, FiX, FiMessageSquare, FiChevronUp, FiChevronDown,
+  FiPlus, FiTrash2, FiZap, FiCamera, FiX, FiMessageSquare, FiChevronUp, FiChevronDown, FiEdit2,
 } from 'react-icons/fi';
 import {
   useUnitConstructionStages, useConstructionTemplate, useApplyConstructionTemplate,
   useAddUnitConstructionStage, useAddUnitConstructionStages, useUpdateConstructionStage,
-  useStageLibrary,
+  useStageCatalogue,
   useReorderUnitConstructionStages, useDeleteConstructionStage,
   useCustomOptions, useUsers, useAddStagePhoto, useRemoveStagePhoto, usePresignedUpload,
   useCreateDailyLog, useDailyLogs,
@@ -62,6 +62,19 @@ export function UnitConstructionChecklist({
   const reorder = useReorderUnitConstructionStages();
 
   const [adding, setAdding] = useState(false);
+  /**
+   * Which stage's detail dialog is open, by ID — not by object.
+   * Every field on a stage (owner, inspection status and date, timeline, notes, photos)
+   * is editable in StageDetailModal, and until now the ONLY way in was the "Add note"
+   * link in the last column. The other cells rendered a bare "—" that looked like dead
+   * text, so a grid full of em-dashes read as "there is nothing to set here" rather than
+   * "nobody has set this yet". Held at table level so any cell can open the same dialog.
+   * The id, not the row, so the dialog re-reads the freshly patched stage on every render.
+   */
+  const [detailStageId, setDetailStageId] = useState<string | null>(null);
+  // Deleting a stage takes away its status, dates, inspection and notes, and there is no
+  // undo — so it asks first, which the bare trash icon never did.
+  const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
 
   const stages: any[] = Array.isArray(stagesQ.data) ? stagesQ.data : [];
   const template: any[] = Array.isArray(templateQ.data) ? templateQ.data : [];
@@ -107,16 +120,23 @@ export function UnitConstructionChecklist({
 
 
   if (stages.length === 0) {
+    /**
+     * One line, not a 200px-tall empty state.
+     *
+     * On a unit with nothing recorded, this card, Financing and Construction each rendered
+     * a full-height illustrated placeholder, so the page was mostly boxes announcing their
+     * own emptiness. Say it in a sentence and keep the actions on the same row (client,
+     * 2026-09-02).
+     */
     return (
       <div className="space-y-3">
-        <EmptyState
-          title="No construction checklist yet"
-          message={
-            template.length > 0
-              ? `Copy this building's ${template.length}-stage template to start tracking this unit.`
-              : "This unit's building has no template yet — add stages to start one, or set the template up from the building."
-          }
-          action={canEdit ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 py-1">
+          <p className="text-sm text-gray-500">
+            {template.length > 0
+              ? `No stages yet — this building has a ${template.length}-stage template to copy.`
+              : 'No stages recorded for this unit.'}
+          </p>
+          {canEdit && (
             <div className="flex items-center gap-2">
               {template.length > 0 && (
                 <Button
@@ -133,11 +153,11 @@ export function UnitConstructionChecklist({
                 Add stage
               </Button>
             </div>
-          ) : undefined}
-        />
+          )}
+        </div>
         {adding && (
           <AddStageModal
-            unitId={unitId} buildingId={buildingId} projectId={projectId}
+            unitId={unitId}
             statusOptions={statusOptions} inspectionOptions={inspectionOptions}
             users={users} onClose={() => setAdding(false)}
             usedLabels={stages.map((s) => s.label)}
@@ -177,7 +197,9 @@ export function UnitConstructionChecklist({
                   something about this stage. One column, one popup, and the cell shows the
                   most recent thing said rather than a count of things said. */}
               <th className="text-left px-3 py-2 font-medium">Notes &amp; updates</th>
-              {canEdit && <th className="w-8" />}
+              {/* Always present now: the actions cell holds the edit pencil, which a
+                  read-only viewer gets too (the dialog carries notes, updates, photos). */}
+              <th className="w-14" />
             </tr>
           </thead>
           <tbody>
@@ -212,14 +234,30 @@ export function UnitConstructionChecklist({
                     </div>
                   ) : i + 1}
                 </td>
-                <td className="px-3 py-2 font-medium text-gray-800">{s.label}</td>
+                <td className="px-3 py-2 font-medium text-gray-800">
+                  <button
+                    type="button"
+                    onClick={() => setDetailStageId(s.id)}
+                    className="text-left hover:text-blue-600 hover:underline decoration-dotted"
+                    title="Open this stage — owner, inspection, timeline, notes and photos"
+                  >
+                    {s.label}
+                  </button>
+                </td>
                 <td className="px-3 py-2 text-gray-700">
-                  {s.owner?.name ?? <span className="text-gray-500">—</span>}
+                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!s.owner}>
+                    {s.owner?.name}
+                  </DetailCellButton>
                 </td>
                 <td className="px-3 py-2">
                   {canEdit ? (
                     <Select
                       size="sm" aria-label="Status" className="min-w-[130px]"
+                      // The listbox popover otherwise matches the trigger's own width
+                      // (130px), so a status label longer than that truncated inside its
+                      // own dropdown menu — the one place there's no excuse for it, since
+                      // nothing else on the row constrains how wide it can open.
+                      popoverProps={{ className: 'min-w-fit' }}
                       selectedKeys={s.status ? [s.status] : []}
                       onSelectionChange={(keys) => {
                         const v = Array.from(keys)[0] as string;
@@ -237,43 +275,61 @@ export function UnitConstructionChecklist({
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  {s.inspectionStatus ? (
-                    <Chip size="sm" variant="flat" color={chipColor(inspectionOptions.find((o) => o.value === s.inspectionStatus)?.color)}>
-                      {inspectionOptions.find((o) => o.value === s.inspectionStatus)?.label ?? s.inspectionStatus}
-                    </Chip>
-                  ) : <span className="text-gray-500">—</span>}
+                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!s.inspectionStatus}>
+                    {s.inspectionStatus && (
+                      <Chip size="sm" variant="flat" color={chipColor(inspectionOptions.find((o) => o.value === s.inspectionStatus)?.color)}>
+                        {inspectionOptions.find((o) => o.value === s.inspectionStatus)?.label ?? s.inspectionStatus}
+                      </Chip>
+                    )}
+                  </DetailCellButton>
                 </td>
                 <td className="px-3 py-2 text-gray-700">
-                  {s.inspectionDate ? fmtDateShort(s.inspectionDate) : <span className="text-gray-500">—</span>}
+                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!s.inspectionDate}>
+                    {s.inspectionDate && fmtDateShort(s.inspectionDate)}
+                  </DetailCellButton>
                 </td>
                 <td className="px-3 py-2 text-gray-700">
-                  {s.startsOn || s.endsOn ? (
-                    <span className="whitespace-nowrap rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">
-                      {s.startsOn ? fmtDateShort(s.startsOn) : '…'} – {s.endsOn ? fmtDateShort(s.endsOn) : '…'}
-                    </span>
-                  ) : <span className="text-gray-500">—</span>}
+                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!(s.startsOn || s.endsOn)}>
+                    {(s.startsOn || s.endsOn) && (
+                      <span className="whitespace-nowrap rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">
+                        {s.startsOn ? fmtDateShort(s.startsOn) : '…'} – {s.endsOn ? fmtDateShort(s.endsOn) : '…'}
+                      </span>
+                    )}
+                  </DetailCellButton>
                 </td>
                 <td className="px-3 py-2">
-                  <StageDetailCell
-                    stage={s} unitId={unitId} projectId={projectId} canEdit={canEdit}
-                    onSaveNotes={(v: string | null) => patch(s.id, { notes: v })}
-                    onPatch={(d: Record<string, unknown>) => patch(s.id, d)}
-                    users={users} inspectionOptions={inspectionOptions}
-                  />
+                  <StageDetailCell stage={s} onOpen={() => setDetailStageId(s.id)} />
                 </td>
-                {canEdit && (
-                  <td className="px-3 py-2">
-                    <Tooltip content="Remove this stage" size="sm">
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    {/* An explicit pencil, not only the clickable cells. The cells are the
+                        shortcut for someone who already knows; this is the affordance for
+                        someone who does not. Shown to read-only viewers too — the dialog
+                        holds the notes, updates and photos, which they may read. */}
+                    <Tooltip content={canEdit ? 'Edit this stage' : 'Open this stage'} size="sm">
                       <button
                         type="button"
-                        onClick={() => deleteStage.mutate({ stageId: s.id, unitId })}
-                        className="text-gray-300 hover:text-red-700 transition-colors"
+                        aria-label={`Edit stage ${s.label}`}
+                        onClick={() => setDetailStageId(s.id)}
+                        className="text-gray-500 hover:text-blue-600 transition-colors"
                       >
-                        <FiTrash2 size={13} />
+                        <FiEdit2 size={13} />
                       </button>
                     </Tooltip>
-                  </td>
-                )}
+                    {canEdit && (
+                      <Tooltip content="Remove this stage" size="sm">
+                        <button
+                          type="button"
+                          aria-label={`Remove stage ${s.label}`}
+                          onClick={() => setConfirmDelete(s)}
+                          className="text-gray-300 hover:text-red-700 transition-colors"
+                        >
+                          <FiTrash2 size={13} />
+                        </button>
+                      </Tooltip>
+                    )}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -282,12 +338,77 @@ export function UnitConstructionChecklist({
 
       {adding && (
         <AddStageModal
-          unitId={unitId} buildingId={buildingId} projectId={projectId}
+          unitId={unitId}
           statusOptions={statusOptions} inspectionOptions={inspectionOptions}
           users={users} onClose={() => setAdding(false)}
           usedLabels={stages.map((s) => s.label)}
         />
       )}
+
+      {/* One dialog for the whole table, resolved from the CURRENT stages array so it
+          shows the freshly patched row rather than the snapshot taken when it opened.
+          Falls closed on its own if the stage is deleted underneath it. */}
+      {(() => {
+        const s = stages.find((x) => x.id === detailStageId);
+        if (!s) return null;
+        return (
+          <StageDetailModal
+            stage={s} unitId={unitId} projectId={projectId} canEdit={canEdit}
+            pending={updateStage.isPending}
+            onSaveNotes={(v: string | null) => patch(s.id, { notes: v })}
+            onPatch={(d: Record<string, unknown>) => patch(s.id, d)}
+            users={users} inspectionOptions={inspectionOptions}
+            statusOptions={statusOptions}
+            onClose={() => setDetailStageId(null)}
+          />
+        );
+      })()}
+
+      <Modal
+        isOpen={confirmDelete !== null}
+        onClose={() => !deleteStage.isPending && setConfirmDelete(null)}
+        size="md"
+      >
+        <ModalContent>
+          <ModalHeader className="text-sm">Remove this stage?</ModalHeader>
+          <ModalBody className="gap-2 text-sm text-gray-700">
+            <p className="font-medium text-gray-900">{confirmDelete?.label}</p>
+            <p className="text-xs text-gray-700">
+              Its status, dates, inspection and notes go with it, along with
+              {' '}{confirmDelete?.photos?.length
+                ? `its ${confirmDelete.photos.length} photo${confirmDelete.photos.length === 1 ? '' : 's'}`
+                : 'any photos on it'}. This cannot be undone.
+            </p>
+            {/* DailyLog.stageId is SetNull — the update outlives the stage it was pinned to,
+                which is worth saying here because "delete the stage" reads like it takes the
+                conversation with it. */}
+            <p className="text-xs text-gray-700">
+              Updates posted against this stage are kept on the unit's feed and lose only their pin.
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              size="sm" variant="light" isDisabled={deleteStage.isPending}
+              onPress={() => setConfirmDelete(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm" color="danger" isLoading={deleteStage.isPending}
+              onPress={async () => {
+                try {
+                  await deleteStage.mutateAsync({ stageId: confirmDelete.id, unitId });
+                  setConfirmDelete(null);
+                } catch (e) {
+                  addToast({ title: errMsg(e, 'Could not remove the stage'), color: 'danger' });
+                }
+              }}
+            >
+              Remove stage
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }
@@ -302,13 +423,7 @@ export function UnitConstructionChecklist({
  * else moves into a popup that only exists while someone is using it. Photos live in the
  * popup too: they are worth having and not worth a column of empty dashed squares.
  */
-function StageDetailCell({ stage, unitId, projectId, canEdit, onSaveNotes, onPatch, users, inspectionOptions }: {
-  stage: any; unitId: string; projectId?: string; canEdit: boolean;
-  onSaveNotes: (v: string | null) => void;
-  onPatch: (d: Record<string, unknown>) => void;
-  users: any[]; inspectionOptions: OptionLike[];
-}) {
-  const [open, setOpen] = useState(false);
+function StageDetailCell({ stage, onOpen }: { stage: any; onOpen: () => void }) {
   const updateCount = stage._count?.dailyLogs ?? 0;
   const photoCount = (stage.photos ?? []).length;
   // Prefer the note, which is the durable summary of the stage; fall back to a bare count.
@@ -317,7 +432,7 @@ function StageDetailCell({ stage, unitId, projectId, canEdit, onSaveNotes, onPat
   return (
     <>
       <button
-        type="button" onClick={() => setOpen(true)}
+        type="button" onClick={onOpen}
         className="flex w-full max-w-[260px] items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-gray-100"
         aria-label="Open notes and updates for this stage"
       >
@@ -337,18 +452,34 @@ function StageDetailCell({ stage, unitId, projectId, canEdit, onSaveNotes, onPat
           </span>
         )}
       </button>
-      {open && (
-        <StageDetailModal
-          stage={stage} unitId={unitId} projectId={projectId} canEdit={canEdit}
-          onSaveNotes={onSaveNotes} onPatch={onPatch} users={users} inspectionOptions={inspectionOptions}
-          onClose={() => setOpen(false)}
-        />
-      )}
     </>
   );
 }
 
-function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPatch, users, inspectionOptions, onClose }: any) {
+/**
+ * A read-only grid cell that is also the way in to the dialog where its value is set.
+ *
+ * Every one of these columns used to render a bare "—" with no affordance, so a row of
+ * em-dashes read as "there is nothing to set here". The dash now carries the same dotted
+ * underline the "Add note" cell does, which is the app's existing signal for "this opens
+ * something".
+ */
+function DetailCellButton({ children, onOpen, filled }: {
+  children?: React.ReactNode; onOpen: () => void; filled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="rounded px-1 py-0.5 text-left hover:bg-gray-100"
+      title="Open this stage — owner, inspection, timeline, notes and photos"
+    >
+      {filled ? children : <span className="text-gray-500 underline decoration-dotted">—</span>}
+    </button>
+  );
+}
+
+function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNotes, onPatch, users, inspectionOptions, statusOptions = [], onClose }: any) {
   const create = useCreateDailyLog();
   const addPhoto = useAddStagePhoto();
   const removePhoto = useRemoveStagePhoto();
@@ -385,13 +516,26 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPa
           <span className="text-[11px] font-normal text-gray-500">Notes, updates and photos for this stage</span>
         </ModalHeader>
         <ModalBody className="pb-4">
-          {/* Every field for this stage lives here now. The grid is text so it can be
-              scanned; this is where it is changed. Status is the exception and stays in the
-              row — it is the field people change on a walk-round and a popup for one click
-              would be three. */}
+          {/* Every field for this stage lives here. The grid is text so it can be scanned;
+              this is where it is changed. Status ALSO stays inline in the row — it is the
+              field people change on a walk-round, and a popup for one click would be three
+              — but it is repeated here so this dialog is the complete set rather than
+              "everything except the one you probably came for". */}
           <div className="grid gap-2 sm:grid-cols-2">
             <Select
-              size="sm" label="Owner" isDisabled={!canEdit}
+              size="sm" label="Status" isDisabled={!canEdit || pending}
+              selectedKeys={stage.status ? new Set([stage.status]) : new Set()}
+              onSelectionChange={(k) => {
+                const v = Array.from(k)[0] as string;
+                if (v) onPatch({ status: v });
+              }}
+            >
+              {statusOptions.map((o: OptionLike) => (
+                <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
+              ))}
+            </Select>
+            <Select
+              size="sm" label="Owner" isDisabled={!canEdit || pending}
               selectedKeys={stage.ownerId ? new Set([stage.ownerId]) : new Set()}
               onSelectionChange={(k) => onPatch({ ownerId: (Array.from(k)[0] as string) ?? null })}
             >
@@ -400,7 +544,7 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPa
               ))}
             </Select>
             <Select
-              size="sm" label="Inspection status" isDisabled={!canEdit}
+              size="sm" label="Inspection status" isDisabled={!canEdit || pending}
               selectedKeys={stage.inspectionStatus ? new Set([stage.inspectionStatus]) : new Set()}
               onSelectionChange={(k) => onPatch({ inspectionStatus: (Array.from(k)[0] as string) ?? null })}
             >
@@ -409,18 +553,18 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPa
               ))}
             </Select>
             <Input
-              size="sm" type="date" label="Inspection date" isDisabled={!canEdit}
+              size="sm" type="date" label="Inspection date" isDisabled={!canEdit || pending}
               value={stage.inspectionDate ? stage.inspectionDate.slice(0, 10) : ''}
               onChange={(e) => onPatch({ inspectionDate: e.target.value || null })}
             />
             <div className="flex items-end gap-1">
               <Input
-                size="sm" type="date" label="Timeline from" isDisabled={!canEdit}
+                size="sm" type="date" label="Timeline from" isDisabled={!canEdit || pending}
                 value={stage.startsOn ? stage.startsOn.slice(0, 10) : ''}
                 onChange={(e) => onPatch({ startsOn: e.target.value || null })}
               />
               <Input
-                size="sm" type="date" label="to" isDisabled={!canEdit}
+                size="sm" type="date" label="to" isDisabled={!canEdit || pending}
                 value={stage.endsOn ? stage.endsOn.slice(0, 10) : ''}
                 onChange={(e) => onPatch({ endsOn: e.target.value || null })}
               />
@@ -429,7 +573,7 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPa
 
           <Textarea
             size="sm" minRows={2} label="Note" value={note} onValueChange={setNote}
-            isDisabled={!canEdit}
+            isDisabled={!canEdit || pending}
             placeholder="The durable summary for this stage"
             onBlur={() => { if (note !== (stage.notes ?? '')) onSaveNotes(note.trim() || null); }}
           />
@@ -519,7 +663,7 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, onSaveNotes, onPa
  * "on 40 units" is what tells them apart without anyone having to police a catalogue.
  */
 function StageOption({ item, checked, onToggle }: {
-  item: { label: string; usedOn?: number };
+  item: { label: string };
   checked: boolean;
   onToggle: () => void;
 }) {
@@ -532,13 +676,26 @@ function StageOption({ item, checked, onToggle }: {
         onChange={onToggle}
       />
       <span className="flex-1">{item.label}</span>
-      {(item.usedOn ?? 0) > 0 && (
-        <span className="text-[11px] text-gray-500 tabular-nums">
-          on {item.usedOn} unit{item.usedOn === 1 ? '' : 's'}
-        </span>
-      )}
     </label>
   );
+}
+
+/**
+ * Is a typed name near enough to a catalogue stage to be a mistake?
+ *
+ * Only the escape hatch needs this. Exact matches are already impossible to add twice, so
+ * what is left is the near miss — "Storefront glass" against "Store Front Glass" — which
+ * is how one stage became three names last time. Compared on letters and digits alone, so
+ * spacing, case, hyphens and the old "07 - " prefixes all fall away.
+ */
+function nearestStage(typed: string, catalogue: { label: string }[]) {
+  const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const key = norm(typed);
+  if (key.length < 3) return null;
+  return catalogue.find((o) => {
+    const k = norm(o.label);
+    return k === key || k.includes(key) || key.includes(k);
+  }) ?? null;
 }
 
 /**
@@ -559,34 +716,38 @@ function StageOption({ item, checked, onToggle }: {
  * was free-text only until 2026-09-01. Both halves are now real.
  */
 function AddStageModal({
-  unitId, buildingId, projectId, statusOptions, inspectionOptions, users, onClose, usedLabels = [],
+  unitId, statusOptions, inspectionOptions, users, onClose, usedLabels = [],
 }: {
   unitId: string; statusOptions: OptionLike[]; inspectionOptions: OptionLike[]; users: any[];
   onClose: () => void;
-  buildingId?: string;
-  projectId?: string;
   /** Labels already on this unit, so the list offers the gap rather than everything. */
   usedLabels?: string[];
 }) {
   const addStage = useAddUnitConstructionStage();
   const addStages = useAddUnitConstructionStages();
 
-  // A stage name used to be free text only, which is how one unit gets "Store Front Glass",
-  // the next "Storefront glass" and a third "SF glass" — three names for one stage, and a
-  // rollup that can never group them. The building's template is the list everyone is
-  // supposed to be working from, so it is offered first.
+  // A stage name used to be free text backed by a list DERIVED from labels already used in
+  // this project — so it was empty on any project that had not used the feature, and it
+  // treated every typo as a permanent option once saved. That is how one stage became
+  // "Store Front Glass", "Storefront glass" and "SF glass".
   //
-  // Typing one in is still allowed rather than removed. Genuinely one-off work exists, and
-  // a portfolio with no stages recorded anywhere yet has to start somewhere — the picker
-  // simply doesn't appear when there is nothing to pick.
-  const libraryQ = useStageLibrary(buildingId, projectId);
-  const library: any[] = Array.isArray(libraryQ.data) ? libraryQ.data : [];
+  // It is now the `construction_stage` option catalogue: org-wide, seeded, ordered, and
+  // edited in Admin -> Options like Project Status and Unit Type. Same list on every
+  // project, so this can no longer come up empty.
+  //
+  // Typing one in stays as an escape hatch — genuinely one-off work exists — but it does
+  // NOT quietly join the catalogue; it is flagged in Admin to promote or ignore.
+  const catalogueQ = useStageCatalogue();
+  const catalogue: any[] = Array.isArray(catalogueQ.data) ? catalogueQ.data : [];
   const used = new Set(usedLabels.map((l) => l.trim().toLowerCase()));
-  const available = library.filter((t) => !used.has(String(t.label).trim().toLowerCase()));
-  const fromTemplate = available.filter((t) => t.source === 'template');
-  const fromLibrary = available.filter((t) => t.source !== 'template');
+  const available = catalogue.filter((t) => !used.has(String(t.label).trim().toLowerCase()));
 
-  const [mode, setMode] = useState<'template' | 'custom'>(available.length > 0 ? 'template' : 'custom');
+  // Null means "not chosen yet", resolved on every render rather than frozen at mount.
+  // Seeding the state from available.length instead put the modal on the one-off tab every
+  // time: the catalogue is still loading on first render, so the count is zero and the
+  // escape hatch became the default door.
+  const [mode, setMode] = useState<'template' | 'custom' | null>(null);
+  const effectiveMode: 'template' | 'custom' = mode ?? (available.length > 0 ? 'template' : 'custom');
   // A set, not one value: seeding a checklist means taking most of the template at once,
   // and doing that a stage at a time is seventeen trips through this modal.
   const [picked, setPicked] = useState<string[]>([]);
@@ -606,10 +767,10 @@ function AddStageModal({
   const submit = async () => {
     setErr(null);
     try {
-      if (mode === 'template') {
+      if (effectiveMode === 'template') {
         if (picked.length === 0) { setErr('Pick at least one stage.'); return; }
-        // Added in template order regardless of the order they were ticked in — the
-        // template's order is the order the work happens in, and a checklist that came
+        // Added in catalogue order regardless of the order they were ticked in — the
+        // catalogue's order is the order the work happens in, and a checklist that came
         // out shuffled because of the sequence someone clicked would be worse than
         // useless. Reordering afterwards is a deliberate act, on the grid.
         const labels = available.filter((t: any) => picked.includes(t.label)).map((t: any) => t.label);
@@ -651,7 +812,7 @@ function AddStageModal({
         <ModalHeader className="flex flex-col gap-0.5">
           <span className="text-sm font-semibold">Add a stage</span>
           <span className="text-[11px] font-normal text-gray-500">
-            Added to this unit only — the template is untouched.
+            Added to this unit only. The stage list itself is edited in Admin → Options.
           </span>
         </ModalHeader>
         <ModalBody className="pb-2">
@@ -662,15 +823,15 @@ function AddStageModal({
           {available.length > 0 && (
             <div className="flex items-center gap-2">
               <Button
-                size="sm" variant={mode === 'template' ? 'solid' : 'flat'}
-                color={mode === 'template' ? 'primary' : 'default'}
+                size="sm" variant={effectiveMode === 'template' ? 'solid' : 'flat'}
+                color={effectiveMode === 'template' ? 'primary' : 'default'}
                 onPress={() => { setMode('template'); setErr(null); }}
               >
-                From the template
+                Pick stages
               </Button>
               <Button
-                size="sm" variant={mode === 'custom' ? 'solid' : 'flat'}
-                color={mode === 'custom' ? 'primary' : 'default'}
+                size="sm" variant={effectiveMode === 'custom' ? 'solid' : 'flat'}
+                color={effectiveMode === 'custom' ? 'primary' : 'default'}
                 onPress={() => { setMode('custom'); setErr(null); }}
               >
                 One-off stage
@@ -678,7 +839,7 @@ function AddStageModal({
             </div>
           )}
 
-          {mode === 'template' && available.length > 0 ? (
+          {effectiveMode === 'template' && available.length > 0 ? (
             <div className="rounded-lg border border-gray-200">
               <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
                 <span className="text-xs text-gray-500">
@@ -691,30 +852,13 @@ function AddStageModal({
                   {allPicked ? 'Clear' : 'Select all'}
                 </Button>
               </div>
+              {/* One list, in catalogue order. The old two-heading split ("this
+                  building's template" / "used elsewhere") existed because the options came
+                  from two guessed-at sources; there is one source now. */}
               <div className="max-h-64 overflow-y-auto p-1">
-                {/* The building's own list first — it is what this building is meant to
-                    run. Everything else is offered under its own heading rather than mixed
-                    in, so "our template" and "something another building does" stay
-                    distinguishable at a glance. */}
-                {fromTemplate.length > 0 && (
-                  <p className="px-2 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                    This building's template
-                  </p>
-                )}
-                {fromTemplate.map((t: any) => (
+                {available.map((t: any) => (
                   <StageOption
-                    key={t.label} item={t}
-                    checked={picked.includes(t.label)} onToggle={() => toggle(t.label)}
-                  />
-                ))}
-                {fromLibrary.length > 0 && (
-                  <p className="px-2 pt-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                    Used elsewhere{fromTemplate.length > 0 ? ' — not in this template' : ''}
-                  </p>
-                )}
-                {fromLibrary.map((t: any) => (
-                  <StageOption
-                    key={t.label} item={t}
+                    key={t.value ?? t.label} item={t}
                     checked={picked.includes(t.label)} onToggle={() => toggle(t.label)}
                   />
                 ))}
@@ -726,21 +870,74 @@ function AddStageModal({
               </p>
             </div>
           ) : (
-            <Input
-              size="sm" label="Stage name" value={label} onValueChange={setLabel}
-              placeholder="e.g. Store Front Glass" autoFocus
-              description={
-                library.length === 0
-                  ? 'No stages have been recorded anywhere yet, so there is nothing to pick from. This one starts the library — every unit can select it from then on.'
-                  : undefined
-              }
-            />
+            <div className="flex flex-col gap-2.5">
+              {/* Pick ONE stage from the catalogue, with its owner, status and dates set
+                  below in the same pass.
+                  Until now this tab was a bare text box, so adding a single catalogue
+                  stage WITH its detail was impossible: the multi-select tab cannot set
+                  per-stage fields (one inspection date across seventeen stages is
+                  seventeen wrong dates) and this tab could not reach the catalogue. The
+                  common case — "add Slab Pour, owned by Ravi, starting Monday" — had no
+                  route that did not involve retyping a name the list already holds. */}
+              {available.length > 0 && (
+                <Select
+                  size="sm"
+                  label="Stage"
+                  labelPlacement="outside"
+                  placeholder="Choose a stage"
+                  selectedKeys={label && available.some((t: any) => t.label === label)
+                    ? new Set([label])
+                    : new Set()}
+                  onSelectionChange={(k) => {
+                    const v = Array.from(k)[0] as string | undefined;
+                    setLabel(v ?? '');
+                    setErr(null);
+                  }}
+                  description="From the shared stage list — the same names every other unit uses."
+                >
+                  {available.map((t: any) => (
+                    <SelectItem key={t.label} textValue={t.label}>{t.label}</SelectItem>
+                  ))}
+                </Select>
+              )}
+
+              {/* `labelPlacement="outside"` on both: the default in-field label sits on
+                  top of the placeholder at size="sm", so "Stage name" and
+                  "e.g. Temporary hoarding" rendered over each other and neither was
+                  readable. Outside placement gives the label its own line. */}
+              <Input
+                size="sm" label={available.length > 0 ? 'Or type a one-off name' : 'Stage name'}
+                labelPlacement="outside"
+                value={available.some((t: any) => t.label === label) ? '' : label}
+                onValueChange={setLabel}
+                placeholder="e.g. Temporary hoarding"
+                autoFocus={available.length === 0}
+                description={
+                  available.length === 0 && catalogue.length === 0
+                    ? 'The stage list is empty. Add stages in Admin → Options so every unit can pick the same ones.'
+                    : 'For genuinely one-off work. It stays on this unit and is not added to the stage list.'
+                }
+              />
+              {/* The near miss is the whole risk of keeping a text box: "Storefront glass"
+                  typed next to a catalogue "Store Front Glass" is how one stage became
+                  three names. Named, not blocked — sometimes the similar one is wrong. */}
+              {/* Not when the name came from the dropdown just above — telling someone
+                  "the list already has Slab Pour" about the Slab Pour they selected FROM
+                  the list is the warning crying wolf. */}
+              {!available.some((t: any) => t.label === label) && nearestStage(label, catalogue) && (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                  The stage list already has{' '}
+                  <strong>“{nearestStage(label, catalogue)!.label}”</strong>. Use that one unless
+                  this is genuinely different — two spellings of one stage never group in a report.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Per-stage detail, so only for the single-stage path. These fields cannot
               mean anything applied to a batch: one inspection date across seventeen
               stages is not a shortcut, it is seventeen wrong dates. */}
-          {mode === 'custom' && (<>
+          {effectiveMode === 'custom' && (<>
           <div className="grid gap-2 sm:grid-cols-2">
             <Select
               size="sm" label="Owner" selectedKeys={form.ownerId ? new Set([form.ownerId]) : new Set()}
@@ -785,7 +982,7 @@ function AddStageModal({
             size="sm" color="primary" onPress={submit}
             isLoading={addStage.isPending || addStages.isPending}
           >
-            {mode === 'template' && picked.length > 1 ? `Add ${picked.length} stages` : 'Add stage'}
+            {effectiveMode === 'template' && picked.length > 1 ? `Add ${picked.length} stages` : 'Add stage'}
           </Button>
         </ModalFooter>
       </ModalContent>

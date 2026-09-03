@@ -534,6 +534,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.REPORT_PORTFOLIO,
     PERMISSIONS.INTERIOR_VIEW,
     PERMISSIONS.INTERIOR_EDIT,
+    // Approval stamps are informational — they gate nothing (client, 2026-09-01). Withholding
+    // them from the role that actually runs the fit-out therefore bought no separation of
+    // duties; it only stopped the PM from recording that an approval had landed, while the
+    // EXECUTIVE who could record it has no interior:edit and so cannot move the phase either.
+    PERMISSIONS.INTERIOR_APPROVE,
     PERMISSIONS.INTERIOR_FINANCE,
     PERMISSIONS.DAILYLOG_VIEW,
     PERMISSIONS.DAILYLOG_EDIT,

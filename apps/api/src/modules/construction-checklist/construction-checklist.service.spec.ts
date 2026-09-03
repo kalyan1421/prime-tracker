@@ -12,7 +12,11 @@ const mockPrisma: any = {
     delete: jest.fn(),
   },
   checklistTemplate: { findUnique: jest.fn() },
-  unitConstructionStagePhoto: { create: jest.fn(), findUnique: jest.fn(), delete: jest.fn() },
+  unitConstructionStagePhoto: {
+    create: jest.fn(), findUnique: jest.fn(), delete: jest.fn(), count: jest.fn(),
+  },
+  dailyLog: { count: jest.fn() },
+  customOption: { findMany: jest.fn() },
   unitConstructionStage: {
     groupBy: jest.fn(),
     findMany: jest.fn(),
@@ -23,6 +27,7 @@ const mockPrisma: any = {
     findUnique: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
+    deleteMany: jest.fn(),
   },
   $transaction: jest.fn((arg: any) => (typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg))),
 };
@@ -44,6 +49,10 @@ function makeService() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Stage names resolve against the construction_stage catalogue on every write path.
+  // Empty by default: a label that matches nothing is ad-hoc, which is a supported state,
+  // so tests that are not about the catalogue do not have to know it exists.
+  mockPrisma.customOption.findMany.mockResolvedValue([]);
 });
 
 describe('ConstructionChecklistService — building template', () => {
@@ -139,8 +148,8 @@ describe('ConstructionChecklistService.applyTemplate', () => {
 
     const { data } = mockPrisma.unitConstructionStage.createMany.mock.calls[0][0];
     expect(data).toEqual([
-      { unitId: 'u1', sortOrder: 0, label: '01 - Contracts', createdById: 'u9' },
-      { unitId: 'u1', sortOrder: 1, label: '02 - Timeline Calendar', createdById: 'u9' },
+      { unitId: 'u1', sortOrder: 0, label: '01 - Contracts', stageValue: null, createdById: 'u9' },
+      { unitId: 'u1', sortOrder: 1, label: '02 - Timeline Calendar', stageValue: null, createdById: 'u9' },
     ]);
   });
 
@@ -458,9 +467,9 @@ describe('ConstructionChecklistService.addUnitStages', () => {
 
     expect(mockPrisma.unitConstructionStage.createMany).toHaveBeenCalledWith({
       data: [
-        { unitId: 'u1', label: 'Rebar', sortOrder: 5, createdById: 'user-1' },
-        { unitId: 'u1', label: 'Columns', sortOrder: 6, createdById: 'user-1' },
-        { unitId: 'u1', label: 'Roof', sortOrder: 7, createdById: 'user-1' },
+        { unitId: 'u1', label: 'Rebar', stageValue: null, sortOrder: 5, createdById: 'user-1' },
+        { unitId: 'u1', label: 'Columns', stageValue: null, sortOrder: 6, createdById: 'user-1' },
+        { unitId: 'u1', label: 'Roof', stageValue: null, sortOrder: 7, createdById: 'user-1' },
       ],
     });
   });
@@ -476,7 +485,7 @@ describe('ConstructionChecklistService.addUnitStages', () => {
     expect(res.added).toBe(1);
     expect(res.skipped).toEqual(['Rebar']);
     expect(mockPrisma.unitConstructionStage.createMany.mock.calls[0][0].data)
-      .toEqual([{ unitId: 'u1', label: 'Columns', sortOrder: 1, createdById: 'user-1' }]);
+      .toEqual([{ unitId: 'u1', label: 'Columns', stageValue: null, sortOrder: 1, createdById: 'user-1' }]);
   });
 
   it('collapses the same label repeated within one request', async () => {
@@ -548,73 +557,67 @@ describe('ConstructionChecklistService.reorderUnitStages', () => {
 });
 
 /**
- * The picker's source. Keying it to the building's own template alone was too narrow:
- * templates are configured per building, so a building nobody had set up offered nothing
- * to pick — on a portfolio where the full stage list was already running on units one
- * building over.
+ * NOT the picker any more. Stage names come from the construction_stage CustomOption
+ * category; what this reports is the inverse — labels running on real units that the
+ * active catalogue does not offer, so Admin can promote the useful ones and leave the
+ * retired numbering schemes alone.
  */
-describe('ConstructionChecklistService.getStageLibrary', () => {
+describe('ConstructionChecklistService.getAdHocStages', () => {
   beforeEach(() => {
     mockAccess.isScoped.mockReturnValue(false);
-    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([]);
+    mockPrisma.customOption.findMany.mockResolvedValue([]);
     mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([]);
   });
 
-  it("offers stages in use anywhere, not just this building's template", async () => {
-    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([
-      { label: '02 - Timeline Calendar', sortOrder: 0 },
-    ]);
+  it('omits a stage the catalogue already offers', async () => {
+    mockPrisma.customOption.findMany.mockResolvedValue([{ value: 'SOIL_COMPACTION' }]);
     mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([
-      { label: '17 - Store front glass', _count: { label: 3 } },
-      { label: '01 - Soil Compaction', _count: { label: 3 } },
+      { label: 'Soil Compaction', stageValue: 'SOIL_COMPACTION', _count: { label: 9 } },
+      { label: 'Temporary hoarding', stageValue: null, _count: { label: 2 } },
     ]);
     const service = makeService();
-    const lib = await service.getStageLibrary({ buildingId: 'b1' }, 'u1', 'FOUNDER');
-
-    expect(lib.map((s: any) => s.label)).toEqual([
-      '02 - Timeline Calendar', '01 - Soil Compaction', '17 - Store front glass',
-    ]);
-    expect(lib[0]).toMatchObject({ source: 'template' });
-    expect(lib[1]).toMatchObject({ source: 'library', usedOn: 3 });
+    const out = await service.getAdHocStages({ buildingId: 'b1' }, 'u1', 'FOUNDER');
+    expect(out).toEqual([{ label: 'Temporary hoarding', usedOn: 2 }]);
   });
 
-  it('lists the template first and the rest by name — the labels are numbered', async () => {
-    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([
-      { label: '99 - Handover', sortOrder: 0 },
-      { label: '98 - Snagging', sortOrder: 1 },
-    ]);
+  it('reports a label linked to a RETIRED entry — deactivating does not unstick the rows', async () => {
+    mockPrisma.customOption.findMany.mockResolvedValue([{ value: 'SOIL_COMPACTION' }]);
     mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([
-      { label: '02 - Rebar', _count: { label: 1 } },
-      { label: '01 - Grading', _count: { label: 2 } },
+      { label: '01 - Permits', stageValue: '01_PERMITS', _count: { label: 3 } },
     ]);
     const service = makeService();
-    const lib = await service.getStageLibrary({ buildingId: 'b1' }, 'u1', 'FOUNDER');
-    expect(lib.map((s: any) => s.label)).toEqual([
-      '99 - Handover', '98 - Snagging', '01 - Grading', '02 - Rebar',
-    ]);
+    const out = await service.getAdHocStages({}, 'u1', 'FOUNDER');
+    expect(out).toEqual([{ label: '01 - Permits', usedOn: 3 }]);
   });
 
-  it('counts a template stage that is also in use, and never lists it twice', async () => {
-    mockPrisma.constructionStageTemplateItem.findMany.mockResolvedValue([
-      { label: '05 - Columns', sortOrder: 0 },
-    ]);
+  it('collapses one wording to one row and sums its uses, commonest first', async () => {
     mockPrisma.unitConstructionStage.groupBy.mockResolvedValue([
-      { label: '  05 - COLUMNS ', _count: { label: 7 } },
+      { label: 'Scaffolding', stageValue: null, _count: { label: 1 } },
+      { label: '  scaffolding ', stageValue: 'SCAFFOLDING_OLD', _count: { label: 4 } },
+      { label: 'Site hut', stageValue: null, _count: { label: 6 } },
     ]);
     const service = makeService();
-    const lib = await service.getStageLibrary({ buildingId: 'b1' }, 'u1', 'FOUNDER');
-    expect(lib).toEqual([{ label: '05 - Columns', source: 'template', usedOn: 7 }]);
+    const out = await service.getAdHocStages({}, 'u1', 'FOUNDER');
+    expect(out).toEqual([
+      { label: 'Site hut', usedOn: 6 },
+      { label: 'Scaffolding', usedOn: 5 },
+    ]);
   });
 
   it('limits a scoped role to stage names from projects it can see', async () => {
     mockAccess.isScoped.mockReturnValue(true);
     mockAccess.accessibleProjectIds.mockResolvedValue(['p1', 'p2']);
     const service = makeService();
-    await service.getStageLibrary({}, 'u1', 'CONSTRUCTION');
+    await service.getAdHocStages({}, 'u1', 'CONSTRUCTION');
 
     expect(mockPrisma.unitConstructionStage.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { unit: { deletedAt: null, building: { projectId: { in: ['p1', 'p2'] } } } },
+        where: {
+          unit: {
+            deletedAt: null,
+            building: { deletedAt: null, project: { deletedAt: null }, projectId: { in: ['p1', 'p2'] } },
+          },
+        },
       }),
     );
   });
@@ -622,12 +625,80 @@ describe('ConstructionChecklistService.getStageLibrary', () => {
   it('does not resolve the membership set when one project was named', async () => {
     mockAccess.isScoped.mockReturnValue(true);
     const service = makeService();
-    await service.getStageLibrary({ projectId: 'p9' }, 'u1', 'CONSTRUCTION');
+    await service.getAdHocStages({ projectId: 'p9' }, 'u1', 'CONSTRUCTION');
     expect(mockAccess.accessibleProjectIds).not.toHaveBeenCalled();
     expect(mockPrisma.unitConstructionStage.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { unit: { deletedAt: null, building: { projectId: 'p9' } } },
+        where: {
+          unit: { deletedAt: null, building: { deletedAt: null, project: { deletedAt: null }, projectId: 'p9' } },
+        },
       }),
     );
+  });
+
+  it('narrows to one building without dropping the project scope', async () => {
+    mockAccess.isScoped.mockReturnValue(false);
+    const service = makeService();
+    await service.getAdHocStages({ buildingId: 'b7', projectId: 'p9' }, 'u1', 'FOUNDER');
+    expect(mockPrisma.unitConstructionStage.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          unit: {
+            deletedAt: null,
+            building: { deletedAt: null, project: { deletedAt: null }, projectId: 'p9' },
+            buildingId: 'b7',
+          },
+        },
+      }),
+    );
+  });
+});
+
+/**
+ * The catalogue link on the write paths. `stageValue` is what a stage is grouped and
+ * reported by; `label` is only its wording, mirrored so a rename does not have to rewrite
+ * the rollup, the grid and the exports.
+ */
+describe('ConstructionChecklistService — stage catalogue link', () => {
+  beforeEach(() => {
+    mockPrisma.unit.findUnique.mockResolvedValue({ id: 'u1', buildingId: 'b1', deletedAt: null });
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockPrisma.unitConstructionStage.findFirst.mockResolvedValue(null);
+    mockPrisma.unitConstructionStage.create.mockResolvedValue({ id: 's1' });
+    mockPrisma.unitConstructionStage.createMany.mockResolvedValue({ count: 1 });
+    mockPrisma.customOption.findMany.mockResolvedValue([
+      { value: 'SLAB_POUR', label: 'Slab Pour' },
+    ]);
+  });
+
+  it('stamps the catalogue value on a single added stage, matching case-insensitively', async () => {
+    const service = makeService();
+    await service.addUnitStage('u1', { label: '  slab pour ' }, 'user-1');
+    expect(mockPrisma.unitConstructionStage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ label: 'slab pour', stageValue: 'SLAB_POUR' }),
+      }),
+    );
+  });
+
+  it('leaves a one-off stage unlinked rather than refusing it', async () => {
+    const service = makeService();
+    await service.addUnitStage('u1', { label: 'Temporary hoarding' }, 'user-1');
+    expect(mockPrisma.unitConstructionStage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ label: 'Temporary hoarding', stageValue: null }),
+      }),
+    );
+  });
+
+  it('stamps each stage in a bulk add', async () => {
+    const service = makeService();
+    await service.addUnitStages('u1', ['Slab Pour', 'Something bespoke'], 'user-1');
+    expect(mockPrisma.unitConstructionStage.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ label: 'Slab Pour', stageValue: 'SLAB_POUR' }),
+        expect.objectContaining({ label: 'Something bespoke', stageValue: null }),
+      ],
+    });
   });
 });

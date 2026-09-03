@@ -5,13 +5,15 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
   useDisclosure, addToast,
 } from '@heroui/react';
-import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiMinus, FiEye, FiEyeOff, FiSliders, FiLock } from 'react-icons/fi';
+import { FiUsers, FiLink, FiFileText, FiRefreshCw, FiCheck, FiX, FiPlus, FiEdit2, FiTrash2, FiSearch, FiShield, FiMinus, FiEye, FiEyeOff, FiSliders, FiLock, FiChevronUp, FiChevronDown } from 'react-icons/fi';
 import {
   useUsers, useUpdateUserRole, useUpdateUserRoles, useToggleUserActive, useCreateUser, useUpdateUser, useDeleteUser,
   useSetUserPassword,
   useAuditLog, useAuditFilterOptions, useQBStatus, useQBSync,
   useRoleCounts, useRoleDefinitions,
-  useCustomOptions, useCreateCustomOption, useDeleteCustomOption,
+  useCustomOptions, useCreateCustomOption, useUpdateCustomOption, useDeleteCustomOption,
+  useReorderCustomOptions,
+  useAdHocStages,
   type CustomOption,
 } from '../hooks/useApi';
 import { fmtDate } from '../utils/fmt';
@@ -1415,7 +1417,21 @@ const CATEGORY_META: Record<string, { label: string; description: string }> = {
   task_priority:  { label: 'Task Priority',      description: 'Priority levels for tasks' },
   budget_category:{ label: 'Budget Category',    description: 'Categories for budget lines, commitments, and actuals' },
   loan_type:      { label: 'Loan Type',          description: 'Types of loans (Construction, Permanent, Bridge, etc.)' },
+  // The construction checklist's own lists. The first is new; the rest existed in the API
+  // but had never been registered here, so nobody could edit them without a deploy.
+  construction_stage: {
+    label: 'Construction Stage',
+    description: 'The stage names a unit checklist is built from. Order here is the order the work happens in.',
+  },
+  construction_stage_status: { label: 'Stage Status',      description: 'Progress states for a checklist stage' },
+  construction_inspection_status: { label: 'Inspection Status', description: 'Inspection outcomes recorded against a stage' },
+  site_priority:  { label: 'Site Priority',      description: 'Priority levels on the Site Tracker' },
 };
+
+// Categories whose ORDER is meaningful rather than cosmetic — a construction stage list is
+// a work sequence, so it gets move up/down controls. Elsewhere the order is just how the
+// dropdown reads and reordering would be noise.
+const ORDERED_CATEGORIES = new Set(['construction_stage']);
 
 const COLOR_OPTIONS = [
   { value: 'default',   label: 'Gray'   },
@@ -1430,14 +1446,110 @@ function slugify(s: string) {
   return s.trim().toUpperCase().replace(/\s+/g, '_').replace(/[^A-Z0-9_]/g, '');
 }
 
+/**
+ * Stage names running on units that this list does not offer.
+ *
+ * The picker is a closed list, but "One-off stage" on the checklist still lets someone type
+ * a name — genuinely non-standard work exists. A typed name deliberately does NOT join the
+ * catalogue on its own; auto-joining is exactly how the old derived list accumulated four
+ * rival numbering schemes and two typos. So they surface here instead: promote the ones
+ * that turned out to be real stages, ignore the rest.
+ *
+ * Also where the legacy names the catalogue migration retired show up, so a checklist that
+ * still carries one is visible rather than quietly odd.
+ */
+function AdHocStages({ options }: { options: CustomOption[] }) {
+  const { data: adHoc = [], isLoading } = useAdHocStages();
+  const createOpt = useCreateCustomOption();
+
+  if (isLoading || adHoc.length === 0) return null;
+
+  const promote = async (label: string) => {
+    const value = slugify(label);
+    if (options.some((o) => o.value === value)) {
+      addToast({ title: 'That value is already taken by another stage', color: 'warning' });
+      return;
+    }
+    const nextOrder = options.reduce((m, o) => Math.max(m, o.sortOrder ?? 0), -1) + 1;
+    try {
+      await createOpt.mutateAsync({ category: 'construction_stage', value, label, sortOrder: nextOrder });
+      addToast({ title: `"${label}" added to the stage list`, color: 'success' });
+    } catch {
+      addToast({ title: 'Could not add that stage', color: 'danger' });
+    }
+  };
+
+  return (
+    <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-3">
+      <h4 className="text-sm font-semibold text-amber-900">In use but not on the list</h4>
+      <p className="mt-0.5 text-xs text-amber-800">
+        Typed as one-off stages, or retired when the list was standardised. They still show on
+        their own units. Add one here to make it pickable everywhere.
+      </p>
+      <div className="mt-2 space-y-1">
+        {adHoc.map((a) => (
+          <div key={a.label} className="flex items-center justify-between gap-2 rounded-md bg-white px-2.5 py-1.5">
+            <span className="truncate text-xs text-gray-800">{a.label}</span>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="text-[11px] text-gray-500 tabular-nums">
+                {a.usedOn} unit{a.usedOn === 1 ? '' : 's'}
+              </span>
+              <Button size="sm" variant="flat" color="primary" onPress={() => promote(a.label)}>
+                Add to list
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CategoryOptions({ category }: { category: string }) {
   const { data: options = [], isLoading } = useCustomOptions(category);
   const createOpt = useCreateCustomOption();
+  const updateOpt = useUpdateCustomOption();
+  const reorderOpts = useReorderCustomOptions();
   const deleteOpt = useDeleteCustomOption();
 
   const [newLabel, setNewLabel] = useState('');
   const [newColor, setNewColor] = useState('default');
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState('');
+
+  const ordered = ORDERED_CATEGORIES.has(category);
+
+  // Renaming edits the LABEL only; `value` is the slug everything else stores, so changing
+  // it would orphan every row that already refers to it. For construction stages the API
+  // re-syncs the wording onto the units carrying that stage, so a rename reaches the
+  // checklists rather than leaving two spellings live at once.
+  const saveRename = async (opt: CustomOption) => {
+    const label = editLabel.trim();
+    setEditingId(null);
+    if (!label || label === opt.label) return;
+    try {
+      await updateOpt.mutateAsync({ id: opt.id, label });
+      addToast({ title: `Renamed to "${label}"`, color: 'success' });
+    } catch {
+      addToast({ title: 'Could not rename this option', color: 'danger' });
+    }
+  };
+
+  // Send the whole order, not a two-row swap. A swap is two writes with both rows briefly
+  // sharing a sortOrder in between, so the list re-sorts mid-click and a quick second
+  // press moves the wrong row. One request, one transaction, one meaning.
+  const move = async (index: number, delta: number) => {
+    const target = index + delta;
+    if (!options[index] || !options[target]) return;
+    const next = [...options];
+    [next[index], next[target]] = [next[target], next[index]];
+    try {
+      await reorderOpts.mutateAsync({ category, ids: next.map((o) => o.id) });
+    } catch {
+      addToast({ title: 'Could not reorder', color: 'danger' });
+    }
+  };
 
   const handleAdd = async () => {
     const label = newLabel.trim();
@@ -1448,7 +1560,10 @@ function CategoryOptions({ category }: { category: string }) {
       return;
     }
     try {
-      await createOpt.mutateAsync({ category, value, label, color: newColor });
+      // Append. Without an explicit sortOrder every new option lands on 0 and the list
+      // falls back to createdAt — invisible until a category where order means something.
+      const nextOrder = options.reduce((m: number, o: CustomOption) => Math.max(m, o.sortOrder ?? 0), -1) + 1;
+      await createOpt.mutateAsync({ category, value, label, color: newColor, sortOrder: nextOrder });
       setNewLabel('');
       setNewColor('default');
       setAdding(false);
@@ -1462,41 +1577,83 @@ function CategoryOptions({ category }: { category: string }) {
 
   return (
     <div className="space-y-2">
-      {options.map((opt: CustomOption) => (
+      {options.map((opt: CustomOption, i: number) => (
         <div
           key={opt.id}
-          className={`flex items-center justify-between px-3 py-2 rounded-lg border ${opt.isSystem ? 'bg-gray-50 border-gray-200' : 'bg-white border-blue-100'}`}
+          className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border ${opt.isSystem ? 'bg-gray-50 border-gray-200' : 'bg-white border-blue-100'}`}
         >
-          <div className="flex items-center gap-3">
-            <Chip
-              size="sm"
-              color={(opt.color as any) || 'default'}
-              variant="flat"
-            >
-              {opt.label}
-            </Chip>
-            <span className="text-xs text-gray-500 font-mono">{opt.value}</span>
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            {ordered && (
+              <span className="text-xs text-gray-500 font-mono tabular-nums w-6 shrink-0">{i + 1}.</span>
+            )}
+            {editingId === opt.id ? (
+              // Commits on Enter or on blur, so clicking away is a save rather than a
+              // silently discarded edit; Escape abandons it.
+              <Input
+                size="sm"
+                value={editLabel}
+                onValueChange={setEditLabel}
+                autoFocus
+                className="max-w-xs"
+                aria-label={`Rename ${opt.label}`}
+                onBlur={() => saveRename(opt)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveRename(opt);
+                  if (e.key === 'Escape') setEditingId(null);
+                }}
+              />
+            ) : (
+              <Chip size="sm" color={(opt.color as any) || 'default'} variant="flat">
+                {opt.label}
+              </Chip>
+            )}
+            <span className="text-xs text-gray-500 font-mono truncate">{opt.value}</span>
             {opt.isSystem && (
               <Chip size="sm" variant="flat" color="default" className="text-[11px]">system</Chip>
             )}
           </div>
           {!opt.isSystem && (
-            <Button
-              size="sm"
-              isIconOnly
-              variant="light"
-              color="danger"
-              onPress={async () => {
-                try {
-                  await deleteOpt.mutateAsync(opt.id);
-                  addToast({ title: 'Option removed', color: 'success' });
-                } catch {
-                  addToast({ title: 'Cannot remove this option', color: 'danger' });
-                }
-              }}
-            >
-              <FiTrash2 size={13} />
-            </Button>
+            <div className="flex items-center gap-0.5 shrink-0">
+              {/* Arrows, not drag: this list is edited on a phone as often as a desk, and
+                  the same call was already made on the checklist grid. */}
+              {ordered && (<>
+                <Button
+                  size="sm" isIconOnly variant="light" aria-label={`Move ${opt.label} up`}
+                  isDisabled={i === 0} onPress={() => move(i, -1)}
+                >
+                  <FiChevronUp size={14} />
+                </Button>
+                <Button
+                  size="sm" isIconOnly variant="light" aria-label={`Move ${opt.label} down`}
+                  isDisabled={i === options.length - 1} onPress={() => move(i, 1)}
+                >
+                  <FiChevronDown size={14} />
+                </Button>
+              </>)}
+              <Button
+                size="sm" isIconOnly variant="light" aria-label={`Rename ${opt.label}`}
+                onPress={() => { setEditingId(opt.id); setEditLabel(opt.label); }}
+              >
+                <FiEdit2 size={13} />
+              </Button>
+              <Button
+                size="sm"
+                isIconOnly
+                variant="light"
+                color="danger"
+                aria-label={`Remove ${opt.label}`}
+                onPress={async () => {
+                  try {
+                    await deleteOpt.mutateAsync(opt.id);
+                    addToast({ title: 'Option removed', color: 'success' });
+                  } catch {
+                    addToast({ title: 'Cannot remove this option', color: 'danger' });
+                  }
+                }}
+              >
+                <FiTrash2 size={13} />
+              </Button>
+            </div>
           )}
         </div>
       ))}
@@ -1538,6 +1695,8 @@ function CategoryOptions({ category }: { category: string }) {
           Add option
         </Button>
       )}
+
+      {category === 'construction_stage' && <AdHocStages options={options} />}
     </div>
   );
 }

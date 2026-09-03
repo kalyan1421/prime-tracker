@@ -5,7 +5,10 @@ const mockPrisma: any = {
   unit: { findUnique: jest.fn(), update: jest.fn() },
   user: { findMany: jest.fn() },
   customOption: { findFirst: jest.fn() },
-  unitAssignee: { deleteMany: jest.fn(), createMany: jest.fn(), findMany: jest.fn() },
+  unitAssignee: { deleteMany: jest.fn(), createMany: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+  unitConstructionStage: { findMany: jest.fn(), deleteMany: jest.fn() },
+  unitConstructionStagePhoto: { count: jest.fn() },
+  dailyLog: { count: jest.fn() },
   $transaction: jest.fn((arg: any) => (typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg))),
 };
 
@@ -194,5 +197,75 @@ describe('UnitsService.setAssignees', () => {
     mockPrisma.user.findMany.mockResolvedValue([{ id: 'a' }]);
     await expect(makeService().setAssignees('u1', ['a', 'ghost'])).rejects.toThrow(/ghost/);
     expect(mockPrisma.unitAssignee.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('UnitsService.untrackFromSiteTracker', () => {
+  /** Every signal the grid reads, set — the state a real tracked unit is in. */
+  function tracked() {
+    existing({ blockerStatus: 'YES', sitePriority: 'HIGH' });
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([{ id: 's1' }, { id: 's2' }]);
+    mockPrisma.unitConstructionStagePhoto.count.mockResolvedValue(3);
+    mockPrisma.dailyLog.count.mockResolvedValue(4);
+    mockPrisma.unitAssignee.count.mockResolvedValue(2);
+  }
+
+  it('clears every signal that puts a unit on the board, in one transaction', async () => {
+    tracked();
+    await makeService().untrackFromSiteTracker('u1');
+
+    // A half-cleared unit stays on the grid looking like live work, so all four go together.
+    expect(mockPrisma.unitConstructionStage.deleteMany).toHaveBeenCalledWith({ where: { unitId: 'u1' } });
+    expect(mockPrisma.unitAssignee.deleteMany).toHaveBeenCalledWith({ where: { unitId: 'u1' } });
+    expect(writtenData()).toEqual({
+      blockerStatus: null,
+      blockerReason: null,
+      blockerSince: null,
+      sitePriority: null,
+      // The provenance stamp goes with the stages it describes. Left behind, the unit
+      // claims it came from a checklist it no longer has — and a later re-track from a
+      // different template would inherit the stale version.
+      templateId: null,
+      templateVersion: null,
+    });
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+  });
+
+  it('reports what it removed so the caller can say it rather than imply it', async () => {
+    tracked();
+    await expect(makeService().untrackFromSiteTracker('u1')).resolves.toEqual({
+      stagesDeleted: 2,
+      photosDeleted: 3,
+      updatesUnpinned: 4,
+      assigneesCleared: 2,
+      blockerCleared: true,
+    });
+  });
+
+  it('never deletes the unit itself', async () => {
+    tracked();
+    await makeService().untrackFromSiteTracker('u1');
+    expect(mockPrisma.unit.update).toHaveBeenCalledTimes(1);
+    expect((mockPrisma as any).unit.delete).toBeUndefined();
+    // deletedAt is not among the fields written — the unit stays in inventory.
+    expect(writtenData()).not.toHaveProperty('deletedAt');
+  });
+
+  it('works on a unit tracked only by a blocker, with no checklist to delete', async () => {
+    existing({ blockerStatus: 'YES', sitePriority: null });
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockPrisma.unitAssignee.count.mockResolvedValue(0);
+    const res = await makeService().untrackFromSiteTracker('u1');
+    expect(res).toMatchObject({ stagesDeleted: 0, photosDeleted: 0, updatesUnpinned: 0 });
+    // No stage ids means no reason to ask the photo/log tables anything.
+    expect(mockPrisma.unitConstructionStagePhoto.count).not.toHaveBeenCalled();
+    expect(mockPrisma.dailyLog.count).not.toHaveBeenCalled();
+  });
+
+  it('refuses on a unit that is already soft-deleted', async () => {
+    existing({ deletedAt: new Date() });
+    await expect(makeService().untrackFromSiteTracker('u1')).rejects.toThrow(NotFoundException);
+    expect(mockPrisma.unitConstructionStage.deleteMany).not.toHaveBeenCalled();
   });
 });

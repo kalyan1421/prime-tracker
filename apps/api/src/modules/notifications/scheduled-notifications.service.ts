@@ -5,6 +5,9 @@ import { EncryptionService } from '../../common/encryption/encryption.service';
 import { NotificationsService } from './notifications.service';
 import { LeaseRentInvoiceService } from '../leases/lease-rent-invoice.service';
 import { NOT_ON_SOLD_UNIT } from '../leases/lease-filters';
+// The grid's own threshold, imported rather than restated: the tile and the alert have to
+// agree about what "quiet" means.
+import { STALE_DAYS as SITE_UPDATE_STALE_DAYS } from '../site-tracker/site-tracker.service';
 
 /**
  * A lease is polymorphic (unitId XOR buildingId), so every leasing check has to fetch
@@ -96,7 +99,75 @@ export class ScheduledNotificationsService {
       this.checkHoldovers(),
       this.checkExpiringDocuments(),
       this.checkUpdateBoardDueSoon(),
+      this.checkStaleSiteUpdates(),
     ]);
+  }
+
+  /**
+   * A unit on the Site Tracker that has gone quiet.
+   *
+   * STALE_DAYS lived only inside SiteTrackerService's summary, so "silence is its own
+   * risk" was asserted on a tile nobody sees unless they open the page — no notification,
+   * no exception entry, no cron, unlike vacancy which has a whole scheduled job.
+   *
+   * "Tracked" is the same four signals the grid uses, and the silence is aged the same
+   * way: from the last update, or for a unit nobody has ever posted about, from when it
+   * joined the tracker. Aging from the tracker join is what keeps a unit added this
+   * morning out of a "7 days quiet" alert.
+   *
+   * Archived projects and soft-deleted buildings are excluded for the same reason the
+   * grid excludes them: archiving a project soft-deletes the project row only, so its
+   * units would otherwise raise alerts forever about work nobody is doing.
+   */
+  private async checkStaleSiteUpdates() {
+    const cutoff = new Date(Date.now() - SITE_UPDATE_STALE_DAYS * 86_400_000);
+
+    const units = await this.prisma.unit.findMany({
+      where: {
+        deletedAt: null,
+        building: { deletedAt: null, project: { deletedAt: null } },
+        // A closed deal is not site work — the grid hides sold units from the people this
+        // alert routes to, so alerting them about one would be unactionable.
+        status: { not: 'SOLD' },
+        OR: [
+          { constructionStages: { some: {} } },
+          { blockerStatus: { not: null } },
+          { sitePriority: { not: null } },
+          { siteAssignees: { some: {} } },
+        ],
+      },
+      select: {
+        id: true, unitNumber: true, createdAt: true,
+        building: { select: { project: { select: { id: true, name: true } } } },
+        constructionStages: { select: { createdAt: true }, orderBy: { createdAt: 'asc' }, take: 1 },
+        dailyLogs: { select: { logDate: true }, orderBy: { logDate: 'desc' }, take: 1 },
+      },
+    });
+
+    let raised = 0;
+    for (const u of units) {
+      const lastUpdate = u.dailyLogs[0]?.logDate ?? null;
+      const trackedSince = u.constructionStages[0]?.createdAt ?? u.createdAt;
+      const since = lastUpdate ?? trackedSince;
+      if (!since || since > cutoff) continue;
+
+      const days = Math.floor((Date.now() - since.getTime()) / 86_400_000);
+      try {
+        await this.notifications.notifySiteUpdateStale({
+          id: u.id,
+          unitNumber: u.unitNumber,
+          projectId: u.building.project.id,
+          projectName: u.building.project.name,
+          days,
+          everUpdated: lastUpdate !== null,
+        });
+        raised++;
+      } catch (err) {
+        this.logger.warn(`Stale site update notify failed for ${u.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Checked ${units.length} tracked units, ${raised} quiet for ${SITE_UPDATE_STALE_DAYS}+ days`);
+    return raised;
   }
 
   /**

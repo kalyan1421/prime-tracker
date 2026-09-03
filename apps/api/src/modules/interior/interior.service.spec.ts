@@ -18,8 +18,12 @@ const mockPrisma: any = {
 
 const mockBus = { emit: jest.fn() };
 
+// findById signs snag photos through the storage driver. Resolving to a fixed string keeps
+// the assertions about phase/gate behaviour independent of the signer.
+const mockStorage = { signedUrl: jest.fn().mockResolvedValue('https://signed.example/photo') };
+
 function makeService() {
-  return new InteriorService(mockPrisma as any, mockBus as any);
+  return new InteriorService(mockPrisma as any, mockBus as any, mockStorage as any);
 }
 
 /** Convenience: stub findById's underlying findFirst with a project at a given phase. */

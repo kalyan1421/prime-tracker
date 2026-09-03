@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { PERMISSIONS_KEY } from '../decorators/index';
+import { PERMISSIONS_KEY, ANY_PERMISSIONS_KEY } from '../decorators/index';
 import { PATH_METADATA, GUARDS_METADATA } from '@nestjs/common/constants';
 
 /**
@@ -140,9 +140,16 @@ describe('every route requires a permission', () => {
     const perms =
       Reflect.getMetadata(PERMISSIONS_KEY, controller.prototype[handler]) ??
       Reflect.getMetadata(PERMISSIONS_KEY, controller);
+    // @RequireAnyPermission is the other way a route states its requirement — one of N
+    // rather than all of N. It writes a different metadata key, so a route guarded only
+    // that way would read as permission-free here.
+    const anyPerms =
+      Reflect.getMetadata(ANY_PERMISSIONS_KEY, controller.prototype[handler]) ??
+      Reflect.getMetadata(ANY_PERMISSIONS_KEY, controller);
 
     expect(
-      Array.isArray(perms) && perms.length > 0,
+      (Array.isArray(perms) && perms.length > 0) ||
+      (Array.isArray(anyPerms) && anyPerms.length > 0),
     ).toBe(true);
   });
 });
@@ -178,6 +185,11 @@ describe('the routes added this cycle carry the permission they are meant to', (
     ['TasksController', 'addUpdate', ['task:edit']],
     ['TasksController', 'addUpdatePhoto', ['task:edit']],
     ['TasksController', 'deleteUpdate', ['task:edit']],
+    // The Site Tracker's destructive pair. Untracking clears the board fields AND deletes
+    // the unit's checklist, so it must require both — one alone would let a holder of half
+    // the rights do the whole job.
+    ['UnitsController', 'untrackFromSiteTracker', ['siteTracker:edit', 'checklist:edit']],
+    ['ConstructionChecklistController', 'clearUnitStages', ['checklist:edit']],
   ];
 
   it.each(expected)('%s.%s requires %s', (controllerName, handler, perms) => {

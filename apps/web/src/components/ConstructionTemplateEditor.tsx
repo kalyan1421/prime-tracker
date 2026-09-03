@@ -5,10 +5,11 @@
  * ConstructionChecklistService.applyTemplate.
  */
 import { useState } from 'react';
-import { Button, Chip, Input, addToast } from '@heroui/react';
+import { Button, Chip, Select, SelectItem, addToast } from '@heroui/react';
 import { FiPlus } from 'react-icons/fi';
 import {
   useConstructionTemplate, useAddConstructionTemplateItem, useDeleteConstructionTemplateItem,
+  useStageCatalogue,
 } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
 import { LoadingState } from './ui';
@@ -19,7 +20,15 @@ export function ConstructionTemplateEditor({ buildingId, canEdit }: { buildingId
   const deleteItem = useDeleteConstructionTemplateItem();
   const [label, setLabel] = useState('');
 
+  // Picked from the same catalogue the checklist picks from. A template that could invent
+  // its own wording would put names on units that no picker offers and no report groups —
+  // the template is a SUBSET of the standard stages, not a second list of them.
+  const catalogueQ = useStageCatalogue();
+  const catalogue: any[] = Array.isArray(catalogueQ.data) ? catalogueQ.data : [];
+
   const items: any[] = Array.isArray(templateQ.data) ? templateQ.data : [];
+  const taken = new Set(items.map((t) => String(t.label).trim().toLowerCase()));
+  const available = catalogue.filter((o) => !taken.has(String(o.label).trim().toLowerCase()));
 
   if (templateQ.isLoading) return <LoadingState message="Loading template…" />;
 
@@ -56,12 +65,21 @@ export function ConstructionTemplateEditor({ buildingId, canEdit }: { buildingId
       )}
       {canEdit && (
         <div className="flex items-center gap-2 pt-1">
-          <Input
-            size="sm" placeholder="e.g. 01 - Contracts"
-            value={label} onChange={(e) => setLabel(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
-          />
-          <Button size="sm" variant="flat" startContent={<FiPlus size={13} />} onPress={handleAdd} isLoading={addItem.isPending}>
+          <Select
+            size="sm" aria-label="Stage to add to this template"
+            placeholder={available.length === 0 ? 'Every stage is already here' : 'Pick a stage'}
+            isDisabled={available.length === 0}
+            selectedKeys={label ? [label] : []}
+            onChange={(e) => setLabel(e.target.value)}
+          >
+            {available.map((o: any) => (
+              <SelectItem key={o.label} textValue={o.label}>{o.label}</SelectItem>
+            ))}
+          </Select>
+          <Button
+            size="sm" variant="flat" startContent={<FiPlus size={13} />}
+            onPress={handleAdd} isLoading={addItem.isPending} isDisabled={!label}
+          >
             Add stage
           </Button>
         </div>

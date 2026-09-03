@@ -2,11 +2,11 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Card, CardBody, CardHeader, Chip, Button, Input, Select, SelectItem,
-  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
+  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Tooltip,
   useDisclosure, addToast,
 } from '@heroui/react';
 import {
-  FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiExternalLink, FiEdit2, FiX, FiCheck,
+  FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiExternalLink, FiEdit2, FiX, FiCheck, FiAlertTriangle,
 } from 'react-icons/fi';
 import {
   useInteriorProjects, useCreateInterior, useUpdateInterior,
@@ -31,6 +31,17 @@ const PHASE_LABEL: Record<string, string> = {
 
 const CONTRACT_TYPES = ['PER_SQFT', 'FIXED', 'COST_PLUS'] as const;
 
+/**
+ * PER_SQFT is the only contract type with a formula behind it (rate x area), and the API
+ * derives the value from that formula unless an explicit contractValue is supplied — in
+ * which case the explicit one wins, deliberately, so a negotiated total can override the
+ * arithmetic. That makes it the caller's job not to send a value it did not mean.
+ *
+ * FIXED and COST_PLUS have no formula: their value is entered by hand (client, 2026-09-01),
+ * so it must be sent.
+ */
+const derivesOwnValue = (contractType: string) => contractType === 'PER_SQFT';
+
 function PhaseStepper({ current }: { current: string }) {
   const idx = INTERIOR_PHASES.indexOf(current as any);
   return (
@@ -50,9 +61,25 @@ function PhaseStepper({ current }: { current: string }) {
   );
 }
 
-/** Per-unit Interior / Fit-Out panel. Drop into UnitDetailPage. */
-export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string; unitNumber?: string; unitSqft?: number }) {
-  const { data, isLoading } = useInteriorProjects({ unitId });
+/**
+ * Interior / Fit-Out panel for one anchor — a unit (UnitDetailPage) or a building
+ * (BuildingDetailPage).
+ *
+ * InteriorProject is anchored to a unit XOR a building, and the API has always accepted
+ * either; only the unit half had a UI, so a building-level fit-out (a whole floor, a
+ * common area, a LOT) could not be created anywhere in the app.
+ */
+export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, unitSqft }: {
+  unitId?: string;
+  buildingId?: string;
+  unitNumber?: string;
+  buildingName?: string;
+  /** Prefills the pricing area — a unit's sqft, or a building's if it has one. */
+  unitSqft?: number;
+}) {
+  const anchorLabel = unitNumber ? `Unit ${unitNumber}` : buildingName ?? 'this building';
+  const isUnit = !!unitId;
+  const { data, isLoading } = useInteriorProjects(unitId ? { unitId } : { buildingId });
   const { data: templatesData } = useInteriorTemplates();
   const { data: usersData } = useAssignableUsers();
   const templates: any[] = Array.isArray(templatesData) ? templatesData : [];
@@ -74,7 +101,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
   const canCreate = canEditInterior;
 
   const defaultForm = (): Record<string, string> => ({
-    name: unitNumber ? `Unit ${unitNumber} fit-out` : '',
+    name: unitNumber ? `Unit ${unitNumber} fit-out` : buildingName ? `${buildingName} fit-out` : '',
     packageTemplateId: '',
     contractType: 'PER_SQFT',
     ratePerSqft: '',
@@ -95,12 +122,18 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
     setInteriorErr(null);
     try {
       await create.mutateAsync({
-        unitId,
+        // Exactly one of these — the API rejects both or neither.
+        ...(unitId ? { unitId } : { buildingId }),
         name: form.name.trim(),
         contractType: form.contractType || 'PER_SQFT',
         ratePerSqft: form.ratePerSqft ? Number(form.ratePerSqft) : undefined,
         area: form.area ? Number(form.area) : undefined,
-        contractValue: form.contractValue ? Number(form.contractValue) : undefined,
+        // Only sent for the contract types that have no formula. A PER_SQFT job's value
+        // IS rate x area and the API derives it; sending a figure as well would override
+        // that derivation with whatever happened to be in the field.
+        contractValue: derivesOwnValue(form.contractType)
+          ? undefined
+          : form.contractValue ? Number(form.contractValue) : undefined,
         packageTemplateId: form.packageTemplateId || undefined,
         pmId: form.pmId || undefined,
         startDate: form.startDate || undefined,
@@ -154,9 +187,9 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
         <ModalContent>
           <ModalHeader>Start interior fit-out</ModalHeader>
           <ModalBody className="space-y-3">
-            {(unitNumber || unitSqft != null) && (
+            {(unitNumber || buildingName || unitSqft != null) && (
               <p className="text-xs text-gray-500">
-                Prefilled from{unitNumber ? ` Unit ${unitNumber}` : ' this unit'}
+                Prefilled from {anchorLabel}
                 {unitSqft != null ? ` · ${Number(unitSqft).toLocaleString()} sqft` : ''} — edit as needed.
               </p>
             )}
@@ -165,7 +198,7 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
             <Input
               label="Name" value={form.name}
               onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setInteriorErr(null); }}
-              placeholder="e.g. Unit 204 fit-out"
+              placeholder={isUnit ? "e.g. Unit 204 fit-out" : "e.g. Ground floor common-area fit-out"}
               isInvalid={!!interiorErr && !form.name.trim()}
               errorMessage="Required"
             />
@@ -213,8 +246,13 @@ export function InteriorPanel({ unitId, unitNumber, unitSqft }: { unitId: string
               <Input size="sm" type="number" label="Rate / sqft ($)" value={form.ratePerSqft} onChange={set('ratePerSqft')} />
               <Input size="sm" type="number" label="Area (sqft)" value={form.area} onChange={set('area')} />
             </div>
-            {form.contractType === 'FIXED' && (
-              <Input size="sm" type="number" label="Fixed contract value ($)" value={form.contractValue} onChange={set('contractValue')} />
+            {!derivesOwnValue(form.contractType) && (
+              <Input
+                size="sm" type="number"
+                label={form.contractType === 'COST_PLUS' ? 'Contract value ($) — cost plus' : 'Fixed contract value ($)'}
+                description="Entered manually — this contract type has no rate x area formula."
+                value={form.contractValue} onChange={set('contractValue')}
+              />
             )}
             {form.ratePerSqft && form.area && form.contractType === 'PER_SQFT' && (
               <p className="text-xs text-gray-500">
@@ -299,7 +337,13 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
           contractType: editForm.contractType || undefined,
           ratePerSqft: editForm.ratePerSqft ? Number(editForm.ratePerSqft) : undefined,
           area: editForm.area ? Number(editForm.area) : undefined,
-          contractValue: editForm.contractValue ? Number(editForm.contractValue) : undefined,
+          // See derivesOwnValue: this form prefills contractValue from the stored record,
+          // so re-sending it on a PER_SQFT job pinned the total at its old figure forever —
+          // the API honours an explicit value over the derived one, by design. Changing the
+          // rate from 100 to 200 left the contract sitting at the original amount.
+          contractValue: derivesOwnValue(editForm.contractType)
+            ? undefined
+            : editForm.contractValue ? Number(editForm.contractValue) : undefined,
           pmId: editForm.pmId || null,
           startDate: editForm.startDate || undefined,
           targetEnd: editForm.targetEnd || undefined,
@@ -357,8 +401,13 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
           <Input size="sm" type="number" label="Rate / sqft ($)" value={editForm.ratePerSqft} onChange={setEdit('ratePerSqft')} />
           <Input size="sm" type="number" label="Area (sqft)" value={editForm.area} onChange={setEdit('area')} />
         </div>
-        {editForm.contractType === 'FIXED' && (
-          <Input size="sm" type="number" label="Fixed contract value ($)" value={editForm.contractValue} onChange={setEdit('contractValue')} />
+        {!derivesOwnValue(editForm.contractType) && (
+          <Input
+            size="sm" type="number"
+            label={editForm.contractType === 'COST_PLUS' ? 'Contract value ($) — cost plus' : 'Fixed contract value ($)'}
+            description="Entered manually — this contract type has no rate x area formula."
+            value={editForm.contractValue} onChange={setEdit('contractValue')}
+          />
         )}
 
         {users.length > 0 && (
@@ -391,12 +440,17 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-medium text-sm">{project.name}</p>
+          {/* Contract value used to only render for PER_SQFT (the one type with a formula
+              behind it) and silently dropped for FIXED/COST_PLUS, even though both carry
+              a hand-entered contractValue same as PER_SQFT does. */}
           <p className="text-xs text-gray-500">
-            {project.contractType === 'PER_SQFT' && project.contractValue
-              ? `${fmt(Number(project.contractValue))} · per sqft`
-              : project.status}
-            {project.pm?.name && ` · PM: ${project.pm.name}`}
-            {project.handoverAt && ` · handed over ${fmtDate(project.handoverAt)}`}
+            {[
+              project.contractValue != null
+                ? `${fmt(Number(project.contractValue))}${project.contractType === 'PER_SQFT' ? ' · per sqft' : ''}`
+                : null,
+              project.pm?.name ? `PM: ${project.pm.name}` : null,
+              project.handoverAt ? `handed over ${fmtDate(project.handoverAt)}` : null,
+            ].filter(Boolean).join(' · ')}
           </p>
           {(project.startDate || project.targetEnd) && (
             <p className="text-xs text-gray-500">
@@ -405,6 +459,19 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {/* Fetched via _count.snags since the list query was built, never shown on this
+              card — the only place a viewer could see the punch-list size was opening the
+              full workspace. Total on file, not just open ones: the count has no status
+              filter behind it, so this states what it counts rather than implying more. */}
+          {project._count?.snags > 0 && (
+            <Tooltip size="sm" content={`${project._count.snags} snag${project._count.snags === 1 ? '' : 's'} on file`}>
+              <span>
+                <Chip size="sm" color="warning" variant="flat" startContent={<FiAlertTriangle className="w-3 h-3" />}>
+                  {project._count.snags}
+                </Chip>
+              </span>
+            </Tooltip>
+          )}
           <Chip size="sm" color={project.status === 'COMPLETED' ? 'success' : 'primary'} variant="flat">
             {project.status}
           </Chip>
@@ -420,14 +487,28 @@ function InteriorProjectCard({ project, templates, users }: { project: any; temp
 
       {canEdit && (
         <div className="flex flex-wrap gap-2">
-          {next && (
+          {/* Handover is the one transition that captures a client sign-off (and, when
+              punch-list items are still open, a written reason for going ahead anyway).
+              That form lives in the full workspace, so send the user there rather than
+              firing a second, sign-off-less handover path from here. */}
+          {next === 'HANDOVER' ? (
+            // A real anchor, not `Button as={Link}` — HeroUI renders that as a <button>
+            // with no href, so it announces as a button and cannot be middle-clicked or
+            // opened in a new tab. This is navigation; it should be a link.
+            <Link
+              to={`/interior/${project.id}`}
+              className="inline-flex items-center gap-1.5 rounded-medium bg-success-50 px-3 py-1.5 text-xs font-medium text-success-700 hover:bg-success-100 transition-colors"
+            >
+              Complete handover <FiArrowRight />
+            </Link>
+          ) : next ? (
             <Button
               size="sm" color="primary" variant="flat" endContent={<FiArrowRight />}
               isLoading={advance.isPending} onPress={doAdvance}
             >
               Advance to {PHASE_LABEL[next]}
             </Button>
-          )}
+          ) : null}
           {project.phase === 'CLIENT_APPROVAL' && (
             <Button size="sm" variant="flat" startContent={<FiCheckCircle />}
               onPress={() => approve.mutate({ id: project.id, kind: 'client' })}>

@@ -5,11 +5,10 @@
  * creating there, and coming back. The board is where you notice a unit is missing, so it is
  * where the unit should be creatable.
  *
- * Work type is no longer asked for here, or anywhere else in the UI. The checklist is
- * therefore seeded from the BUILDING's stage list (ConstructionChecklistService.applyTemplate
- * falls back to it when a unit has no work type), which means a new unit inherits whatever
- * its building uses and is recorded on the drift report as having no template provenance.
- * That is the accepted trade for dropping the field.
+ * The checklist is seeded from the BUILDING's stage list (ConstructionChecklistService.
+ * applyTemplate), so a new unit inherits whatever its building uses and is recorded on the
+ * drift report as having no template provenance. Work type — the field that used to select
+ * a versioned template instead — has been removed from the system entirely.
  */
 import { useEffect, useState } from 'react';
 import {
@@ -56,9 +55,9 @@ export function NewUnitModal({ projects, onClose }: {
       });
       if (seedChecklist) {
         // Non-fatal: a unit with no checklist is recoverable from the board, and failing
-        // the whole creation over it would throw away the unit that was just made. With no
-        // work type this resolves against the building's stage list, so it legitimately
-        // fails when the building has none — hence a warning, not an error.
+        // the whole creation over it would throw away the unit that was just made. This
+        // resolves against the building's stage list, so it legitimately fails when the
+        // building has none — hence a warning, not an error.
         try { await applyTemplate.mutateAsync({ unitId: unit.id }); }
         catch { addToast({ title: 'Unit created, but its checklist could not be seeded', color: 'warning' }); }
       }

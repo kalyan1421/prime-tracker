@@ -11,9 +11,10 @@
  * update under a building that unit is not in.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { DailyLogFeed } from './DailyLogFeed';
 
+const edits: any[] = [];
 const created: any[] = [];
 const state = {
   logs: [] as any[],
@@ -32,6 +33,10 @@ vi.mock('../hooks/useApi', () => ({
     isPending: false,
   }),
   useDeleteDailyLog: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateDailyLog: () => ({
+    mutateAsync: (p: any) => { edits.push(p); return Promise.resolve({}); },
+    isPending: false,
+  }),
   useAddDailyLogPhoto: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useRemoveDailyLogPhoto: () => ({ mutate: vi.fn(), isPending: false }),
   usePresignedUpload: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -236,5 +241,45 @@ describe('DailyLogFeed — the photo affordance', () => {
     render(<DailyLogFeed projectId="p1" unitId="u1" />);
     expect(screen.getAllByRole('img').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Photo')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Editing an update, rather than deleting and re-posting it.
+ *
+ * PATCH /daily-logs/:id and its DTO existed from the start and no screen reached them, so
+ * fixing a typo meant removing the update — which loses its place in the feed and takes
+ * its photos with it. This is the feature used on a phone, on site, one-handed.
+ */
+describe('DailyLogFeed — editing an update', () => {
+  beforeEach(() => { edits.length = 0; state.logs = [LOG]; });
+
+  it('saves the corrected text against the same log', async () => {
+    render(<DailyLogFeed projectId="p1" unitId="u1" />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /edit this update/i }))[0]);
+    const box = await screen.findByLabelText(/update text/i);
+    fireEvent.change(box, { target: { value: 'Slab poured, not slap poured' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(edits).toHaveLength(1));
+    expect(edits[0].data).toEqual({ notes: 'Slab poured, not slap poured' });
+  });
+
+  it('refuses to save an empty update instead of letting the DTO 400', async () => {
+    render(<DailyLogFeed projectId="p1" unitId="u1" />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /edit this update/i }))[0]);
+    fireEvent.change(await screen.findByLabelText(/update text/i), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(/needs some text/i)).toBeTruthy();
+    expect(edits).toHaveLength(0);
+  });
+
+  it('sends nothing when the text came back unchanged', async () => {
+    render(<DailyLogFeed projectId="p1" unitId="u1" />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /edit this update/i }))[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(screen.queryByLabelText(/update text/i)).toBeNull());
+    expect(edits).toHaveLength(0);
   });
 });

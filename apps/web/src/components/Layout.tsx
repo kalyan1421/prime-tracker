@@ -428,7 +428,7 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 
         <Dropdown placement="bottom-end">
           <DropdownTrigger>
-            <button className="flex items-center gap-2 cursor-pointer outline-none px-1 py-1 rounded-md hover:bg-gray-50 min-h-[40px]">
+            <button className="flex items-center gap-2 cursor-pointer outline-none px-1 py-1 rounded-md hover:bg-gray-50 min-h-[40px] focus-visible:ring-2 focus-visible:ring-blue-500">
               <Avatar size="sm" name={user?.name} src={user?.avatarUrl} />
               <span className="text-sm font-medium hidden md:block max-w-[120px] truncate">{user?.name}</span>
               {user?.mfaEnabled && (

@@ -1,14 +1,10 @@
-import { useState } from 'react';
-import {
-  Card, CardBody, CardHeader, Chip, Button, Input, Select, SelectItem,
-  Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
-} from '@heroui/react';
+import { Card, CardBody, CardHeader, Chip, useDisclosure } from '@heroui/react';
 import { FiUser, FiDollarSign, FiCalendar, FiEdit2 } from 'react-icons/fi';
-import { fmt, fmtDate, errMsg } from '../utils/fmt';
-import { useUpdateSale, useBrokers } from '../hooks/useApi';
+import { fmt, fmtDate } from '../utils/fmt';
 import { useAuthStore } from '../store/authStore';
 import { SalePaymentPanel } from './SalePaymentPanel';
-import { FormError } from './FormError';
+import { SaleGateDocuments } from './SaleGateDocuments';
+import { EditSaleDetailsModal } from './EditSaleDetailsModal';
 import { HistoricalRecordControls } from './HistoricalRecordControls';
 
 interface SoldUnitPanelProps {
@@ -40,69 +36,12 @@ function DetailRow({ label, value }: { label: React.ReactNode; value: React.Reac
   );
 }
 
-const toFormDate = (d?: string | null) => (d ? d.slice(0, 10) : '');
-// Prisma DateTime needs a full ISO string, not a bare "YYYY-MM-DD" — same coercion
-// the API's create-lease/create-sale paths already apply server-side, done here too
-// so the payload is unambiguous regardless of local timezone.
-const toApiDate = (d: string) => (d ? new Date(`${d}T12:00:00.000Z`).toISOString() : undefined);
-
-function emptyFormFrom(sale: SoldUnitPanelProps['sale']): Record<string, string> {
-  return {
-    buyer: sale.buyer || '',
-    salePrice: sale.salePrice != null ? String(Number(sale.salePrice)) : '',
-    depositAmt: sale.depositAmt != null ? String(Number(sale.depositAmt)) : '',
-    loiDate: toFormDate(sale.loiDate),
-    contractDate: toFormDate(sale.contractDate),
-    closingDate: toFormDate(sale.closingDate),
-    brokerId: sale.brokerId || sale.broker?.id || '',
-    brokerCommissionPct: sale.brokerCommissionPct != null ? String(Number(sale.brokerCommissionPct)) : '',
-    notes: sale.notes || '',
-  };
-}
-
 export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
   const salePriceNum = sale.salePrice != null ? Number(sale.salePrice) : null;
   const canEditSale = useAuthStore((s) => s.hasPermission('sales:edit'));
-  const updateSale = useUpdateSale();
-  const { data: brokersData } = useBrokers();
-  const brokers = (brokersData as any[]) || [];
 
+  // The form itself lives in EditSaleDetailsModal, which the History timeline opens too.
   const { isOpen, onOpen, onClose } = useDisclosure();
-  const [form, setForm] = useState<Record<string, string>>(() => emptyFormFrom(sale));
-  const [formError, setFormError] = useState<string | null>(null);
-
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [field]: e.target.value }));
-
-  const openEdit = () => {
-    setForm(emptyFormFrom(sale));
-    setFormError(null);
-    onOpen();
-  };
-
-  const handleSave = async () => {
-    setFormError(null);
-    try {
-      await updateSale.mutateAsync({
-        id: sale.id,
-        data: {
-          buyer: form.buyer.trim() || undefined,
-          salePrice: form.salePrice ? Number(form.salePrice) : undefined,
-          depositAmt: form.depositAmt ? Number(form.depositAmt) : undefined,
-          loiDate: toApiDate(form.loiDate),
-          contractDate: toApiDate(form.contractDate),
-          closingDate: toApiDate(form.closingDate),
-          brokerId: form.brokerId || null,
-          brokerCommissionPct: form.brokerCommissionPct ? Number(form.brokerCommissionPct) : null,
-          notes: form.notes.trim() || undefined,
-        },
-      });
-      addToast({ title: 'Sale details updated', color: 'success' });
-      onClose();
-    } catch (e) {
-      setFormError(errMsg(e, 'Failed to update sale'));
-    }
-  };
 
   return (
     <Card className="mb-5 sm:mb-6 border border-gray-200 shadow-none rounded-2xl">
@@ -118,7 +57,7 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
           )}
           {canEditSale && (
             <button
-              onClick={openEdit}
+              onClick={onOpen}
               className="text-gray-500 hover:text-blue-600 transition-colors p-1 rounded"
               title="Edit sale details"
               aria-label="Edit sale details"
@@ -176,7 +115,17 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
           )}
         </dl>
 
+        {/* The deal's paperwork, on the unit rather than only inside the Sales tab's edit
+            dialog. Every document is filed against the sale AND its unit (see
+            DocumentsService.create), so this is the second of the two places it "shows on
+            both" — and the place somebody looking at a sold unit actually asks whether the
+            Deed is on file. No stage move is pending here, so nothing is marked required;
+            the header chip reads "No documents uploaded" until one is. */}
         <div className="border-t border-gray-100 pt-4">
+          <SaleGateDocuments saleId={sale.id} />
+        </div>
+
+        <div className="border-t border-gray-100 pt-4 mt-4">
           <SalePaymentPanel saleId={sale.id} salePrice={salePriceNum ?? undefined} />
         </div>
 
@@ -194,51 +143,10 @@ export function SoldUnitPanel({ sale }: SoldUnitPanelProps) {
         )}
       </CardBody>
 
-      {/* Edit modal — factual details of an already-closed sale. Changing the sale's
-          STATUS (e.g. cancelling a close) stays in the Sales tab's dedicated cancel
-          flow, which also releases the unit; this form never touches status. */}
-      <Modal isOpen={isOpen} onClose={onClose} size="lg" scrollBehavior="inside">
-        <ModalContent>
-          <ModalHeader>Edit Sale Details</ModalHeader>
-          <ModalBody>
-            <FormError message={formError} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input size="sm" label="Buyer" value={form.buyer} onChange={set('buyer')} />
-              <Input size="sm" type="number" label="Sale Price ($)" value={form.salePrice} onChange={set('salePrice')} />
-              <Input size="sm" type="number" label="Deposit Amount ($)" value={form.depositAmt} onChange={set('depositAmt')} />
-              <Input size="sm" type="date" label="LOI Date" value={form.loiDate} onChange={set('loiDate')} />
-              <Input size="sm" type="date" label="Contract Date" value={form.contractDate} onChange={set('contractDate')} />
-              <Input size="sm" type="date" label="Closing Date" value={form.closingDate} onChange={set('closingDate')} />
-              <Select
-                size="sm"
-                label="Broker (optional)"
-                selectedKeys={form.brokerId ? [form.brokerId] : []}
-                onSelectionChange={(keys) => setForm((f) => ({ ...f, brokerId: (Array.from(keys)[0] as string) || '' }))}
-              >
-                {[{ id: '', name: '— none —', company: '' }, ...brokers].map((b: any) => (
-                  <SelectItem key={b.id} textValue={b.id ? `${b.name}${b.company ? ` · ${b.company}` : ''}` : '— none —'}>
-                    {b.id ? `${b.name}${b.company ? ` · ${b.company}` : ''}` : '— none —'}
-                  </SelectItem>
-                ))}
-              </Select>
-              {form.brokerId && (
-                <Input
-                  size="sm" type="number" label="Commission % override"
-                  value={form.brokerCommissionPct} onChange={set('brokerCommissionPct')}
-                  description="Blank = broker default"
-                />
-              )}
-              <div className="sm:col-span-2">
-                <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
-              </div>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button size="sm" variant="light" onPress={onClose}>Cancel</Button>
-            <Button size="sm" color="primary" onPress={handleSave} isLoading={updateSale.isPending}>Save Changes</Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+      {/* Extracted so the History timeline can open the same form — a sale entry there
+          could be deleted but not corrected. See EditSaleDetailsModal. */}
+      <EditSaleDetailsModal sale={sale} isOpen={isOpen} onClose={onClose} />
+
     </Card>
   );
 }

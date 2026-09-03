@@ -24,18 +24,21 @@ import {
 } from '@heroui/react';
 import {
   FiAlertTriangle, FiChevronDown, FiChevronRight, FiSearch, FiUsers, FiX, FiMessageSquare,
-  FiPlus, FiEdit2,
+  FiPlus, FiEdit2, FiHome,
 } from 'react-icons/fi';
 import {
   useSiteTracker, useUpdateSiteTracker, useSetUnitAssignees,
-  useProjects, useCustomOptions, useAssignableUsers,
-  useStageLibrary, useAddUnitConstructionStages,
+  useProjects, useBuildings, useCustomOptions, useAssignableUsers,
+  useStageCatalogue, useAddUnitConstructionStages,
 } from '../hooks/useApi';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
+import { usePagination } from '../hooks/usePagination';
 import { useDebounced } from '../hooks/useDebounced';
 import { LoadingState, ErrorState, EmptyState, PermissionGate, chipColor, type HeroColor } from '../components/ui';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { EditUnitModal } from '../components/EditUnitModal';
+import { SiteTrackerDetailsModal } from '../components/SiteTrackerDetailsModal';
+import { SiteTrackerRowActions } from '../components/SiteTrackerRowActions';
 import { UnitConstructionChecklist } from '../components/UnitConstructionChecklist';
 import { useAuthStore } from '../store/authStore';
 import { errMsg, fmtDateShort } from '../utils/fmt';
@@ -59,6 +62,9 @@ interface Row {
     notes: string; logDate: string; authorName: string | null; stageLabel: string | null;
   } | null;
 }
+
+/** Units per page. Groups are formed from the page, so a building can span two. */
+const PAGE_SIZE = 50;
 
 const initials = (a: Assignee) =>
   (a.name ?? a.email).split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('');
@@ -98,6 +104,9 @@ function optLabel(opts: { value: string; label: string }[], value?: string | nul
 export default function SiteTrackerPage() {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('siteTracker:edit');
+  // Same gate the row's pencil sat behind — it now guards the secondary route to the
+  // unit form rather than the pencil itself.
+  const canEditUnit = hasPermission('unit:editBuild');
   // Editing a stage is gated on checklist:edit, not siteTracker:edit — the same permission
   // that governs it on the unit page, so the two screens agree on who may touch a checklist.
   const canEditChecklist = hasPermission('checklist:edit');
@@ -108,14 +117,35 @@ export default function SiteTrackerPage() {
   const [search, setSearch] = useState('');
   const [projectId, setProjectId] = useState(params.get('projectId') ?? '');
   const [blockerStatus, setBlockerStatus] = useState('');
+  // Priority is editable on every row and filterable on none of them — the API accepted
+  // it all along, and buildingId too. Building narrows within the chosen property, so it
+  // only appears once there is one.
+  const [sitePriority, setSitePriority] = useState('');
+  const [buildingId, setBuildingId] = useState('');
   const debouncedSearch = useDebounced(search, 300);
 
   const { data, isLoading, error } = useSiteTracker({
-    projectId, blockerStatus, search: debouncedSearch,
+    projectId, buildingId, blockerStatus, sitePriority, search: debouncedSearch,
   });
-  const { data: projects = [] } = useProjects();
+  const { data: projects = [], isSuccess: projectsLoaded } = useProjects();
+  const { data: buildings = [] } = useBuildings(projectId);
   const { data: priorityOpts = [] } = useCustomOptions('site_priority');
   const { data: stageStatusOpts = [] } = useCustomOptions('construction_stage_status');
+
+  // The dropdown only ever lists live projects (useProjects excludes archived), so an
+  // archived-mid-session project just vanishes from its options — but `projectId` is local
+  // state, independent of that list, so it kept filtering by an id nothing could select any
+  // more: the Select rendered blank and the grid silently showed zero rows with no
+  // explanation. Gated on `projectsLoaded` so this can't fire on the very first render,
+  // before the list has arrived, and mistake "not loaded yet" for "no longer exists."
+  useEffect(() => {
+    if (!projectId || !projectsLoaded) return;
+    if (projects.some((p: any) => p.id === projectId)) return;
+    setProjectId('');
+    setBuildingId('');
+    addToast({ title: 'That project is no longer available — cleared the filter.', color: 'warning' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, projectsLoaded, projectId]);
 
   const rows: Row[] = data?.rows ?? [];
   const summary = data?.summary;
@@ -129,6 +159,12 @@ export default function SiteTrackerPage() {
   // unit people already had.
   const trackUnit = useDisclosure();
   const [editUnit, setEditUnit] = useState<Row | null>(null);
+  /**
+   * The row pencil opens THIS — the unit's site-tracker fields (blocker, priority,
+   * owners) — not EditUnitModal, which edits the asset. Unit details stay reachable
+   * from a secondary button inside it.
+   */
+  const [trackerUnit, setTrackerUnit] = useState<Row | null>(null);
   const [feedUnit, setFeedUnit] = useState<Row | null>(null);
   const openFeed = (row: Row) => { setFeedUnit(row); feedModal.onOpen(); };
 
@@ -141,11 +177,21 @@ export default function SiteTrackerPage() {
 
   // Reset collapsed-group overrides whenever a filter narrows the list — otherwise a
   // section collapsed earlier stays shut and a search looks like it found nothing.
-  const { isExpanded, toggle } = useCollapsibleGroups([debouncedSearch, projectId, blockerStatus]);
+  const { isExpanded, toggle } = useCollapsibleGroups(
+    [debouncedSearch, projectId, buildingId, blockerStatus, sitePriority],
+  );
+
+  // Paginated on UNITS, then grouped, so a page is a fixed amount of work regardless of
+  // how the buildings happen to divide — and every expanded row's stage list is bounded
+  // with it. The August list-scale pass added this across seven components; this table was
+  // built afterwards and rendered every row and every stage at once.
+  const {
+    page, setPage, totalPages, paged: pagedRows, total: totalRows,
+  } = usePagination(rows, PAGE_SIZE, [debouncedSearch, projectId, buildingId, blockerStatus, sitePriority]);
 
   const groups = useMemo(() => {
     const map = new Map<string, { key: string; project: Row['project']; building: Row['building']; units: Row[] }>();
-    for (const r of rows) {
+    for (const r of pagedRows) {
       const key = `${r.project.id}:${r.building.id}`;
       const g = map.get(key);
       if (g) g.units.push(r);
@@ -175,9 +221,9 @@ export default function SiteTrackerPage() {
         ),
       };
     });
-  }, [rows]);
+  }, [pagedRows]);
 
-  const filtersActive = !!(search || projectId || blockerStatus);
+  const filtersActive = !!(search || projectId || buildingId || blockerStatus || sitePriority);
 
   if (isLoading) return <LoadingState message="Loading the site tracker…" />;
   if (error) return <ErrorState message={errMsg(error, 'Could not load the site tracker')} />;
@@ -206,7 +252,7 @@ export default function SiteTrackerPage() {
         </div>
       </div>
 
-      {summary && <SummaryRail summary={summary} />}
+      {summary && <SummaryRail summary={summary} filtered={filtersActive} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <Input
@@ -217,7 +263,7 @@ export default function SiteTrackerPage() {
         <Select
           size="sm" className="max-w-[180px]" aria-label="Filter by property"
           placeholder="All properties" selectedKeys={projectId ? [projectId] : []}
-          onChange={(e) => setProjectId(e.target.value)}
+          onChange={(e) => { setProjectId(e.target.value); setBuildingId(''); }}
         >
           {projects.map((p: any) => (
             <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>
@@ -233,10 +279,35 @@ export default function SiteTrackerPage() {
           {/* Distinct from "Not blocked": nobody has assessed these at all. */}
           <SelectItem key="NONE" textValue="Not assessed">Not assessed</SelectItem>
         </Select>
+        <Select
+          size="sm" className="max-w-[150px]" aria-label="Filter by priority"
+          placeholder="Any priority" selectedKeys={sitePriority ? [sitePriority] : []}
+          onChange={(e) => setSitePriority(e.target.value)}
+        >
+          {priorityOpts.map((o: any) => (
+            <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
+          ))}
+        </Select>
+        {/* Only once a property is chosen — a flat list of every building across the
+            portfolio would be longer than the unit list it filters. */}
+        {projectId && buildings.length > 1 && (
+          <Select
+            size="sm" className="max-w-[170px]" aria-label="Filter by building"
+            placeholder="All buildings" selectedKeys={buildingId ? [buildingId] : []}
+            onChange={(e) => setBuildingId(e.target.value)}
+          >
+            {buildings.map((b: any) => (
+              <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+            ))}
+          </Select>
+        )}
         {filtersActive && (
           <Button
             size="sm" variant="light" startContent={<FiX />}
-            onPress={() => { setSearch(''); setProjectId(''); setBlockerStatus(''); }}
+            onPress={() => {
+              setSearch(''); setProjectId(''); setBuildingId('');
+              setBlockerStatus(''); setSitePriority('');
+            }}
           >
             Clear
           </Button>
@@ -249,9 +320,13 @@ export default function SiteTrackerPage() {
       {groups.length === 0 ? (
         <EmptyState
           title={filtersActive ? 'Nothing matches those filters' : 'No units on the tracker yet'}
+          // The old copy said units appear "as soon as they belong to a building on a
+          // project you can see", which is not the rule and is the exact misreading that
+          // had people pressing New unit and making a second copy of a unit they had.
+          // A unit joins this board when site work is recorded against it.
           message={filtersActive
             ? 'Try clearing a filter.'
-            : 'Units appear here as soon as they belong to a building on a project you can see.'}
+            : 'A unit joins the board once site work is recorded on it — a checklist, a blocker, a priority or an owner. Use “Track a unit” to bring one on.'}
         />
       ) : (
         <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
@@ -277,8 +352,8 @@ export default function SiteTrackerPage() {
                   <GroupSection
                     key={g.key} group={g} open={open} onToggle={() => toggle(g.key, open)}
                     expanded={expanded} onToggleRow={toggleRow} onOpenFeed={openFeed}
-                    onEditUnit={setEditUnit}
-                    canEdit={canEdit} canEditChecklist={canEditChecklist}
+                    onEditUnit={setTrackerUnit}
+                    canEdit={canEdit} canEditUnit={canEditUnit} canEditChecklist={canEditChecklist}
                     priorityOpts={priorityOpts}
                     stageStatusOpts={stageStatusOpts}
                   />
@@ -286,7 +361,32 @@ export default function SiteTrackerPage() {
               })}
             </tbody>
           </table>
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-gray-100 px-3 py-2.5">
+              <span className="text-xs text-gray-500 tabular-nums">
+                {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalRows)} of {totalRows} units
+              </span>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="flat" isDisabled={page === 1} onPress={() => setPage(page - 1)}>
+                  Previous
+                </Button>
+                <span className="px-2 text-xs tabular-nums text-gray-500">Page {page} / {totalPages}</span>
+                <Button size="sm" variant="flat" isDisabled={page === totalPages} onPress={() => setPage(page + 1)}>
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {trackerUnit && (
+        <SiteTrackerDetailsModal
+          unit={trackerUnit}
+          canEdit={canEdit}
+          onClose={() => setTrackerUnit(null)}
+          onEditUnitDetails={canEditUnit ? () => { setEditUnit(trackerUnit); setTrackerUnit(null); } : undefined}
+        />
       )}
 
       {editUnit && (
@@ -377,13 +477,18 @@ function Th({ children, className = '' }: { children: React.ReactNode; className
   );
 }
 
-function SummaryRail({ summary }: { summary: any }) {
+function SummaryRail({ summary, filtered }: { summary: any; filtered: boolean }) {
   const tiles = [
     {
       label: 'Blocked now', value: summary.blocked,
       // Blocker AGE, which the source board cannot show at all. "Blocked" matters much
-      // less than "blocked for eleven days".
-      foot: summary.oldestBlockerDays ? `oldest ${summary.oldestBlockerDays}d` : 'none open',
+      // less than "blocked for eleven days". Null is "no start date recorded", which is
+      // not the same as zero days and must not read as "blocked today".
+      foot: summary.blocked === 0
+        ? 'none open'
+        : summary.oldestBlockerDays === null
+          ? 'start date not recorded'
+          : `oldest ${summary.oldestBlockerDays}d`,
       tone: summary.blocked ? 'border-l-red-500' : 'border-l-gray-300',
     },
     { label: 'Units tracked', value: summary.total, foot: `${summary.noChecklist} with no checklist`, tone: 'border-l-gray-300' },
@@ -397,9 +502,18 @@ function SummaryRail({ summary }: { summary: any }) {
       label: 'No update 7d+', value: summary.stale, foot: 'silence is its own risk',
       tone: summary.stale ? 'border-l-amber-500' : 'border-l-gray-300',
     }]),
-    { label: 'Awaiting inspection', value: summary.awaitingInspection, foot: 'scheduled or in progress', tone: 'border-l-blue-500' },
+    // Counts STAGES, not units — three can be three steps on one unit. Said plainly,
+    // because it sits fifth in a row of unit counts and read as three units.
+    { label: 'Awaiting inspection', value: summary.awaitingInspection, foot: 'stages scheduled or in progress', tone: 'border-l-blue-500' },
   ];
   return (
+    <div className="flex flex-col gap-1.5">
+    {/* Every number here is computed over what the filters left, so a search quietly
+        turns "blocked now" into "blocked among the matches". Say so rather than letting
+        the rail look portfolio-wide while the table under it is not. */}
+    {filtered && (
+      <p className="text-[11px] text-gray-500">Across the filtered units only.</p>
+    )}
     <div className="grid gap-2 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
       {tiles.map((t) => (
         <div key={t.label} className={`rounded-lg border border-gray-200 border-l-[3px] ${t.tone} bg-white px-3 py-2`}>
@@ -409,11 +523,12 @@ function SummaryRail({ summary }: { summary: any }) {
         </div>
       ))}
     </div>
+    </div>
   );
 }
 
 const GroupSection = memo(function GroupSection({
-  group, open, onToggle, expanded, onToggleRow, onOpenFeed, onEditUnit, canEdit, canEditChecklist,
+  group, open, onToggle, expanded, onToggleRow, onOpenFeed, onEditUnit, canEdit, canEditUnit, canEditChecklist,
   priorityOpts, stageStatusOpts,
 }: any) {
   const b = group.battery;
@@ -424,7 +539,7 @@ const GroupSection = memo(function GroupSection({
   return (
     <>
       <tr className="bg-gray-100/70 border-y border-gray-200">
-        <td colSpan={8} className="px-3 py-1.5">
+        <td colSpan={7} className="px-3 py-1.5">
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button" onClick={onToggle}
@@ -472,7 +587,7 @@ const GroupSection = memo(function GroupSection({
         <UnitRow
           key={u.id} row={u} isOpen={expanded.has(u.id)} onToggle={() => onToggleRow(u.id)}
           onOpenFeed={onOpenFeed} onEditUnit={onEditUnit}
-          canEdit={canEdit} canEditChecklist={canEditChecklist}
+          canEdit={canEdit} canEditUnit={canEditUnit} canEditChecklist={canEditChecklist}
           priorityOpts={priorityOpts}
           stageStatusOpts={stageStatusOpts}
         />
@@ -481,7 +596,7 @@ const GroupSection = memo(function GroupSection({
   );
 });
 
-function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEditChecklist, priorityOpts, stageStatusOpts }: any) {
+function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEditUnit, canEditChecklist, priorityOpts, stageStatusOpts }: any) {
   const u = row as Row;
   const update = useUpdateSiteTracker();
   const [blockerOpen, setBlockerOpen] = useState(false);
@@ -512,23 +627,57 @@ function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEd
               </Link>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-gray-500">{u.status.replace(/_/g, ' ').toLowerCase()}</span>
-                {/* unit:editBuild, matching the unit page: Construction reaches the form
-                    and may correct the unit's number, type, size and notes, while the
-                    asking price and rent inside it stay behind unit:edit and are not
-                    rendered for them. Creating a unit still needs the wider permission —
-                    see the New unit button above. */}
-                <PermissionGate permission="unit:editBuild">
-                  <Tooltip size="sm" content="Edit unit details">
+                {/* Opens the SITE details — blocker, priority, owners — which
+                    is what this board is about. It used to open the unit form (number,
+                    type, size, price); that is the asset rather than the work, and is now
+                    a secondary button inside the dialog, still behind unit:editBuild.
+                    Shown to whoever can edit either one. */}
+                {(canEdit || canEditUnit) && (
+                  <Tooltip size="sm" content="Edit site details — blocker, priority, owners">
                     <button
-                      type="button" aria-label={`Edit unit ${u.unitNumber}`}
+                      type="button" aria-label={`Edit site details for unit ${u.unitNumber}`}
                       onClick={() => onEditUnit(u)}
                       className="rounded p-0.5 text-gray-500 hover:bg-gray-100 hover:text-blue-600"
                     >
                       <FiEdit2 size={11} />
                     </button>
                   </Tooltip>
-                </PermissionGate>
+                )}
+                {/* The board's only destructive actions, kept off the row itself and behind
+                    a confirmation that counts what goes — see SiteTrackerRowActions. */}
+                <SiteTrackerRowActions
+                  row={{
+                    id: u.id, unitNumber: u.unitNumber,
+                    totalStages: u.totalStages, doneStages: u.doneStages,
+                    updateCount: u.updateCount,
+                    assigneeCount: u.assignees.length,
+                    blockerStatus: u.blockerStatus,
+                    sitePriority: u.sitePriority,
+                  }}
+                  canEditChecklist={canEditChecklist}
+                  canEditTracker={canEdit}
+                />
               </div>
+              {/* Who is in there. The API has fetched and permission-gated this all along
+                  — `undefined` means "you may not see tenancies", `null` means "there is
+                  none" — and nothing rendered it, so the search placeholder promised a
+                  tenant you could match but never read. Shown here rather than as an
+                  eighth column: the table already scrolls sideways on a phone.
+                  `undefined` gets its own line — same "Hidden" language as LatestUpdateCell
+                  — so a viewer without lease:view can tell "withheld" from "genuinely no
+                  tenant" (which stays silent, same as before, so a tenant-less unit isn't
+                  cluttered with a line that has nothing to say). */}
+              {u.tenantName ? (
+                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-gray-500">
+                  <FiHome size={10} className="shrink-0" />
+                  <span className="truncate" title={u.tenantName}>{u.tenantName}</span>
+                </div>
+              ) : u.tenantName === undefined && (
+                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-gray-500 italic">
+                  <FiHome size={10} className="shrink-0" />
+                  Tenant hidden
+                </div>
+              )}
             </div>
           </div>
         </td>
@@ -589,7 +738,7 @@ function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEd
 
       {isOpen && (
         <tr className="border-b border-gray-200 bg-gray-50">
-          <td colSpan={8} className="px-4 py-3">
+          <td colSpan={7} className="px-4 py-3">
             <ChecklistPanel row={u} canEdit={canEditChecklist} />
           </td>
         </tr>
@@ -713,6 +862,8 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
 
   if (!canEdit) return stack;
 
+  // Multi-assign, one PUT with the whole set — never a write per person. A per-item loop
+  // here would hit the API's 10-req/sec throttle and silently drop assignees.
   // Each checkbox toggle fires the full-set PUT (see the comment above) — with no guard,
   // ticking two boxes quickly sends two overlapping requests whose responses can resolve
   // out of order, letting the first click's set win over the second. Disabling the trigger
@@ -758,9 +909,14 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
  * "New unit", so people used it, and got a second copy of a unit they already had.
  *
  * Seeding stages is what does it — a unit counts as tracked the moment it has a checklist —
- * so this is a stage picker over the building's template, not a unit form. All of them is
- * the common case and is preselected; a fit-out that only needs four steps unticks the rest.
- * Order is the template's; it is changed afterwards on the checklist, in one place.
+ * so this is a stage picker, not a unit form. All of them is the common case and is
+ * preselected; a fit-out that only needs four steps unticks the rest. Order is the
+ * catalogue's; it is changed afterwards on the checklist, in one place.
+ *
+ * The stages come from the org-wide `construction_stage` catalogue. They used to come from
+ * whatever had already been recorded in the same project, which meant this modal refused to
+ * do its job on precisely the projects that most needed it: no stages recorded yet, nothing
+ * to seed from, and a suggestion to go and type them into the unit by hand instead.
  */
 function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
@@ -768,29 +924,36 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
   const [picked, setPicked] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
-  // includeUntracked is the whole point: the default grid hides exactly the units this
-  // modal exists to find.
-  const { data, isLoading } = useSiteTracker({ projectId, includeUntracked: 'true' });
-  const untracked: Row[] = useMemo(
-    () => (data?.rows ?? []).filter((r: Row) => (r.totalStages ?? 0) === 0),
-    [data],
+  // `untrackedOnly` asks the API the question this modal actually has, and waits for a
+  // property before asking it at all.
+  //
+  // It used to request every unit the viewer could see and then keep the ones with no
+  // stages. That was wrong twice over. Wrong in fact — a unit counts as tracked on FIVE
+  // signals, so one with a blocker and no checklist was offered here while already sitting
+  // on the grid, and tracking it appended a second checklist to a unit the board was
+  // showing. And wrong in cost — the unfiltered call returned 393 rows and 268 KB of
+  // stages, leases and daily logs to populate a dropdown that stays disabled until a
+  // property is picked.
+  const { data, isLoading } = useSiteTracker(
+    { projectId, untrackedOnly: 'true' },
+    { enabled: !!projectId },
   );
+  const untracked: Row[] = useMemo(() => data?.rows ?? [], [data]);
   const unit = untracked.find((r) => r.id === unitId) ?? null;
 
-  // The LIBRARY, not just this building's template: a building nobody has configured had
-  // nothing to offer, which is most of them, so the action dead-ended on exactly the units
-  // it exists to bring onto the tracker.
-  const templateQ = useStageLibrary(unit?.building.id, projectId || undefined);
-  const template: any[] = Array.isArray(templateQ.data) ? templateQ.data : [];
+  // The org-wide stage catalogue, not a list derived from what this project happens to
+  // have recorded. Deriving it is why this modal used to dead-end on exactly the units it
+  // exists to bring onto the tracker: a project with no stages yet had nothing to seed
+  // from, which is every project the feature had not been used on.
+  const catalogueQ = useStageCatalogue();
+  const template: any[] = Array.isArray(catalogueQ.data) ? catalogueQ.data : [];
   const addStages = useAddUnitConstructionStages();
 
-  // Preselect this building's OWN template, not the whole library — "all of them" means
-  // the list this building runs, and starting with forty stages ticked because some other
-  // building somewhere uses them would be worse than starting with none. Everything else
-  // is still listed, just unticked.
-  const templateKey = template.map((t: any) => `${t.source}:${t.label}`).join('|');
+  // All of them, ticked. Putting a unit on the tracker means giving it the standard list;
+  // a fit-out that only needs four steps unticks the rest, which is the rarer case.
+  const templateKey = template.map((t: any) => t.value ?? t.label).join('|');
   useEffect(() => {
-    setPicked(template.filter((t: any) => t.source === 'template').map((t: any) => t.label));
+    setPicked(template.map((t: any) => t.label));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateKey]);
 
@@ -841,13 +1004,15 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
             size="sm" label="Unit" aria-label="Pick a unit to track"
             selectedKeys={unitId ? [unitId] : []}
             onChange={(e) => setUnitId(e.target.value)}
-            isDisabled={isLoading || untracked.length === 0}
+            isDisabled={!projectId || isLoading || untracked.length === 0}
             description={
-              isLoading
-                ? 'Loading units…'
-                : untracked.length === 0
-                  ? 'Every unit here is already on the tracker.'
-                  : `${untracked.length} unit${untracked.length === 1 ? '' : 's'} not on the tracker yet.`
+              !projectId
+                ? 'Pick a property first.'
+                : isLoading
+                  ? 'Loading units…'
+                  : untracked.length === 0
+                    ? 'Every unit here is already on the tracker.'
+                    : `${untracked.length} unit${untracked.length === 1 ? '' : 's'} not on the tracker yet.`
             }
           >
             {untracked.map((r) => (
@@ -857,11 +1022,14 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
             ))}
           </Select>
 
-          {unit && template.length === 0 && (
+          {/* Only reachable if the catalogue itself has been emptied in Admin — it ships
+              seeded, so this is a misconfiguration, not the normal first-run state it used
+              to be. It says where to fix it rather than sending anyone off to type names
+              into a unit by hand. */}
+          {unit && template.length === 0 && !catalogueQ.isLoading && (
             <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              No stages have been recorded anywhere yet, so there is nothing to seed from.
-              Open the unit and add its first stages by hand — every unit can pick them from
-              then on.
+              The stage list is empty, so there is nothing to put on this unit. Add stages in
+              Admin → Options → Construction Stage; every unit picks from the same list.
             </p>
           )}
 
@@ -881,7 +1049,7 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
               <div className="max-h-64 overflow-y-auto p-1">
                 {template.map((t: any) => (
                   <label
-                    key={t.label}
+                    key={t.value ?? t.label}
                     className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50"
                   >
                     <input
@@ -897,8 +1065,8 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
                 ))}
               </div>
               <p className="border-t border-gray-100 px-3 py-2 text-[11px] text-gray-500">
-                {unit.building.name}'s template first, then stages used elsewhere. Reorder
-                them on the checklist once the unit is on the tracker.
+                The standard stage list, in order. Untick anything {unit.building.name} does
+                not need; reorder on the checklist once the unit is on the tracker.
               </p>
             </div>
           )}
@@ -910,7 +1078,12 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
             isDisabled={!unit || picked.length === 0}
             isLoading={addStages.isPending}
           >
-            {picked.length > 0 ? `Track with ${picked.length} stage${picked.length === 1 ? '' : 's'}` : 'Track unit'}
+            {/* The count only means something once there is a unit to put them on. The
+                whole catalogue is preselected from the start, so without this the button
+                announced "Track with 18 stages" before a property had even been chosen. */}
+            {unit && picked.length > 0
+              ? `Track with ${picked.length} stage${picked.length === 1 ? '' : 's'}`
+              : 'Track unit'}
           </Button>
         </ModalFooter>
       </ModalContent>

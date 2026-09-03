@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { JsonLogger } from './common/logging/json.logger';
+import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 
 async function bootstrap() {
   // Ensure uploads directory exists
@@ -76,6 +77,10 @@ async function bootstrap() {
 
   // Global prefix
   app.setGlobalPrefix('api');
+
+  // A file over a FileInterceptor's fileSize limit throws before any controller or DTO
+  // runs, so this has to be a global filter, not a per-route try/catch.
+  app.useGlobalFilters(new MulterExceptionFilter());
 
   // Validation
   app.useGlobalPipes(

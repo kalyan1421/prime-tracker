@@ -70,12 +70,15 @@ export class DocumentsController {
 
   @Get()
   @RequirePermissions('document:view')
-  @ApiOperation({ summary: 'List documents by projectId, buildingId, unitId, saleId, or interiorProjectId' })
+  @ApiOperation({
+    summary: 'List documents by projectId, buildingId, unitId, saleId, leadId, or interiorProjectId',
+  })
   find(
     @Query('projectId') projectId: string,
     @Query('unitId') unitId: string,
     @Query('buildingId') buildingId?: string,
     @Query('saleId') saleId?: string,
+    @Query('leadId') leadId?: string,
     @Query('interiorProjectId') interiorProjectId?: string,
   ) {
     if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId);
@@ -83,6 +86,10 @@ export class DocumentsController {
     // gate asks what is on THIS sale, and a unit that sold twice would otherwise let the
     // first deal's Deed answer for the second.
     if (saleId) return this.service.findBySale(saleId);
+    // Same rule for a lead: one unit can carry many enquiries, and each asks only for its
+    // own. ProjectAccessGuard already resolves `leadId` to its project (KEY_ENTITY), so a
+    // scoped role reading someone else's lead 404s before this runs.
+    if (leadId) return this.service.findByLead(leadId);
     if (unitId) return this.service.findByUnit(unitId);
     if (buildingId) return this.service.findByBuilding(buildingId);
     return this.service.findByProject(projectId);

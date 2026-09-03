@@ -80,10 +80,26 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
   // ── edit state ────────────────────────────────────────────────────────────
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditForm>({ name: '', description: '', defaultRatePerSqft: '' });
+  const [editItems, setEditItems] = useState<ItemRow[]>([]);
   const [editErr, setEditErr] = useState<string | null>(null);
 
   const setItem = (i: number, k: keyof ItemRow, v: string) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)));
+  const setEditItem = (i: number, k: keyof ItemRow, v: string) =>
+    setEditItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)));
+
+  /** Form rows -> API items. Blank descriptions are dropped, not rejected. */
+  const cleanRows = (rows: ItemRow[]) =>
+    rows
+      .filter((it) => it.description.trim())
+      .map((it, i) => ({
+        description: it.description.trim(),
+        category: it.category.trim() || undefined,
+        quantity: it.quantity ? Number(it.quantity) : undefined,
+        unit: it.unit.trim() || undefined,
+        unitPrice: it.unitPrice ? Number(it.unitPrice) : undefined,
+        sequence: i,
+      }));
 
   const resetCreate = () => {
     setCreateForm({ name: '', description: '', defaultRatePerSqft: '' });
@@ -99,6 +115,15 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
       description: t.description ?? '',
       defaultRatePerSqft: t.defaultRatePerSqft != null ? String(t.defaultRatePerSqft) : '',
     });
+    setEditItems(
+      (t.items ?? []).map((it: any) => ({
+        description: it.description ?? '',
+        category: it.category ?? '',
+        quantity: it.quantity != null ? String(it.quantity) : '',
+        unit: it.unit ?? '',
+        unitPrice: it.unitPrice != null ? String(it.unitPrice) : '',
+      })),
+    );
     setEditErr(null);
     setCreating(false); // close create form if open
   };
@@ -108,16 +133,7 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
   const handleCreate = async () => {
     if (!createForm.name.trim()) { setCreateErr('Package name is required'); return; }
     setCreateErr(null);
-    const cleanItems = items
-      .filter((it) => it.description.trim())
-      .map((it, i) => ({
-        description: it.description.trim(),
-        category: it.category.trim() || undefined,
-        quantity: it.quantity ? Number(it.quantity) : undefined,
-        unit: it.unit.trim() || undefined,
-        unitPrice: it.unitPrice ? Number(it.unitPrice) : undefined,
-        sequence: i,
-      }));
+    const cleanItems = cleanRows(items);
     try {
       await createTpl.mutateAsync({
         name: createForm.name.trim(),
@@ -142,6 +158,11 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
           name: editForm.name.trim(),
           description: editForm.description.trim() || '',
           defaultRatePerSqft: editForm.defaultRatePerSqft ? Number(editForm.defaultRatePerSqft) : null,
+          // Replaces the template's line list. Fit-outs already created from it keep the
+          // lines they were seeded with — the API copies items at creation rather than
+          // referencing them, so a BOQ that has since been priced or part-delivered is not
+          // rewritten by an edit to its template.
+          items: cleanRows(editItems),
         },
       });
       addToast({ title: 'Package updated', color: 'success' });
@@ -200,7 +221,33 @@ export function InteriorPackagesModal({ isOpen, onClose }: { isOpen: boolean; on
                       value={editForm.description}
                       onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                     />
-                    <p className="text-[11px] text-gray-500">BOQ items are not changed — delete and recreate to update line items.</p>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pt-1">BOQ lines</p>
+                    {editItems.map((it, i) => (
+                      <div key={i} className="flex flex-wrap gap-2 items-end">
+                        <Input size="sm" label="Description" value={it.description}
+                          onChange={(e) => setEditItem(i, 'description', e.target.value)} className="flex-1 min-w-[140px]" />
+                        <Input size="sm" label="Category" value={it.category}
+                          onChange={(e) => setEditItem(i, 'category', e.target.value)} className="w-28" />
+                        <Input size="sm" type="number" label="Qty" value={it.quantity}
+                          onChange={(e) => setEditItem(i, 'quantity', e.target.value)} className="w-20" />
+                        <Input size="sm" label="Unit" value={it.unit}
+                          onChange={(e) => setEditItem(i, 'unit', e.target.value)} className="w-20" />
+                        <Input size="sm" type="number" label="Unit price" value={it.unitPrice}
+                          onChange={(e) => setEditItem(i, 'unitPrice', e.target.value)} className="w-24" />
+                        <Button size="sm" isIconOnly variant="light" aria-label="Remove line"
+                          onPress={() => setEditItems((rows) => rows.filter((_, idx) => idx !== i))}>
+                          <FiTrash2 className="w-4 h-4 text-gray-400" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button size="sm" variant="light" startContent={<FiPlus />}
+                      onPress={() => setEditItems((r) => [...r, { ...EMPTY_ITEM }])}>
+                      Add BOQ line
+                    </Button>
+                    <p className="text-[11px] text-gray-500">
+                      Changes apply to fit-outs created from this package <strong>after</strong> the edit —
+                      existing fit-outs keep the scope they were started with.
+                    </p>
                     <div className="flex justify-end gap-2 pt-1">
                       <Button size="sm" variant="light" onPress={cancelEdit}>Cancel</Button>
                       <Button size="sm" color="primary" isLoading={updateTpl.isPending} onPress={handleUpdate}>

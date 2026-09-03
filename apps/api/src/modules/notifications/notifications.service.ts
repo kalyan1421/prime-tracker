@@ -76,6 +76,11 @@ export const NOTIFICATION_TIERS = {
   UPDATE_BOARD_DUE_SOON: 'ACTION',
 
   // ---- FYI: awareness only ----
+  // FYI, deliberately. It is a standing condition on potentially dozens of units at once,
+  // and emailing a daily list of quiet units is exactly the noise that trains people to
+  // filter this sender — which would cost them the ACTION alerts too. In-app, where the
+  // board already lives, unless someone opts in.
+  SITE_UPDATE_STALE: 'FYI',
   LEASE_EXPIRING_30: 'FYI',
   COMMENT_FINANCIAL: 'FYI',
   COMMENT_SALES: 'FYI',
@@ -203,6 +208,9 @@ export const RECURRING_TYPES = {
   // or the date changes, so the daily cron must be able to re-raise it. dedupeKey ->
   // `update-board:<postId>`.
   UPDATE_BOARD_DUE_SOON: true,
+  // RECURRING: silence persists every morning until somebody posts. dedupeKey ->
+  // `unit:<id>:stale`, so one quiet unit is one pending alert however long it stays quiet.
+  SITE_UPDATE_STALE: true,
 } as const satisfies Record<string, boolean>;
 
 /** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
@@ -651,6 +659,35 @@ export class NotificationsService {
       title: `Snag overdue: ${short}`,
       body: `A punch-list item${snag.interiorName ? ` in "${snag.interiorName}"` : ''} is ${snag.daysOverdue} day(s) overdue.`,
       link,
+    });
+  }
+
+  /**
+   * A tracked unit nobody has posted about for a week.
+   *
+   * `days` is the age of the SILENCE, not of the last update — for a unit nobody has ever
+   * posted about it counts from when the unit joined the tracker. Both are genuinely "no
+   * one has said anything for N days", which is what the recipient needs to know; a unit
+   * that has never had an update is not a special case worth a second alert type.
+   */
+  async notifySiteUpdateStale(unit: {
+    id: string;
+    unitNumber: string;
+    projectId: string;
+    projectName?: string;
+    days: number;
+    everUpdated: boolean;
+  }) {
+    await this.sendToRoles({
+      roles: ['PROJECT_MANAGER', 'CONSTRUCTION'],
+      projectId: unit.projectId,
+      type: NotificationType.SITE_UPDATE_STALE,
+      dedupeKey: `unit:${unit.id}:stale`,
+      title: `No site update on Unit ${unit.unitNumber} for ${unit.days} days`,
+      body: unit.everUpdated
+        ? `The last site update${unit.projectName ? ` in ${unit.projectName}` : ''} was ${unit.days} days ago.`
+        : `It has been on the tracker ${unit.days} days${unit.projectName ? ` in ${unit.projectName}` : ''} with no site update at all.`,
+      link: `/site-tracker?projectId=${unit.projectId}`,
     });
   }
 

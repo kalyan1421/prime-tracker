@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsPositive, Min, IsDateString, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsPositive, IsIn, Min, IsDateString, MaxLength } from 'class-validator';
 import { EmptyStringToUndefined } from '../../documents/dto/upload-document.dto';
 
 export class AddScopeItemDto {
@@ -24,6 +24,20 @@ export class AddInteriorInvoiceDto {
 
   @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
   amount!: number;
+
+  @IsOptional() @IsString() @MaxLength(100)
+  invoiceNo?: string;
+
+  @IsOptional() @EmptyStringToUndefined() @IsDateString()
+  invoiceDate?: string;
+}
+
+/** Invoice lifecycle states (client, 2026-09-01). PAID is terminal — void to undo. */
+export const INTERIOR_INVOICE_STATUSES = ['PENDING', 'APPROVED', 'PAID'] as const;
+
+export class UpdateInteriorInvoiceDto {
+  @IsOptional() @IsIn(INTERIOR_INVOICE_STATUSES as unknown as string[])
+  status?: string;
 
   @IsOptional() @IsString() @MaxLength(100)
   invoiceNo?: string;

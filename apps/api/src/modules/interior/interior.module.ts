@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { InteriorService } from './interior.service';
 import { InteriorController } from './interior.controller';
 import { AuditService } from '../../common/utils/audit.service';
+import { StorageService } from '../../common/storage/storage.service';
 
 /**
  * Interior / Fit-Out module — the post-shell fit-out workflow (7 phases),
@@ -14,7 +15,7 @@ import { AuditService } from '../../common/utils/audit.service';
  */
 @Module({
   controllers: [InteriorController],
-  providers: [InteriorService, AuditService],
+  providers: [InteriorService, AuditService, StorageService],
   exports: [InteriorService],
 })
 export class InteriorModule {}

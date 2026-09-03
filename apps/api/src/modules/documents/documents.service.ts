@@ -160,6 +160,20 @@ export class DocumentsService {
     return this.withSignedUrls(docs);
   }
 
+  /**
+   * Documents attached to one lead. Scoped to `leadId` alone, like findBySale — the
+   * question is "what came in on THIS enquiry", and a unit with six leads against it must
+   * not show all six sets of paperwork under each one.
+   */
+  async findByLead(leadId: string) {
+    const docs = await this.prisma.document.findMany({
+      where: { leadId, ...DocumentsService.LIVE },
+      include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return this.withSignedUrls(docs);
+  }
+
   async findByInteriorProject(interiorProjectId: string) {
     const docs = await this.prisma.document.findMany({
       where: { interiorProjectId, ...DocumentsService.LIVE },
@@ -174,7 +188,9 @@ export class DocumentsService {
     metadata: {
       projectId?: string;
       unitId?: string;
+      buildingId?: string;
       saleId?: string;
+      leadId?: string;
       interiorProjectId?: string;
       category?: string;
       displayName?: string;
@@ -200,14 +216,107 @@ export class DocumentsService {
      * unitId would file a Deed against the wrong unit, and the sale already knows the
      * right answer.
      */
-    let { projectId, unitId } = metadata;
+    let { projectId, unitId, buildingId } = metadata;
+
+    /**
+     * A document filed against an INTERIOR project is also filed against that fit-out's
+     * unit and project, for the same reason a sale's is (below).
+     *
+     * The handover certificate for Unit 101 is evidence about Unit 101. Filed only against
+     * the fit-out, it was reachable from exactly one screen — the fit-out's own Documents
+     * tab — and invisible on the unit and the project, which is where anyone looking for it
+     * a year later would go. Client asked for it on both (2026-09-01).
+     *
+     * Derived here rather than trusted from the caller: the interior project already knows
+     * its anchor, and a caller-supplied unitId could file the certificate against the wrong
+     * unit.
+     */
+    if (metadata.interiorProjectId) {
+      const ip = await this.prisma.interiorProject.findUnique({
+        where: { id: metadata.interiorProjectId },
+        select: {
+          unitId: true,
+          buildingId: true,
+          building: { select: { projectId: true } },
+          unit: { select: { building: { select: { projectId: true } } } },
+        },
+      });
+      if (!ip) throw new NotFoundException('Interior project not found');
+      unitId = ip.unitId ?? unitId;
+      // A fit-out anchored to the BUILDING has no unit to inherit, so without this its
+      // paperwork carried no anchor below the project and the building's own Documents
+      // card could not show it. Only taken from a building-level fit-out: a unit's
+      // certificate belongs to the unit, and copying it up would bury the building's card
+      // under every unit's file.
+      buildingId = ip.buildingId ?? buildingId;
+      projectId = ip.building?.projectId ?? ip.unit?.building?.projectId ?? projectId;
+    }
+
+    /**
+     * A document filed against a LEAD is also filed against that lead's project.
+     *
+     * It is deliberately NOT copied onto the lead's unit, which is the one place this
+     * differs from the sale rule directly below. A sale is a commitment about one unit; a
+     * lead is an enquiry, a unit can carry many of them, and most never convert. Pushing
+     * every prospect's brochure and ID proof onto the unit would bury the unit's actual
+     * file — the deed, the possession certificate — under paperwork for deals that never
+     * happened. The unit starts collecting documents when the lead converts and the SALE
+     * begins filing them.
+     */
+    if (metadata.leadId) {
+      const lead = await this.prisma.lead.findUnique({
+        where: { id: metadata.leadId },
+        select: { projectId: true },
+      });
+      if (!lead) throw new NotFoundException('Lead not found');
+      projectId = lead.projectId ?? projectId;
+    }
+
+    /**
+     * A document filed against a UNIT is also filed against that unit's project.
+     *
+     * Without this a unit upload landed with `projectId: null` — visible on the unit and
+     * nowhere else, so the project's Documents tab, which is where anyone searching the
+     * whole project looks, could not see it. Every other anchor here already resolves its
+     * project; the unit was the one that did not.
+     */
+    if (unitId && !projectId) {
+      const unit = await this.prisma.unit.findUnique({
+        where: { id: unitId },
+        select: { deletedAt: true, building: { select: { projectId: true } } },
+      });
+      if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+      projectId = unit.building?.projectId ?? projectId;
+    }
+
+    /**
+     * A document filed against a BUILDING is also filed against that building's project,
+     * so it is reachable from the project's Documents tab as well — the same one-file,
+     * two-audiences rule the sale and interior anchors follow above.
+     *
+     * Deliberately NOT pushed down to the building's units: "attached to this building" is
+     * what the card says, and copying a whole-building lease onto forty units would make
+     * every unit's file unreadable.
+     */
+    if (buildingId && !projectId) {
+      const building = await this.prisma.building.findUnique({
+        where: { id: buildingId },
+        select: { projectId: true, deletedAt: true },
+      });
+      if (!building || building.deletedAt) throw new NotFoundException('Building not found');
+      projectId = building.projectId;
+    }
+
     if (metadata.saleId) {
       const sale = await this.prisma.sale.findUnique({
         where: { id: metadata.saleId },
-        select: { id: true, projectId: true, unitId: true, deletedAt: true },
+        select: { id: true, projectId: true, unitId: true, buildingId: true, deletedAt: true },
       });
       if (!sale || sale.deletedAt) throw new NotFoundException('Sale not found');
       unitId = sale.unitId ?? unitId;
+      // Sale is Unit/Building polymorphic. A building-level deal's Deed is evidence about
+      // the building for exactly the reason a unit-level one is evidence about the unit.
+      buildingId = sale.buildingId ?? buildingId;
       projectId = sale.projectId ?? projectId;
     }
 
@@ -243,7 +352,9 @@ export class DocumentsService {
       data: {
         projectId: projectId || null,
         unitId: unitId || null,
+        buildingId: buildingId || null,
         saleId: metadata.saleId || null,
+        leadId: metadata.leadId || null,
         interiorProjectId: metadata.interiorProjectId || null,
         fileName,
         fileUrl: publicUrl,

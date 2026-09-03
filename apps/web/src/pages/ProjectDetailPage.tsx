@@ -1,4 +1,4 @@
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { MentionTextarea } from '../components/MentionTextarea';
@@ -28,6 +28,7 @@ import { CancelSaleModal } from '../components/CancelSaleModal';
 import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
 import { SaleGateDocuments } from '../components/SaleGateDocuments';
+import { LeadDocumentsPanel } from '../components/LeadDocumentsPanel';
 import {
   useProject, useFinancialSummary, useBudgetByBuildingUnitReport, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useDeleteLoan, useCommitments, useBuildings,
@@ -162,7 +163,7 @@ import {
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
-const TAB_MAP = ['overview', 'construction', 'board', 'budget', 'revenue', 'units', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments', 'activity'];
+const TAB_MAP = ['overview', 'construction', 'board', 'budget', 'revenue', 'units', 'interior', 'milestones', 'leads', 'draws', 'vendors', 'documents', 'tasks', 'comments', 'activity'];
 
 const TAB_TITLE_MAP: Record<string, string> = {
   overview: 'Overview',
@@ -178,6 +179,9 @@ const TAB_TITLE_MAP: Record<string, string> = {
   budget: 'Budget',
   revenue: 'Revenue',
   units: 'Units',
+  // Fit-outs belonging to this project. Sits next to Units because that is what a
+  // fit-out is usually anchored to, and it is where someone goes looking for one.
+  interior: 'Interior',
   milestones: 'Milestones',
   leads: 'Leads',
   draws: 'Draws',
@@ -215,6 +219,7 @@ const TAB_PERMISSIONS: Record<string, string[]> = {
   // gated separately below so a lease-only role never triggers a sales 403.
   revenue: ['sales:view', 'lease:view'],
   units: ['unit:view'],
+  interior: ['interior:view'],
   milestones: ['milestone:view'],
   leads: ['lead:view'],
   draws: ['draw:view'],
@@ -227,6 +232,7 @@ const TAB_PERMISSIONS: Record<string, string[]> = {
 
 
 import { ConstructionBoard } from '../components/ConstructionBoard';
+import { ProjectInteriorTab } from '../components/ProjectInteriorTab';
 
 export default function ProjectDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
@@ -250,6 +256,33 @@ export default function ProjectDetailPage() {
     // Re-attached when the project changes: the sentinel unmounts with the loading state.
   }, [project]);
 
+  const visibleTabs = TAB_MAP.filter((t) => {
+    const needed = TAB_PERMISSIONS[t] ?? [];
+    return needed.length === 0 || hasAnyPermission(...needed);
+  });
+  const requestedTab = tab || 'overview';
+  const activeTab = visibleTabs.includes(requestedTab) ? requestedTab : (visibleTabs[0] || 'overview');
+
+  /**
+   * Keep the URL honest when it names a tab this page is not showing.
+   *
+   * `/projects/:id/buildings` is the case that surfaced it: Buildings is a SECTION of the
+   * Construction tab, never a tab of its own, so the URL said "buildings" while the page
+   * rendered Overview — and the browser Back button then returned to a link that had
+   * never worked. The same silent swap happens for any tab a role cannot see. Rewriting
+   * with `replace` keeps the history stack the size the user thinks it is.
+   *
+   * Above the early returns, with the tab maths it depends on: a hook after
+   * `if (isLoading) return` runs on some renders and not others, which React counts as
+   * "rendered more hooks than during the previous render" and turns into an error
+   * boundary the moment the query resolves.
+   */
+  useEffect(() => {
+    if (id && requestedTab !== activeTab) {
+      navigate(`/projects/${id}/${activeTab}`, { replace: true });
+    }
+  }, [id, requestedTab, activeTab, navigate]);
+
   if (isLoading) return <LoadingState />;
   if (error || !project) return <ErrorState />;
 
@@ -260,13 +293,6 @@ export default function ProjectDetailPage() {
       value: `${v.score} · ${v.reason}`,
     }))
     : undefined;
-
-  const visibleTabs = TAB_MAP.filter((t) => {
-    const needed = TAB_PERMISSIONS[t] ?? [];
-    return needed.length === 0 || hasAnyPermission(...needed);
-  });
-  const requestedTab = tab || 'overview';
-  const activeTab = visibleTabs.includes(requestedTab) ? requestedTab : (visibleTabs[0] || 'overview');
 
   return (
     <div>
@@ -377,6 +403,7 @@ export default function ProjectDetailPage() {
         {activeTab === 'leads' && <ProjectLeadsTab projectId={id!} />}
         {activeTab === 'draws' && <DrawsTab projectId={id!} />}
         {activeTab === 'vendors' && <VendorsTab projectId={id!} />}
+        {activeTab === 'interior' && <ProjectInteriorTab projectId={id!} />}
         {activeTab === 'documents' && <DocumentsTab projectId={id!} />}
         {activeTab === 'board' && (
           <ConstructionBoard projectId={id!} canEdit={hasAnyPermission('task:edit')} />
@@ -3092,8 +3119,12 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
       <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Size (sqft)</th>
       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Status</th>
       <th className="text-center py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Prime</th>
-      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant</th>
-      {canSeeRentColumn && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Monthly Rent</th>}
+      {/* Dual-purpose, and named for it. A SOLD unit has a buyer and a sale price, not a
+          tenant and a monthly rent — but it often still carries the lease it had before
+          the sale, so these columns were showing the old tenant and their old rent against
+          a unit Prime no longer lets. Headers say both because the column shows both. */}
+      <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Tenant / Buyer</th>
+      {canSeeRentColumn && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Rent / Sale Price</th>}
       {canSeePriceColumns && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Asking Price</th>}
       {canSeePriceColumns && <th className="text-right py-2 px-2 text-xs font-semibold text-gray-500 uppercase">PSF</th>}
       <th className="text-left py-2 px-2 text-xs font-semibold text-gray-500 uppercase">Actions</th>
@@ -3103,6 +3134,11 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const renderUnitRow = (u: any) => {
     const monthlyRent = u.leases?.[0]?.monthlyRent;
     const psf = u.askingPrice && u.sqft ? (Number(u.askingPrice) / u.sqft).toFixed(2) : null;
+    // A sold unit's story is the sale, not the tenancy that preceded it. `u.sales` is
+    // already empty for a viewer without sales:view (UnitsService redacts it), so this
+    // falls back to a dash for them rather than leaking a buyer.
+    const isSold = u.status === 'SOLD';
+    const closedSale = isSold ? u.sales?.find((sale: any) => sale.status === 'CLOSED') : null;
     return (
       <tr
         key={u.id}
@@ -3116,8 +3152,28 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
         <td className="py-2 px-2 text-center">
           {u.primeOwned && <Chip size="sm" color="success" variant="flat">Prime</Chip>}
         </td>
-        <td className="py-2 px-2">{u.leases?.[0]?.tenantName || '\u2014'}</td>
-        {canSeeRentColumn && <td className="py-2 px-2 text-right">{monthlyRent ? fmt(monthlyRent) : '\u2014'}</td>}
+        <td className="py-2 px-2">
+          {isSold ? (
+            closedSale?.buyer ? (
+              <span className="inline-flex items-center gap-1.5">
+                {closedSale.buyer}
+                <span className="text-[11px] uppercase tracking-wide text-gray-500">buyer</span>
+              </span>
+            ) : '\u2014'
+          ) : (u.leases?.[0]?.tenantName || '\u2014')}
+        </td>
+        {canSeeRentColumn && (
+          <td className="py-2 px-2 text-right">
+            {isSold ? (
+              closedSale?.salePrice != null ? (
+                <span className="inline-flex items-center gap-1.5">
+                  {fmt(Number(closedSale.salePrice))}
+                  <span className="text-[11px] uppercase tracking-wide text-gray-500">sold</span>
+                </span>
+              ) : '\u2014'
+            ) : (monthlyRent ? fmt(monthlyRent) : '\u2014')}
+          </td>
+        )}
         {canSeePriceColumns && <td className="py-2 px-2 text-right">{u.askingPrice ? fmt(u.askingPrice) : '\u2014'}</td>}
         {canSeePriceColumns && <td className="py-2 px-2 text-right">{psf ? `$${psf}` : '\u2014'}</td>}
         <td className="py-2 px-2" onClick={(e) => e.stopPropagation()}>
@@ -5399,7 +5455,17 @@ function SectionSwitch({ sections, value, onChange }: {
 function usePermittedSections(all: { key: string; label: string; permission?: string }[]) {
   const { hasAnyPermission } = useAuthStore();
   const sections = all.filter((s) => !s.permission || hasAnyPermission(s.permission));
-  const [active, setActive] = useState<string>(sections[0]?.key ?? '');
+  /**
+   * `?section=` lets a link land on a specific section of a composed tab, which is what
+   * "Back to buildings" needs: Buildings is a section of Construction, and without this
+   * the only reachable destination was whichever section happens to be first (Checklist).
+   * Ignored when it names a section this role cannot see — the permission filter above
+   * stays the authority.
+   */
+  const [params] = useSearchParams();
+  const requested = params.get('section');
+  const seeded = requested && sections.some((s) => s.key === requested) ? requested : null;
+  const [active, setActive] = useState<string>(seeded ?? sections[0]?.key ?? '');
   const current = sections.some((s) => s.key === active) ? active : (sections[0]?.key ?? '');
   return { sections, active: current, setActive };
 }
@@ -6212,6 +6278,12 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                     Convert to Sale →
                   </button>
                 )}
+              </div>
+
+              {/* The same panel the cross-project Leads page uses, not a second copy —
+                  two copies drift, and the second one is always the one missing delete. */}
+              <div className="px-4 pb-1">
+                <LeadDocumentsPanel leadId={selectedLead.id} />
               </div>
 
               {/* Log Activity */}

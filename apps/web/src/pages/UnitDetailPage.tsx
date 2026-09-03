@@ -9,7 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUpdateUnit, useLeads, useDocuments,
   useUnitWaitlist, useCreateLead, useCreateLease, useUpdateLease, useCreateSale, useUploadDocument, useDeleteDocument,
-  useRenameDocument, useReplaceDocument, useUnitFinancialSummary, useCustomOptions,
+  useRenameDocument, useReplaceDocument, useDocumentVersions, useUnitFinancialSummary, useUnitBudgetLines, useCustomOptions,
   useLeaseRentPeriods, useUnitObligationSummary, useUnitHistory,
   useTasks,
   useLeaseRentInvoices, useBackfillTenancy, useAddSalePayment, useBrokers,
@@ -27,6 +27,8 @@ import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { UnitActivity } from '../components/UnitActivity';
 import { InteriorPanel } from '../components/InteriorPanel';
 import { SoldUnitPanel } from '../components/SoldUnitPanel';
+import { EditSaleDetailsModal } from '../components/EditSaleDetailsModal';
+import { SaleGateDocuments } from '../components/SaleGateDocuments';
 import { LeaseRentSchedule } from '../components/LeaseRentSchedule';
 import { LeaseObligationsPanel } from '../components/LeaseObligationsPanel';
 import { EndTenancyDialog, AssignTenantDialog } from '../components/TenancyTransitionDialogs';
@@ -314,8 +316,14 @@ const RENT_KINDS = ['rent_change', 'free_rent'];
  * asked for ("age unit history whenever unit was available to lease") and are only
  * answerable from the event log — `availableSince` is wiped on every status change.
  */
-function UnitHistorySummary({ summary }: { summary: any }) {
+function UnitHistorySummary({ summary, unitStatus }: { summary: any; unitStatus?: string }) {
   if (!summary) return null;
+
+  // A sold unit is not Prime's to let, so it has no vacancy to report — the API already
+  // drops the vacancy entries and zeroes the days (UnitHistoryService.vacancyEntries).
+  // Rendering the tile anyway would put a confident "0 days" where the honest answer is
+  // "this question no longer applies to this unit".
+  const sold = unitStatus === 'SOLD';
 
   // Day totals are only as old as the occupancy log. On a unit whose only event is the
   // migration bootstrap row, "total leased: 21 days" sitting beside a tenancy that ran
@@ -331,7 +339,9 @@ function UnitHistorySummary({ summary }: { summary: any }) {
   // hide the tile, not `?? 0`, which would show a real-looking "$0" for data that's
   // actually just hidden from this role.
   const tiles = [
-    { label: 'Total vacant', value: daysLabel(summary.totalDaysVacant ?? 0), tone: 'text-gray-700', note: since },
+    ...(sold
+      ? []
+      : [{ label: 'Total vacant', value: daysLabel(summary.totalDaysVacant ?? 0), tone: 'text-gray-700', note: since }]),
     { label: 'Total leased', value: daysLabel(summary.totalDaysLeased ?? 0), tone: 'text-emerald-700', note: since },
     { label: 'Tenancies', value: String(summary.tenancyCount ?? 0), tone: 'text-gray-700', note: null },
     ...(summary.lifetimeRentCollected != null
@@ -362,7 +372,7 @@ function UnitHistorySummary({ summary }: { summary: any }) {
           </div>
         ))}
       </div>
-      {summary.isCurrentlyVacant && (
+      {summary.isCurrentlyVacant && !sold && (
         <p className="text-xs text-amber-700 mt-2 flex items-center gap-1.5">
           <FiClock className="w-3.5 h-3.5 shrink-0" />
           On the market {daysLabel(summary.currentVacancyDays ?? 0)} — since {fmtDate(summary.vacantSince)}
@@ -418,7 +428,17 @@ function HistoricalEntryDelete({ entry }: { entry: any }) {
   );
 }
 
-function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
+function UnitHistoryTimeline({ unitId, onEditLease, onEditSale }: {
+  unitId: string | undefined;
+  /**
+   * Correcting a past record, not just deleting it. A lease or sale entry offered a
+   * delete button and nothing else, so a mistyped closing date meant erasing the record
+   * and re-entering it (client, 2026-09-02). Absent when the viewer cannot edit that
+   * kind, in which case no pencil is drawn.
+   */
+  onEditLease?: (leaseId: string) => void;
+  onEditSale?: (saleId: string) => void;
+}) {
   const { data, isLoading, error } = useUnitHistory(unitId);
   const [showRent, setShowRent] = useState(true);
 
@@ -437,7 +457,7 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
 
   return (
     <div>
-      <UnitHistorySummary summary={data?.summary} />
+      <UnitHistorySummary summary={data?.summary} unitStatus={data?.unit?.status} />
       {hasRentEntries && (
         <div className="flex justify-end mb-3">
           <button
@@ -482,6 +502,17 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                       {e.isOngoing ? 'Backfilled' : 'Historical'}
                     </span>
                   )}
+                  {onEditLease && e.data?.leaseId && (
+                    <button
+                      type="button"
+                      onClick={() => onEditLease(e.data.leaseId)}
+                      className="shrink-0 text-gray-500 hover:text-blue-600 transition-colors"
+                      title="Edit this tenancy"
+                      aria-label={`Edit tenancy ${e.title}`}
+                    >
+                      <FiEdit2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <HistoricalEntryDelete entry={e} />
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
@@ -521,6 +552,17 @@ function UnitHistoryTimeline({ unitId }: { unitId: string | undefined }) {
                     <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
                       Historical
                     </span>
+                  )}
+                  {onEditSale && e.data?.saleId && (
+                    <button
+                      type="button"
+                      onClick={() => onEditSale(e.data.saleId)}
+                      className="shrink-0 text-gray-500 hover:text-blue-600 transition-colors"
+                      title="Edit this sale"
+                      aria-label={`Edit sale ${e.title}`}
+                    >
+                      <FiEdit2 className="w-3.5 h-3.5" />
+                    </button>
                   )}
                   <HistoricalEntryDelete entry={e} />
                 </p>
@@ -925,6 +967,10 @@ export default function UnitDetailPage() {
   // than a role-name list, which is the thing that has drifted repeatedly in this codebase.
   const constructionFirst = canEditChecklist && !hasPermission('financial:view');
   const { data: budgetSummary } = useUnitFinancialSummary(canViewBudget ? (unitId || '') : '');
+  // The line items behind that summary. BudgetLine carries a unitId — a locked client
+  // decision — and only the roll-up was ever shown, so a unit could say "spent 30% of
+  // $143,500" and never say of what.
+  const { data: unitBudgetLines = [] } = useUnitBudgetLines(canViewBudget ? (unitId || '') : '');
   // Derived from `unit` (not `u`) because the early returns below sit between here and
   // where `activeLease` is computed — hooks cannot live after a conditional return.
   const activeLeaseId = (unit as any)?.leases?.find(
@@ -975,6 +1021,8 @@ export default function UnitDetailPage() {
   // The two tenancy transitions. Held as the lease itself rather than a boolean so
   // the dialog always has the row it is acting on, even mid-close animation.
   const [endLease, setEndLease] = useState<any>(null);
+  /** A sale being corrected from the History timeline. SoldUnitPanel owns its own copy. */
+  const [editSale, setEditSale] = useState<any>(null);
   const [assignLease, setAssignLease] = useState<any>(null);
   const [backfilling, setBackfilling] = useState(false);
 
@@ -1287,11 +1335,22 @@ export default function UnitDetailPage() {
   };
 
   const handleSave = async () => {
+    // An empty unit number used to be sent as `undefined` — a silent no-op that left the
+    // old number in place with no indication anything was wrong, instead of erroring.
+    if (!form.unitNumber.trim()) {
+      return addToast({ title: 'A unit needs a number.', color: 'warning' });
+    }
+    for (const [field, label] of [['sqft', 'Size'], ['askingPrice', 'Asking price'], ['askingRent', 'Asking rent']] as const) {
+      const v = form[field];
+      if (v && Number(v) <= 0) {
+        return addToast({ title: `${label} must be greater than zero.`, color: 'warning' });
+      }
+    }
     try {
       await updateUnit.mutateAsync({
         id: unitId!,
         data: {
-          unitNumber: form.unitNumber || undefined,
+          unitNumber: form.unitNumber.trim(),
           unitType: form.unitType || undefined,
           sqft: form.sqft ? parseInt(form.sqft, 10) : null,
           // Status, the commercial terms and ownership all need `unit:edit`; the route
@@ -1411,7 +1470,9 @@ export default function UnitDetailPage() {
               {u.sitePriority && (
                 <Chip
                   size="sm" variant="flat"
-                  color={u.sitePriority === 'HIGH' ? 'secondary' : u.sitePriority === 'MEDIUM' ? 'warning' : 'primary'}
+                  // HIGH must read as more urgent than MEDIUM — danger (red) over warning
+                  // (amber) — not the other way around, which purple/secondary did.
+                  color={u.sitePriority === 'HIGH' ? 'danger' : u.sitePriority === 'MEDIUM' ? 'warning' : 'primary'}
                 >
                   {u.sitePriority.charAt(0) + u.sitePriority.slice(1).toLowerCase()} priority
                 </Chip>
@@ -1526,7 +1587,11 @@ export default function UnitDetailPage() {
                 size="sm"
                 minRows={2}
                 maxRows={5}
+                maxLength={2000}
               />
+              <p className={`mt-1 text-right text-[11px] ${(form.notes ?? '').length > 1900 ? 'text-red-700' : 'text-gray-500'}`}>
+                {(form.notes ?? '').length}/2000
+              </p>
             </div>
             {canEditCommercial && (
               <div className="mt-3">
@@ -1632,6 +1697,13 @@ export default function UnitDetailPage() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* Correcting a sale from the History timeline. SoldUnitPanel renders its own for
+          the closed sale it displays; this one covers every other entry on the timeline —
+          a cancelled deal, an earlier sale, one still in progress. */}
+      {editSale && (
+        <EditSaleDetailsModal sale={editSale} isOpen onClose={() => setEditSale(null)} />
+      )}
 
       {/* Add Sale Modal — quick-add for a SOLD unit with no sale record yet.
           Broker attribution and further edits happen inside SoldUnitPanel once
@@ -1806,6 +1878,19 @@ export default function UnitDetailPage() {
       {u.status === 'SOLD' && (() => {
         const closedSale = u.sales?.find((s: any) => s.status === 'CLOSED');
         if (closedSale) return <SoldUnitPanel sale={closedSale} />;
+        // u.sales comes back as [] both when nothing has actually been recorded AND when
+        // the API redacted it for a role without sales:view (units.service.ts findOne) —
+        // the two look identical here, but only one of them is true. CONSTRUCTION reading
+        // "no sale has been recorded yet" on a unit that in fact has a closed sale on file
+        // was told the wrong fact about the unit, not just denied a detail.
+        if (!canViewSales) {
+          return (
+            <div className="mb-5 sm:mb-6 rounded-2xl border border-dashed border-gray-200 bg-white p-5 flex items-center gap-2.5 text-gray-500">
+              <FiDollarSign className="w-4 h-4" />
+              <p className="text-sm">This unit is marked SOLD. Sale details are restricted for your role.</p>
+            </div>
+          );
+        }
         return (
           <div className="mb-5 sm:mb-6 rounded-2xl border border-dashed border-gray-200 bg-white p-5 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 text-gray-500">
@@ -1817,6 +1902,31 @@ export default function UnitDetailPage() {
             ) : (
               <span className="text-xs text-gray-500 shrink-0">Ask someone with sales access to record it.</span>
             )}
+          </div>
+        );
+      })()}
+
+      {/* A deal in flight — under contract, not yet closed. SoldUnitPanel only renders for
+          a CLOSED sale, so until now the unit page showed nothing about the sale that is
+          actually running on it, and the paperwork it owes lived only in the project's
+          Sales tab. That is the "Paperwork for under contract" half: the Booking Agreement
+          arrives while the unit is in exactly this state. Skipped when SoldUnitPanel is
+          already on screen so the same block never appears twice. */}
+      {u.status !== 'SOLD' && (() => {
+        const liveSale = u.sales?.find((s: any) => s.status === 'UNDER_CONTRACT' || s.status === 'LOI_SIGNED');
+        if (!liveSale) return null;
+        return (
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2.5">
+                <FiDollarSign className="w-4 h-4 text-blue-600" />
+                <h2 className="font-semibold text-sm text-gray-800">Sale in Progress</h2>
+              </div>
+              <Chip size="sm" color="primary" variant="flat" className="font-medium">
+                {String(liveSale.status).replace(/_/g, ' ')}
+              </Chip>
+            </div>
+            <SaleGateDocuments saleId={liveSale.id} />
           </div>
         );
       })()}
@@ -1863,7 +1973,11 @@ export default function UnitDetailPage() {
               the tenancy if the tenant has left.
             </p>
           </div>
-          {canEditUnit && (
+          {/* This button's only purpose is to open the Status field — which the modal
+              gates on canEditCommercial, not canEditUnit. Construction holds canEditUnit
+              without canEditCommercial, so gating on canEditUnit offered a "fix" that
+              opened the modal with no Status field in it: a dead-end click. */}
+          {canEditCommercial && (
             <Button size="sm" color="danger" variant="flat" className="shrink-0" onPress={openEdit}>
               Fix unit status
             </Button>
@@ -1900,6 +2014,11 @@ export default function UnitDetailPage() {
         <Section
           icon={<FiHome className="w-4 h-4 text-blue-600" />}
           title="Tenant"
+          // Collapses to a one-line header, like Construction and Financing. A unit with
+          // no tenancy on record — not even an ended one — has nothing to lay out, and a
+          // card whose whole body is a centred "No active lease" is a screenful spent
+          // saying so. The "+ Add Lease" action stays in the header either way.
+          empty={shownLease ? null : 'No tenancy recorded'}
           action={canEditLease ? (
             activeLease ? (
               <div className="flex items-center gap-1">
@@ -1908,35 +2027,53 @@ export default function UnitDetailPage() {
                     ends up hand-typing a termination the server should be deriving. */}
                 <button
                   onClick={() => setAssignLease(activeLease)}
-                  className="text-gray-500 hover:text-violet-600 transition-colors p-1 rounded"
+                  className="text-gray-500 hover:text-violet-600 transition-colors p-1.5 rounded"
                   title="Assign lease to a new tenant (the lease itself continues)"
                 >
                   <FiRepeat className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => setEndLease(activeLease)}
-                  className="text-gray-500 hover:text-rose-700 transition-colors p-1 rounded"
+                  className="text-gray-500 hover:text-rose-700 transition-colors p-1.5 rounded"
                   title="End tenancy — records the move-out and releases the unit"
                 >
                   <FiLogOut className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => openEditLease(activeLease)}
-                  className="text-gray-500 hover:text-blue-600 transition-colors p-1 rounded"
+                  className="text-gray-500 hover:text-blue-600 transition-colors p-1.5 rounded"
                   title="Edit lease"
                 >
                   <FiEdit2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ) : (
-              <button
-                // Wrapped, not passed bare: openAddLease now takes the lease status to
-                // seed, and a bare handler would hand it the click event.
-                onClick={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
-                className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
-              >
-                + Add Lease
-              </button>
+              <div className="flex items-center gap-2">
+                {/* A PAST tenancy is still editable. The card shows the last tenant's
+                    rent, dates, deposit and term in full, and until now the only action
+                    beside it was "+ Add Lease" — so a wrong move-out date or a
+                    mistyped deposit on the tenancy just ended could be read and not
+                    corrected. openEditLease is not active-lease-specific; it was simply
+                    never wired up on this branch. */}
+                {shownLease && (
+                  <button
+                    onClick={() => openEditLease(shownLease)}
+                    className="text-gray-500 hover:text-blue-600 transition-colors p-1.5 rounded"
+                    title="Edit the last tenancy's details"
+                    aria-label="Edit the last tenancy's details"
+                  >
+                    <FiEdit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  // Wrapped, not passed bare: openAddLease now takes the lease status to
+                  // seed, and a bare handler would hand it the click event.
+                  onClick={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
+                  className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                >
+                  + Add Lease
+                </button>
+              </div>
             )
           ) : undefined}
         >
@@ -2075,7 +2212,10 @@ export default function UnitDetailPage() {
               </dl>
             </div>
           ) : (
-            <EmptyRow icon={<FiHome className="w-5 h-5" />} text="No active lease" />
+            // Unreachable in practice: `empty` above collapses the card to its header
+            // when there is no tenancy, so the body never renders. Kept as null rather
+            // than an EmptyRow so the two cannot both claim the empty state.
+            null
           )}
 
           {/* Said once, at the bottom, rather than as a banner over the card: on a sold
@@ -2122,7 +2262,15 @@ export default function UnitDetailPage() {
           const hasLoans = u.loans?.length > 0;
           if (!canViewBudget && !hasLoans) return null;
           return (
-            <Section icon={<FiDollarSign className="w-4 h-4 text-emerald-600" />} title="Financing" subtitle="Linked loans & budget">
+            <Section
+              icon={<FiDollarSign className="w-4 h-4 text-emerald-600" />}
+              title="Financing" subtitle="Linked loans & budget"
+              // Collapses to a one-line header instead of a card whose whole body is an
+              // illustrated "nothing here". Construction already did this; on a unit with
+              // no loans and no budget the page was three tall boxes announcing their own
+              // emptiness.
+              empty={!hasLoans && !hasBudget ? 'None' : null}
+            >
               {hasLoans && (
                 <div className={`space-y-4 ${hasBudget ? 'mb-4 pb-4 border-b border-gray-100' : ''}`}>
                   {u.loans.map((loan: any) => (
@@ -2147,6 +2295,22 @@ export default function UnitDetailPage() {
                   </Row>
                 </dl>
               )}
+              {hasBudget && unitBudgetLines.length > 0 && (
+                <div className="mt-3">
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                    Budget lines
+                  </p>
+                  <dl className="text-sm divide-y divide-gray-100 rounded-xl border border-gray-100 px-3">
+                    {unitBudgetLines.map((b: any) => (
+                      <Row key={b.id} label={b.description || b.category?.replace(/_/g, ' ') || 'Line'}>
+                        <span className="tabular-nums text-gray-700">
+                          {fmt(b.revisedAmt ?? b.budgetAmt)}
+                        </span>
+                      </Row>
+                    ))}
+                  </dl>
+                </div>
+              )}
               {!hasLoans && !hasBudget && (
                 <EmptyRow icon={<FiCreditCard className="w-5 h-5" />} text="No loans or budget on this unit" />
               )}
@@ -2159,7 +2323,19 @@ export default function UnitDetailPage() {
           (e.g. a past tenant stays visible after the unit is later sold) */}
       <div id="section-history" className="mb-5 sm:mb-6">
         <Section icon={<FiClock className="w-4 h-4 text-gray-600" />} title="History">
-          <UnitHistoryTimeline unitId={unitId} />
+          <UnitHistoryTimeline
+            unitId={unitId}
+            // Resolved from the unit's own arrays, so the form opens on the full record
+            // rather than the timeline's flattened copy of it.
+            onEditLease={canEditLease ? (leaseId: string) => {
+              const lease = (u.leases ?? []).find((l: any) => l.id === leaseId);
+              if (lease) openEditLease(lease);
+            } : undefined}
+            onEditSale={canEditSale ? (saleId: string) => {
+              const sale = (u.sales ?? []).find((sl: any) => sl.id === saleId);
+              if (sale) setEditSale(sale);
+            } : undefined}
+          />
         </Section>
       </div>
 
@@ -2226,7 +2402,7 @@ export default function UnitDetailPage() {
             action={canEditUnit && !editingNotes ? (
               <button
                 onClick={() => { setNotesDraft(u.notes ?? ''); setEditingNotes(true); }}
-                className="text-gray-500 hover:text-blue-600 transition-colors p-1 rounded"
+                className="text-gray-500 hover:text-blue-600 transition-colors p-1.5 rounded"
                 title="Edit notes"
               >
                 <FiEdit2 className="w-3.5 h-3.5" />
@@ -2239,10 +2415,14 @@ export default function UnitDetailPage() {
                   autoFocus
                   size="sm"
                   minRows={3}
+                  maxLength={2000}
                   value={notesDraft}
                   onValueChange={setNotesDraft}
                   placeholder="Add notes about this unit…"
                 />
+                <p className={`text-right text-[11px] ${notesDraft.length > 1900 ? 'text-red-700' : 'text-gray-500'}`}>
+                  {notesDraft.length}/2000
+                </p>
                 <div className="flex gap-2">
                   <Button size="sm" color="primary" startContent={<FiCheck />} onPress={saveNotes} isLoading={updateUnit.isPending}>
                     Save
@@ -2282,10 +2462,14 @@ export default function UnitDetailPage() {
         </div>
       </PermissionGate>
 
-      {/* Documents scoped to this unit */}
-      <div id="section-documents" className="mb-5 sm:mb-6">
-        <UnitDocumentsPanel unitId={unitId!} />
-      </div>
+      {/* Documents scoped to this unit. UnitDocumentsPanel already self-gates on
+          document:view via useDocuments, so this wrapper isn't a real leak — it's here
+          for consistency with the Leads/Interior sections above, which both wrap. */}
+      <PermissionGate permission="document:view">
+        <div id="section-documents" className="mb-5 sm:mb-6">
+          <UnitDocumentsPanel unitId={unitId!} />
+        </div>
+      </PermissionGate>
 
       {/* Comments */}
       {/* Site updates and team comments in one chronological list. They were two separate
@@ -2339,10 +2523,19 @@ const DOC_CATEGORY_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 // Categories relevant at the unit level (excludes project-wide types like PERMIT, DRAWING, CONTRACT).
+/**
+ * Every value here must be a real `DocCategory` (see schema.prisma) — the upload DTO
+ * validates with @IsEnum and 400s anything else.
+ *
+ * LEASE_DOCS and OTHER used to be on this list and are not in the enum, so picking either
+ * failed the upload outright with "category must be one of the following values…". They
+ * are replaced by the enum members that carry the same meaning: a lease is a CONTRACT (or
+ * LEGAL), and OTHER is what GENERAL already is.
+ */
 const UNIT_DOC_CATEGORIES = [
   'LOI', 'BOOKING_AGREEMENT', 'DEED', 'RECEIPT',
-  'NOC', 'POSSESSION_CERTIFICATE', 'LEASE_DOCS',
-  'BROCHURE', 'FINANCIAL', 'GENERAL', 'OTHER',
+  'NOC', 'POSSESSION_CERTIFICATE', 'CONTRACT', 'LEGAL',
+  'BROCHURE', 'FINANCIAL', 'PHOTO', 'GENERAL',
 ] as const;
 
 type PreviewDoc = { url: string; name: string; kind: 'image' | 'pdf' | 'other' };
@@ -2369,6 +2562,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
   const [showUploadForm, setShowUploadForm] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewDoc | null>(null);
+  const [historyDoc, setHistoryDoc] = useState<{ id: string; name: string } | null>(null);
   // edit state
   const editFileRef = useRef<HTMLInputElement>(null);
   const [editId, setEditId] = useState<string | null>(null);
@@ -2440,17 +2634,30 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
     }
   };
 
-  const uploadAction = canUpload ? (
-    <Button
-      size="sm" variant="flat" color="primary"
-      startContent={<FiUpload className="w-3 h-3" />}
-      onPress={() => fileInputRef.current?.click()}
-      isLoading={upload.isPending}
-      className="text-xs h-7"
-    >
-      Upload
-    </Button>
-  ) : undefined;
+  // "Nothing has been filed against this unit" is a fact worth stating in the header rather
+  // than only by an empty list further down — a sold unit with no Deed on it is the case
+  // this is here to make visible at a glance. Held back while the list is still loading so
+  // it never claims "none" about an answer that has not arrived.
+  const uploadAction = (
+    <div className="flex items-center gap-2">
+      {!isLoading && docs.length === 0 && (
+        <Chip size="sm" variant="flat" color="warning" className="text-[11px]">
+          No documents uploaded
+        </Chip>
+      )}
+      {canUpload && (
+        <Button
+          size="sm" variant="flat" color="primary"
+          startContent={<FiUpload className="w-3 h-3" />}
+          onPress={() => fileInputRef.current?.click()}
+          isLoading={upload.isPending}
+          className="text-xs h-7"
+        >
+          Upload
+        </Button>
+      )}
+    </div>
+  );
 
   return (
     <Section
@@ -2550,6 +2757,8 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
         </Modal>
       )}
 
+      {historyDoc && <DocumentHistoryModal doc={historyDoc} onClose={() => setHistoryDoc(null)} />}
+
       {/* hidden file input for replace */}
       <input ref={editFileRef} type="file" className="hidden" onChange={(e) => {
         const f = e.target.files?.[0];
@@ -2617,7 +2826,16 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                       {String(cat).replace(/_/g, ' ')}
                     </span>
                     {d.versionNumber > 1 && (
-                      <span className="text-[11px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">v{d.versionNumber}</span>
+                      // GET /documents/:id/versions has existed since the archive was
+                      // added — this button was the missing other half, the only way to
+                      // actually reach what it had been archiving.
+                      <button
+                        onClick={() => setHistoryDoc({ id: d.id, name: d.fileName || d.name })}
+                        className="text-[11px] text-gray-500 bg-gray-100 hover:bg-gray-200 px-1.5 py-0.5 rounded transition-colors"
+                        title="View version history"
+                      >
+                        v{d.versionNumber}
+                      </button>
                     )}
                   </div>
                   <p className="text-xs text-gray-500 mt-0.5">
@@ -2677,6 +2895,58 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
         </div>
       )}
     </Section>
+  );
+}
+
+function DocumentHistoryModal({ doc, onClose }: { doc: { id: string; name: string }; onClose: () => void }) {
+  const { data, isLoading } = useDocumentVersions(doc.id, true);
+  const versions: any[] = Array.isArray(data) ? data : [];
+
+  return (
+    <Modal isOpen onClose={onClose} size="lg" scrollBehavior="inside">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-0.5">
+          <span className="text-sm font-semibold">Version history</span>
+          <span className="text-[11px] font-normal text-gray-500 truncate">{doc.name}</span>
+        </ModalHeader>
+        <ModalBody className="pb-6">
+          {isLoading && <div className="text-sm text-gray-500 py-4 text-center">Loading…</div>}
+          {!isLoading && versions.length === 0 && (
+            <p className="text-sm text-gray-500 py-4 text-center">No prior versions on file.</p>
+          )}
+          {!isLoading && versions.length > 0 && (
+            <ol className="space-y-2">
+              {versions.map((v: any) => (
+                <li key={v.id} className="flex items-center gap-3 rounded-lg border border-gray-100 p-3">
+                  <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                    <FiClock className="text-gray-500 w-3.5 h-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      v{v.versionNumber} · {v.fileName}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {v.uploadedBy?.name && <>by {v.uploadedBy.name} · </>}
+                      {fmtDate(v.createdAt)}
+                    </p>
+                  </div>
+                  {v.available && v.fileUrl ? (
+                    <a
+                      href={v.fileUrl} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors shrink-0"
+                    >
+                      <FiExternalLink className="w-3.5 h-3.5" /> Open
+                    </a>
+                  ) : (
+                    <span className="text-[11px] text-gray-500 shrink-0">No longer available</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </ModalBody>
+      </ModalContent>
+    </Modal>
   );
 }
 

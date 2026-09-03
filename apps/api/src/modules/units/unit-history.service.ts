@@ -55,6 +55,23 @@ export function classifyStatus(status: UnitStatus): OccupancyKind {
   }
 }
 
+/**
+ * Can this unit be "vacant" at all?
+ *
+ * Vacancy is a LEASING fact — "the unit was on the market and earning nothing". Once it
+ * is SOLD it is not Prime's to let, so the gaps between its old tenancies stop being a
+ * story about lost rent and become noise on a record whose ending is the sale (client,
+ * 2026-09-02).
+ *
+ * Exported and pure so the timeline entries and the summary tiles ask the SAME question.
+ * They are computed in two different places, and a card whose tile says "Total vacant:
+ * 214 days" above a timeline showing no vacancy at all is the two halves contradicting
+ * each other.
+ */
+export function unitCanBeVacant(status: UnitStatus): boolean {
+  return status !== 'SOLD';
+}
+
 const MS_PER_DAY = 86_400_000;
 
 export function daysBetween(a: Date, b: Date): number {
@@ -308,10 +325,19 @@ export class UnitHistoryService {
         sqft: true,
         createdAt: true,
         availableSince: true,
-        building: { select: { id: true, name: true, projectId: true } },
+        deletedAt: true,
+        building: {
+          select: { id: true, name: true, projectId: true, deletedAt: true, project: { select: { deletedAt: true } } },
+        },
       },
     });
     if (!unit) throw new NotFoundException('Unit not found');
+    // A unit is only reachable if its whole chain is — deleting a project soft-deletes
+    // the project, not its units/buildings, so this stayed openable by direct URL and
+    // returned a full history for a unit that no longer exists anywhere else in the app.
+    if (unit.deletedAt || unit.building?.deletedAt || unit.building?.project?.deletedAt) {
+      throw new NotFoundException('Unit not found');
+    }
 
     const [events, leases, sales] = await Promise.all([
       this.prisma.unitStatusEvent.findMany({
@@ -361,7 +387,15 @@ export class UnitHistoryService {
         : Promise.resolve([]),
       combinedRefs.length
         ? this.prisma.lease.findMany({
-            where: { combinedDealRef: { in: combinedRefs }, unitId: { not: unitId }, deletedAt: null },
+            where: {
+              combinedDealRef: { in: combinedRefs },
+              unitId: { not: unitId },
+              deletedAt: null,
+              // A sibling unit whose project (or building) has since been archived is
+              // gone from the rest of the app; naming it here would be the one place
+              // this history page still reaches into archived data.
+              unit: { deletedAt: null, building: { deletedAt: null, project: { deletedAt: null } } },
+            },
             select: { combinedDealRef: true, unit: { select: { unitNumber: true } } },
           })
         : Promise.resolve([]),
@@ -404,6 +438,23 @@ export class UnitHistoryService {
       // PAST vacancy (a closed window, before this lease or between two others) is
       // unaffected, only the one currently misclassified as vacant.
       summary.totalDaysVacant = Math.max(0, summary.totalDaysVacant - summary.currentVacancyDays);
+      summary.isCurrentlyVacant = false;
+      summary.currentVacancyDays = 0;
+      summary.vacantSince = null;
+    }
+
+    /**
+     * A SOLD unit has no vacancy, for the reason spelled out on vacancyEntries: it is
+     * not Prime's to let any more. The timeline drops those entries, so the tiles have
+     * to drop the days too — a "Total vacant: 214 days" tile above a timeline showing no
+     * vacancy at all is the two halves of one card contradicting each other.
+     *
+     * The days are zeroed, not recomputed: `totalDaysSold` already carries the time
+     * since the sale, and the pre-sale vacancy is not a number anyone reads off a unit
+     * Prime has sold.
+     */
+    if (!unitCanBeVacant(unit.status)) {
+      summary.totalDaysVacant = 0;
       summary.isCurrentlyVacant = false;
       summary.currentVacancyDays = 0;
       summary.vacantSince = null;
@@ -519,7 +570,7 @@ export class UnitHistoryService {
     const entries = [
       ...this.leaseEntries(leases, economics, combinedSiblingUnitsByRef),
       ...this.saleEntries(sales),
-      ...this.vacancyEntries(windows, leases, now),
+      ...this.vacancyEntries(windows, leases, now, unit.status),
       ...this.statusEntries(windows),
       ...tenancyEndEntries(leases),
       ...assignmentEntries(assignments, leases),
@@ -752,7 +803,16 @@ export class UnitHistoryService {
    * one it may be sitting in right now — the two the old client-side derivation could
    * not see.
    */
-  private vacancyEntries(windows: OccupancyWindow[], leases: any[] = [], now: Date = new Date()) {
+  private vacancyEntries(
+    windows: OccupancyWindow[],
+    leases: any[] = [],
+    now: Date = new Date(),
+    unitStatus?: UnitStatus,
+  ) {
+    // See unitCanBeVacant. Suppressed here rather than in the frontend so the timeline
+    // and the summary tiles cannot disagree — getHistory zeroes the day totals to match.
+    if (unitStatus && !unitCanBeVacant(unitStatus)) return [];
+
     // A lease linked to a successor on the SAME unit is a renewal: the tenant never
     // left, so any vacancy window sitting in the handover is an artefact of how the
     // records were entered, not something that happened.

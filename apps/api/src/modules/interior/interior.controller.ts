@@ -9,7 +9,8 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
-import { AddScopeItemDto, AddInteriorInvoiceDto } from './dto/scope-invoice.dto';
+import { AddScopeItemDto, AddInteriorInvoiceDto, UpdateInteriorInvoiceDto } from './dto/scope-invoice.dto';
+import { CreateSnagDto, UpdateSnagDto, ResolveSnagDto } from './dto/snag.dto';
 
 @ApiTags('Interior')
 @ApiBearerAuth()
@@ -54,7 +55,13 @@ export class InteriorController {
   @ApiOperation({ summary: 'Update package template name/description/rate' })
   updateTemplate(
     @Param('tid') tid: string,
-    @Body() body: { name?: string; description?: string; defaultRatePerSqft?: number | null },
+    @Body() body: {
+      name?: string;
+      description?: string;
+      defaultRatePerSqft?: number | null;
+      /** Supplying this REPLACES the template's line list; omit it to leave lines alone. */
+      items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
+    },
   ) {
     return this.service.updatePackageTemplate(tid, body);
   }
@@ -67,14 +74,15 @@ export class InteriorController {
 
   @Get()
   @RequirePermissions('interior:view')
-  @ApiOperation({ summary: 'List interior projects (filter by unit/building/status)' })
+  @ApiOperation({ summary: 'List interior projects (filter by unit / building / project / status)' })
   findAll(
     @Query('unitId') unitId?: string,
     @Query('buildingId') buildingId?: string,
+    @Query('projectId') projectId?: string,
     @Query('status') status?: InteriorStatus,
     @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.findAll({ unitId, buildingId, status }, permissions ?? []);
+    return this.service.findAll({ unitId, buildingId, projectId, status }, permissions ?? []);
   }
 
   @Get(':id')
@@ -183,10 +191,15 @@ export class InteriorController {
     return this.service.addScopeItem(id, body);
   }
 
-  @Delete('scope/:itemId')
+  // Nested under ':id' so ProjectAccessGuard can resolve the owning project from the
+  // interior project (CONTROLLER_ID_ENTITY maps this controller's ':id' to 'interior').
+  // A bare '/scope/:itemId' carried no key the guard could resolve, so it ran with no
+  // project scoping at all — and the web app was calling this shape anyway, against a
+  // route that did not exist, so every delete 404'd.
+  @Delete(':id/scope/:itemId')
   @RequirePermissions('interior:edit')
-  removeScope(@Param('itemId') itemId: string) {
-    return this.service.removeScopeItem(itemId);
+  removeScope(@Param('id') id: string, @Param('itemId') itemId: string) {
+    return this.service.removeScopeItem(id, itemId);
   }
 
   // ─────── Sub-contractor invoices ───────
@@ -200,14 +213,34 @@ export class InteriorController {
     return this.service.addInvoice(id, body);
   }
 
+  @Patch(':id/invoices/:invoiceId')
+  @RequirePermissions('interior:finance')
+  @ApiOperation({
+    summary: 'Move a sub-contractor invoice through PENDING → APPROVED → PAID',
+    description:
+      'Approval is reversible; PAID is not — void the invoice instead, which also reverses ' +
+      'the Actual that mirrors it into the TI spend figures.',
+  })
+  updateInvoice(
+    @Param('id') _id: string,
+    @Param('invoiceId') invoiceId: string,
+    @Body() body: UpdateInteriorInvoiceDto,
+  ) {
+    return this.service.updateInvoice(invoiceId, body);
+  }
+
+  @Delete(':id/invoices/:invoiceId')
+  @RequirePermissions('interior:finance')
+  @ApiOperation({ summary: 'Void an invoice and reverse its mirrored Actual' })
+  removeInvoice(@Param('id') _id: string, @Param('invoiceId') invoiceId: string) {
+    return this.service.removeInvoice(invoiceId);
+  }
+
   // ─────── Snags (punch list) ───────
 
   @Post(':id/snags')
   @RequirePermissions('interior:edit')
-  addSnag(
-    @Param('id') id: string,
-    @Body() body: { description: string; room?: string; assigneeId?: string; dueDate?: string; photoPath?: string },
-  ) {
+  addSnag(@Param('id') id: string, @Body() body: CreateSnagDto) {
     return this.service.addSnag(id, body);
   }
 
@@ -219,7 +252,7 @@ export class InteriorController {
       'afterPhotoPath is the storage key of the proof-of-fix image. The original photoPath ' +
       '(the "before" / defect shot) is left untouched.',
   })
-  resolveSnag(@Param('snagId') snagId: string, @Body() body?: { afterPhotoPath?: string }) {
+  resolveSnag(@Param('snagId') snagId: string, @Body() body?: ResolveSnagDto) {
     return this.service.resolveSnag(snagId, body);
   }
 
@@ -231,16 +264,7 @@ export class InteriorController {
       'Setting status=RESOLVED requires an afterPhotoPath (here or already on the record). ' +
       'Reopening a resolved snag clears its proof-of-fix photo — the re-fix needs its own.',
   })
-  updateSnag(
-    @Param('snagId') snagId: string,
-    @Body() body: {
-      status?: string;
-      description?: string;
-      room?: string;
-      assigneeId?: string;
-      afterPhotoPath?: string;
-    },
-  ) {
+  updateSnag(@Param('snagId') snagId: string, @Body() body: UpdateSnagDto) {
     return this.service.updateSnag(snagId, body);
   }
 }

@@ -1,6 +1,8 @@
 import React from 'react';
-import { Avatar, Chip, Tooltip } from '@heroui/react';
-import { useBudgetRevisions } from '../hooks/useApi';
+import { Avatar, Button, Chip, Tooltip, addToast } from '@heroui/react';
+import { useBudgetRevisions, useApproveBudgetRevision } from '../hooks/useApi';
+import { errMsg } from '../utils/fmt';
+import { PermissionGate } from './ui';
 
 /**
  * Budget revision history — append-only audit trail of every change.
@@ -45,6 +47,7 @@ const fmtRelative = (iso: string): string => {
 
 export function BudgetRevisionHistory({ budgetLineId }: { budgetLineId?: string | null }) {
   const { data, isLoading } = useBudgetRevisions(budgetLineId ?? undefined);
+  const approve = useApproveBudgetRevision();
   const revisions = (data as any[]) ?? [];
 
   if (!budgetLineId) return null;
@@ -106,7 +109,30 @@ export function BudgetRevisionHistory({ budgetLineId }: { budgetLineId?: string 
                     </span>
                   </Tooltip>
                 ) : !isBaseline ? (
-                  <span className="text-amber-700">awaiting approval</span>
+                  // "Awaiting approval" was a label with nothing behind it: the approve
+                  // endpoint existed, stamped the approver and refused a double-approval,
+                  // and no screen could reach it — so every revision awaited approval
+                  // forever while the word promised an action that did not exist.
+                  <span className="flex items-center gap-2">
+                    <span className="text-amber-700">awaiting approval</span>
+                    <PermissionGate permission="budget:edit">
+                      <Button
+                        size="sm" variant="flat" color="primary"
+                        className="h-6 min-w-0 px-2 text-[11px]"
+                        isLoading={approve.isPending && approve.variables === r.id}
+                        onPress={async () => {
+                          try {
+                            await approve.mutateAsync(r.id);
+                            addToast({ title: 'Revision approved', color: 'success' });
+                          } catch (e) {
+                            addToast({ title: errMsg(e, 'Could not approve this revision'), color: 'danger' });
+                          }
+                        }}
+                      >
+                        Approve
+                      </Button>
+                    </PermissionGate>
+                  </span>
                 ) : null}
               </div>
             </li>

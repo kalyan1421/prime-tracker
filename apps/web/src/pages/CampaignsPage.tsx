@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Card, CardBody, CardHeader, Chip, Button, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Select, SelectItem, Textarea, useDisclosure, addToast } from '@heroui/react';
 import {
-  BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
 import { FiBarChart2, FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import {
-  useCampaigns, useCampaignPerformance, useCampaignSpendByCampaign,
+  useCampaigns, useCampaignPerformance, useCampaignSpendByCampaign, useCampaignSpendTrend,
   useCreateCampaign, useUpdateCampaign, useDeleteCampaign, useRecordCampaignSpend, useProjects,
 } from '../hooks/useApi';
 import { LoadingState, ErrorState, StatCard, EmptyState } from '../components/ui';
@@ -44,6 +44,9 @@ export default function CampaignsPage() {
   const { data: projects } = useProjects();
   // No project filter — always combined across every project (portfolio + project-specific).
   const { data: performance, isLoading: perfLoading } = useCampaignPerformance();
+  const trendQ = useCampaignSpendTrend();
+  const trendSeries: any[] = (trendQ.data as any)?.series ?? [];
+  const trendChannels: string[] = (trendQ.data as any)?.channels ?? [];
   const { data: campaigns } = useCampaigns();
   const { data: spendByCampaign } = useCampaignSpendByCampaign();
 
@@ -241,6 +244,38 @@ export default function CampaignsPage() {
                     <Cell key={c.campaignId} fill={CHANNEL_FILL[c.channel] || '#94a3b8'} />
                   ))}
                 </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Spend over time, split by channel. The endpoint returned six months of
+          channel-bucketed series and nothing plotted it — "Spend by campaign" above
+          answers who, and this answers when, which is the question a monthly budget
+          conversation actually starts from. */}
+      <Card shadow="sm">
+        <CardHeader className="pb-2">
+          <p className="font-semibold text-sm text-gray-700">Spend over time</p>
+        </CardHeader>
+        <CardBody className="pt-0">
+          {trendSeries.length === 0 || trendChannels.length === 0 ? (
+            <div className="py-12 text-center text-sm text-gray-500">No spend recorded in the last six months.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={trendSeries} margin={{ top: 8, right: 24, bottom: 0, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} tickFormatter={(n) => `$${n.toLocaleString()}`} />
+                <Tooltip formatter={(v: number) => fmt(v)} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {trendChannels.map((ch: string) => (
+                  <Bar
+                    key={ch} dataKey={ch} stackId="spend"
+                    fill={CHANNEL_FILL[ch] || '#94a3b8'}
+                    name={ch.replace(/_/g, ' ')}
+                  />
+                ))}
               </BarChart>
             </ResponsiveContainer>
           )}

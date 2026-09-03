@@ -15,6 +15,7 @@ const mockPrisma = {
   leaseRentInvoice: { findMany: jest.fn() },
   lease: { findMany: jest.fn() },
   document: { findMany: jest.fn() },
+  unit: { findMany: jest.fn() },
 };
 const mockNotifications = {
   notifyPaymentOverdue: jest.fn(),
@@ -25,6 +26,7 @@ const mockNotifications = {
   notifyLeaseHoldover: jest.fn(),
   notifyDocumentExpiring: jest.fn(),
   notifyDocumentExpired: jest.fn(),
+  notifySiteUpdateStale: jest.fn(),
 };
 // runDailyChecks generates the rent ledger before reading it; the per-check tests
 // below call the checks directly, so a no-op stub is enough.
@@ -606,6 +608,10 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
       // half only: the decision is made BY the recipient, so telling them about it would
       // be telling them what they just did.
       'MILESTONE_SLIP_PENDING_REVIEW',
+      // A tracked unit nobody has posted about for a week. STALE_DAYS previously lived
+      // only inside the grid's summary, so the one number the board asks people to act on
+      // could only be seen by opening the page.
+      'SITE_UPDATE_STALE',
     ] as const) {
       expect(Object.values(NotificationType)).toContain(type);
       expect(NOTIFICATION_TIERS).toHaveProperty(type);
@@ -615,7 +621,8 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     // getPreferences(). Bump it WITH the list above, never on its own.
     // 2026-08-26: +4 for the Update Board (UPDATE_BOARD_POSTED/_COMMENT_MENTION/
     // _ASSIGNED/_DUE_SOON) — 36 -> 40.
-    expect(Object.values(NotificationType)).toHaveLength(40);
+    // 2026-09-02: +1 for SITE_UPDATE_STALE — 40 -> 41.
+    expect(Object.values(NotificationType)).toHaveLength(41);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {
@@ -1269,5 +1276,89 @@ describe('NotificationsService — document expiry triggers', () => {
   it('both halves are RECURRING, which is what makes the dedupeKey mandatory', () => {
     expect(RECURRING_TYPES.DOCUMENT_EXPIRING).toBe(true);
     expect(RECURRING_TYPES.DOCUMENT_EXPIRED).toBe(true);
+  });
+});
+
+/**
+ * The Site Tracker's own staleness, raised where people are rather than only on a tile.
+ *
+ * STALE_DAYS lived only inside SiteTrackerService's summary: no notification, no exception
+ * entry, no cron — unlike vacancy, which has a whole scheduled job. "Silence is its own
+ * risk" was asserted on a number nobody sees unless they open the page.
+ */
+describe('ScheduledNotificationsService.checkStaleSiteUpdates', () => {
+  const svc = () => new ScheduledNotificationsService(
+    mockPrisma as any, mockNotifications as any, mockRentInvoices as any, {} as any,
+  );
+  const ago = (d: number) => new Date(Date.now() - d * 86_400_000);
+  const unit = (over: any = {}) => ({
+    id: 'u1', unitNumber: '101', createdAt: ago(400),
+    building: { project: { id: 'p1', name: 'Prime Lewisville' } },
+    constructionStages: [{ createdAt: ago(90) }],
+    dailyLogs: [],
+    ...over,
+  });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('asks for tracked units only, on the same four signals as the grid', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([]);
+    await (svc() as any).checkStaleSiteUpdates();
+
+    const where = mockPrisma.unit.findMany.mock.calls[0][0].where;
+    expect(where.OR).toEqual([
+      { constructionStages: { some: {} } },
+      { blockerStatus: { not: null } },
+      { sitePriority: { not: null } },
+      { siteAssignees: { some: {} } },
+    ]);
+    // Archived projects soft-delete the PROJECT ROW ONLY, so without this every unit of
+    // every archived project would alert forever about work nobody is doing.
+    expect(where.building).toEqual({ deletedAt: null, project: { deletedAt: null } });
+    // A closed deal is not site work, and the grid hides it from the roles this routes to.
+    expect(where.status).toEqual({ not: 'SOLD' });
+  });
+
+  it('raises for a unit that has never been posted about, aged from the tracker join', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([unit()]);
+    await (svc() as any).checkStaleSiteUpdates();
+
+    expect(mockNotifications.notifySiteUpdateStale).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1', unitNumber: '101', projectId: 'p1', days: 90, everUpdated: false }),
+    );
+  });
+
+  it('stays quiet for a unit tracked this week — the bug the tile had', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unit({ constructionStages: [{ createdAt: ago(2) }] }),
+    ]);
+    await (svc() as any).checkStaleSiteUpdates();
+    expect(mockNotifications.notifySiteUpdateStale).not.toHaveBeenCalled();
+  });
+
+  it('measures from the last update once there is one, and says so', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unit({ dailyLogs: [{ logDate: ago(20) }] }),
+    ]);
+    await (svc() as any).checkStaleSiteUpdates();
+    expect(mockNotifications.notifySiteUpdateStale).toHaveBeenCalledWith(
+      expect.objectContaining({ days: 20, everUpdated: true }),
+    );
+  });
+
+  it('stays quiet when the last update is recent even on a long-tracked unit', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      unit({ constructionStages: [{ createdAt: ago(300) }], dailyLogs: [{ logDate: ago(1) }] }),
+    ]);
+    await (svc() as any).checkStaleSiteUpdates();
+    expect(mockNotifications.notifySiteUpdateStale).not.toHaveBeenCalled();
+  });
+
+  it('one unit failing does not stop the rest', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([unit({ id: 'a' }), unit({ id: 'b' })]);
+    mockNotifications.notifySiteUpdateStale
+      .mockRejectedValueOnce(new Error('smtp down'))
+      .mockResolvedValueOnce(undefined);
+    await expect((svc() as any).checkStaleSiteUpdates()).resolves.toBe(1);
   });
 });

@@ -3,9 +3,10 @@ import {
   Chip, Button, Input, Select, SelectItem, Progress,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiPlus, FiDollarSign } from 'react-icons/fi';
+import { FiPlus, FiDollarSign, FiEdit2 } from 'react-icons/fi';
 import {
   useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment,
+  useUpdateSalePayment,
 } from '../hooks/useApi';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
@@ -28,6 +29,34 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
   const addPayment = useAddSalePayment();
   const logPayment = useLogPayment();
   const del = useDeleteSalePayment();
+  // Editing an installment instead of deleting and re-adding it. PATCH /sales/payments/:id
+  // existed and nothing reached it, so correcting an amount meant removing the row — which
+  // takes its logged payments with it.
+  const updatePayment = useUpdateSalePayment();
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ label: string; amount: string; dueDate: string }>({ label: '', amount: '', dueDate: '' });
+  const [editErr, setEditErr] = useState<string | null>(null);
+
+  const saveEdit = async (id: string) => {
+    const amount = Number(editForm.amount);
+    if (!editForm.label.trim()) { setEditErr('Give the installment a name.'); return; }
+    if (!Number.isFinite(amount) || amount <= 0) { setEditErr('Amount must be a positive number.'); return; }
+    try {
+      await updatePayment.mutateAsync({
+        id,
+        saleId,
+        data: {
+          label: editForm.label.trim(),
+          amount,
+          ...(editForm.dueDate ? { dueDate: editForm.dueDate } : {}),
+        },
+      });
+      setEditId(null);
+      addToast({ title: 'Installment updated', color: 'success' });
+    } catch (e) {
+      setEditErr(errMsg(e, 'Could not update the installment'));
+    }
+  };
 
   const payments: any[] = Array.isArray(data) ? data : [];
   const totalScheduled = payments.reduce((s, p) => s + Number(p.amount), 0);
@@ -143,12 +172,34 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
             return (
               <div key={p.id} className="rounded-lg border border-gray-100 p-2.5 text-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="font-medium">{p.label}</span>
-                    <span className="text-xs text-gray-500 ml-2">{dueLabel(p)}</span>
-                  </div>
+                  {editId === p.id ? (
+                    <div className="flex flex-1 flex-wrap items-center gap-2">
+                      <Input
+                        size="sm" className="max-w-[190px]" aria-label="Installment name"
+                        value={editForm.label} onValueChange={(v) => setEditForm((f) => ({ ...f, label: v }))}
+                      />
+                      <Input
+                        size="sm" type="number" className="max-w-[130px]" aria-label="Amount"
+                        value={editForm.amount} onValueChange={(v) => setEditForm((f) => ({ ...f, amount: v }))}
+                      />
+                      <Input
+                        size="sm" type="date" className="max-w-[160px]" aria-label="Due date"
+                        value={editForm.dueDate} onValueChange={(v) => setEditForm((f) => ({ ...f, dueDate: v }))}
+                      />
+                      <Button size="sm" color="primary" isLoading={updatePayment.isPending} onPress={() => saveEdit(p.id)}>Save</Button>
+                      <Button size="sm" variant="light" onPress={() => setEditId(null)}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <div className="min-w-0">
+                      <span className="font-medium">{p.label}</span>
+                      <span className="text-xs text-gray-500 ml-2">{dueLabel(p)}</span>
+                    </div>
+                  )}
                   <Chip size="sm" variant="flat" color={STATUS_COLOR[p.status] ?? 'default'}>{p.status}</Chip>
                 </div>
+                {editId === p.id && editErr && (
+                  <p className="mt-1 text-xs text-red-700">{editErr}</p>
+                )}
                 <div className="flex items-center gap-3 mt-1.5">
                   <Progress aria-label="paid" size="sm" value={pct} className="flex-1" color={pct >= 100 ? 'success' : 'primary'} />
                   <span className="text-xs text-gray-500 whitespace-nowrap">{fmt(paid)} / {fmt(amount)}</span>
@@ -160,7 +211,24 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
                       </Button>
                     </PermissionGate>
                   )}
-                  <Button size="sm" variant="light" color="danger" onPress={() => del.mutate({ id: p.id, saleId })}>✕</Button>
+                  <PermissionGate permission="sales:edit">
+                    <Button
+                      size="sm" variant="light" isIconOnly aria-label={`Edit ${p.label}`}
+                      className="h-7 w-7 min-w-7"
+                      onPress={() => {
+                        setEditId(p.id);
+                        setEditErr(null);
+                        setEditForm({
+                          label: p.label ?? '',
+                          amount: String(p.amount ?? ''),
+                          dueDate: p.dueDate ? String(p.dueDate).slice(0, 10) : '',
+                        });
+                      }}
+                    >
+                      <FiEdit2 className="text-xs" />
+                    </Button>
+                  </PermissionGate>
+                  <Button size="sm" variant="light" color="danger" aria-label={`Remove ${p.label}`} onPress={() => del.mutate({ id: p.id, saleId })}>✕</Button>
                 </div>
               </div>
             );

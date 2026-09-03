@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser, RequireAnyPermission } from '../../common/decorators/index';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -82,8 +82,14 @@ export class ReportsController {
   // `financial:view` matches /reports/portfolio — this is the same class of money data
   // (commitment vs spend), just the isolated fit-out side of it. `interior:view` is the
   // operational (phase/snag) permission and is deliberately NOT what gates this.
+  //
+  // `interior:finance` is accepted as an equivalent because it is the permission that
+  // already grants the same figures on every interior endpoint (contract value, rate,
+  // sub-contractor invoices). PROJECT_MANAGER holds it and does NOT hold financial:view,
+  // so the role that runs fit-outs was the one role locked out of the fit-out report.
+  // RequirePermissions is ALL-of, so the alternatives go through RequireAnyPermission.
   @Get('interior')
-  @RequirePermissions('financial:view')
+  @RequireAnyPermission('financial:view', 'interior:finance')
   @ApiOperation({
     summary: 'Interior / TI fit-out summary — committed vs invoiced vs remaining, per project',
   })

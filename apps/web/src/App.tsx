@@ -88,7 +88,7 @@ export default function App() {
         <Route index element={<RootRedirect />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
-        <Route path="projects/:id/units/:unitId" element={<UnitDetailPage />} />
+        <Route path="projects/:id/units/:unitId" element={<ProtectedRoute permission="unit:view"><UnitDetailPage /></ProtectedRoute>} />
         <Route path="projects/:id/buildings/:buildingId" element={<ProtectedRoute permission="building:view"><BuildingDetailPage /></ProtectedRoute>} />
         <Route path="projects/:id/rent-history-import" element={<ProtectedRoute permission="unit:history:backfill"><RentHistoryImportPage /></ProtectedRoute>} />
         <Route path="projects/:id/sale-history-import" element={<ProtectedRoute permission="unit:history:backfill"><SaleHistoryImportPage /></ProtectedRoute>} />

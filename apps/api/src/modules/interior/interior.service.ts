@@ -14,6 +14,7 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { canTransition, getPhaseGate, isSnagOpen } from './interior-state-machine';
 import { AddScopeItemDto, AddInteriorInvoiceDto } from './dto/scope-invoice.dto';
 
@@ -54,25 +55,46 @@ type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildin
 
 @Injectable()
 export class InteriorService {
-  constructor(private prisma: PrismaService, private bus: EventBus) {}
+  constructor(
+    private prisma: PrismaService,
+    private bus: EventBus,
+    private storage: StorageService,
+  ) {}
 
   // ─────── Reads ───────
 
   async findAll(
-    filter: { unitId?: string; buildingId?: string; status?: InteriorStatus },
+    filter: { unitId?: string; buildingId?: string; projectId?: string; status?: InteriorStatus },
     viewerPermissions?: string[],
   ) {
+    // A fit-out reaches its project through EITHER anchor, so a projectId filter has to
+    // cover both paths — a unit-anchored fit-out has no buildingId of its own.
+    const projectScope: Prisma.InteriorProjectWhereInput | undefined = filter.projectId
+      ? {
+          OR: [
+            { building: { projectId: filter.projectId } },
+            { unit: { building: { projectId: filter.projectId } } },
+          ],
+        }
+      : undefined;
+
     const projects = await this.prisma.interiorProject.findMany({
       where: {
         deletedAt: null,
         unitId: filter.unitId,
         buildingId: filter.buildingId,
         status: filter.status,
+        ...(projectScope ?? {}),
       },
       orderBy: { createdAt: 'desc' },
       include: {
-        unit: { select: { id: true, unitNumber: true, buildingId: true } },
-        building: { select: { id: true, name: true } },
+        unit: {
+          select: {
+            id: true, unitNumber: true, buildingId: true,
+            building: { select: { id: true, name: true, projectId: true } },
+          },
+        },
+        building: { select: { id: true, name: true, projectId: true } },
         pm: { select: { id: true, name: true } },
         _count: { select: { snags: true, invoices: true, scopeItems: true } },
       },
@@ -87,11 +109,21 @@ export class InteriorService {
   }
 
   async findById(id: string, viewerPermissions?: string[]) {
-    const project = await this.prisma.interiorProject.findFirst({
+    let project = await this.prisma.interiorProject.findFirst({
       where: { id, deletedAt: null },
       include: {
-        unit: { select: { id: true, unitNumber: true, buildingId: true, sqft: true } },
-        building: { select: { id: true, name: true, phase: true } },
+        // The anchor building's phase drives the shell gate, and its projectId is what
+        // lets the UI link a fit-out back to its unit and project. Both are selected for
+        // the unit path too — a unit-anchored fit-out previously returned neither, so the
+        // page could not tell whether the shell gate would pass and had to warn about it
+        // unconditionally.
+        unit: {
+          select: {
+            id: true, unitNumber: true, buildingId: true, sqft: true,
+            building: { select: { id: true, name: true, phase: true, projectId: true } },
+          },
+        },
+        building: { select: { id: true, name: true, phase: true, projectId: true } },
         sale: { select: { id: true, buyer: true } },
         pm: { select: { id: true, name: true, email: true } },
         scopeItems: { orderBy: { createdAt: 'asc' } },
@@ -111,6 +143,10 @@ export class InteriorService {
       },
     });
     if (!project) throw new NotFoundException('Interior project not found');
+    // Snag photos are stored as bucket keys. Without a signed URL the before/after pair —
+    // the whole point of the proof-of-fix rule — is data nobody can look at.
+    const snags = await this.signSnagPhotos(project.snags);
+    project = { ...project, snags };
     // TI contract value / scope pricing / sub-contractor invoices are `interior:finance`
     // territory, not `interior:view` — this endpoint requires only the latter. Redact
     // rather than 403 the whole endpoint since CONSTRUCTION still needs the phase/scope/
@@ -277,22 +313,59 @@ export class InteriorService {
     });
   }
 
+  /**
+   * Update a package template. When `items` is supplied the line list is REPLACED wholesale
+   * — the rows carry no stable client-side identity, and a merge would need one.
+   *
+   * Fit-outs already created from this template keep the lines they were seeded with:
+   * `create()` copies items into `InteriorScopeItem` rather than referencing them, so a BOQ
+   * that has since been priced, revised or partly delivered is not silently rewritten by an
+   * edit to the template it came from. Editing the template changes what the NEXT fit-out
+   * starts with, which is the only thing it should change.
+   *
+   * Omit `items` entirely to edit just the name/description/rate.
+   */
   async updatePackageTemplate(id: string, input: {
     name?: string; description?: string; defaultRatePerSqft?: number | null;
+    items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
   }) {
     const tpl = await this.prisma.interiorPackageTemplate.findFirst({ where: { id, deletedAt: null } });
     if (!tpl) throw new NotFoundException('Package template not found');
     if (input.defaultRatePerSqft != null && input.defaultRatePerSqft < 0) {
       throw new BadRequestException('defaultRatePerSqft cannot be negative');
     }
-    return this.prisma.interiorPackageTemplate.update({
-      where: { id },
-      data: {
-        name: input.name?.trim() ?? undefined,
-        description: input.description !== undefined ? (input.description.trim() || null) : undefined,
-        defaultRatePerSqft: input.defaultRatePerSqft !== undefined ? input.defaultRatePerSqft : undefined,
-      },
-      include: { items: { orderBy: { sequence: 'asc' } }, _count: { select: { interiorProjects: true } } },
+    for (const it of input.items ?? []) {
+      if (!it.description?.trim()) throw new BadRequestException('Every package item needs a description');
+      if (it.quantity != null && it.quantity < 0) throw new BadRequestException('item quantity cannot be negative');
+      if (it.unitPrice != null && it.unitPrice < 0) throw new BadRequestException('item unitPrice cannot be negative');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      if (input.items) {
+        await tx.interiorPackageItem.deleteMany({ where: { packageTemplateId: id } });
+        if (input.items.length) {
+          await tx.interiorPackageItem.createMany({
+            data: input.items.map((it, i) => ({
+              packageTemplateId: id,
+              description: it.description.trim(),
+              category: it.category ?? null,
+              quantity: it.quantity ?? null,
+              unit: it.unit ?? null,
+              unitPrice: it.unitPrice ?? null,
+              sequence: i,
+            })),
+          });
+        }
+      }
+      return tx.interiorPackageTemplate.update({
+        where: { id },
+        data: {
+          name: input.name?.trim() ?? undefined,
+          description: input.description !== undefined ? (input.description.trim() || null) : undefined,
+          defaultRatePerSqft: input.defaultRatePerSqft !== undefined ? input.defaultRatePerSqft : undefined,
+        },
+        include: { items: { orderBy: { sequence: 'asc' } }, _count: { select: { interiorProjects: true } } },
+      });
     });
   }
 
@@ -509,9 +582,16 @@ export class InteriorService {
     });
   }
 
-  async removeScopeItem(itemId: string) {
+  /**
+   * Delete a BOQ line. Scoped to its interior project — the route is nested under the
+   * project id so the access guard can resolve it, and checking the parent here means a
+   * mismatched pair is a 404 rather than a cross-project delete that happens to work.
+   */
+  async removeScopeItem(interiorProjectId: string, itemId: string) {
     const item = await this.prisma.interiorScopeItem.findUnique({ where: { id: itemId } });
-    if (!item) throw new NotFoundException('Scope item not found');
+    if (!item || item.interiorProjectId !== interiorProjectId) {
+      throw new NotFoundException('Scope item not found');
+    }
     return this.prisma.interiorScopeItem.delete({ where: { id: itemId } });
   }
 
@@ -574,13 +654,104 @@ export class InteriorService {
     });
   }
 
+  /**
+   * Invoice lifecycle: PENDING -> APPROVED -> PAID (client, 2026-09-01).
+   *
+   * Approval can be undone — a wrongly approved invoice is a correction, not an event.
+   * PAID is not undone here: money having moved is a fact, and the way back is to void the
+   * invoice, which also reverses the mirrored Actual so TI spend stops counting it.
+   */
+  private static readonly INVOICE_TRANSITIONS: Record<string, string[]> = {
+    PENDING: ['APPROVED'],
+    APPROVED: ['PENDING', 'PAID'],
+    PAID: [],
+  };
+
+  async updateInvoice(invoiceId: string, input: { status?: string; invoiceNo?: string; invoiceDate?: string }) {
+    const inv = await this.prisma.interiorInvoice.findUnique({ where: { id: invoiceId } });
+    if (!inv) throw new NotFoundException('Invoice not found');
+
+    const data: Prisma.InteriorInvoiceUncheckedUpdateInput = {};
+    if (input.invoiceNo !== undefined) data.invoiceNo = input.invoiceNo.trim() || null;
+    if (input.invoiceDate !== undefined) {
+      data.invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : null;
+    }
+
+    if (input.status !== undefined && input.status !== inv.status) {
+      const allowed = InteriorService.INVOICE_TRANSITIONS[inv.status] ?? [];
+      if (!allowed.includes(input.status)) {
+        throw new ConflictException(
+          `Cannot move an invoice from ${inv.status} to ${input.status}` +
+            (inv.status === 'PAID' ? ' — void it instead, which also reverses the recorded spend' : ''),
+        );
+      }
+      data.status = input.status;
+      // paidAt tracks the PAID state and nothing else, so stepping back to PENDING clears it.
+      data.paidAt = input.status === 'PAID' ? new Date() : null;
+    }
+
+    return this.prisma.interiorInvoice.update({
+      where: { id: invoiceId },
+      data,
+      include: { vendor: { select: { id: true, name: true } } },
+    });
+  }
+
+  /**
+   * Void an invoice and reverse its mirrored `Actual` in the same transaction.
+   *
+   * Deleting only the invoice would leave the Actual behind, and the Actual is what the
+   * budget, cashflow and TI report all read — so a voided invoice would keep counting as
+   * spend everywhere except the one screen it was voided on.
+   */
+  async removeInvoice(invoiceId: string) {
+    const inv = await this.prisma.interiorInvoice.findUnique({ where: { id: invoiceId } });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    return this.prisma.$transaction(async (tx) => {
+      if (inv.actualId) {
+        // deleteMany, not delete: a missing Actual (removed by hand, or by an older code
+        // path) must not block voiding the invoice that points at it.
+        await tx.actual.deleteMany({ where: { id: inv.actualId } });
+      }
+      return tx.interiorInvoice.delete({ where: { id: invoiceId } });
+    });
+  }
+
   // ─────── Snags (punch list) ───────
+
+  /**
+   * Storage keys arrive from the presigned-upload flow and are handed straight to the
+   * signer, so refuse anything that is not a relative bucket key — absolute paths,
+   * traversal, or an external URL. Mirrors DailyLogsService.addPhoto.
+   */
+  private assertStorageKey(path?: string | null) {
+    if (!path) return;
+    if (path.startsWith('/') || path.includes('..') || /^[a-z]+:\/\//i.test(path)) {
+      throw new BadRequestException('Invalid photo path');
+    }
+  }
+
+  /** Attach short-lived signed URLs to a snag's before/after shots. */
+  private async signSnagPhotos<T extends { photoPath: string | null; afterPhotoPath: string | null }>(
+    snags: T[],
+  ) {
+    return Promise.all(
+      snags.map(async (sn) => ({
+        ...sn,
+        photoUrl: sn.photoPath ? await this.storage.signedUrl(sn.photoPath, 3600).catch(() => '') : null,
+        afterPhotoUrl: sn.afterPhotoPath
+          ? await this.storage.signedUrl(sn.afterPhotoPath, 3600).catch(() => '')
+          : null,
+      })),
+    );
+  }
 
   async addSnag(
     interiorProjectId: string,
     input: { description: string; room?: string; assigneeId?: string; dueDate?: string; photoPath?: string },
   ) {
     await this.findById(interiorProjectId);
+    this.assertStorageKey(input.photoPath);
     return this.prisma.snagItem.create({
       data: {
         interiorProjectId,
@@ -601,6 +772,7 @@ export class InteriorService {
   async resolveSnag(snagId: string, input?: { afterPhotoPath?: string }) {
     const snag = await this.prisma.snagItem.findUnique({ where: { id: snagId } });
     if (!snag) throw new NotFoundException('Snag not found');
+    this.assertStorageKey(input?.afterPhotoPath);
     const afterPhotoPath = input?.afterPhotoPath?.trim() || snag.afterPhotoPath;
     if (!afterPhotoPath) throw new BadRequestException(AFTER_PHOTO_REQUIRED);
     return this.prisma.snagItem.update({
@@ -617,16 +789,19 @@ export class InteriorService {
       room?: string;
       assigneeId?: string;
       afterPhotoPath?: string;
+      dueDate?: string;
     },
   ) {
     const snag = await this.prisma.snagItem.findUnique({ where: { id: snagId } });
     if (!snag) throw new NotFoundException('Snag not found');
+    this.assertStorageKey(input.afterPhotoPath);
 
     const data: Prisma.SnagItemUncheckedUpdateInput = {};
     if (input.description !== undefined) data.description = input.description;
     if (input.room !== undefined) data.room = input.room || null;
     if (input.assigneeId !== undefined) data.assigneeId = input.assigneeId || null;
     if (input.afterPhotoPath !== undefined) data.afterPhotoPath = input.afterPhotoPath || null;
+    if (input.dueDate !== undefined) data.dueDate = input.dueDate ? new Date(input.dueDate) : null;
 
     if (input.status !== undefined) {
       const status = input.status as SnagStatus;

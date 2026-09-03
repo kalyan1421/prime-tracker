@@ -855,7 +855,18 @@ describe('DocumentsService.create — attaching to a sale', () => {
       project: { findUnique: jest.fn().mockResolvedValue({ name: 'Rio Ranch' }) },
       sale: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 's1', projectId: 'pr-from-sale', unitId: 'u-from-sale', deletedAt: null,
+          id: 's1', projectId: 'pr-from-sale', unitId: 'u-from-sale', buildingId: null, deletedAt: null,
+        }),
+      },
+      building: {
+        findUnique: jest.fn().mockResolvedValue({ projectId: 'pr-from-building', deletedAt: null }),
+      },
+      lead: {
+        findUnique: jest.fn().mockResolvedValue({ projectId: 'pr-from-lead' }),
+      },
+      unit: {
+        findUnique: jest.fn().mockResolvedValue({
+          deletedAt: null, building: { projectId: 'pr-from-unit' },
         }),
       },
       document: {
@@ -914,6 +925,137 @@ describe('DocumentsService.create — attaching to a sale', () => {
       saleId: null, unitId: 'u1', projectId: 'pr1',
     });
     expect(prisma.sale.findUnique).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The building anchor. `Document.buildingId` and findByBuilding have existed since Doc
+   * Vault Phase 1 and BuildingDetailPage has been POSTing the field the whole time — but
+   * the DTO never declared it, so forbidNonWhitelisted 400'd every building upload, and
+   * create() would have dropped it even if one had got through.
+   */
+  it('files a building upload against the building AND its project', async () => {
+    await service.create(file(), { buildingId: 'b1', category: 'LEGAL' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      buildingId: 'b1',
+      projectId: 'pr-from-building',
+      unitId: null,
+    });
+  });
+
+  it('does not push a building document down onto the building\'s units', async () => {
+    // "Attached to this building" is what the card says. Copying a whole-building lease
+    // onto forty units would make every unit's file unreadable.
+    await service.create(file(), { buildingId: 'b1' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data.unitId).toBeNull();
+  });
+
+  it('refuses a building that does not exist or was deleted, before touching storage', async () => {
+    prisma.building.findUnique.mockResolvedValue(null);
+    await expect(service.create(file(), { buildingId: 'nope' }, 'user-1'))
+      .rejects.toThrow(NotFoundException);
+    expect(storage.upload).not.toHaveBeenCalled();
+
+    prisma.building.findUnique.mockResolvedValue({ projectId: 'p', deletedAt: new Date() });
+    await expect(service.create(file(), { buildingId: 'b1' }, 'user-1'))
+      .rejects.toThrow(NotFoundException);
+  });
+
+  it('keeps an explicit projectId rather than re-deriving it from the building', async () => {
+    await service.create(file(), { buildingId: 'b1', projectId: 'pr-explicit' }, 'user-1');
+    expect(prisma.building.findUnique).not.toHaveBeenCalled();
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      buildingId: 'b1', projectId: 'pr-explicit',
+    });
+  });
+
+  it('files a BUILDING-level sale against the building, since it has no unit to inherit', async () => {
+    // Sale is Unit/Building polymorphic. Without this a building-level deal's Deed carried
+    // no anchor below the project and the building's own card could not show it.
+    prisma.sale.findUnique.mockResolvedValue({
+      id: 's2', projectId: 'pr-from-sale', unitId: null, buildingId: 'b-from-sale', deletedAt: null,
+    });
+    await service.create(file(), { saleId: 's2', category: 'DEED' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      saleId: 's2', buildingId: 'b-from-sale', unitId: null, projectId: 'pr-from-sale',
+    });
+  });
+
+  it('leaves buildingId null for a unit-level sale', async () => {
+    await service.create(file(), { saleId: 's1', category: 'DEED' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      unitId: 'u-from-sale', buildingId: null,
+    });
+  });
+
+  /**
+   * The lead anchor. `Document.leadId` was a column reachable from nowhere — not the DTO,
+   * not create(), not the list endpoint, not any screen.
+   */
+  it('files a lead upload against the lead AND its project', async () => {
+    await service.create(file(), { leadId: 'l1', category: 'BROCHURE' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      leadId: 'l1', projectId: 'pr-from-lead',
+    });
+  });
+
+  it('does NOT copy a lead document onto the lead\'s unit', async () => {
+    // The one place this differs from the sale rule. A unit carries many enquiries and
+    // most never convert; pushing every prospect's brochure onto the unit would bury the
+    // deed under paperwork for deals that never happened.
+    await service.create(file(), { leadId: 'l1', unitId: 'u-caller' }, 'user-1');
+    const data = prisma.document.create.mock.calls[0][0].data;
+    expect(data.leadId).toBe('l1');
+    // The caller's own unitId is still honoured — this asserts nothing was DERIVED from
+    // the lead, not that a unit-scoped upload is forbidden.
+    expect(prisma.lead.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { projectId: true } }),
+    );
+  });
+
+  it('refuses a lead that does not exist, before touching storage', async () => {
+    prisma.lead.findUnique.mockResolvedValue(null);
+    await expect(service.create(file(), { leadId: 'nope' }, 'user-1'))
+      .rejects.toThrow(NotFoundException);
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
+  it('leaves leadId null for an ordinary upload', async () => {
+    await service.create(file(), { projectId: 'pr1' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data.leadId).toBeNull();
+    expect(prisma.lead.findUnique).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The unit anchor resolved no project, so a unit upload landed with projectId null —
+   * visible on the unit and nowhere else, including the project Documents tab that is
+   * where anyone searching the whole project looks.
+   */
+  it('files a unit upload against the unit\'s project too', async () => {
+    await service.create(file(), { unitId: 'u1', category: 'DEED' }, 'user-1');
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      unitId: 'u1', projectId: 'pr-from-unit',
+    });
+  });
+
+  it('refuses a unit that does not exist or was deleted, before touching storage', async () => {
+    prisma.unit.findUnique.mockResolvedValue(null);
+    await expect(service.create(file(), { unitId: 'nope' }, 'user-1'))
+      .rejects.toThrow(NotFoundException);
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
+  it('does not re-derive the project when the caller already gave one', async () => {
+    await service.create(file(), { unitId: 'u1', projectId: 'pr-explicit' }, 'user-1');
+    expect(prisma.unit.findUnique).not.toHaveBeenCalled();
+    expect(prisma.document.create.mock.calls[0][0].data.projectId).toBe('pr-explicit');
+  });
+
+  it('lists by lead alone, never widening to the project', async () => {
+    // A project has many leads; each panel asks only for its own.
+    await service.findByLead('l1');
+    expect(prisma.document.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { leadId: 'l1', deletedAt: null } }),
+    );
   });
 
   it('lists by sale alone, never widening to the unit', async () => {

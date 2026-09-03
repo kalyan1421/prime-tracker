@@ -21,7 +21,8 @@ import {
   useDailyLogs, useUnitComments, useCreateComment, useCustomOptions,
 } from '../hooks/useApi';
 import { DailyLogFeed } from './DailyLogFeed';
-import { PermissionGate, LoadingState } from './ui';
+import { LoadingState } from './ui';
+import { useAuthStore } from '../store/authStore';
 import { fmtDate, errMsg } from '../utils/fmt';
 
 type Item =
@@ -33,7 +34,17 @@ const COMMENT_COLOR: Record<string, 'secondary' | 'primary' | 'success'> = {
 };
 
 export function UnitActivity({ unitId, projectId }: { unitId: string; projectId: string }) {
-  const [composing, setComposing] = useState<'update' | 'comment'>('update');
+  const { hasPermission } = useAuthStore();
+  // Posting a site update needs dailylog:edit (POST /daily-logs is gated on that, not
+  // dailylog:view — several roles hold view without edit); posting a comment needs
+  // comment:edit. These used to share one dailylog:view gate around the whole composer,
+  // which both showed the wrong control to some roles (SALES/MARKETING/LEGAL hold
+  // comment:edit but not dailylog:view, so they never saw the Comment tab at all) and
+  // offered a control the backend would reject for others (dailylog:view-only roles could
+  // open Site update and 403 on submit).
+  const canPostUpdate = hasPermission('dailylog:edit');
+  const canPostComment = hasPermission('comment:edit');
+  const [composing, setComposing] = useState<'update' | 'comment'>(canPostUpdate ? 'update' : 'comment');
 
   const logsQ = useDailyLogs(projectId, undefined, unitId);
   const commentsQ = useUnitComments(unitId);
@@ -52,24 +63,31 @@ export function UnitActivity({ unitId, projectId }: { unitId: string; projectId:
 
   const loading = logsQ.isLoading || commentsQ.isLoading;
 
+  const composerTabs = [
+    ...(canPostUpdate ? (['update'] as const) : []),
+    ...(canPostComment ? (['comment'] as const) : []),
+  ];
+
   return (
     <div className="space-y-4">
-      <PermissionGate permission="dailylog:view">
+      {composerTabs.length > 0 && (
         <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3">
-          <div className="mb-2 flex gap-1">
-            {(['update', 'comment'] as const).map((k) => (
-              <button
-                key={k} type="button" onClick={() => setComposing(k)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  composing === k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                {k === 'update' ? <FiClipboard size={12} /> : <FiMessageSquare size={12} />}
-                {k === 'update' ? 'Site update' : 'Comment'}
-              </button>
-            ))}
-          </div>
-          {composing === 'update' ? (
+          {composerTabs.length > 1 && (
+            <div className="mb-2 flex gap-1">
+              {composerTabs.map((k) => (
+                <button
+                  key={k} type="button" onClick={() => setComposing(k)}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    composing === k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {k === 'update' ? <FiClipboard size={12} /> : <FiMessageSquare size={12} />}
+                  {k === 'update' ? 'Site update' : 'Comment'}
+                </button>
+              ))}
+            </div>
+          )}
+          {(composerTabs.length > 1 ? composing : composerTabs[0]) === 'update' ? (
             /* The full site-update composer — photos, stage pin, date. `showList` off
                because the merged timeline below is already showing the posts. */
             <DailyLogFeed projectId={projectId} unitId={unitId} showList={false} bare />
@@ -77,7 +95,7 @@ export function UnitActivity({ unitId, projectId }: { unitId: string; projectId:
             <CommentComposer unitId={unitId} />
           )}
         </div>
-      </PermissionGate>
+      )}
 
       {loading ? <LoadingState message="Loading activity…" /> : items.length === 0 ? (
         <p className="text-sm text-gray-500">Nothing recorded on this unit yet.</p>

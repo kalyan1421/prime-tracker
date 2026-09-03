@@ -225,12 +225,40 @@ describe('SalesService — discount-approval gate', () => {
 
   it('blocks committing a sale whose discount exceeds the threshold and is unapproved', async () => {
     mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'LOI_SIGNED', projectId: 'pr1', unitId: 'u1', salePrice: 90, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 }); // 10% discount > 5%
+
+    await expect(service.update('s1', { status: 'UNDER_CONTRACT' } as any)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+  });
+
+  it('does NOT ask for approval again on Under Contract -> Closed', async () => {
+    // The commitment — and its Founder sign-off — happened at Under Contract. Re-charging
+    // it at closing stranded already-approved, already-contracted deals at the last step
+    // (client decision 2026-09-02). Same over-threshold, still-unapproved sale as the test
+    // above; only the origin stage differs.
+    mockPrisma.sale.findUnique.mockResolvedValue({
       id: 's1', status: 'UNDER_CONTRACT', projectId: 'pr1', unitId: 'u1', salePrice: 90, discountApprovedAt: null, unit: {},
     });
     mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 }); // 10% discount > 5%
 
-    await expect(service.update('s1', { status: 'CLOSED' } as any)).rejects.toBeInstanceOf(ForbiddenException);
-    expect(mockPrisma.sale.update).not.toHaveBeenCalled();
+    await service.update('s1', { status: 'CLOSED' } as any);
+    expect(mockPrisma.sale.updateMany).toHaveBeenCalled();
+  });
+
+  it('still gates a sale skipping straight from Prospect to Closed', async () => {
+    // Skipping the Under Contract rung must not buy a discount on the approval, for the
+    // same reason requiredDocsForTransition is cumulative over the rungs it crosses.
+    mockPrisma.sale.findUnique.mockResolvedValue({
+      id: 's1', status: 'PROSPECT', projectId: 'pr1', unitId: 'u1', salePrice: 90, discountApprovedAt: null, unit: {},
+    });
+    mockPrisma.unit.findUnique.mockResolvedValue({ askingPrice: 100 });
+
+    // Matched on the message, not just the type: the document gate runs first and also
+    // throws ForbiddenException, so a bare type assertion would pass for the wrong reason.
+    await expect(service.update('s1', { status: 'CLOSED' } as any))
+      .rejects.toThrow(/Founder\/Co-Founder approval/);
   });
 
   it('allows committing once the discount has been approved', async () => {

@@ -100,6 +100,14 @@ export function discountPctOffAsking(
   return ((asking - price) / asking) * 100;
 }
 
+/**
+ * The stages at which a deal is already committed — the buyer is on a contract.
+ *
+ * The discount-approval gate fires on the way IN to this set, once. Moving around inside
+ * it (Under Contract → Closed) is the same commitment being completed, not a new one.
+ */
+const COMMITTED_STAGES: string[] = ['UNDER_CONTRACT', 'CLOSED'];
+
 @Injectable()
 export class SalesService {
   constructor(
@@ -375,10 +383,20 @@ export class SalesService {
       await this.assertStageDocumentsAttached(sale, data.status);
     }
 
-    // Discount-approval gate: committing a sale (UNDER_CONTRACT/CLOSED) with an over-threshold
-    // discount requires Founder/Co-Founder sign-off first. Single approval (client decision).
+    // Discount-approval gate: COMMITTING a sale with an over-threshold discount requires
+    // Founder/Co-Founder sign-off first. Single approval (client decision).
+    //
+    // "Committing" is the moment the deal stops being a prospect — the move INTO
+    // UNDER_CONTRACT (or straight into CLOSED from before it). Under Contract → Closed is
+    // NOT a second commitment: the price the Founder signed off on is the price already on
+    // the contract, and asking again at closing meant a deal that had been approved and
+    // contracted sat blocked at the last step for an approval it had already received
+    // (client decision 2026-09-02). Both rungs are in COMMITTED_STAGES, so moving between
+    // them — in either direction — is ungated, exactly like the document gate above.
     const committing =
-      (data.status === 'UNDER_CONTRACT' || data.status === 'CLOSED') && data.status !== sale.status;
+      (data.status === 'UNDER_CONTRACT' || data.status === 'CLOSED') &&
+      data.status !== sale.status &&
+      !COMMITTED_STAGES.includes(sale.status);
     if (committing) {
       await this.assertDiscountApproved(sale);
     }

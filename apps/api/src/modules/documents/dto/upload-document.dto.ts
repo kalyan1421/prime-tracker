@@ -19,6 +19,20 @@ export class UploadDocumentDto {
   unitId?: string;
 
   /**
+   * Attach this document to a BUILDING — whole-building leases, building-level contracts,
+   * anything about the structure rather than one unit inside it.
+   *
+   * `Document.buildingId` and `DocumentsService.findByBuilding` have both existed since
+   * Doc Vault Phase 1, and BuildingDetailPage has been sending this field in its FormData
+   * the whole time. It was never on this DTO, so `forbidNonWhitelisted` rejected every one
+   * of those uploads with "property buildingId should not exist" — the building's
+   * Documents card offered an Upload button that could not succeed, and the panel below it
+   * could only ever have shown rows put there by a seed script.
+   */
+  @IsOptional() @IsString()
+  buildingId?: string;
+
+  /**
    * Attach this document to a SALE.
    *
    * Without it the stage gate could not be satisfied by any route. The gate reads
@@ -34,6 +48,21 @@ export class UploadDocumentDto {
    */
   @IsOptional() @IsString()
   saleId?: string;
+
+  /**
+   * Attach this document to a LEAD — the brochure that was sent, the LOI draft that came
+   * back, the ID proof collected at a site visit.
+   *
+   * `Document.leadId` has existed since the column was added and was reachable from
+   * nowhere: not this DTO, not `create()`, not the list endpoint, not the UI. A lead's
+   * paperwork had to be filed against the project with nothing tying it to the enquiry it
+   * belonged to.
+   *
+   * Unlike a sale, a lead document is NOT copied onto the lead's unit — see
+   * DocumentsService.create for why.
+   */
+  @IsOptional() @IsString()
+  leadId?: string;
 
   @IsOptional() @IsString()
   interiorProjectId?: string;

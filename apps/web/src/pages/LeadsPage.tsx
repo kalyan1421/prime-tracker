@@ -17,6 +17,7 @@ import {
 import { fmtDate, errMsg } from '../utils/fmt';
 import { LoadingState, ErrorState, EmptyState, Pagination } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
+import { LeadDocumentsPanel } from '../components/LeadDocumentsPanel';
 import { usePagination } from '../hooks/usePagination';
 
 const LEAD_SOURCES = ['WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'WALK_IN', 'SIGNAGE', 'COLD_CALL', 'EMAIL_CAMPAIGN', 'BROKER', 'LOOPNET', 'CREXI', 'OTHER'];
@@ -355,6 +356,8 @@ function LeadDetailPanel({ lead: selected }: { lead: any }) {
       )}
 
       <LeadInterests leadId={lead.id} projectId={lead.projectId} />
+
+      <LeadDocumentsPanel leadId={lead.id} />
 
       <div className="flex-1 overflow-auto">
         <ActivityTimeline leadId={lead.id} />

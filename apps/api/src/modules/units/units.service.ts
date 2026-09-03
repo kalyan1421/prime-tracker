@@ -780,6 +780,90 @@ export class UnitsService {
   }
 
   /**
+   * Take a unit back OFF the site tracker, leaving the unit itself alone.
+   *
+   * The reverse of "Track a unit", which the board shipped without: a unit put on the board
+   * by mistake, or one whose site work was recorded against the wrong row, could be edited
+   * forever and never removed. Clearing one field at a time does not do it either — the grid
+   * calls a unit tracked if ANY of four signals is set (see SiteTrackerService.grid), so a
+   * half-cleared unit stays on the board looking like live work with nothing on it.
+   *
+   * This clears all four in one transaction: the checklist, the blocker, the priority and
+   * the owners. It is NOT a delete of the unit — the unit keeps its number,
+   * its lease, its sale and its place in inventory, and can be tracked again tomorrow.
+   *
+   * Site updates are deliberately untouched. They are what people said about this unit, they
+   * are readable from the unit page, and losing them is not what "remove from the board"
+   * means to anyone who presses it. Stage photos do go, with their stages.
+   */
+  async untrackFromSiteTracker(id: string) {
+    const unit = await this.prisma.unit.findUnique({
+      where: { id },
+      select: { id: true, deletedAt: true },
+    });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    // Counts and clears run inside ONE interactive transaction, not a read pass followed by
+    // a separate write array — the array form let another request (a stage added, an
+    // assignee changed) land between the counting queries and the delete/update, so what
+    // this reported back as "what was removed" could disagree with what the transaction
+    // actually removed. Reading and writing against the same transactional snapshot closes
+    // that window; Prisma's default isolation is enough here since nothing outside this
+    // transaction can observe the intermediate state either way.
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.unit.findUnique({
+        where: { id },
+        select: { blockerStatus: true },
+      });
+
+      const stages = await tx.unitConstructionStage.findMany({
+        where: { unitId: id },
+        select: { id: true },
+      });
+      const stageIds = stages.map((s) => s.id);
+
+      const [photosDeleted, updatesUnpinned, assigneesCleared] = await Promise.all([
+        stageIds.length
+          ? tx.unitConstructionStagePhoto.count({ where: { stageId: { in: stageIds } } })
+          : Promise.resolve(0),
+        // SetNull, not Cascade: the update survives its stage and keeps its place in the feed.
+        stageIds.length
+          ? tx.dailyLog.count({ where: { stageId: { in: stageIds } } })
+          : Promise.resolve(0),
+        tx.unitAssignee.count({ where: { unitId: id } }),
+      ]);
+
+      await tx.unitConstructionStage.deleteMany({ where: { unitId: id } });
+      await tx.unitAssignee.deleteMany({ where: { unitId: id } });
+      await tx.unit.update({
+        where: { id },
+        data: {
+          blockerStatus: null,
+          blockerReason: null,
+          // Owned here and in updateSiteTracker only — leaving it set would date a blocker
+          // that no longer exists.
+          blockerSince: null,
+          sitePriority: null,
+          // The template stamp goes with the stages it describes. Left behind, the unit
+          // claims provenance from a checklist it no longer has — and if it is tracked
+          // again later from a different template, that stale stamp is what the drift
+          // reporting and the board's template chip would read.
+          templateId: null,
+          templateVersion: null,
+        },
+      });
+
+      return {
+        stagesDeleted: stages.length,
+        photosDeleted,
+        updatesUnpinned,
+        assigneesCleared,
+        blockerCleared: before?.blockerStatus !== null,
+      };
+    });
+  }
+
+  /**
    * Validates a free-text value against its CustomOption category. Mirrors how unitType is
    * handled elsewhere: the value set is org-editable, so this checks membership at write
    * time rather than pinning an enum into the schema. null/'' clears the field.

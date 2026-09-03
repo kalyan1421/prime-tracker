@@ -7,6 +7,7 @@ import {
 } from 'react-icons/fi';
 import {
   useBuilding, useUnits, useLeases, useLoans, useDocuments, useBuildingFinancialSummary,
+  useBuildingBudgetLines,
   useUploadDocument,
 } from '../hooks/useApi';
 import { BuildingFormModal } from '../components/BuildingFormModal';
@@ -17,6 +18,7 @@ import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, StatCard } from '../components/ui';
 import { ObligationSummaryCard } from '../components/ObligationSummaryCard';
 import { ConstructionTemplateEditor } from '../components/ConstructionTemplateEditor';
+import { InteriorPanel } from '../components/InteriorPanel';
 
 // Unit status palette — re-uses the dashboard's status semantics so users only learn one.
 const STATUS_FILL: Record<string, string> = {
@@ -76,6 +78,10 @@ export default function BuildingDetailPage() {
   const { data: buildingLoans } = useLoans(projectId || '', buildingId);
   const { data: docs } = useDocuments({ buildingId });
   const { data: budgetSummary } = useBuildingFinancialSummary(canViewBudget ? (buildingId || '') : '');
+  // The lines behind the roll-up. BudgetLine carries a buildingId and only the four
+  // totals were ever rendered, so the card could say "committed $43,500" and never what
+  // against.
+  const { data: buildingBudgetLines = [] } = useBuildingBudgetLines(canViewBudget ? (buildingId || '') : '');
 
   const units = useMemo(() => (buildingUnits as any[]) || [], [buildingUnits]);
 
@@ -159,7 +165,13 @@ export default function BuildingDetailPage() {
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-7xl mx-auto">
       {/* Header */}
-      <Link to={`/projects/${projectId}/buildings`} className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline">
+      {/* Buildings is a SECTION of the Construction tab, not a tab. This used to point at
+          `/projects/:id/buildings`, which is not in TAB_MAP — so it silently fell through
+          to Overview while the URL still claimed "buildings". */}
+      <Link
+        to={`/projects/${projectId}/construction?section=buildings`}
+        className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
+      >
         <FiArrowLeft /> Back to buildings
       </Link>
 
@@ -225,6 +237,30 @@ export default function BuildingDetailPage() {
                 colorScheme={Number((budgetSummary as any)?.variance ?? 0) >= 0 ? 'success' : 'danger'}
               />
             </div>
+            {buildingBudgetLines.length > 0 && (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-left">
+                      <th className="px-2 py-1.5 text-xs font-semibold uppercase text-gray-500">Line</th>
+                      <th className="px-2 py-1.5 text-xs font-semibold uppercase text-gray-500">Category</th>
+                      <th className="px-2 py-1.5 text-right text-xs font-semibold uppercase text-gray-500">Budget</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {buildingBudgetLines.map((b: any) => (
+                      <tr key={b.id} className="border-b border-gray-50">
+                        <td className="px-2 py-1.5 text-gray-800">{b.description || '\u2014'}</td>
+                        <td className="px-2 py-1.5 text-xs text-gray-500">{b.category?.replace(/_/g, ' ') ?? '\u2014'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-gray-700">
+                          {fmtMoney(Number(b.revisedAmt ?? b.budgetAmt ?? 0))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CardBody>
         </Card>
       )}
@@ -434,6 +470,19 @@ export default function BuildingDetailPage() {
           </CardBody>
         </Card>
       </div>
+
+      {/* Interior / Fit-Out anchored to the BUILDING rather than a unit — a whole floor, a
+          common area, or a LOT with no units to hang it off. The data model has always
+          allowed it; this is the first place in the app that can create one. */}
+      {hasPermission('interior:view') && (
+        <div id="section-interior">
+          <InteriorPanel
+            buildingId={buildingId!}
+            buildingName={b.name}
+            unitSqft={b.totalSqft != null ? Number(b.totalSqft) : undefined}
+          />
+        </div>
+      )}
 
       {/* Write-action modals. Each is create/edit only — deletion stays where the
           confirmation flow and its force-delete rules already live. */}
