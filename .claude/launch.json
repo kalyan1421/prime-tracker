@@ -21,8 +21,7 @@
         "run",
         "dev"
       ],
-      "autoPort": false,
-      "port": 3041
+      "autoPort": true
     }
   ]
 }
