@@ -47,7 +47,7 @@ interface Row {
   project: { id: string; name: string };
   building: { id: string; name: string };
   blockerStatus: string | null; blockerReason: string | null; blockerDays: number | null;
-  sitePriority: string | null; workType: string | null;
+  sitePriority: string | null;
   template: { id: string; name: string; version: number; stampedVersion: number | null } | null;
   assignees: Assignee[];
   tenantName?: string | null;

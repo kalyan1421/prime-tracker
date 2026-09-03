@@ -384,13 +384,6 @@ model Unit {
   // PRIORITY column also carries a "DONE" value, which mixes priority with completion and
   // is why its own group battery reports the wrong number. Completion is the checklist %.
   sitePriority  String?
-  // CustomOption category "work_type". On the board this is fused with the tenant name in
-  // one free-text column ("INTERIOR FINISHOUT" and "QAMARIA COFFEE" in the same field);
-  // split here because work type is what selects the checklist template below, while the
-  // tenant is already modelled properly via Lease -> LeaseTenantAssignment and must be
-  // read from there rather than re-typed.
-  workType      String?
-
   // ── Checklist template provenance (Phase 2) ───────────────────────────────
   // Which template this unit's checklist was built from, stamped once at apply time.
   // This is the field the source board lacks, and the direct cause of the five divergent
@@ -448,7 +441,6 @@ model Unit {
   // The Site Tracker's default sort is "blocked first"; the partial-ish shape of this
   // index also serves the "how many are blocked right now" rail count.
   @@index([blockerStatus, deletedAt])
-  @@index([workType])
   @@index([templateId])
   @@map("units")
 }

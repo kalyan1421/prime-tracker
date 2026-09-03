@@ -679,7 +679,6 @@ export class UnitsService {
       blockerStatus?: 'YES' | 'NO' | null;
       blockerReason?: string | null;
       sitePriority?: string | null;
-      workType?: string | null;
     },
     userId?: string,
   ) {
@@ -694,10 +693,6 @@ export class UnitsService {
     if (input.sitePriority !== undefined) {
       await this.assertOption('site_priority', input.sitePriority);
       data.sitePriority = input.sitePriority;
-    }
-    if (input.workType !== undefined) {
-      await this.assertOption('work_type', input.workType);
-      data.workType = input.workType;
     }
 
     // Reason may be edited on its own while a unit stays blocked.

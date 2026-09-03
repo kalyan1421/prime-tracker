@@ -12,7 +12,7 @@ function unitRow(over: any = {}) {
   return {
     id: 'u1', unitNumber: '101', status: 'UNDER_CONSTRUCTION',
     blockerStatus: null, blockerReason: null, blockerSince: null,
-    sitePriority: null, workType: 'SHELL', templateVersion: 1,
+    sitePriority: null, templateVersion: 1,
     building: { id: 'b1', name: 'Building 1', project: { id: 'p1', name: 'Project 1' } },
     template: { id: 't1', name: 'Ground-up Shell', version: 1 },
     siteAssignees: [],
@@ -205,7 +205,6 @@ describe('SiteTrackerService.grid — what counts as "on the tracker"', () => {
       { constructionStages: { some: {} } },
       { blockerStatus: { not: null } },
       { sitePriority: { not: null } },
-      { workType: { not: null } },
       { siteAssignees: { some: {} } },
     ]);
   });

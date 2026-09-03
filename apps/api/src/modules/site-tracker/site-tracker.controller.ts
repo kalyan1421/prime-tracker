@@ -26,13 +26,12 @@ export class SiteTrackerController {
     @Query('projectId') projectId?: string,
     @Query('buildingId') buildingId?: string,
     @Query('blockerStatus') blockerStatus?: string,
-    @Query('workType') workType?: string,
     @Query('sitePriority') sitePriority?: string,
     @Query('search') search?: string,
     @Query('includeUntracked') includeUntracked?: string,
   ) {
     return this.service.grid(
-      { projectId, buildingId, blockerStatus, workType, sitePriority, search,
+      { projectId, buildingId, blockerStatus, sitePriority, search,
         includeUntracked: includeUntracked === 'true' },
       { userId, role, roles, permissions: permissions ?? [] },
     );

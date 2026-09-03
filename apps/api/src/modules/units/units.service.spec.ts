@@ -16,7 +16,6 @@ const mockPrisma: any = {
 const mockCustomOptions = {
   getSystemDefaults: () => ({
     site_priority: [{ value: 'LOW' }, { value: 'MEDIUM' }, { value: 'HIGH' }],
-    work_type: [{ value: 'SHELL' }, { value: 'INTERIOR_FINISHOUT' }, { value: 'PERMIT' }],
   }),
 };
 

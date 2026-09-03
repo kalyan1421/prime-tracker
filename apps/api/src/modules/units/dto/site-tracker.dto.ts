@@ -21,9 +21,6 @@ export class UpdateSiteTrackerDto {
 
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() @MaxLength(100)
   sitePriority?: string | null;
-
-  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() @MaxLength(100)
-  workType?: string | null;
 }
 
 export class SetUnitAssigneesDto {

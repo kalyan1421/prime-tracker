@@ -12,7 +12,6 @@ const mockPrisma: any = {
 const mockCustomOptions = {
   getSystemDefaults: () => ({
     site_priority: [{ value: 'LOW' }, { value: 'MEDIUM' }, { value: 'HIGH' }],
-    work_type: [{ value: 'SHELL' }, { value: 'INTERIOR_FINISHOUT' }, { value: 'PERMIT' }],
   }),
 };
 
@@ -136,18 +135,10 @@ describe('UnitsService.updateSiteTracker — option validation', () => {
     expect(writtenData().sitePriority).toBe('CRITICAL');
   });
 
-  it('rejects an unknown work type', async () => {
-    existing();
-    await expect(
-      makeService().updateSiteTracker('u1', { workType: 'DEMOLITION' }),
-    ).rejects.toThrow(BadRequestException);
-  });
-
   it('allows clearing a field with null without hitting validation', async () => {
     existing();
-    await makeService().updateSiteTracker('u1', { workType: null, sitePriority: null });
+    await makeService().updateSiteTracker('u1', { sitePriority: null });
     const data = writtenData();
-    expect(data.workType).toBeNull();
     expect(data.sitePriority).toBeNull();
   });
 

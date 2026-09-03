@@ -12,7 +12,6 @@ export interface SiteTrackerFilters {
   projectId?: string;
   buildingId?: string;
   blockerStatus?: string;
-  workType?: string;
   sitePriority?: string;
   search?: string;
   /** Opt in to units that are not on the tracker at all — see the note in grid(). */
@@ -69,13 +68,12 @@ export class SiteTrackerService {
     // project" — and this grid has to agree with it or the two disagree on screen.
     //
     // A unit counts as tracked once ANYTHING about its site work has been recorded: a
-    // checklist, a blocker call, a priority, a work type, or an owner.
+    // checklist, a blocker call, a priority, or an owner.
     if (!filters.includeUntracked) {
       where.OR = [
         { constructionStages: { some: {} } },
         { blockerStatus: { not: null } },
         { sitePriority: { not: null } },
-        { workType: { not: null } },
         { siteAssignees: { some: {} } },
       ];
     }
@@ -92,7 +90,6 @@ export class SiteTrackerService {
       // state that a plain equality filter cannot express.
       where.blockerStatus = filters.blockerStatus === 'NONE' ? null : filters.blockerStatus;
     }
-    if (filters.workType) where.workType = filters.workType;
     if (filters.sitePriority) where.sitePriority = filters.sitePriority;
 
     const units = await this.prisma.unit.findMany({
@@ -103,7 +100,7 @@ export class SiteTrackerService {
         // that form needs rather than making it fetch the unit again.
         unitType: true, sqft: true, askingPrice: true, askingRent: true, notes: true,
         blockerStatus: true, blockerReason: true, blockerSince: true,
-        sitePriority: true, workType: true, templateVersion: true,
+        sitePriority: true, templateVersion: true,
         building: {
           select: { id: true, name: true, project: { select: { id: true, name: true } } },
         },
@@ -186,7 +183,6 @@ export class SiteTrackerService {
           ? Math.floor((now - new Date(u.blockerSince).getTime()) / DAY_MS)
           : null,
         sitePriority: u.sitePriority,
-        workType: u.workType,
         template: u.template
           ? { ...u.template, stampedVersion: u.templateVersion }
           : null,

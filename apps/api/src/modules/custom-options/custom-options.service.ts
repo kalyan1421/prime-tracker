@@ -149,14 +149,6 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'MEDIUM', label: 'Medium', color: 'warning' },
     { value: 'HIGH',   label: 'High',   color: 'danger'  },
   ],
-  // Selects which checklist template a unit is seeded from (checklist_templates.workType).
-  // Adding a value here does NOT create a template — a work type with no active template
-  // simply has no default checklist, which the apply endpoint reports plainly.
-  work_type: [
-    { value: 'SHELL',              label: 'Shell',              color: 'secondary' },
-    { value: 'INTERIOR_FINISHOUT', label: 'Interior Finish-out', color: 'primary'   },
-    { value: 'PERMIT',             label: 'Permit Only',         color: 'default'   },
-  ],
 };
 
 @Injectable()
