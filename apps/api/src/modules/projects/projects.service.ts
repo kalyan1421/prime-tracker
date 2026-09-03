@@ -534,10 +534,15 @@ export class ProjectsService {
       },
     });
 
-    // Lightweight: only the phase field is needed for phase-distribution counts.
+    // Phase-distribution and unit-inventory counts span every non-deleted project
+    // (not just ACTIVE ones) — a paused/on-hold project's unsold units are still
+    // real, sellable inventory and shouldn't silently vanish from availability stats.
     const allProjects = await this.prisma.project.findMany({
       where: { deletedAt: null, ...scopeWhere },
-      select: { phase: true },
+      select: {
+        phase: true,
+        buildings: { select: { units: { select: { status: true } } } },
+      },
     });
 
     let totalBudget = 0;
@@ -559,6 +564,11 @@ export class ProjectsService {
 
     for (const p of allProjects) {
       projectsByPhase[p.phase] = (projectsByPhase[p.phase] || 0) + 1;
+      for (const building of p.buildings) {
+        for (const unit of building.units) {
+          unitsByStatus[unit.status] = (unitsByStatus[unit.status] || 0) + 1;
+        }
+      }
     }
 
     for (const p of projects) {
@@ -585,13 +595,6 @@ export class ProjectsService {
       // Monthly mortgage payments
       for (const loan of p.loans) {
         totalMonthlyMortgage += Number(loan.monthlyPayment || 0);
-      }
-
-      // Unit status counts
-      for (const building of p.buildings) {
-        for (const unit of building.units) {
-          unitsByStatus[unit.status] = (unitsByStatus[unit.status] || 0) + 1;
-        }
       }
 
       // Budget overrun alert — construction spend vs the construction budget on both
@@ -681,8 +684,10 @@ export class ProjectsService {
           projectName: p.name,
           dueDate: m.dueDate.toISOString(),
           status: m.status,
+          phase: m.phase,
         })),
       )
+      .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
       .slice(0, 10);
 
     // Hide budget/spend/debt aggregates from viewers without budget:view.

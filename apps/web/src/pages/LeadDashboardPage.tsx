@@ -8,14 +8,17 @@ import {
   FiTarget, FiUsers, FiTrendingUp, FiClock, FiLink2, FiMail, FiPhone,
   FiAlertCircle, FiActivity,
 } from 'react-icons/fi';
-import { useLeadDashboard, useProjects } from '../hooks/useApi';
+import { useLeadDashboard, useProjects, useCustomOptions } from '../hooks/useApi';
 import { fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, StatCard } from '../components/ui';
 import { useState } from 'react';
 
+// Fallback order/coloring for the built-in statuses — warm at the top of the funnel,
+// cool/successful at the bottom. lead_status is an extensible CustomOption category
+// (admins can add more, same as construction_stage), so this is only a fallback: the
+// live funnel order/colors come from useCustomOptions('lead_status') below, with this
+// map used only when that catalogue hasn't loaded yet or a status has no configured color.
 const STATUS_ORDER = ['NEW', 'CONTACTED', 'POTENTIAL', 'QUALIFIED', 'SITE_VISIT', 'PROPOSAL_SENT', 'NEGOTIATING', 'CONVERTED', 'LOST', 'DEAD'];
-
-// Funnel coloring — warm at the top of the funnel, cool/successful at the bottom.
 const STATUS_FILL: Record<string, string> = {
   NEW:           '#94a3b8',
   CONTACTED:     '#60a5fa',
@@ -28,6 +31,7 @@ const STATUS_FILL: Record<string, string> = {
   LOST:          '#ef4444',
   DEAD:          '#71717a',
 };
+const DEFAULT_STATUS_FILL = '#94a3b8';
 
 // Source pie colors — one stable color per known source so the legend stays consistent across reloads.
 const SOURCE_FILL = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#6366f1', '#94a3b8'];
@@ -41,13 +45,27 @@ export default function LeadDashboardPage() {
   const [projectId, setProjectId] = useState<string>('');
   const { data: projects } = useProjects();
   const { data, isLoading, error } = useLeadDashboard(projectId ? { projectId } : undefined);
+  const { data: statusOpts = [] } = useCustomOptions('lead_status');
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState message="Failed to load dashboard" />;
   if (!data) return null;
 
   const d = data as any;
-  const funnel = STATUS_ORDER.map((s) => ({ status: s, count: d.byStatus[s] ?? 0 }));
+
+  // Funnel order: the live lead_status catalogue (admin-configurable, sorted), falling
+  // back to the built-in order for the statuses it hasn't loaded yet — plus any status
+  // present in real data that isn't in either list, so a lead never silently vanishes
+  // from the chart just because its status wasn't in a hardcoded array.
+  const catalogueOrder = statusOpts.length > 0
+    ? [...statusOpts].sort((a, b) => a.sortOrder - b.sortOrder).map((o) => o.value)
+    : STATUS_ORDER;
+  const knownStatuses = new Set(catalogueOrder);
+  const extraStatuses = Object.keys(d.byStatus).filter((s) => !knownStatuses.has(s));
+  const statusOrder = [...catalogueOrder, ...extraStatuses];
+  const statusColor = (status: string) =>
+    STATUS_FILL[status] ?? statusOpts.find((o) => o.value === status)?.color ?? DEFAULT_STATUS_FILL;
+  const funnel = statusOrder.map((s) => ({ status: s, count: d.byStatus[s] ?? 0 }));
   const conversionPct = d.conversionRate != null ? (d.conversionRate * 100).toFixed(1) : '—';
 
   // Attribution donut data
@@ -87,7 +105,7 @@ export default function LeadDashboardPage() {
           Object.entries(d.byStatus).filter(([s]) => !['LOST', 'DEAD', 'CONVERTED'].includes(s))
             .reduce((sum: number, [, n]) => sum + (n as number), 0).toString()
         } />
-        <StatCard label="Stale (14d+)" value={d.staleLeads.length.toString()} />
+        <StatCard label="Stale (14d+)" value={(d.staleLeadsCount ?? d.staleLeads.length).toString()} />
       </div>
 
       {/* Pipeline funnel + Attribution */}
@@ -104,7 +122,7 @@ export default function LeadDashboardPage() {
                 <Tooltip />
                 <Bar dataKey="count" radius={[0, 6, 6, 0]}>
                   {funnel.map((row) => (
-                    <Cell key={row.status} fill={STATUS_FILL[row.status]} />
+                    <Cell key={row.status} fill={statusColor(row.status)} />
                   ))}
                 </Bar>
               </BarChart>
@@ -195,7 +213,7 @@ export default function LeadDashboardPage() {
                       <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 -mx-2 px-2 rounded">
                         <div className="flex items-center gap-2 min-w-0">
                           <p className="text-sm text-gray-800 truncate">{l.name || <span className="italic text-gray-500">Unnamed</span>}</p>
-                          <Chip size="sm" variant="flat" className="text-[11px]" style={{ backgroundColor: STATUS_FILL[l.status] + '20', color: STATUS_FILL[l.status] }}>
+                          <Chip size="sm" variant="flat" className="text-[11px]" style={{ backgroundColor: statusColor(l.status) + '20', color: statusColor(l.status) }}>
                             {l.status.replace('_', ' ')}
                           </Chip>
                           {l.project?.name && <span className="text-xs text-blue-600 truncate">{l.project.name}</span>}

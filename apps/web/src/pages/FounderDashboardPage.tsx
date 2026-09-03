@@ -103,7 +103,7 @@ export default function FounderDashboardPage() {
                 colorScheme={d.budgetVariance >= 0 ? 'green' : 'red'}
                 variant="construction"
               />
-              <StatCard label="Total Loan Available" value={fmt(d.loanBook?.totalPrincipal)} helpText={`${fmt(d.loanBook?.totalMonthlyPayment)}/mo service`} variant="construction" colorScheme="purple" />
+              <StatCard label="Total Loan Available" value={fmt(d.loanBook?.totalAvailable)} helpText="undrawn principal" variant="construction" colorScheme="purple" />
             </div>
           </CardBody>
         </Card>
@@ -115,7 +115,7 @@ export default function FounderDashboardPage() {
           </CardHeader>
           <CardBody className="pt-0">
             <div className="grid grid-cols-2 gap-3">
-              <StatCard label="Closed Sales YTD" value={fmt(d.closedSalesRevenue)} variant="revenue" colorScheme="green" />
+              <StatCard label="Closed Sales (All-Time)" value={fmt(d.closedSalesRevenue)} variant="revenue" colorScheme="green" />
               <StatCard label="Projected Unsold Value" value={fmt(d.projectedUnsoldValue)} helpText="available units" variant="revenue" colorScheme="brand" />
               <StatCard label="Under Contract Value" value={fmt(d.underContractValue)} variant="revenue" colorScheme="orange" />
               <StatCard label="Monthly Lease Income" value={fmt(d.totalMonthlyLeaseIncome)} helpText={`${fmt((d.totalMonthlyLeaseIncome ?? 0) * 12)}/yr`} variant="revenue" colorScheme="teal" />

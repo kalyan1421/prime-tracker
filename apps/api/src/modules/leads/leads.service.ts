@@ -361,28 +361,36 @@ export class LeadsService {
     // Stale leads — no activity (lead.updatedAt is bumped on activity log) in 14+ days
     // and not in a terminal status. Surfaces what's rotting.
     const staleCutoff = new Date(Date.now() - 14 * 86_400_000);
-    const staleLeads = await this.prisma.lead.findMany({
-      where: {
-        ...where,
-        updatedAt: { lt: staleCutoff },
-        status: { notIn: ['CONVERTED', 'LOST', 'DEAD'] },
-      },
-      select: {
-        id: true,
-        name: true,
-        status: true,
-        source: true,
-        updatedAt: true,
-        project: { select: { id: true, name: true } },
-        assignedUser: { select: { id: true, name: true } },
-      },
-      orderBy: { updatedAt: 'asc' },
-      take: 10,
-    });
+    const staleWhere: Prisma.LeadWhereInput = {
+      ...where,
+      updatedAt: { lt: staleCutoff },
+      status: { notIn: ['CONVERTED', 'LOST', 'DEAD'] },
+    };
+    // The list below is capped at 10 for display; the KPI tile needs the true total,
+    // not the length of the capped list (which silently ceilinged at 10).
+    const [staleLeadsCount, staleLeads] = await Promise.all([
+      this.prisma.lead.count({ where: staleWhere }),
+      this.prisma.lead.findMany({
+        where: staleWhere,
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          source: true,
+          updatedAt: true,
+          project: { select: { id: true, name: true } },
+          assignedUser: { select: { id: true, name: true } },
+        },
+        orderBy: { updatedAt: 'asc' },
+        take: 10,
+      }),
+    ]);
 
-    // Recent activity — across all leads in scope, last 15 events.
+    // Recent activity — across all leads in scope, last 15 events. Scoped the same way
+    // `where` above is: an unscoped projectId param previously fell through to `{}`,
+    // leaking activity from projects outside a restricted viewer's access.
     const recentActivity = await this.prisma.leadActivity.findMany({
-      where: projectId ? { lead: { projectId } } : {},
+      where: { lead: where },
       select: {
         id: true,
         type: true,
@@ -414,6 +422,7 @@ export class LeadsService {
         unattached: totalLeads - withUnit - withBuilding,
       },
       staleLeads,
+      staleLeadsCount,
       recentActivity,
     };
   }

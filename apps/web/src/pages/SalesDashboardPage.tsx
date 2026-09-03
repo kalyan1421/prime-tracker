@@ -57,7 +57,7 @@ export default function SalesDashboardPage() {
         <StatCard label="Available Units" value={String(inv.available ?? 0)} variant="neutral" colorScheme="gray" onClick={() => navigate('/inventory')} />
         <StatCard label="Under Contract" value={String(inv.underContract ?? 0)} variant="revenue" colorScheme="brand" onClick={() => navigate('/inventory')} />
         <StatCard label="Total Pipeline" value={fmt(d.pipelineTotalValue)} variant="revenue" colorScheme="green" onClick={() => navigate('/reports/sales')} />
-        <StatCard label="Closed Sales YTD" value={fmt(d.closedSalesRevenue)} variant="revenue" colorScheme="purple" onClick={() => navigate('/reports/sales')} />
+        <StatCard label="Closed Sales (All-Time)" value={fmt(d.closedSalesRevenue)} variant="revenue" colorScheme="purple" onClick={() => navigate('/reports/sales')} />
         <StatCard label="Monthly Lease Income" value={fmt(d.monthlyLeaseIncome)} helpText={`${fmt(d.monthlyLeaseIncome * 12)}/yr`} variant="revenue" colorScheme="teal" onClick={() => navigate('/reports/sales')} />
         <StatCard label="Active Leads" value={String(d.leadStats?.active ?? 0)} helpText={`${d.leadStats?.thisMonthConverted ?? 0} converted this month`} variant="marketing" colorScheme="purple" onClick={() => navigate('/leads')} />
       </div>

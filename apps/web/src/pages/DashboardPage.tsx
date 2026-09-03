@@ -95,7 +95,7 @@ export default function DashboardPage() {
           <StatCard
             label="Total Budget"
             value={fmt(d.totalBudget)}
-            helpText={`${d.totalProjects} projects`}
+            helpText={`${d.activeProjects} active projects`}
             colorScheme="brand"
             variant="construction"
           />

@@ -3175,7 +3175,10 @@ export function useSalePayments(saleId?: string) {
 }
 
 export function useReceivables(weeks = 4) {
-  const can = useCan('interior:finance');
+  // Must match the backend's actual guard — GET /sales/receivables requires
+  // financial:view, not interior:finance. The mismatched gate silently hid this
+  // widget from FINANCE/EXECUTIVE (who have financial:view but not interior:finance).
+  const can = useCan('financial:view');
   return useQuery({
     queryKey: ['receivables', weeks],
     queryFn: () => api.get('/sales/receivables', { params: { weeks } }).then((r) => r.data),

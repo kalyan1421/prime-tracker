@@ -92,6 +92,7 @@ export class DashboardService {
     let underContractValue = 0;
     let totalLoanPrincipal = 0;
     let totalLoanMonthlyPayment = 0;
+    let totalLoanFunded = 0;
 
     const unitsByStatus: Record<string, number> = {};
     const projectsByPhase: Record<string, number> = {};
@@ -127,6 +128,9 @@ export class DashboardService {
         totalLoanPrincipal += Number(loan.principalAmt ?? 0);
         totalLoanMonthlyPayment += Number(loan.monthlyPayment ?? 0);
         totalMonthlyMortgage += Number(loan.monthlyPayment ?? 0);
+        for (const draw of (loan as any).drawRequests ?? []) {
+          if (draw.status === 'FUNDED') totalLoanFunded += Number(draw.amount ?? 0);
+        }
       }
 
       // Units / leases
@@ -240,6 +244,8 @@ export class DashboardService {
       loanBook: {
         totalPrincipal: totalLoanPrincipal,
         totalMonthlyPayment: totalLoanMonthlyPayment,
+        /** Principal not yet drawn down (FUNDED draw requests) — remaining borrowing headroom. */
+        totalAvailable: Math.max(0, totalLoanPrincipal - totalLoanFunded),
       },
       unitsByStatus,
       projectsByPhase,
@@ -347,22 +353,23 @@ export class DashboardService {
 
     const budgetSpentPct = totalBudget > 0 ? totalActuals / totalBudget : 0;
 
-    // Recent milestones (overdue first)
-    const allMilestones: any[] = [];
+    // Recent milestones (overdue first). Every OVERDUE milestone is kept — the
+    // OverdueMilestonesCard's badge/list must never disagree with overdueMilestoneCount
+    // above, which is unbounded. Only the IN_PROGRESS tail is capped, to bound payload
+    // size on a portfolio with many active milestones.
+    const overdueMilestones: any[] = [];
+    const inProgressMilestones: any[] = [];
     for (const p of projects) {
       for (const m of p.milestones) {
-        if (['OVERDUE', 'IN_PROGRESS'].includes(m.status)) {
-          allMilestones.push({ ...m, projectName: p.name, projectId: p.id });
-        }
+        if (m.status === 'OVERDUE') overdueMilestones.push({ ...m, projectName: p.name, projectId: p.id });
+        else if (m.status === 'IN_PROGRESS') inProgressMilestones.push({ ...m, projectName: p.name, projectId: p.id });
       }
     }
-    const recentMilestones = allMilestones
-      .sort((a, b) => {
-        if (a.status === 'OVERDUE' && b.status !== 'OVERDUE') return -1;
-        if (b.status === 'OVERDUE' && a.status !== 'OVERDUE') return 1;
-        return new Date(a.dueDate ?? 0).getTime() - new Date(b.dueDate ?? 0).getTime();
-      })
-      .slice(0, 10);
+    const byDueDateAsc = (a: any, b: any) => new Date(a.dueDate ?? 0).getTime() - new Date(b.dueDate ?? 0).getTime();
+    const recentMilestones = [
+      ...overdueMilestones.sort(byDueDateAsc),
+      ...inProgressMilestones.sort(byDueDateAsc).slice(0, 10),
+    ];
 
     return {
       activeProjectCount: projects.length,
@@ -472,7 +479,10 @@ export class DashboardService {
       for (const sale of p.sales) {
         if (sale.status !== 'CANCELLED') {
           pipelineByStatus[sale.status] = (pipelineByStatus[sale.status] || 0) + 1;
-          pipelineTotalValue += Number(sale.salePrice ?? 0);
+          // "Pipeline" is in-flight value only — CLOSED deals are already money in hand
+          // and are reported separately as closedSalesRevenue. Folding them in here
+          // double-counted closed revenue as if it were still open pipeline.
+          if (sale.status !== 'CLOSED') pipelineTotalValue += Number(sale.salePrice ?? 0);
         }
         if (sale.status === 'CLOSED') {
           closedSalesRevenue += Number(sale.salePrice ?? 0);
