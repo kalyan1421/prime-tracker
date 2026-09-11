@@ -371,8 +371,12 @@ export default function SaleHistoryImportPage() {
    */
   const step: 1 | 2 | 3 = result ? 3 : preview ? 3 : fileName ? 2 : 1;
 
+  // max-w-7xl, matching every other data-heavy page. max-w-3xl suited steps 1-2
+  // (download, drop a file) but strangled step 3: an 8-column review table with inline
+  // fix inputs, and a create-units panel whose Building dropdown truncated at exactly
+  // the character that tells "Building 1" from "Building 10".
   return (
-    <div className="space-y-5 max-w-3xl mx-auto pb-6">
+    <div className="space-y-5 max-w-7xl mx-auto pb-6">
       <div>
         <Link
           to={projectId ? `/projects/${projectId}/revenue` : '/projects'}
@@ -381,7 +385,7 @@ export default function SaleHistoryImportPage() {
           <FiArrowLeft className="w-3.5 h-3.5" /> Back to project
         </Link>
         <h1 className="text-xl font-bold text-gray-900">Import sale history</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <p className="text-sm text-gray-500 mt-1 max-w-3xl">
           Bulk-enter closed sales from a spreadsheet. Nothing is written until you review
           the preview below and confirm it. If a unit's past tenancy is also being
           imported, import the rent history first — a backfilled sale ends whatever
@@ -704,7 +708,7 @@ export default function SaleHistoryImportPage() {
                   <div className="flex flex-wrap items-end gap-2 bg-white rounded-lg p-2 border border-blue-100">
                     <span className="text-xs font-medium text-gray-700 min-w-[90px]">Apply to all</span>
                     <Select
-                      size="sm" label="Building" className="max-w-[200px]"
+                      size="sm" label="Building" className="min-w-[260px] max-w-[340px]" popoverProps={{ classNames: { content: 'min-w-[300px] w-auto' } }}
                       onSelectionChange={(keys) => applyToAllUnits({ buildingId: (Array.from(keys)[0] as string) || '' })}
                     >
                       {((buildings.data as any[]) || []).map((b: any) => (
@@ -738,7 +742,7 @@ export default function SaleHistoryImportPage() {
                       <div key={num} className="flex flex-wrap items-end gap-2 bg-white rounded-lg p-2 border border-blue-100">
                         <span className="text-xs font-medium text-gray-700 min-w-[90px]">Unit {num}</span>
                         <Select
-                          size="sm" label="Building" className="max-w-[200px]"
+                          size="sm" label="Building" className="min-w-[260px] max-w-[340px]" popoverProps={{ classNames: { content: 'min-w-[300px] w-auto' } }}
                           selectedKeys={choice.buildingId ? [choice.buildingId] : []}
                           onSelectionChange={(keys) => setChoice({ buildingId: (Array.from(keys)[0] as string) || '' })}
                         >
