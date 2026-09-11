@@ -5580,6 +5580,14 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                       They are archived, not destroyed — the lease, sale and loan history is kept
                       and stays available for reporting.
                     </p>
+                    {/* Where the archive IS, and that a permanent option exists. Saying
+                        "archived, not destroyed" without either left people assuming the
+                        delete had failed, or hunting for a section that gave no clue it
+                        was behind a toggle. */}
+                    <p className="mt-2">
+                      Find it again under <strong>Show archived</strong> above — you can restore it
+                      from there{canHardDelete ? ', or delete it permanently' : ''}.
+                    </p>
                     <label className="flex items-start gap-2 mt-3 cursor-pointer">
                       <input
                         type="checkbox"
@@ -5591,7 +5599,11 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                     </label>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-500 mt-2">This building has no units. Safe to archive.</p>
+                  <p className="text-xs text-gray-500 mt-2">
+                    This building has no units. Safe to archive — find it afterwards under{' '}
+                    <strong>Show archived</strong> to restore
+                    {canHardDelete ? ' or permanently delete' : ''} it.
+                  </p>
                 )}
               </>
             )}
