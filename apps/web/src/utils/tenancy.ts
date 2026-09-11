@@ -258,17 +258,38 @@ export type UnitDealGroup = {
   ref: string | null;
   units: any[];
   unitLabel: string;
-  tenantName: string | null;
+  /** Whether these units are held together by a letting or by a sale. */
+  dealKind: 'LEASE' | 'SALE' | null;
+  /** Tenant for a letting, buyer for a sale — whoever the group is with. */
+  partyName: string | null;
   isGroup: boolean;
 };
 
-/** The live deal ref a unit is let under, if any. */
-function dealRefOfUnit(unit: any): string {
+/**
+ * What holds this unit together with others, if anything.
+ *
+ * A SOLD unit is grouped by its SALE, not its tenancy: the letting that preceded the sale
+ * is history, and a lease row surviving on a sold unit must not drag it back into a
+ * lettings group (the rule the rent roll already applies). Units sold together as one deal
+ * still belong together though — they just belong together as a SALE, which is why this
+ * looks at the sale first for those.
+ */
+function dealOfUnit(unit: any): { ref: string; kind: 'LEASE' | 'SALE' | null; party: string | null } {
+  if (unit?.status === 'SOLD') {
+    const sales = (unit?.sales ?? []).filter((x: any) => x?.status !== 'CANCELLED');
+    const sale = sales.find((x: any) => x?.combinedDealRef) ?? sales[0];
+    return {
+      ref: String(sale?.combinedDealRef ?? '').trim(),
+      kind: sale ? 'SALE' : null,
+      party: sale?.buyer ?? null,
+    };
+  }
   const lease = (unit?.leases ?? []).find((l: any) => l?.combinedDealRef) ?? unit?.leases?.[0];
-  // A SOLD unit's tenancy is not what the list is about — and a lease row surviving on one
-  // must not drag it into a letting group. Mirrors the rule the rent roll already applies.
-  if (unit?.status === 'SOLD') return '';
-  return String(lease?.combinedDealRef ?? '').trim();
+  return {
+    ref: String(lease?.combinedDealRef ?? '').trim(),
+    kind: lease ? 'LEASE' : null,
+    party: lease?.tenantName ?? null,
+  };
 }
 
 export function groupUnitsByCombinedDeal(units: any[]): UnitDealGroup[] {
@@ -276,35 +297,42 @@ export function groupUnitsByCombinedDeal(units: any[]): UnitDealGroup[] {
   const singles: any[] = [];
 
   for (const u of units ?? []) {
-    const ref = dealRefOfUnit(u);
+    const { ref, kind } = dealOfUnit(u);
     if (!ref) { singles.push(u); continue; }
-    const list = byRef.get(ref) ?? [];
+    // Keyed by kind too: a letting and a sale could reuse a label, and merging the two
+    // would put sold and let units in one row.
+    const key = `${kind}:${ref}`;
+    const list = byRef.get(key) ?? [];
     list.push(u);
-    byRef.set(ref, list);
+    byRef.set(key, list);
   }
 
   const out: UnitDealGroup[] = [];
-  for (const [ref, members] of byRef) {
+  for (const [key, members] of byRef) {
     const ordered = [...members].sort((a, b) =>
       String(a?.unitNumber ?? '').localeCompare(String(b?.unitNumber ?? ''), undefined, { numeric: true }));
     // A ref with one member in THIS list is not a group — it is one unit. That happens
     // both for a half-imported deal and, routinely, when a building filter is applied.
     if (ordered.length < 2) { singles.push(ordered[0]); continue; }
+    const head = dealOfUnit(ordered[0]);
     out.push({
-      ref,
+      ref: key.slice(key.indexOf(':') + 1),
       units: ordered,
       unitLabel: formatUnitLabel(ordered.map((u) => String(u?.unitNumber ?? ''))),
-      tenantName: ordered[0]?.leases?.[0]?.tenantName ?? null,
+      dealKind: head.kind,
+      partyName: head.party,
       isGroup: true,
     });
   }
 
   for (const u of singles) {
+    const d = dealOfUnit(u);
     out.push({
       ref: null,
       units: [u],
       unitLabel: String(u?.unitNumber ?? u?.name ?? '—'),
-      tenantName: u?.leases?.[0]?.tenantName ?? null,
+      dealKind: d.kind,
+      partyName: d.party,
       isGroup: false,
     });
   }

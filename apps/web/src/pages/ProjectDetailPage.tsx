@@ -3419,8 +3419,13 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                                     </span>
                                   </td>
                                   <td className="py-2 px-2">
-                                    <Chip size="sm" variant="flat" color="primary" className="text-[11px]">
-                                      {g.units.length} units leased together
+                                    <Chip
+                                      size="sm"
+                                      variant="flat"
+                                      color={g.dealKind === 'SALE' ? 'success' : 'primary'}
+                                      className="text-[11px]"
+                                    >
+                                      {g.units.length} units {g.dealKind === 'SALE' ? 'sold' : 'leased'} together
                                     </Chip>
                                   </td>
                                   <td className="py-2 px-2 text-right">
@@ -3433,7 +3438,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                                   </td>
                                   <td className="py-2 px-2"><StatusBadge status={g.units[0].status} /></td>
                                   <td className="py-2 px-2" />
-                                  <td className="py-2 px-2">{g.tenantName || '\u2014'}</td>
+                                  <td className="py-2 px-2">{g.partyName || '\u2014'}</td>
                                   <td className="py-2 px-2" colSpan={4} />
                                 </tr>
                                 {open && g.units.map(renderUnitRow)}

@@ -236,8 +236,13 @@ export default function InventoryPage() {
                       <td className="py-2 px-3 text-xs text-gray-600">{g.units[0].building?.project?.name}</td>
                       <td className="py-2 px-3 text-xs text-gray-600">{g.units[0].building?.name}</td>
                       <td className="py-2 px-3">
-                        <Chip size="sm" variant="flat" color="primary" className="text-[11px]">
-                          {g.units.length} units leased together
+                        <Chip
+                          size="sm"
+                          variant="flat"
+                          color={g.dealKind === 'SALE' ? 'success' : 'primary'}
+                          className="text-[11px]"
+                        >
+                          {g.units.length} units {g.dealKind === 'SALE' ? 'sold' : 'leased'} together
                         </Chip>
                       </td>
                       <td className="py-2 px-3">
@@ -249,7 +254,7 @@ export default function InventoryPage() {
                       {canSeePriceColumns && <td className="py-2 px-3" />}
                       <td className="py-2 px-3"><StatusBadge status={g.units[0].status} /></td>
                       {(canSeeRentColumn || canSeePriceColumns) && (
-                        <td className="py-2 px-3">{g.tenantName || '\u2014'}</td>
+                        <td className="py-2 px-3">{g.partyName || '\u2014'}</td>
                       )}
                       <td className="py-2 px-3" />
                     </tr>

@@ -250,7 +250,8 @@ describe('groupUnitsByCombinedDeal', () => {
     expect(groups[0].isGroup).toBe(true);
     expect(groups[0].units).toHaveLength(3);
     expect(groups[0].unitLabel).toBe('701–703');
-    expect(groups[0].tenantName).toBe('We Fun');
+    expect(groups[0].partyName).toBe('We Fun');
+    expect(groups[0].dealKind).toBe('LEASE');
   });
 
   it('does not group a unit whose deal has only one member here', () => {
@@ -264,6 +265,39 @@ describe('groupUnitsByCombinedDeal', () => {
     const groups = groupUnitsByCombinedDeal([
       unit('701', 'CEN-B7-701-706', { status: 'SOLD' }),
       unit('702', 'CEN-B7-701-706'),
+    ]);
+    expect(groups.every((g) => !g.isGroup)).toBe(true);
+  });
+
+  it('groups units SOLD together by their sale, showing the buyer', () => {
+    const sold = (n: string) => ({
+      id: `u-${n}`, unitNumber: n, status: 'SOLD', leases: [],
+      sales: [{ combinedDealRef: 'SALE-201-202', buyer: 'Acme Holdings', status: 'CLOSED' }],
+    });
+    const groups = groupUnitsByCombinedDeal([sold('201'), sold('202')]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].isGroup).toBe(true);
+    expect(groups[0].dealKind).toBe('SALE');
+    expect(groups[0].partyName).toBe('Acme Holdings');
+    expect(groups[0].unitLabel).toBe('201, 202');
+  });
+
+  it('keeps a let group and a sold group apart even under the same label', () => {
+    const groups = groupUnitsByCombinedDeal([
+      { id: 'a', unitNumber: '301', status: 'LEASED', leases: [{ combinedDealRef: 'D', tenantName: 'T' }], sales: [] },
+      { id: 'b', unitNumber: '302', status: 'LEASED', leases: [{ combinedDealRef: 'D', tenantName: 'T' }], sales: [] },
+      { id: 'c', unitNumber: '401', status: 'SOLD', leases: [], sales: [{ combinedDealRef: 'D', buyer: 'B' }] },
+      { id: 'd', unitNumber: '402', status: 'SOLD', leases: [], sales: [{ combinedDealRef: 'D', buyer: 'B' }] },
+    ]);
+    expect(groups.filter((g) => g.isGroup)).toHaveLength(2);
+    expect(groups.filter((g) => g.dealKind === 'SALE' && g.isGroup)).toHaveLength(1);
+    expect(groups.filter((g) => g.dealKind === 'LEASE' && g.isGroup)).toHaveLength(1);
+  });
+
+  it('ignores a cancelled sale when grouping a sold unit', () => {
+    const groups = groupUnitsByCombinedDeal([
+      { id: 'a', unitNumber: '501', status: 'SOLD', leases: [], sales: [{ combinedDealRef: 'X', buyer: 'B', status: 'CANCELLED' }] },
+      { id: 'b', unitNumber: '502', status: 'SOLD', leases: [], sales: [{ combinedDealRef: 'X', buyer: 'B', status: 'CANCELLED' }] },
     ]);
     expect(groups.every((g) => !g.isGroup)).toBe(true);
   });

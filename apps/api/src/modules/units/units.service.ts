@@ -615,7 +615,9 @@ export class UnitsService {
         // combinedDealRef: the inventory list collapses a multi-unit lease into one row,
         // so it has to be able to tell which units are let together.
         leases: { where: { status: 'ACTIVE', deletedAt: null }, select: { id: true, tenantName: true, leaseEnd: true, combinedDealRef: true } },
-        sales: { where: { deletedAt: null }, select: { id: true, status: true, buyer: true, salePrice: true } },
+        // combinedDealRef: the inventory list collapses units SOLD together into one row,
+        // exactly as it does units let together.
+        sales: { where: { deletedAt: null }, select: { id: true, status: true, buyer: true, salePrice: true, combinedDealRef: true } },
       },
       orderBy: [
         { building: { project: { name: 'asc' } } },
