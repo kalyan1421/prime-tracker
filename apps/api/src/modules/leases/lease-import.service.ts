@@ -4,7 +4,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { LeasesService, TERMINATION_REASONS } from './leases.service';
 import {
   addColumnarSheet, assertHeaderMatches, cellText, cellDateIso, cellNumber, resolveUnit, resolveBroker, joinKey,
+  parseMultiUnitRef,
 } from '../../common/utils/xlsx-import';
+import { apportion } from './rent-apportionment';
 import {
   readRawGrid, analyzeGrid, applyMapping, textToDateIso, textToNumber,
   parseDurationMonths, addMonthsIso, extractFirstEmail, extractFirstToken,
@@ -132,7 +134,7 @@ export function matchProjectLabel(
  * writer and the parser can never silently disagree about which column means what.
  */
 const TENANCY_COLUMNS = [
-  { key: 'unitNumber', label: 'Unit Number', note: 'Required. Must match a unit already in this project.' },
+  { key: 'unitNumber', label: 'Unit Number', note: 'Required. Must match a unit already in this project. If ONE lease covered several units, you can list them all in this one cell — "104, 105, 106" or "201+203" — and the rent will be divided equally between them. To divide it by floor area instead, give each unit its own row and use the Combined Deal Reference column.' },
   { key: 'building', label: 'Building', note: 'Optional — only needed if the unit number exists in more than one building in this project.' },
   { key: 'tenantName', label: 'Tenant Name', note: 'Required.' },
   { key: 'tenantLegalName', label: 'Tenant Legal Name', note: 'Optional — the signing entity, if different from the trading name.' },
@@ -148,7 +150,7 @@ const TENANCY_COLUMNS = [
   { key: 'securityDeposit', label: 'Security Deposit', note: 'Optional — the agreed amount.' },
   { key: 'rentDueDay', label: 'Rent Due Day', note: 'Optional, 1-31. Defaults to the 1st.' },
   { key: 'brokerName', label: 'Broker Name', note: 'Optional. Must exactly match an existing broker\'s name.' },
-  { key: 'combinedDealRef', label: 'Combined Deal Reference', note: 'Optional. Give two or more rows the SAME value here when one lease covered more than one physical unit — enter one row per unit, each with that unit\'s own Sqft.' },
+  { key: 'combinedDealRef', label: 'Combined Deal Reference', note: 'Optional. The precise way to record one lease over several units: give two or more rows the SAME value here — one row per unit, each with that unit\'s own Sqft, and the full deal rent on ONE of them. The rent is then split by floor area rather than equally. Simpler alternative: list the units in a single Unit Number cell instead ("104, 105, 106"). Either way the units stay separate and keep their own history, so any one of them can later be sold or re-let on its own.' },
   { key: 'notes', label: 'Notes', note: 'Optional — free text. Renewal option terms (e.g. "2x5yr options") go here; only actually-exercised renewals are tracked as real records.' },
 ] as const;
 
@@ -253,14 +255,24 @@ export interface ImportPreview {
    * project is counted in `skippedOtherProject` instead — it is not a defect to fix,
    * and listing 36 of them as errors buries the handful that are. */
   summary: { total: number; ready: number; errors: number; duplicates: number; skippedOtherProject: number };
-  /** Distinct values found in an OPTIONAL "Project" column on the Tenancies sheet (see
-   * PROJECT_HEADER). Empty when the sheet has no such column — the template deliberately
-   * has none, because an import is always scoped to the project you launched it from. */
+  /** Distinct values found in an OPTIONAL "Project" column — on the Tenancies sheet (see
+   * PROJECT_HEADER) for the template path, or whichever column was mapped to `project` for
+   * the generic path. Empty when the sheet has no such column: our own template
+   * deliberately has none, because an import is always scoped to the project you launched
+   * it from. */
   projectLabels: string[];
-  /** Which of those labels was matched to this project, so rows carrying the others
-   * could be left out. Null when the sheet named projects but none looked like this
-   * one — everything is then imported, and the UI warns instead of blocking. */
+  /** Which of those labels was matched to this project, so rows carrying the others could
+   * be left out. Null when the sheet named projects but none could be tied to this one —
+   * every labelled row is then blocked, not imported. */
   matchedProjectLabel: string | null;
+  /** The labels whose rows were blocked because ANOTHER project answers to them. A reviewer
+   * who knows the sheet meant this project after all confirms one and re-checks; see
+   * scopeToProject. Empty on a clean single-project sheet. */
+  unmatchedProjectLabels: string[];
+  /** Labels that match NO project in the system, this one included. Their rows are imported
+   * here — there is no other project they could belong to — and listed so that assumption
+   * is visible. See scopeToProject for why these are not blocked. */
+  unreadableProjectLabels: string[];
 }
 
 /**
@@ -299,6 +311,83 @@ export interface RowOverride {
   rentStartDate?: string;
   securityDeposit?: number;
   rentDueDay?: number;
+}
+
+/**
+ * Turns one multi-unit row into one row PER unit, tied together as a Combined Deal.
+ *
+ * Client decision (2026-09-12): the units stay separate and are LINKED, rather than being
+ * merged into a single new unit via UnitsService.combine(). Keeping them distinct is what
+ * makes the end-of-lease case work — when the lease ends, two of the units can be sold to
+ * one business while the third starts a fresh lease, with no un-merge step (there is none).
+ *
+ * The expanded rows reuse the ORIGINAL sheet row number on purpose: every fix typed into
+ * the preview is keyed by row number, so correcting "row 30" keeps correcting all the units
+ * it produced — they are, after all, one lease.
+ *
+ * Rent is carried on the first row only, which is exactly the shape the Combined Deal
+ * splitter already expects (one row holds the group total, the rest are blank and get their
+ * share). Per-unit Sqft is deliberately NOT copied: the sheet's figure is the total for the
+ * whole let, and repeating it on each unit would dress an even split up as a proportional
+ * one. Left blank, the splitter divides evenly and says so in the preview.
+ */
+function expandMultiUnitRows(raw: RawTenancy[], existingUnitNumbers: Set<string>): RawTenancy[] {
+  const out: RawTenancy[] = [];
+  for (const r of raw) {
+    // A unit that REALLY IS called "1001 & 1002" (Lewisville Retail has one, created by an
+    // earlier hand-workaround) must never be split into two units that don't exist. An
+    // existing unit always wins over the guess that this is a list.
+    if (existingUnitNumbers.has(r.unitNumber.trim().toLowerCase())) {
+      out.push(r);
+      continue;
+    }
+    const parts = parseMultiUnitRef(r.unitNumber);
+    if (parts.length < 2) {
+      out.push(r);
+      continue;
+    }
+    // A Combined Deal Reference already on the row is KEPT rather than overridden. The
+    // client's own workbook writes both at once — Unit Number "104+105+106" together with
+    // ref "CEN-B1-104-106" — using the ref as a human label for the deal, not as the
+    // two-rows-share-a-value linking mechanism. Honouring it keeps the author's name for
+    // the deal on all three units. (An earlier version treated the ref's presence as
+    // "hands off" and skipped expansion entirely, which left every real combined lease in
+    // the 2026-09-12 Centro file unresolvable.)
+    const ref = r.combinedDealRef || `AUTO-ROW-${r.rowNumber}`;
+    parts.forEach((unitNumber, i) => {
+      out.push({
+        ...r,
+        unitNumber,
+        combinedDealRef: ref,
+        // Only the first row carries the deal total; see the splitter's "exactly one row
+        // must carry the total" rule.
+        monthlyRent: i === 0 ? r.monthlyRent : undefined,
+        // Every other money field on the row is a DEAL total too, and unlike rent nothing
+        // downstream divides it — so copying it to each unit multiplies it. That is not
+        // cosmetic: the 2026-09-12 Centro import recorded We Fun's single $40,412.59
+        // deposit six times, $242,475.54 of liability that was never held, and the
+        // building-level obligation summary adds them up and shows it.
+        //
+        // Kept WHOLE on the first member rather than divided (client decision,
+        // 2026-09-12): one deposit is one instrument, settled by one decision when the
+        // lease ends. Landing it on exactly one lease is also what lets a TRANSFER
+        // disposition name a successor, since Lease.successorLeaseId is 1:1.
+        securityDeposit: i === 0 ? r.securityDeposit : undefined,
+        tiAllowance: i === 0 ? r.tiAllowance : undefined,
+        nnnTotalAmount: i === 0 ? r.nnnTotalAmount : undefined,
+        sqft: undefined,
+        // Errors/warnings are per-row from here on, so each unit needs its own arrays
+        // rather than three references to one shared list.
+        errors: [...r.errors],
+        warnings: [
+          ...r.warnings,
+          `Unit "${r.unitNumber}" names ${parts.length} units; imported as ${parts.length} linked `
+          + `tenancies (${parts.join(', ')}) sharing one lease.`,
+        ],
+      });
+    });
+  }
+  return out;
 }
 
 /** Merges preview-entered values into the parsed rows, in place. */
@@ -413,6 +502,8 @@ interface RawTenancy {
   warnings: string[];
 }
 
+export { parseMultiUnitRef };
+
 @Injectable()
 export class LeaseImportService {
   constructor(
@@ -433,6 +524,106 @@ export class LeaseImportService {
 
   // ─────── Preview (parse + validate, no writes) ───────
 
+  /**
+   * Binds a parsed sheet to the ONE project the import was launched from, and keeps every
+   * other project's rows out of it.
+   *
+   * The project is never asked for — it comes from the URL the importer was opened at, the
+   * same way the sale importer works. The sheet's own optional Project column is read only
+   * to REJECT rows, never to look a project up.
+   *
+   * Why a row that names another project has to be blocked rather than trusted to fail on
+   * its own: unit numbers repeat across projects ("101", "701" and "1001" each exist in
+   * more than one), so a foreign row resolves against a same-numbered unit HERE and reads
+   * as perfectly valid.
+   *
+   * A label that names ANOTHER project blocks its rows even when it is the sheet's ONLY
+   * label (changed 2026-09-11 — before, the check ran only on sheets naming 2+ projects, so
+   * a workbook wholly for another project sailed through unexamined, which is the single
+   * most likely way to get this wrong: you open the importer from the project you're
+   * looking at, not the one the file came from).
+   *
+   * "Names another project" is the whole test, and it is deliberately narrower than "didn't
+   * match this one". A label no project in the system names — "Centro Plaza 2" while the
+   * project is called "CENTRO", an internal site code — cannot be another project's rows,
+   * because there is no other project for them to belong to. Those import, with the banner
+   * naming the label so a human can see what was assumed. Blocking them instead was a real
+   * dead end: our name-matching gives up whenever two labels are each MORE specific than
+   * the project's own name (neither can be preferred), which is an ordinary way to label a
+   * two-phase site, and the reviewer was left with nothing importable and no explanation.
+   *
+   * `unmatchedProjectLabels` (the blocked ones) still carry a per-label confirmation, for
+   * the case where two projects have genuinely similar names and only a human can say which
+   * the sheet meant — explicit and visible, never inferred.
+   */
+  private async scopeToProject(
+    raw: RawTenancy[],
+    projectId: string,
+    acceptedLabels: string[] = [],
+  ): Promise<Pick<ImportPreview,
+    'projectLabels' | 'matchedProjectLabel' | 'unmatchedProjectLabels' | 'unreadableProjectLabels'>> {
+    const projectLabels = [...new Set(raw.map((r) => r.sheetProject).filter(Boolean))];
+    // No Project column (our own template has none) — nothing to reconcile, and the
+    // project is never even looked up.
+    if (projectLabels.length === 0) {
+      return {
+        projectLabels, matchedProjectLabel: null,
+        unmatchedProjectLabels: [], unreadableProjectLabels: [],
+      };
+    }
+
+    // Every project, not just this one: a label another project names more convincingly
+    // is that project's, and claiming it here would filter silently and wrongly.
+    const allProjects = await this.prisma.project.findMany({
+      where: { deletedAt: null }, select: { id: true, name: true },
+    });
+    const project = allProjects.find((p) => p.id === projectId) ?? null;
+    const matchedProjectLabel = project
+      ? matchProjectLabel(
+          projectLabels,
+          project.name,
+          allProjects.filter((p) => p.id !== projectId).map((p) => p.name),
+        )
+      : null;
+
+    const norm = (v: string) => v.trim().toLowerCase();
+    const accepted = new Set(acceptedLabels.map(norm));
+    const otherProjects = allProjects.filter((p) => p.id !== projectId);
+
+    /** Does some OTHER project answer to this label? That — not "failed to match us" — is
+     * what makes a row foreign, and what makes importing it dangerous: a unit number that
+     * repeats across the two projects resolves here and reads as valid. */
+    const claimedByAnother = (label: string) =>
+      otherProjects.some((p) => bestLabelFor([label], p.name) !== null);
+
+    const matchedHere = (label: string) =>
+      (matchedProjectLabel !== null && label === matchedProjectLabel) || accepted.has(norm(label));
+
+    const blocked = new Set(projectLabels.filter((l) => !matchedHere(l) && claimedByAnother(l)));
+
+    for (const r of raw) {
+      if (!r.sheetProject || !blocked.has(r.sheetProject)) continue;
+      r.otherProject = r.sheetProject;
+      r.errors.push(
+        project
+          ? `This row is for project "${r.sheetProject}" — this import is adding to "${project.name}". ` +
+            'Upload the file from that project\'s Revenue tab to bring these in.'
+          : `This row is for project "${r.sheetProject}", which is not the project this import is adding to.`,
+      );
+    }
+
+    return {
+      projectLabels,
+      matchedProjectLabel,
+      unmatchedProjectLabels: projectLabels.filter((l) => blocked.has(l)),
+      // Read as this project's because nothing else answers to them — surfaced so the
+      // assumption is visible rather than silent.
+      unreadableProjectLabels: projectLabels.filter(
+        (l) => !matchedHere(l) && !blocked.has(l),
+      ),
+    };
+  }
+
   async previewImport(
     fileBuffer: Buffer,
     projectId: string,
@@ -443,6 +634,9 @@ export class LeaseImportService {
       defaultBrokerId?: string;
       rowBrokerOverrides?: Record<number, string>;
       rowOverrides?: Record<number, RowOverride>;
+      /** Sheet labels the reviewer has explicitly confirmed mean THIS project — see
+       * scopeToProject. Only ever labels the preview itself reported as unmatched. */
+      acceptProjectLabels?: string[];
     } = {},
   ): Promise<ImportPreview> {
     const wb = new ExcelJS.Workbook();
@@ -469,7 +663,7 @@ export class LeaseImportService {
       if (cellText(headerRow.getCell(c)).trim().toLowerCase() === PROJECT_HEADER) { projectCol = c; break; }
     }
 
-    const raw: RawTenancy[] = [];
+    let raw: RawTenancy[] = [];
     tenancySheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return; // header
       const get = (key: string) => row.getCell(TENANCY_COLUMNS.findIndex((c) => c.key === key) + 1);
@@ -501,38 +695,7 @@ export class LeaseImportService {
       });
     });
 
-    const projectLabels = [...new Set(raw.map((r) => r.sheetProject).filter(Boolean))];
-
-    // The project is whichever one this import was launched from — never asked for
-    // again. The sheet's own label is read only to keep other projects' rows out; see
-    // matchProjectLabel for why that matters and why a no-match warns instead of blocks.
-    let matchedProjectLabel: string | null = null;
-    if (projectLabels.length > 1) {
-      // Every project, not just this one: a label another project names more convincingly
-      // is that project's, and claiming it here would filter silently and wrongly.
-      const allProjects = await this.prisma.project.findMany({
-        where: { deletedAt: null }, select: { id: true, name: true },
-      });
-      const project = allProjects.find((p) => p.id === projectId) ?? null;
-      matchedProjectLabel = project
-        ? matchProjectLabel(
-            projectLabels,
-            project.name,
-            allProjects.filter((p) => p.id !== projectId).map((p) => p.name),
-          )
-        : null;
-      if (matchedProjectLabel) {
-        for (const r of raw) {
-          if (r.sheetProject && r.sheetProject !== matchedProjectLabel) {
-            r.otherProject = r.sheetProject;
-            r.errors.push(
-              `This row is for project "${r.sheetProject}" — this import is adding to "${project!.name}". ` +
-              'Upload the file from that project\'s Revenue tab to bring these in.',
-            );
-          }
-        }
-      }
-    }
+    const scope = await this.scopeToProject(raw, projectId, opts.acceptProjectLabels);
 
     applyRowOverrides(raw, opts.rowOverrides);
     const tenancies = await this.validateTenancyRows(
@@ -544,12 +707,48 @@ export class LeaseImportService {
 
     // ---- Join Ledger Exceptions + Commission Installments by (Unit Number, Tenant Name) ----
     const rowsByKey = new Map<string, TenancyPreviewRow[]>();
+    const rowsByTenant = new Map<string, TenancyPreviewRow[]>();
     for (const t of tenancies) {
       const k = joinKey(t.unitNumber, t.tenantName);
       const list = rowsByKey.get(k) ?? [];
       list.push(t);
       rowsByKey.set(k, list);
+      const tk = t.tenantName.trim().toLowerCase();
+      if (!tk) continue;
+      const byTenant = rowsByTenant.get(tk) ?? [];
+      byTenant.push(t);
+      rowsByTenant.set(tk, byTenant);
     }
+
+    /**
+     * Which tenancy an auxiliary row belongs to.
+     *
+     * Unit Number + Tenant Name is the real key and is tried first. The fallback on tenant
+     * name alone exists because the two sheets routinely disagree about the unit and are
+     * both right: the Tenancies sheet writes "101 (prior)" to distinguish an earlier
+     * tenancy of unit 101, while the Ledger Exceptions sheet just writes "101". The pair
+     * then fails to join and the row is reported as unmatched.
+     *
+     * That is not a cosmetic problem. An unmatched Ledger Exception is a month the team
+     * said was NOT collected in full, and a tenancy imported without it has that month
+     * settled as paid-in-full by settleHistoricalLedger's default — so a failed join
+     * silently OVERSTATES collections. Recovering the row is the conservative outcome.
+     *
+     * The fallback only fires when exactly one tenancy carries that tenant name. Two
+     * tenancies for the same tenant (a renewal, or the same brand in two units) stay
+     * unmatched rather than being guessed at, which is the same answer the strict key
+     * gives for an ambiguous match.
+     */
+    const matchAux = (unitNumber: string, tenantName: string): {
+      row?: TenancyPreviewRow; ambiguous: boolean; viaTenantName: boolean;
+    } => {
+      const exact = rowsByKey.get(joinKey(unitNumber, tenantName)) ?? [];
+      if (exact.length === 1) return { row: exact[0], ambiguous: false, viaTenantName: false };
+      if (exact.length > 1) return { ambiguous: true, viaTenantName: false };
+      const byTenant = rowsByTenant.get(tenantName.trim().toLowerCase()) ?? [];
+      if (byTenant.length === 1) return { row: byTenant[0], ambiguous: false, viaTenantName: true };
+      return { ambiguous: byTenant.length > 1, viaTenantName: false };
+    };
 
     const orphaned: OrphanedAuxRow[] = [];
 
@@ -564,13 +763,13 @@ export class LeaseImportService {
         if (!unitNumber && !tenantName) return;
         const month = cellText(get('month'));
         const amount = cellNumber(get('amountCollected'));
-        const matches = rowsByKey.get(joinKey(unitNumber, tenantName)) ?? [];
-        if (matches.length !== 1) {
+        const match = matchAux(unitNumber, tenantName);
+        if (!match.row) {
           orphaned.push({
             sheet: SHEET_LEDGER_EXCEPTIONS, rowNumber, unitNumber, tenantName,
-            error: matches.length === 0
-              ? 'No Tenancies row matches this Unit Number + Tenant Name.'
-              : 'More than one Tenancies row matches this Unit Number + Tenant Name — ambiguous.',
+            error: match.ambiguous
+              ? 'More than one Tenancies row matches this tenant — ambiguous.'
+              : 'No Tenancies row matches this Unit Number + Tenant Name.',
           });
           return;
         }
@@ -581,7 +780,13 @@ export class LeaseImportService {
           });
           return;
         }
-        const target = matches[0];
+        const target = match.row;
+        if (match.viaTenantName) {
+          target.warnings.push(
+            `Ledger Exception row ${rowNumber} names unit "${unitNumber}" but this tenancy is on `
+            + `"${target.unitNumber}" — matched on Tenant Name and applied to ${month}.`,
+          );
+        }
         target.data.collections = { ...(target.data.collections ?? {}), [month]: amount };
       });
     }
@@ -603,17 +808,23 @@ export class LeaseImportService {
         if (!unitNumber && !tenantName) return;
         const amount = cellNumber(get('amount'));
         const paidAt = cellDateIso(get('paidAt'));
-        const matches = rowsByKey.get(joinKey(unitNumber, tenantName)) ?? [];
-        if (matches.length !== 1) {
+        const match = matchAux(unitNumber, tenantName);
+        if (!match.row) {
           orphaned.push({
             sheet: SHEET_COMMISSIONS, rowNumber, unitNumber, tenantName,
-            error: matches.length === 0
-              ? 'No Tenancies row matches this Unit Number + Tenant Name.'
-              : 'More than one Tenancies row matches this Unit Number + Tenant Name — ambiguous.',
+            error: match.ambiguous
+              ? 'More than one Tenancies row matches this tenant — ambiguous.'
+              : 'No Tenancies row matches this Unit Number + Tenant Name.',
           });
           return;
         }
-        const target = matches[0];
+        const target = match.row;
+        if (match.viaTenantName) {
+          target.warnings.push(
+            `Commission row ${rowNumber} names unit "${unitNumber}" but this tenancy is on `
+            + `"${target.unitNumber}" — matched on Tenant Name.`,
+          );
+        }
         if (amount == null) {
           orphaned.push({ sheet: SHEET_COMMISSIONS, rowNumber, unitNumber, tenantName, error: 'Amount is required.' });
           return;
@@ -640,8 +851,7 @@ export class LeaseImportService {
     return {
       tenancies,
       orphaned,
-      projectLabels,
-      matchedProjectLabel,
+      ...scope,
       summary: {
         total: tenancies.length,
         ready: tenancies.filter((t) => t.status === 'ready').length,
@@ -680,6 +890,8 @@ export class LeaseImportService {
    * same-file overlap detection. Neither caller re-implements any of this.
    */
   private async validateTenancyRows(
+    // Reassigned by the multi-unit expansion below; callers pass their array and get the
+    // expanded rows back as preview rows, never the array itself.
     raw: RawTenancy[],
     projectId: string,
     /** R9.2 — a sheet-wide fallback broker for rows whose own Broker Name doesn't
@@ -692,10 +904,30 @@ export class LeaseImportService {
      * defaultBrokerId for the row it names; still never overrides a row's own broker. */
     rowBrokerOverrides?: Record<number, string>,
   ): Promise<TenancyPreviewRow[]> {
+    const units = await this.prisma.unit.findMany({
+      where: { deletedAt: null, building: { projectId, deletedAt: null } },
+      select: { id: true, unitNumber: true, building: { select: { name: true } } },
+    });
+
+    // Multi-unit cells become one row per unit BEFORE anything else runs, so the rent
+    // split, unit resolution and overlap checks below all see ordinary single-unit rows
+    // and need to know nothing about the expansion. Needs the unit list, hence here
+    // rather than in the callers: an existing unit whose real name contains a separator
+    // must not be split (see expandMultiUnitRows).
+    raw = expandMultiUnitRows(raw, new Set(units.map((u) => u.unitNumber.trim().toLowerCase())));
+
     // ---- R8: proportional rent split within each Combined Deal group ----
     const groups = new Map<string, RawTenancy[]>();
     for (const r of raw) {
       if (!r.combinedDealRef) continue;
+      // A row naming no unit cannot import (it fails "Unit Number is required"), so letting
+      // it take a share of the deal total just under-rents the units that CAN. The client's
+      // Centro workbook records one deal both ways at once — "201, 202" in a single cell
+      // AND a leftover blank-unit row carrying the same reference, whose own note says
+      // "financials recorded on the first row" — which split Devi Liquors' 7,368 three ways
+      // instead of two. The blank row still reports its own error; it just no longer takes
+      // money off the real units.
+      if (!r.unitNumber.trim()) continue;
       const list = groups.get(r.combinedDealRef) ?? [];
       list.push(r);
       groups.set(r.combinedDealRef, list);
@@ -757,25 +989,17 @@ export class LeaseImportService {
       // to the others, so the group billed more than the deal was worth: RRC-B7-700-701
       // went in as 8,641.66 + 4,456.83 = 13,098.49/mo against a real base rent of
       // 8,641.66. Confirmed against live data 2026-08-25.
-      let allocated = 0;
-      // Largest unit last, so the rounding remainder lands on the row where a cent
-      // matters least in percentage terms — and the group sums to the total exactly.
-      const ordered = bySqft ? [...rows].sort((a, b) => (a.sqft ?? 0) - (b.sqft ?? 0)) : [...rows];
-      ordered.forEach((r, i) => {
-        const share = i === ordered.length - 1
-          ? round2(total - allocated)
-          : round2(bySqft ? total * (r.sqft! / totalSqft) : total / ordered.length);
-        allocated = round2(allocated + share);
-        r.monthlyRent = share;
-        splitBasisByRow.set(r, bySqft ? 'sqft' : 'even');
-      });
+      // The arithmetic lives in rent-apportionment.ts so this and the create-a-deal
+      // endpoint cannot drift apart on what each unit is billed. Its own spec pins the
+      // three behaviours that came out of live-data defects, including this one.
+      const { shares } = apportion(total, rows.map((r) => ({ key: r, area: r.sqft ?? null })));
+      for (const { key, amount } of shares) {
+        key.monthlyRent = amount;
+        splitBasisByRow.set(key, bySqft ? 'sqft' : 'even');
+      }
     }
 
     // ---- Resolve units + brokers + validate ----
-    const units = await this.prisma.unit.findMany({
-      where: { deletedAt: null, building: { projectId, deletedAt: null } },
-      select: { id: true, unitNumber: true, building: { select: { name: true } } },
-    });
     const brokers = await this.prisma.broker.findMany({
       where: { deletedAt: null },
       select: { id: true, name: true },
@@ -1041,6 +1265,8 @@ export class LeaseImportService {
     defaultBrokerId?: string,
     rowBrokerOverrides?: Record<number, string>,
     rowOverrides?: Record<number, RowOverride>,
+    /** See previewImport's option of the same name. */
+    acceptProjectLabels?: string[],
   ): Promise<ImportPreview> {
     const wb = new ExcelJS.Workbook();
     try {
@@ -1054,7 +1280,7 @@ export class LeaseImportService {
     }
     const records = applyMapping(grid, mapping);
 
-    const raw: RawTenancy[] = records.map((rec, i) => {
+    let raw: RawTenancy[] = records.map((rec, i) => {
       const leaseStart = textToDateIso(rec.leaseStart);
       // Lease End is often not given directly — the real client sample gives a
       // duration ("10years") instead. Derive it only when Lease End itself is blank;
@@ -1097,15 +1323,17 @@ export class LeaseImportService {
         brokerName: (rec.brokerName ?? '').trim(),
         combinedDealRef: (rec.combinedDealRef ?? '').trim(),
         notes: (rec.notes ?? '').trim(),
-        // The generic mapper has no Project target field — a mapped sheet is always read
-        // as belonging wholly to the project the import was launched from.
-        sheetProject: '',
+        // A mapped sheet gets the same treatment as the template path: if the user mapped
+        // a column to Project, its rows are checked against the project this import was
+        // launched from. Unmapped (the common case) reads as wholly this project's.
+        sheetProject: (rec.project ?? '').trim(),
         commissionInstallments: commissionInstallments.length ? commissionInstallments : undefined,
         errors: [],
         warnings: [],
       };
     }).filter((r) => r.unitNumber || r.tenantName);
 
+    const scope = await this.scopeToProject(raw, projectId, acceptProjectLabels);
     applyRowOverrides(raw, rowOverrides);
     const tenancies = await this.validateTenancyRows(
       raw, projectId, defaultBrokerId, brokerOverridesFrom(rowBrokerOverrides, rowOverrides),
@@ -1113,8 +1341,7 @@ export class LeaseImportService {
     return {
       tenancies,
       orphaned: [],
-      projectLabels: [],
-      matchedProjectLabel: null,
+      ...scope,
       summary: {
         total: tenancies.length,
         ready: tenancies.filter((t) => t.status === 'ready').length,

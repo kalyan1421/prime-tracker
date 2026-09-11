@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { LeaseImportService, matchProjectLabel } from './lease-import.service';
+import { LeaseImportService, matchProjectLabel, parseMultiUnitRef } from './lease-import.service';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -306,16 +306,22 @@ describe('LeaseImportService.previewImport', () => {
       expect(preview.projectLabels).toEqual(['RRC', 'Centro Plaza']);
     });
 
-    it('leaves a single-project workbook (and the template itself) completely alone', async () => {
+    it('leaves a single-project workbook whose label names this project alone', async () => {
       const sameLabel = await buildFileWithProjectColumn([READY_300, READY_701], ['RRC', 'RRC']);
-      expect((await service.previewImport(sameLabel, 'p1')).summary.ready).toBe(2);
+      const preview = await service.previewImport(sameLabel, 'p1');
+      expect(preview.matchedProjectLabel).toBe('RRC');
+      expect(preview.unmatchedProjectLabels).toEqual([]);
+      expect(preview.summary.ready).toBe(2);
+    });
 
+    it('never even looks the project up when the sheet has no Project column', async () => {
       const noColumn = await buildFile({ tenancies: [READY_300, READY_701] });
       const preview = await service.previewImport(noColumn, 'p1');
       expect(preview.projectLabels).toEqual([]);
       expect(preview.matchedProjectLabel).toBeNull();
+      expect(preview.unmatchedProjectLabels).toEqual([]);
       expect(preview.summary.ready).toBe(2);
-      // The project is never even looked up when there is nothing to disambiguate.
+      // Our own template has no Project column, so there is nothing to reconcile.
       expect(mockPrisma.project.findMany).not.toHaveBeenCalled();
     });
 
@@ -323,6 +329,12 @@ describe('LeaseImportService.previewImport', () => {
      * to another project resolves against a same-numbered unit HERE and reads as ready.
      * The user is never asked which project — the one they uploaded from is the answer. */
     it('imports only the rows whose label matches this project, without asking', async () => {
+      // "Centro Plaza" has to BE a project for its rows to be another project's — that is
+      // the whole test of foreignness since 2026-09-11.
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'RRC Bldg 1-8' },
+        { id: 'p2', name: 'Centro Plaza' },
+      ]);
       const file = await buildFileWithProjectColumn([READY_300, READY_701], ['RRC', 'Centro Plaza']);
       const preview = await service.previewImport(file, 'p1');
       expect(preview.matchedProjectLabel).toBe('RRC');
@@ -339,6 +351,10 @@ describe('LeaseImportService.previewImport', () => {
      * it claim that unit's occupancy made legitimate rows fail as overlapping it — three
      * real Centro Plaza rows were blocked this way by RRC rows. */
     it('does not let another project\'s row occupy a unit in this one', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'RRC Bldg 1-8' },
+        { id: 'p2', name: 'Centro Plaza' },
+      ]);
       const file = await buildFileWithProjectColumn(
         [
           { ...READY_300, 'Tenant Name': 'Foreign Tenant' },                 // other project
@@ -355,7 +371,11 @@ describe('LeaseImportService.previewImport', () => {
     });
 
     it('picks the more specific of two overlapping labels', async () => {
-      mockPrisma.project.findMany.mockResolvedValue([{ id: 'p1', name: 'RRC Phase 2 Bldg 9-12' }]);
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'RRC Phase 2 Bldg 9-12' },
+        // The phase-I project has to exist for the bare "RRC" rows to be its rows.
+        { id: 'p2', name: 'RRC Bldg 1-8' },
+      ]);
       const file = await buildFileWithProjectColumn([READY_300, READY_701], ['RRC', 'RRC Phase II']);
       const preview = await service.previewImport(file, 'p1');
       expect(preview.matchedProjectLabel).toBe('RRC Phase II');
@@ -363,15 +383,414 @@ describe('LeaseImportService.previewImport', () => {
       expect(preview.tenancies[1].otherProject).toBeNull();
     });
 
-    /** A naming mismatch we cannot read is not a reason to refuse the file — the rows
-     * still import, and the UI warns instead of blocking. */
-    it('imports everything and flags no match when no label resembles this project', async () => {
-      mockPrisma.project.findMany.mockResolvedValue([{ id: 'p1', name: 'Somewhere Else' }]);
+    /** Reversed 2026-09-11. This used to import everything and merely warn, on the
+     * reasoning that a naming mismatch we can't read is no reason to refuse a file. But
+     * one import adds to ONE project, and a label that names a project that EXISTS is a
+     * row heading somewhere else — importing it resolves it against a same-numbered unit
+     * in a project the file never mentioned. Held instead, with a per-label confirmation
+     * as the way out. */
+    it('blocks every row when every label names some other project', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'Somewhere Else' },
+        { id: 'p2', name: 'RRC' },
+        { id: 'p3', name: 'Centro Plaza' },
+      ]);
       const file = await buildFileWithProjectColumn([READY_300, READY_701], ['RRC', 'Centro Plaza']);
       const preview = await service.previewImport(file, 'p1');
       expect(preview.matchedProjectLabel).toBeNull();
+      expect(preview.unmatchedProjectLabels).toEqual(['RRC', 'Centro Plaza']);
+      expect(preview.summary.ready).toBe(0);
+      expect(preview.summary.skippedOtherProject).toBe(2);
+      expect(preview.tenancies.every((t) => t.otherProject !== null)).toBe(true);
+      expect(preview.tenancies.every((t) => t.data.unitId === null)).toBe(true);
+    });
+
+    /** The regression this rule was narrowed for (found live on CENTRO, 2026-09-11).
+     * bestLabelFor gives up whenever two labels are each MORE specific than the project's
+     * own name — neither can be preferred — which is an ordinary way to label a two-phase
+     * site. Blocking on that left a reviewer with nothing importable, no other project
+     * involved, and no way to tell why. A label NO project answers to cannot be another
+     * project's rows, so it imports and the banner names it. */
+    it('imports labels that name no project at all, and lists them', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'CENTRO' },
+        { id: 'p2', name: 'QA — Building Fixtures' },
+      ]);
+      const file = await buildFileWithProjectColumn(
+        [READY_300, READY_701], ['Centro Plaza', 'Centro Plaza 2'],
+      );
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.matchedProjectLabel).toBeNull();
+      expect(preview.unmatchedProjectLabels).toEqual([]);
+      expect(preview.unreadableProjectLabels).toEqual(['Centro Plaza', 'Centro Plaza 2']);
+      expect(preview.summary.ready).toBe(2);
+      expect(preview.summary.skippedOtherProject).toBe(0);
+    });
+
+    /** ...but unreadable labels sitting NEXT TO a real other project's label must not drag
+     * that one along with them. (Two "Centro*" labels, not one: a single label more
+     * specific than the project's name still matches it outright — it takes two for
+     * bestLabelFor to have no basis to choose.) */
+    it('blocks the label another project answers to while importing the unreadable ones', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'CENTRO' },
+        { id: 'p2', name: 'Prime Lewisville' },
+      ]);
+      const READY_702 = {
+        'Unit Number': '702', 'Tenant Name': 'Tenant C', 'Lease Start': new Date('2019-01-01'),
+        'Lease End': new Date('2022-01-01'), 'Termination Date': new Date('2022-01-01'), 'Monthly Rent': 5000,
+      };
+      const file = await buildFileWithProjectColumn(
+        [READY_300, READY_701, READY_702], ['Centro Plaza', 'Centro Plaza 2', 'Prime Lewisville'],
+      );
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.unreadableProjectLabels).toEqual(['Centro Plaza', 'Centro Plaza 2']);
+      expect(preview.unmatchedProjectLabels).toEqual(['Prime Lewisville']);
+      expect(preview.summary.ready).toBe(2);
+      expect(preview.tenancies[0].otherProject).toBeNull();
+      expect(preview.tenancies[1].otherProject).toBeNull();
+      expect(preview.tenancies[2].otherProject).toBe('Prime Lewisville');
+    });
+
+    /** The hole this closed. The check used to run only on sheets naming 2+ projects, so a
+     * workbook wholly for ANOTHER project went through unexamined — and that is the likely
+     * mistake, because you open the importer from the project you happen to be looking at,
+     * not from the one the file came from. */
+    it('blocks a workbook that is wholly another project\'s', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'RRC Bldg 1-8' },
+        { id: 'p2', name: 'Centro Plaza' },
+      ]);
+      const file = await buildFileWithProjectColumn(
+        [READY_300, READY_701], ['Centro Plaza', 'Centro Plaza'],
+      );
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.matchedProjectLabel).toBeNull();
+      expect(preview.summary.ready).toBe(0);
+      expect(preview.summary.skippedOtherProject).toBe(2);
+      expect(preview.tenancies[0].data.unitId).toBeNull();
+      expect(preview.tenancies[0].errors.join(' '))
+        .toMatch(/is for project "Centro Plaza" — this import is adding to "RRC Bldg 1-8"/);
+    });
+
+    /** A sheet that labels only the rows it needed to distinguish is normal. A blank cell
+     * claims no other project, so it reads as this one — the same forgiving default the
+     * no-column case gets. */
+    it('treats blank Project cells as this project\'s', async () => {
+      const file = await buildFileWithProjectColumn([READY_300, READY_701], ['RRC', undefined]);
+      const preview = await service.previewImport(file, 'p1');
       expect(preview.summary.ready).toBe(2);
       expect(preview.tenancies.every((t) => t.otherProject === null)).toBe(true);
+    });
+
+    /** Two projects with genuinely similar names: only a human can say which one a sheet
+     * labelled "Centro Plaza" meant. Blocked by default, importable on confirmation. */
+    it('imports a blocked label once the reviewer confirms it', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'RRC Bldg 1-8' },
+        { id: 'p2', name: 'Centro Plaza' },
+      ]);
+      const file = await buildFileWithProjectColumn(
+        [READY_300, READY_701], ['Centro Plaza', 'Centro Plaza'],
+      );
+
+      const blocked = await service.previewImport(file, 'p1');
+      expect(blocked.unmatchedProjectLabels).toEqual(['Centro Plaza']);
+      expect(blocked.summary.ready).toBe(0);
+
+      const accepted = await service.previewImport(file, 'p1', { acceptProjectLabels: ['Centro Plaza'] });
+      expect(accepted.unmatchedProjectLabels).toEqual([]);
+      expect(accepted.summary.ready).toBe(2);
+      expect(accepted.tenancies.every((t) => t.otherProject === null)).toBe(true);
+    });
+
+    /** Confirming is per label, not a blanket "import everything" — the whole point is
+     * that one import lands in one project. */
+    it('confirming one label leaves the others blocked', async () => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'Somewhere Else' },
+        { id: 'p2', name: 'RRC' },
+        { id: 'p3', name: 'Centro Plaza' },
+      ]);
+      const file = await buildFileWithProjectColumn([READY_300, READY_701], ['RRC', 'Centro Plaza']);
+      const preview = await service.previewImport(file, 'p1', { acceptProjectLabels: ['RRC'] });
+      expect(preview.unmatchedProjectLabels).toEqual(['Centro Plaza']);
+      expect(preview.summary.ready).toBe(1);
+      expect(preview.tenancies[0].otherProject).toBeNull();
+      expect(preview.tenancies[1].otherProject).toBe('Centro Plaza');
+    });
+  });
+
+
+
+  describe('multi-unit tenancy rows', () => {
+    const MULTI_UNITS = [
+      { id: 'u104', unitNumber: '104', building: { name: 'Building A' } },
+      { id: 'u105', unitNumber: '105', building: { name: 'Building A' } },
+      { id: 'u106', unitNumber: '106', building: { name: 'Building A' } },
+    ];
+
+    it('expands one "104, 105, 106" row into three linked tenancies splitting the rent', async () => {
+      mockPrisma.unit.findMany.mockResolvedValue(MULTI_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '104, 105, 106', 'Tenant Name': 'Bagel Co',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2028-01-01'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 4500,
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+
+      expect(preview.summary.total).toBe(3);
+      expect(preview.summary.ready).toBe(3);
+      expect(preview.tenancies.map((t) => t.unitNumber)).toEqual(['104', '105', '106']);
+      expect(preview.tenancies.map((t) => t.data.unitId)).toEqual(['u104', 'u105', 'u106']);
+      // One lease over three units: same Combined Deal reference, rent divided across them.
+      const refs = new Set(preview.tenancies.map((t) => t.data.combinedDealRef));
+      expect(refs.size).toBe(1);
+      expect(round2(preview.tenancies.reduce((sum, t) => sum + (t.data.monthlyRent ?? 0), 0))).toBe(4500);
+      // Every unit keeps its own identity — that is what lets two be sold and one re-let later.
+      expect(preview.tenancies.every((t) => t.warnings.some((w) => /names 3 units/.test(w)))).toBe(true);
+    });
+
+    it('handles the "201+203" spelling', async () => {
+      mockPrisma.unit.findMany.mockResolvedValue([
+        { id: 'u201', unitNumber: '201', building: { name: 'Building A' } },
+        { id: 'u203', unitNumber: '203', building: { name: 'Building A' } },
+      ]);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '201+203', 'Tenant Name': 'Two Units Ltd',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2028-01-01'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 3000,
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.summary.ready).toBe(2);
+      expect(preview.tenancies.map((t) => t.data.unitId)).toEqual(['u201', 'u203']);
+      expect(preview.tenancies.map((t) => t.data.monthlyRent)).toEqual([1500, 1500]);
+    });
+
+    it('reports each constituent unit separately when only some exist', async () => {
+      // The reviewer can then create just the missing one, rather than being told the
+      // whole "104, 105, 106" reference is unusable.
+      mockPrisma.unit.findMany.mockResolvedValue([MULTI_UNITS[0], MULTI_UNITS[1]]);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '104, 105, 106', 'Tenant Name': 'Bagel Co',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2028-01-01'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 4500,
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.tenancies).toHaveLength(3);
+      const missing = preview.tenancies.find((t) => t.unitNumber === '106')!;
+      expect(missing.status).toBe('error');
+      expect(missing.errors.join(' ')).toMatch(/was not found in this project/);
+      expect(preview.tenancies.filter((t) => t.status === 'ready')).toHaveLength(2);
+    });
+
+    it('expands a multi-unit cell that also carries its own deal reference, keeping that ref', async () => {
+      // The client's Centro workbook writes both: Unit Number "104+105+106" AND
+      // Combined Deal Reference "CEN-B1-104-106". The ref is the author's label for the
+      // deal, not a two-row link, so it must not suppress the expansion.
+      mockPrisma.unit.findMany.mockResolvedValue(MULTI_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '104+105+106', 'Tenant Name': 'Sangam', 'Sqft': 4241,
+          'Lease Start': new Date('2024-04-30'), 'Lease End': new Date('2034-12-31'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 12016.16,
+          'Combined Deal Reference': 'CEN-B1-104-106',
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.tenancies).toHaveLength(3);
+      expect(preview.tenancies.map((t) => t.data.unitId)).toEqual(['u104', 'u105', 'u106']);
+      expect(preview.tenancies.every((t) => t.data.combinedDealRef === 'CEN-B1-104-106')).toBe(true);
+      expect(round2(preview.tenancies.reduce((sum, t) => sum + (t.data.monthlyRent ?? 0), 0))).toBe(12016.16);
+    });
+
+    it('does not let a blank-unit row take a share of a combined deal', async () => {
+      // Centro's sheet records Devi Liquors as "201, 202" in one cell PLUS a leftover
+      // blank-unit row carrying the same reference. Three-way splitting 7,368 under-rented
+      // both real units.
+      mockPrisma.unit.findMany.mockResolvedValue([
+        { id: 'u201', unitNumber: '201', building: { name: 'Building 2' } },
+        { id: 'u202', unitNumber: '202', building: { name: 'Building 2' } },
+      ]);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '201, 202', 'Tenant Name': 'Devi Liquors',
+          'Lease Start': new Date('2024-03-08'), 'Lease End': new Date('2029-10-09'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 7368,
+          'Combined Deal Reference': 'CEN-B2-201-202',
+        }, {
+          'Unit Number': '', 'Tenant Name': 'Devi Liquors',
+          'Lease Start': new Date('2024-03-08'), 'Lease End': new Date('2029-10-09'),
+          'Termination Date': new Date('2025-01-01'),
+          'Combined Deal Reference': 'CEN-B2-201-202',
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      const real = preview.tenancies.filter((t) => t.unitNumber);
+      expect(real.map((t) => t.data.monthlyRent)).toEqual([3684, 3684]);
+      // The blank row is still reported — it is just no longer paid for.
+      const blank = preview.tenancies.find((t) => !t.unitNumber)!;
+      expect(blank.status).toBe('error');
+      expect(blank.errors.join(' ')).toMatch(/Unit Number is required/);
+    });
+
+    it('records a deal-wide deposit ONCE, not once per unit', async () => {
+      // The 2026-09-12 Centro import multiplied We Fun's single $40,412.59 deposit by its
+      // six units — $242,475.54 of liability that was never held. A deposit, TI allowance
+      // and NNN total are all DEAL totals, and nothing downstream divides them.
+      mockPrisma.unit.findMany.mockResolvedValue(MULTI_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '104, 105, 106', 'Tenant Name': 'Sangam',
+          'Lease Start': new Date('2024-04-30'), 'Lease End': new Date('2034-12-31'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 12016.16,
+          'Security Deposit': 15678.37,
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.tenancies).toHaveLength(3);
+      const deposits = preview.tenancies.map((t) => t.data.securityDeposit);
+      expect(deposits.filter((d) => d != null)).toEqual([15678.37]);
+      expect(round2(deposits.reduce<number>((sum, d) => sum + (d ?? 0), 0))).toBe(15678.37);
+      // Rent is still divided — the two are treated differently on purpose.
+      expect(round2(preview.tenancies.reduce((s2, t) => s2 + (t.data.monthlyRent ?? 0), 0))).toBe(12016.16);
+    });
+
+    it('never splits a name that is itself a real unit', async () => {
+      // Lewisville Retail really does have a unit called "1001 & 1002", created by an
+      // earlier hand-workaround. Splitting it would look for two units that do not exist
+      // and break an import that used to work.
+      mockPrisma.unit.findMany.mockResolvedValue([
+        { id: 'uBoth', unitNumber: '1001 & 1002', building: { name: 'Building A' } },
+      ]);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '1001 & 1002', 'Tenant Name': 'Legacy Co',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2028-01-01'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 4500,
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.tenancies).toHaveLength(1);
+      expect(preview.tenancies[0].status).toBe('ready');
+      expect(preview.tenancies[0].data.unitId).toBe('uBoth');
+      expect(preview.tenancies[0].data.monthlyRent).toBe(4500);
+    });
+
+    it('leaves a row with its own Combined Deal Reference alone', async () => {
+      mockPrisma.unit.findMany.mockResolvedValue(MULTI_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '104', 'Tenant Name': 'Bagel Co', 'Sqft': 1000,
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2028-01-01'),
+          'Termination Date': new Date('2025-01-01'), 'Monthly Rent': 4500,
+          'Combined Deal Reference': 'DEAL-1',
+        }, {
+          'Unit Number': '105', 'Tenant Name': 'Bagel Co', 'Sqft': 1000,
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2028-01-01'),
+          'Termination Date': new Date('2025-01-01'),
+          'Combined Deal Reference': 'DEAL-1',
+        }],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.tenancies).toHaveLength(2);
+      expect(preview.tenancies.every((t) => t.data.combinedDealRef === 'DEAL-1')).toBe(true);
+    });
+  });
+
+  describe('auxiliary rows matched on Tenant Name', () => {
+    it('applies a Ledger Exception whose unit number disagrees with the tenancy', async () => {
+      // The 2026-08-25 workbook writes "101 (prior)" on Tenancies and a bare "101" on
+      // Ledger Exceptions. Unmatched, the month would settle as paid in full — overstating
+      // what was actually collected.
+      mockPrisma.unit.findMany.mockResolvedValue(BASE_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '300', 'Tenant Name': 'Brasstap',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2024-01-01'),
+          'Termination Date': new Date('2024-01-01'), 'Monthly Rent': 3000,
+        }],
+        ledgerExceptions: [
+          { 'Unit Number': '300 (prior)', 'Tenant Name': 'Brasstap', 'Month': '2023-04', 'Amount Collected': 0 },
+        ],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.orphaned).toHaveLength(0);
+      expect(preview.tenancies[0].data.collections).toEqual({ '2023-04': 0 });
+      expect(preview.tenancies[0].warnings.join(' ')).toMatch(/matched on Tenant Name/i);
+    });
+
+    it('refuses to guess when the tenant has two tenancies', async () => {
+      mockPrisma.unit.findMany.mockResolvedValue(BASE_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '701', 'Tenant Name': 'Brasstap',
+          'Lease Start': new Date('2020-01-01'), 'Lease End': new Date('2022-01-01'),
+          'Termination Date': new Date('2022-01-01'), 'Monthly Rent': 3000,
+        }, {
+          'Unit Number': '702', 'Tenant Name': 'Brasstap',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2024-01-01'),
+          'Termination Date': new Date('2024-01-01'), 'Monthly Rent': 3000,
+        }],
+        ledgerExceptions: [
+          { 'Unit Number': '999', 'Tenant Name': 'Brasstap', 'Month': '2023-04', 'Amount Collected': 0 },
+        ],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.orphaned).toHaveLength(1);
+      expect(preview.orphaned[0].error).toMatch(/ambiguous/i);
+      expect(preview.tenancies.every((t) => t.data.collections === undefined)).toBe(true);
+    });
+
+    it('still reports a row whose tenant matches nothing', async () => {
+      mockPrisma.unit.findMany.mockResolvedValue(BASE_UNITS);
+      const file = await buildFile({
+        tenancies: [{
+          'Unit Number': '300', 'Tenant Name': 'Brasstap',
+          'Lease Start': new Date('2023-01-01'), 'Lease End': new Date('2024-01-01'),
+          'Termination Date': new Date('2024-01-01'), 'Monthly Rent': 3000,
+        }],
+        ledgerExceptions: [
+          { 'Unit Number': '300', 'Tenant Name': 'Somebody Else', 'Month': '2023-04', 'Amount Collected': 0 },
+        ],
+      });
+      const preview = await service.previewImport(file, 'p1');
+      expect(preview.orphaned).toHaveLength(1);
+      expect(preview.orphaned[0].error).toMatch(/No Tenancies row matches/);
+    });
+  });
+
+  describe('parseMultiUnitRef', () => {
+    it('splits every separator the client sheets actually use', () => {
+      expect(parseMultiUnitRef('104, 105, 106')).toEqual(['104', '105', '106']);
+      expect(parseMultiUnitRef('201+203')).toEqual(['201', '203']);
+      expect(parseMultiUnitRef('700 and 701')).toEqual(['700', '701']);
+      expect(parseMultiUnitRef('1001 & 1002')).toEqual(['1001', '1002']);
+      expect(parseMultiUnitRef('12A, 12B')).toEqual(['12A', '12B']);
+    });
+
+    it('leaves an ordinary single unit number alone', () => {
+      expect(parseMultiUnitRef('104')).toEqual([]);
+      expect(parseMultiUnitRef('12A')).toEqual([]);
+      expect(parseMultiUnitRef('')).toEqual([]);
+    });
+
+    it('refuses to shred prose that merely contains a separator', () => {
+      // Splitting these would mint units called "Building 6" and "whole".
+      expect(parseMultiUnitRef('Building 6, whole')).toEqual([]);
+      expect(parseMultiUnitRef('Not recorded, see file')).toEqual([]);
+      // "(prior)" marks ONE earlier tenancy of one unit, not a list.
+      expect(parseMultiUnitRef('700-701 (prior)')).toEqual([]);
+    });
+
+    it('treats a repeated part as a typo rather than two units', () => {
+      expect(parseMultiUnitRef('104, 104')).toEqual([]);
     });
   });
 
@@ -889,6 +1308,67 @@ describe('LeaseImportService.previewMappedImport (R9)', () => {
     expect(preview.summary).toEqual({ total: 1, ready: 1, errors: 0, duplicates: 0, skippedOtherProject: 0 });
     expect(preview.tenancies[0].data.unitId).toBe('u300');
     expect(preview.orphaned).toHaveLength(0);
+  });
+
+  /** The generic path used to hardcode sheetProject: '' — a mapped sheet was ASSUMED to be
+   * wholly this project's, with no way to say otherwise. Mapping a column to Project now
+   * puts it through the identical check the template path runs. */
+  describe('Project column on a mapped sheet (2026-09-11)', () => {
+    const HEADERS = ['Unit no', 'Tenant', 'Start', 'End', 'Moved Out', 'Rent', 'Project'];
+    const MAPPING = {
+      orientation: 'rows' as const,
+      columns: [
+        { columnIndex: 0, field: 'unitNumber' },
+        { columnIndex: 1, field: 'tenantName' },
+        { columnIndex: 2, field: 'leaseStart' },
+        { columnIndex: 3, field: 'leaseEnd' },
+        { columnIndex: 4, field: 'terminationDate' },
+        { columnIndex: 5, field: 'monthlyRent' },
+        { columnIndex: 6, field: 'project' },
+      ],
+    };
+    const row = (unit: string, tenant: string, project: string) =>
+      [unit, tenant, '2019-01-01', '2022-01-01', '2022-01-01', '3000', project];
+
+    beforeEach(() => {
+      mockPrisma.project.findMany.mockResolvedValue([
+        { id: 'p1', name: 'RRC Bldg 1-8' },
+        { id: 'p2', name: 'Centro Plaza' },
+      ]);
+    });
+
+    it('keeps another project\'s rows out', async () => {
+      const file = await buildGenericFile(HEADERS, [
+        row('300', 'Ours', 'RRC'),
+        row('701', 'Theirs', 'Centro Plaza'),
+      ]);
+      const preview = await service.previewMappedImport(file, 'p1', MAPPING);
+      expect(preview.matchedProjectLabel).toBe('RRC');
+      expect(preview.unmatchedProjectLabels).toEqual(['Centro Plaza']);
+      expect(preview.summary.ready).toBe(1);
+      expect(preview.tenancies[0].otherProject).toBeNull();
+      expect(preview.tenancies[1].otherProject).toBe('Centro Plaza');
+      expect(preview.tenancies[1].data.unitId).toBeNull();
+    });
+
+    it('blocks a mapped sheet wholly for another project, and unblocks on confirmation', async () => {
+      const file = await buildGenericFile(HEADERS, [row('300', 'Theirs', 'Centro Plaza')]);
+      expect((await service.previewMappedImport(file, 'p1', MAPPING)).summary.ready).toBe(0);
+
+      const accepted = await service.previewMappedImport(
+        file, 'p1', MAPPING, undefined, undefined, undefined, ['Centro Plaza'],
+      );
+      expect(accepted.summary.ready).toBe(1);
+    });
+
+    it('leaves a sheet with no Project column mapped exactly as it was', async () => {
+      const file = await buildGenericFile(HEADERS, [row('300', 'Ours', 'Centro Plaza')]);
+      const withoutProject = { ...MAPPING, columns: MAPPING.columns.filter((c) => c.field !== 'project') };
+      const preview = await service.previewMappedImport(file, 'p1', withoutProject);
+      expect(preview.projectLabels).toEqual([]);
+      expect(preview.summary.ready).toBe(1);
+      expect(mockPrisma.project.findMany).not.toHaveBeenCalled();
+    });
   });
 
   it('splits a combined PSF/Total column via the mapping and still validates correctly', async () => {

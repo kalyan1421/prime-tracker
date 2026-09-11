@@ -271,6 +271,86 @@ describe('SaleImportService.previewImport — per-row corrections (R11)', () => 
   });
 });
 
+describe('SaleImportService — several units sold as one deal', () => {
+  let service: SaleImportService;
+
+  const MULTI = [
+    { id: 'u104', unitNumber: '104', sqft: 4200, building: { name: 'Building 1' } },
+    { id: 'u105', unitNumber: '105', sqft: 2850, building: { name: 'Building 1' } },
+    { id: 'u106', unitNumber: '106', sqft: 2850, building: { name: 'Building 1' } },
+  ];
+
+  const row = (unitNumber: string, over: Record<string, any> = {}) => ({
+    'Unit Number': unitNumber, 'Buyer': 'Acme Holdings', 'Purchase Price': 900000,
+    'Closing Date': new Date('2026-03-01'), ...over,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.unit.findMany.mockResolvedValue(MULTI);
+    mockPrisma.broker.findMany.mockResolvedValue([]);
+    mockPrisma.sale.findMany.mockResolvedValue([]);
+    mockSales.findDuplicateHistoricalSale.mockResolvedValue(null);
+  });
+
+  it('expands one "104, 105, 106" row into three sales sharing a deal', async () => {
+    const preview = await service.previewImport(await buildFile({ sales: [row('104, 105, 106')] }), 'p1');
+    expect(preview.sales).toHaveLength(3);
+    expect(preview.sales.map((r) => r.unitNumber)).toEqual(['104', '105', '106']);
+    expect(preview.sales.map((r) => r.data.unitId)).toEqual(['u104', 'u105', 'u106']);
+    expect(new Set(preview.sales.map((r) => r.data.combinedDealRef)).size).toBe(1);
+  });
+
+  it('divides the price by floor area and sums back to the deal exactly', async () => {
+    const preview = await service.previewImport(await buildFile({ sales: [row('104, 105, 106')] }), 'p1');
+    const prices = preview.sales.map((r) => r.data.salePrice);
+    expect(Math.round(prices.reduce((a, b) => a + b, 0) * 100) / 100).toBe(900000);
+    // 104 is the largest unit, so it carries the largest share.
+    expect(prices[0]).toBeGreaterThan(prices[1]);
+    expect(preview.sales[0].warnings.join(' ')).toMatch(/divided by floor area/);
+  });
+
+  it('records the deposit ONCE, not once per unit', async () => {
+    // The rent importer multiplied a single deposit by its units; the same shape of bug
+    // would double a sale deposit here.
+    const preview = await service.previewImport(
+      await buildFile({ sales: [row('104, 105, 106', { 'Deposit Amount': 90000, 'Deposit Date': new Date('2026-01-10') })] }),
+      'p1',
+    );
+    const deposits = preview.sales.map((r) => (r.data.payments ?? []).reduce((sum, p) => sum + p.amount, 0));
+    expect(deposits.filter((d) => d > 0)).toEqual([90000]);
+  });
+
+  it('handles the "201+203" spelling', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      { id: 'u201', unitNumber: '201', building: { name: 'B' } },
+      { id: 'u203', unitNumber: '203', building: { name: 'B' } },
+    ]);
+    const preview = await service.previewImport(await buildFile({ sales: [row('201+203')] }), 'p1');
+    expect(preview.sales.map((r) => r.data.unitId)).toEqual(['u201', 'u203']);
+    expect(preview.sales.map((r) => r.data.salePrice)).toEqual([450000, 450000]);
+  });
+
+  it('reports each missing unit separately so only the absent one need be created', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([MULTI[0], MULTI[1]]);
+    const preview = await service.previewImport(await buildFile({ sales: [row('104, 105, 106')] }), 'p1');
+    const missing = preview.sales.find((r) => r.unitNumber === '106')!;
+    expect(missing.status).toBe('error');
+    expect(missing.errors.join(' ')).toMatch(/was not found in this project/);
+  });
+
+  it('never splits a name that is itself a real unit', async () => {
+    mockPrisma.unit.findMany.mockResolvedValue([
+      { id: 'uBoth', unitNumber: '1001 & 1002', building: { name: 'B' } },
+    ]);
+    const preview = await service.previewImport(await buildFile({ sales: [row('1001 & 1002')] }), 'p1');
+    expect(preview.sales).toHaveLength(1);
+    expect(preview.sales[0].data.unitId).toBe('uBoth');
+    expect(preview.sales[0].data.salePrice).toBe(900000);
+  });
+});
+
 describe('normalizeSaleOverrides', () => {
   it('passes through a well-formed payload', () => {
     expect(normalizeSaleOverrides({ 7: { closingDate: '2022-01-01', purchasePrice: 500 } }))

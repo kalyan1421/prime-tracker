@@ -67,6 +67,10 @@ export class BackfillSaleDto {
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
 
+  /** Set by the importer when one Unit Number cell named several units sold as one deal. */
+  @IsOptional() @IsString() @MaxLength(200)
+  combinedDealRef?: string;
+
   @IsOptional() @IsString()
   brokerId?: string;
 

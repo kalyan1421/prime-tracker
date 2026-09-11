@@ -177,8 +177,9 @@ describe('analyzeGrid', () => {
     expect(result.orientation).toBe('columns');
     expect(result.supported).toBe(true);
     expect(result.recordCount).toBe(2);
-    // "Project" doesn't match any known field — offered unmapped, not dropped.
-    expect(result.fields.find((f) => f.header === 'Project')?.suggestedField).toBeNull();
+    // Project became a real target field on 2026-09-11 — mapping it is what keeps another
+    // project's rows out of an import launched from this one.
+    expect(result.fields.find((f) => f.header === 'Project')?.suggestedField).toBe('project');
     expect(result.fields.find((f) => f.header === 'Tenant')?.suggestedField).toBe('tenantName');
     expect(result.fields.find((f) => f.header === 'Unit Num')?.suggestedField).toBe('unitNumber');
   });

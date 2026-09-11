@@ -72,6 +72,14 @@ export class CreateSaleDto {
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
 
+  /**
+   * Links this sale to its siblings when several units are sold TOGETHER as one negotiated
+   * deal. Mirrors Lease.combinedDealRef — the units stay separate, independently priced
+   * and independently closable Sale rows, linked only by this label.
+   */
+  @IsOptional() @IsString() @MaxLength(200)
+  combinedDealRef?: string;
+
   // Broker attribution (internal-only). Commission amount is computed server-side on close.
   @IsOptional() @IsString()
   brokerId?: string;

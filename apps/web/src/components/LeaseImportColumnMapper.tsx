@@ -14,6 +14,10 @@ import { Select, SelectItem, Switch } from '@heroui/react';
  */
 
 export const TENANCY_FIELDS: { key: string; label: string; required?: boolean }[] = [
+  // Not required: most sheets are one project's and don't carry the column. Mapping it is
+  // what keeps another project's rows out of an import launched from this one — the server
+  // never reads it to CHOOSE a project.
+  { key: 'project', label: 'Project', required: false },
   { key: 'unitNumber', label: 'Unit Number', required: true },
   { key: 'building', label: 'Building' },
   { key: 'tenantName', label: 'Tenant Name', required: true },

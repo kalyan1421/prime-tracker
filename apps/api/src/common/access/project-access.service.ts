@@ -193,6 +193,15 @@ const KEY_ENTITY: Record<string, string> = {
   milestoneId: 'milestone',
   campaignId: 'campaign',
   projectIds: 'project',
+  // Plural forms MUST be listed explicitly. A body key that is absent from this map
+  // resolves to nothing, and the guard's loop then runs over zero ids — i.e. no membership
+  // check at all for a scoped role. `projectIds` was the only plural here, so the first
+  // endpoint to take `leaseIds`/`unitIds` in its body would have shipped unguarded. Same
+  // class of hole this file already records finding twice (unitConstructionStagePhoto,
+  // dailyLogPhoto). add() resolves array values elementwise, so nothing else is needed.
+  leaseIds: 'lease',
+  unitIds: 'unit',
+  saleIds: 'sale',
   taskId: 'task',
   interiorProjectId: 'interior',
   commitmentId: 'commitment',

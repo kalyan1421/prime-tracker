@@ -124,6 +124,17 @@ export class CreateLeaseDto {
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
 
+  /**
+   * Links this lease to its siblings on the other units of one multi-unit letting.
+   *
+   * The service has always persisted it and the schema has always indexed it, but this
+   * DTO never listed it — and main.ts sets `forbidNonWhitelisted: true`, so POST /leases
+   * rejected it outright. A deal could therefore only ever arrive by import, never be
+   * created or corrected by hand.
+   */
+  @IsOptional() @IsString() @MaxLength(200)
+  combinedDealRef?: string;
+
   // ---- Leasing commission (R23) ----
   /** Broker who brought the tenant. Internal-only; brokers have no login. */
   @IsOptional() @IsString()
@@ -251,6 +262,17 @@ export class UpdateLeaseDto {
 
   @IsOptional() @IsString() @MaxLength(1000)
   notes?: string;
+
+  /**
+   * Links this lease to its siblings on the other units of one multi-unit letting.
+   *
+   * The service has always persisted it and the schema has always indexed it, but this
+   * DTO never listed it — and main.ts sets `forbidNonWhitelisted: true`, so POST /leases
+   * rejected it outright. A deal could therefore only ever arrive by import, never be
+   * created or corrected by hand.
+   */
+  @IsOptional() @IsString() @MaxLength(200)
+  combinedDealRef?: string;
 
   // ---- Leasing commission (R23) ----
   /** Broker who brought the tenant. Internal-only; brokers have no login. */

@@ -91,6 +91,147 @@ function makeService() {
   );
 }
 
+describe('LeasesService.endDealTenancy — a multi-unit deal ends as one', () => {
+  let service: LeasesService;
+
+  const member = (id: string, unitNumber: string, over: Record<string, unknown> = {}) => ({
+    id,
+    tenantName: 'We Fun',
+    unitId: `u-${unitNumber}`,
+    combinedDealRef: 'CEN-B7-701-706',
+    leaseStart: new Date('2026-01-12'),
+    leaseEnd: new Date('2033-07-31'),
+    terminationDate: null,
+    securityDeposit: null,
+    deletedAt: null,
+    status: 'ACTIVE',
+    unit: { id: `u-${unitNumber}`, unitNumber, status: 'LEASED' },
+    ...over,
+  });
+
+  const input = (units: Array<{ id: string }>, over: Record<string, unknown> = {}) => ({
+    projectId: 'p1',
+    combinedDealRef: 'CEN-B7-701-706',
+    terminationDate: '2027-03-31',
+    terminationReason: 'EARLY_TERMINATION' as any,
+    units: units.map((u) => ({ leaseId: u.id, outcome: 'VACANT' })),
+    ...over,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockInvoices.paidAfter.mockResolvedValue([]);
+    mockInvoices.voidAfter.mockResolvedValue(0);
+    mockRentPeriods.capAtTermination = jest.fn().mockResolvedValue({ deleted: 0, truncated: 0 });
+    // settleDeposit looks the held balance up per lease; DECIDE_LATER short-circuits, but
+    // the lookup still runs, so the table has to exist on the transaction client.
+    mockPrisma.leaseObligation = { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn(), create: jest.fn() };
+    mockPrisma.unit.findUnique.mockResolvedValue({ building: { projectId: 'p1' }, status: 'LEASED' });
+    mockPrisma.lease.update.mockImplementation(({ where }: any) =>
+      Promise.resolve({ id: where.id, unitId: 'u-x', tenantName: 'We Fun', successorLeaseId: null }));
+  });
+
+  it('ends every member on ONE date in a single transaction', async () => {
+    const group = [member('l1', '701'), member('l2', '702'), member('l3', '703')];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    mockPrisma.lease.findUnique.mockImplementation(({ where }: any) =>
+      Promise.resolve(group.find((g) => g.id === where.id)));
+
+    const out = await service.endDealTenancy(input(group) as any, 'user1');
+
+    expect(out.ended).toBe(3);
+    // "3 of 6 ended" is never true of the world, so it must never be true of the database.
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+    const dates = mockPrisma.lease.update.mock.calls.map((c: any[]) => c[0].data.terminationDate);
+    expect(new Set(dates.map((d: Date) => d.toISOString()))).toHaveProperty('size', 1);
+  });
+
+  it('reports EVERY blocker at once, not just the first', async () => {
+    // Six units means six chances to fail; failing one at a time would have the reviewer
+    // fix, retry, and meet the next one.
+    const group = [member('l1', '701'), member('l2', '702'), member('l3', '703')];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    mockInvoices.paidAfter.mockImplementation((leaseId: string) =>
+      Promise.resolve(leaseId === 'l1' || leaseId === 'l3'
+        ? [{ periodMonth: new Date('2027-04-01') }] : []));
+
+    await expect(service.endDealTenancy(input(group) as any, 'user1')).rejects.toThrow(BadRequestException);
+    try {
+      await service.endDealTenancy(input(group) as any, 'user1');
+    } catch (e: any) {
+      const blockers = e.getResponse().blockers;
+      expect(blockers).toHaveLength(2);
+      expect(blockers.map((b: any) => b.unitNumber)).toEqual(['701', '703']);
+      expect(blockers.every((b: any) => b.code === 'RENT_COLLECTED_AFTER')).toBe(true);
+    }
+    expect(mockPrisma.lease.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the deal has changed since the screen was opened', async () => {
+    const group = [member('l1', '701'), member('l2', '702')];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    // The caller only saw one of the two units.
+    await expect(
+      service.endDealTenancy(input([group[0]]) as any, 'user1'),
+    ).rejects.toThrow(/changed since the screen was opened/);
+    expect(mockPrisma.lease.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reason that requires an already-SOLD unit', async () => {
+    // At group-end time no unit is sold — the sale has not closed. Accepting this would
+    // invite hand-flipping a unit to SOLD, which runs the destructive cap/void path on a
+    // sale that has not happened.
+    const group = [member('l1', '701'), member('l2', '702')];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    await expect(
+      service.endDealTenancy(input(group, { terminationReason: 'TENANT_BOUGHT' }) as any, 'user1'),
+    ).rejects.toThrow(/closing the sale/);
+  });
+
+  it('refuses TRANSFER, because the lease the money moves to does not exist yet', async () => {
+    const group = [member('l1', '701'), member('l2', '702')];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    await expect(
+      service.endDealTenancy(input(group, { depositDisposition: 'TRANSFER' }) as any, 'user1'),
+    ).rejects.toThrow(/does not exist yet/);
+  });
+
+  it('refuses a member whose tenancy already ended, naming the unit', async () => {
+    const group = [member('l1', '701'), member('l2', '702', { terminationDate: new Date('2027-01-31') })];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    try {
+      await service.endDealTenancy(input(group) as any, 'user1');
+      throw new Error('should have thrown');
+    } catch (e: any) {
+      expect(e.getResponse().blockers[0]).toMatchObject({ code: 'ALREADY_ENDED', unitNumber: '702' });
+    }
+  });
+
+  it('emits one termination event per unit and one deal-level audit row', async () => {
+    const group = [member('l1', '701'), member('l2', '702')];
+    mockPrisma.lease.findMany.mockResolvedValue(group);
+    mockPrisma.lease.findUnique.mockImplementation(({ where }: any) =>
+      Promise.resolve(group.find((g) => g.id === where.id)));
+
+    await service.endDealTenancy(input(group) as any, 'user1');
+
+    expect(mockBus.emit).toHaveBeenCalledTimes(2);
+    const dealRows = mockAudit.log.mock.calls
+      .map((c: any[]) => c[0])
+      .filter((a: any) => a.action === 'LEASE_DEAL_TENANCY_ENDED');
+    expect(dealRows).toHaveLength(1);
+    expect(dealRows[0].newValues.units.map((u: any) => u.unitNumber)).toEqual(['701', '702']);
+  });
+
+  it('404s when the ref names no live lease in this project', async () => {
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+    await expect(
+      service.endDealTenancy(input([{ id: 'l1' }]) as any, 'user1'),
+    ).rejects.toThrow(NotFoundException);
+  });
+});
+
 describe('LeasesService.delete — soft delete (preserves unit history)', () => {
   let service: LeasesService;
 
@@ -356,6 +497,41 @@ describe('LeasesService.create — rent schedule generation is non-fatal', () =>
     const result = await service.create(validData);
 
     expect(result.id).toBe('l1');
+  });
+});
+
+describe('LeasesService — leases on soft-deleted units stay out of the rent roll', () => {
+  let service: LeasesService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+  });
+
+  /** The unit/building liveness clause both queries must carry. */
+  const spaceClause = () => mockPrisma.lease.findMany.mock.calls[0][0].where.OR;
+
+  it('findByProject excludes a lease whose unit or building was soft-deleted', async () => {
+    // Deleting a unit never touched the leases on it, so their rows stayed live and kept
+    // counting: 11 phantom tenancies across two projects on 2026-09-12, $47,923/month of
+    // rent Prime does not collect. CENTRO's rent roll read $90,979 against a true $66,261,
+    // and a six-unit deal rendered as "203, 203, 204, 204".
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+    await service.findByProject('p1');
+    expect(spaceClause()).toEqual([
+      { unit: { deletedAt: null, building: { projectId: 'p1', deletedAt: null } } },
+      { building: { projectId: 'p1', deletedAt: null } },
+    ]);
+  });
+
+  it('getRentRoll carries the same liveness clause', async () => {
+    mockPrisma.lease.findMany.mockResolvedValue([]);
+    mockPrisma.leaseRentPeriod.findMany.mockResolvedValue([]);
+    await service.getRentRoll('p1');
+    expect(spaceClause()).toEqual([
+      { unit: { deletedAt: null, building: { projectId: 'p1', deletedAt: null } } },
+      { building: { projectId: 'p1', deletedAt: null } },
+    ]);
   });
 });
 

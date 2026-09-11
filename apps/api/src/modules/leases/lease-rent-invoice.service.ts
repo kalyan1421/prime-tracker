@@ -861,7 +861,10 @@ export class LeaseRentInvoiceService {
     return capped;
   }
 
-  private async capAtSale(lease: { unitId?: string | null }, through: Date): Promise<Date> {
+  private async capAtSale(
+    lease: { unitId?: string | null; terminationDate?: Date | null },
+    through: Date,
+  ): Promise<Date> {
     if (!lease.unitId) return through;
     const unit = await this.prisma.unit.findUnique({
       where: { id: lease.unitId },
@@ -874,11 +877,23 @@ export class LeaseRentInvoiceService {
       orderBy: { closingDate: 'asc' },
       select: { closingDate: true },
     });
-    // Sold with no closing date (hand-flipped status): bill nothing further. Choosing
-    // "cap at the epoch" over "ignore" deliberately — the units found in live data are
-    // exactly this shape, and letting them through is what caused the problem.
-    const soldOn = sale?.closingDate ?? new Date(0);
-    return soldOn < through ? soldOn : through;
+    if (sale?.closingDate) {
+      // The real answer: bill up to the day Prime stopped owning it, never past.
+      return sale.closingDate < through ? sale.closingDate : through;
+    }
+
+    // Sold with NO closing date on record (a hand-flipped status — 6 such units in live
+    // data). The epoch cap here exists to stop a still-running lease billing forward on a
+    // unit Prime no longer owns, and it must stay for exactly that case.
+    //
+    // But it also silently swallowed the case the client asks for: recording the tenancy
+    // that ran BEFORE the sale. A lease that has already ended is closed history bounded
+    // by its own move-out date — billing it is not forward-billing, it is the history
+    // being entered. Deferring to capAtEnd's terminationDate cap keeps the guard where it
+    // belongs and stops a backfilled pre-sale tenancy generating an empty ledger.
+    const ended = lease.terminationDate;
+    const hasEnded = ended instanceof Date && !Number.isNaN(ended.getTime());
+    return hasEnded ? through : new Date(0);
   }
 
   private toScheduleInput(

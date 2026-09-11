@@ -6,6 +6,7 @@ import {
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { fmt as fmtMoney } from '../utils/fmt';
+import { groupByCombinedDeal } from '../utils/tenancy';
 
 const PHASES = [
   { key: 'PRE_DEVELOPMENT', label: 'Pre-Dev' },
@@ -63,7 +64,11 @@ export function ProjectHealthHeader({ project }: { project: any }) {
     const available = unitArr.filter((u) => u.status === 'AVAILABLE').length;
 
     const leaseArr = (leases as any[]) || [];
-    const activeLeases = leaseArr.filter((l) => l.status === 'ACTIVE').length;
+    // Count LETTINGS, not lease rows. One lease over six units is one tenancy to manage;
+    // counting six made a project with four multi-unit deals read as if it had far more
+    // tenants than it has. groupByCombinedDeal returns a group of one for an ordinary
+    // lease, so a project with no multi-unit deals is unaffected.
+    const activeLeases = groupByCombinedDeal(leaseArr.filter((l) => l.status === 'ACTIVE')).length;
     const monthlyRent = leaseArr
       .filter((l) => l.status === 'ACTIVE')
       .reduce((s, l) => s + Number(l.monthlyRent ?? 0), 0);

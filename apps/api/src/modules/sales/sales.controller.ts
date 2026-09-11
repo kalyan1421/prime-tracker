@@ -13,6 +13,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateSaleDto } from './dto/create-sale.dto';
+import { CreateDealSaleDto } from './dto/create-deal-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
 import { BackfillSaleDto } from './dto/backfill-sale.dto';
 import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
@@ -61,6 +62,27 @@ export class SalesController {
   @ApiOperation({ summary: 'Upcoming + overdue sale-payment receivables (Finance widget / cashflow inflows)' })
   receivables(@Query('weeks') weeks?: string) {
     return this.salePayments.receivables(weeks ? Number(weeks) : 4);
+  }
+
+  // Above ":id" — Nest matches in declaration order and would read "deal" as a sale id.
+  @Get('deal')
+  @RequirePermissions('sales:view')
+  @ApiOperation({ summary: 'The sales of one multi-unit deal, with its total price and how many have closed' })
+  findDeal(@Query('projectId') projectId: string, @Query('ref') ref: string) {
+    return this.service.findDeal(projectId, ref);
+  }
+
+  @Post('deal')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({
+    summary: 'Sell several units together as one deal',
+    description:
+      'Writes one sale per unit, linked by a shared reference, with the price either given '
+      + 'per unit or apportioned from a deal total. Creation only — each sale is then CLOSED '
+      + 'individually, because the document and discount checks are per unit.',
+  })
+  createDealSales(@Body() body: CreateDealSaleDto, @CurrentUser('sub') userId: string) {
+    return this.service.createDealSales(body as any, userId);
   }
 
   @Get(':id')

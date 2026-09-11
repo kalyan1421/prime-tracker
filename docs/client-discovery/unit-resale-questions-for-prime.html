@@ -1,0 +1,487 @@
+<title>Sold, Leased, Sold Again</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;1,400&family=Libre+Franklin:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper:      #f2f4f6;
+    --surface:    #ffffff;
+    --surface-2:  #e8ecf0;
+    --ink:        #131c26;
+    --ink-2:      #46545f;
+    --ink-3:      #6d7b86;
+    --rule:       #d3dae0;
+    --accent:     #1d5286;
+    --accent-ink: #0f3a63;
+    --built:      #2c6a4e;
+    --built-bg:   #e4efe8;
+    --gap:        #a03b2e;
+    --gap-bg:     #f7e7e4;
+    --blocked:    #8a5a00;
+    --blocked-bg: #f9eed8;
+
+    --display: "Spectral", Georgia, "Times New Roman", serif;
+    --body:    "Libre Franklin", "Helvetica Neue", Arial, sans-serif;
+    --mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #10161c;
+      --surface:    #171f27;
+      --surface-2:  #1f2932;
+      --ink:        #e7ecf0;
+      --ink-2:      #aab6c0;
+      --ink-3:      #7d8b96;
+      --rule:       #2c3841;
+      --accent:     #79b0e2;
+      --accent-ink: #a8cdee;
+      --built:      #6fc198;
+      --built-bg:   #16281f;
+      --gap:        #e39184;
+      --gap-bg:     #2c1a17;
+      --blocked:    #d9a648;
+      --blocked-bg: #2a2113;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:      #10161c;
+    --surface:    #171f27;
+    --surface-2:  #1f2932;
+    --ink:        #e7ecf0;
+    --ink-2:      #aab6c0;
+    --ink-3:      #7d8b96;
+    --rule:       #2c3841;
+    --accent:     #79b0e2;
+    --accent-ink: #a8cdee;
+    --built:      #6fc198;
+    --built-bg:   #16281f;
+    --gap:        #e39184;
+    --gap-bg:     #2c1a17;
+    --blocked:    #d9a648;
+    --blocked-bg: #2a2113;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 3.25rem 1.5rem 5rem; }
+
+  /* ---------- masthead ---------- */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 1.1rem;
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(2.1rem, 6vw, 3.1rem);
+    line-height: 1.06;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+    margin: 0 0 .85rem;
+  }
+  .standfirst {
+    font-family: var(--display);
+    font-style: italic;
+    font-size: 1.16rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+    max-width: 34rem;
+    margin: 0 0 1.75rem;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: center;
+    font-family: var(--mono); font-size: .76rem; color: var(--ink-3);
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    padding: .7rem 0; margin-bottom: 2.75rem;
+  }
+  .meta strong { color: var(--ink-2); font-weight: 500; }
+
+  /* ---------- section furniture ---------- */
+  h2 {
+    font-family: var(--display);
+    font-weight: 600; font-size: 1.5rem; line-height: 1.2;
+    letter-spacing: -.01em; text-wrap: balance;
+    margin: 3rem 0 .35rem;
+  }
+  h2 + .lede { color: var(--ink-2); margin: 0 0 1.4rem; }
+  h3 {
+    font-family: var(--body); font-weight: 600; font-size: 1rem;
+    margin: 1.9rem 0 .4rem;
+  }
+  p { margin: 0 0 1rem; }
+  a { color: var(--accent-ink); }
+  code {
+    font-family: var(--mono); font-size: .86em;
+    background: var(--surface-2); padding: .1em .35em; border-radius: 3px;
+  }
+  strong { font-weight: 600; }
+
+  /* ---------- status band ---------- */
+  .band { display: grid; gap: .75rem; margin: 0 0 .5rem; }
+  @media (min-width: 40rem) { .band { grid-template-columns: repeat(3, 1fr); } }
+  .state { padding: 1rem 1.05rem; border-radius: 2px; border-left: 3px solid; }
+  .state h4 {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .09em;
+    text-transform: uppercase; margin: 0 0 .5rem; font-weight: 500;
+  }
+  .state p { font-size: .89rem; line-height: 1.5; margin: 0; color: var(--ink-2); }
+  .state.is-built   { background: var(--built-bg);   border-color: var(--built); }
+  .state.is-built h4   { color: var(--built); }
+  .state.is-gap     { background: var(--gap-bg);     border-color: var(--gap); }
+  .state.is-gap h4     { color: var(--gap); }
+  .state.is-blocked { background: var(--blocked-bg); border-color: var(--blocked); }
+  .state.is-blocked h4 { color: var(--blocked); }
+
+  /* ---------- timeline figure ---------- */
+  figure { margin: 1.6rem 0 1.9rem; }
+  .fig-frame {
+    background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 2px; padding: 1.4rem 1.1rem 1rem; overflow-x: auto;
+  }
+  .fig-frame svg { display: block; width: 100%; min-width: 30rem; height: auto; }
+  figcaption {
+    font-family: var(--mono); font-size: .73rem; color: var(--ink-3);
+    margin-top: .7rem; line-height: 1.5;
+  }
+  .t-lane   { fill: var(--surface-2); }
+  .t-prime  { fill: var(--accent); }
+  .t-third  { fill: var(--gap); }
+  .t-lease  { fill: var(--built); }
+  .t-label  { fill: var(--surface); font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 500; }
+  .t-date   { fill: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 10px; }
+  .t-row    { fill: var(--ink); font-family: "Libre Franklin", sans-serif; font-size: 12px; font-weight: 600; }
+  .t-tick   { stroke: var(--rule); stroke-width: 1; }
+  .t-mark   { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 2 2; }
+
+  /* ---------- data figures ---------- */
+  .facts {
+    display: grid; gap: 0; margin: 1.5rem 0 1rem;
+    border: 1px solid var(--rule); border-radius: 2px; background: var(--surface);
+  }
+  @media (min-width: 34rem) { .facts { grid-template-columns: repeat(3, 1fr); } }
+  .fact { padding: 1rem 1.1rem; border-bottom: 1px solid var(--rule); }
+  .fact:last-child { border-bottom: 0; }
+  @media (min-width: 34rem) {
+    .fact { border-bottom: 0; border-right: 1px solid var(--rule); }
+    .fact:last-child { border-right: 0; }
+  }
+  .fact .n {
+    font-family: var(--display); font-size: 1.85rem; font-weight: 600;
+    line-height: 1; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; display: block; margin-bottom: .3rem;
+  }
+  .fact .k { font-size: .82rem; color: var(--ink-2); line-height: 1.42; display: block; }
+
+  /* ---------- tables ---------- */
+  .t-scroll { overflow-x: auto; margin: 1.3rem 0 1.5rem; }
+  table { border-collapse: collapse; width: 100%; min-width: 32rem; font-size: .88rem; }
+  caption {
+    text-align: left; font-family: var(--mono); font-size: .71rem;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+    padding-bottom: .55rem;
+  }
+  th, td { text-align: left; padding: .62rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: .71rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    border-bottom: 1px solid var(--ink-3);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.model { font-family: var(--mono); font-weight: 500; color: var(--accent-ink); white-space: nowrap; }
+  .rec { background: var(--built-bg); }
+  .rec td.model { color: var(--built); }
+
+  /* ---------- questions ---------- */
+  .q { border-top: 1px solid var(--rule); padding: 1.15rem 0 .3rem; }
+  .q:first-of-type { border-top: 0; }
+  .q-id {
+    font-family: var(--mono); font-size: .73rem; font-weight: 500;
+    color: var(--ink-3); letter-spacing: .04em;
+  }
+  .q h3 { margin: .2rem 0 .35rem; font-size: 1.02rem; }
+  .q p { font-size: .91rem; color: var(--ink-2); margin: 0 0 .8rem; }
+  .q-blocking {
+    background: var(--blocked-bg); border: 1px solid var(--blocked);
+    border-left-width: 3px; border-radius: 2px;
+    padding: 1.15rem 1.2rem .5rem; margin: 0 0 1.5rem;
+  }
+  .q-blocking .q-id { color: var(--blocked); font-weight: 500; }
+  .q-blocking h3 { font-size: 1.12rem; }
+  .q-blocking p { color: var(--ink); }
+
+  .note {
+    border-left: 2px solid var(--rule); padding: .1rem 0 .1rem 1rem;
+    color: var(--ink-2); font-size: .91rem; margin: 1.2rem 0;
+  }
+  ul { margin: 0 0 1rem; padding-left: 1.15rem; }
+  li { margin-bottom: .45rem; }
+  li::marker { color: var(--ink-3); }
+  footer {
+    margin-top: 3.5rem; padding-top: 1.1rem; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: .73rem; color: var(--ink-3); line-height: 1.6;
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Prime Tracker · Decision memo</p>
+  <h1>Sold, leased, sold again</h1>
+  <p class="standfirst">One unit, three owners, two tenants. The tracker can already tell that
+    story for leases — it stops dead at the first sale.</p>
+  <div class="meta">
+    <span><strong>11 Sept 2026</strong></span>
+    <span>For the Prime sales team</span>
+    <span>7 questions · 1 blocking</span>
+  </div>
+
+  <p>Two scenarios came up: a unit sold to a business, later leased to a tenant, later sold
+    again; and a lease stopped early so the unit can be re-let to somebody else. Both need to sit
+    in date order on the unit's record.</p>
+
+  <p>The second one is already built. The first one is not, and it is not a small gap — it is a
+    question about whose money the rent is, which nobody at Prime has been asked yet.</p>
+
+  <div class="band">
+    <div class="state is-built">
+      <h4>Already works</h4>
+      <p>Stopping a lease early and re-letting to a new tenant, with the deposit carried across
+        or refunded. Dates enforced so two tenancies can't overlap.</p>
+    </div>
+    <div class="state is-gap">
+      <h4>Not built</h4>
+      <p>Anything after a sale. <code>SOLD</code> is the end of a unit's life in the system —
+        no second sale, no lease afterwards that counts.</p>
+    </div>
+    <div class="state is-blocked">
+      <h4>Waiting on Prime</h4>
+      <p>Whose rent is it once Prime has sold the unit? Three plausible answers, three very
+        different builds.</p>
+    </div>
+  </div>
+
+  <h2>The two scenarios, in date order</h2>
+  <p class="lede">Dates below are illustrative — the shape is what matters.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 640 208" role="img"
+           aria-label="Two timelines. Scenario A: Prime owns a unit, sells it to a business in March 2021, the unit is leased to a tenant in 2022, and sold again in June 2024 — the tracker cannot record the last two steps. Scenario B: Tenant A leases from 2019, the lease stops early in August 2023, Tenant B leases from October 2023 — fully supported today.">
+        <!-- Scenario A -->
+        <text class="t-row" x="0" y="14">Scenario A — resale</text>
+        <rect class="t-lane" x="0" y="26" width="640" height="34" rx="2"></rect>
+        <rect class="t-prime" x="0"   y="26" width="168" height="34" rx="2"></rect>
+        <text class="t-label" x="14" y="47">Prime owns</text>
+        <rect class="t-third" x="172" y="26" width="212" height="34" rx="2"></rect>
+        <text class="t-label" x="186" y="47">Business owns it</text>
+        <rect class="t-lease" x="230" y="32" width="130" height="22" rx="2" opacity="0.92"></rect>
+        <text class="t-label" x="240" y="47">leased to a tenant</text>
+        <rect class="t-third" x="388" y="26" width="252" height="34" rx="2"></rect>
+        <text class="t-label" x="402" y="47">Sold on to a third owner</text>
+        <line class="t-tick" x1="170" y1="26" x2="170" y2="72"></line>
+        <line class="t-tick" x1="386" y1="26" x2="386" y2="72"></line>
+        <text class="t-date" x="140" y="84">Mar 2021 · sale 1</text>
+        <text class="t-date" x="356" y="84">Jun 2024 · sale 2</text>
+        <line class="t-mark" x1="230" y1="60" x2="230" y2="92"></line>
+        <text class="t-date" x="234" y="100">the tracker cannot record this lease, or sale 2</text>
+
+        <!-- Scenario B -->
+        <text class="t-row" x="0" y="140">Scenario B — re-let</text>
+        <rect class="t-lane" x="0" y="152" width="640" height="34" rx="2"></rect>
+        <rect class="t-lease" x="0" y="152" width="300" height="34" rx="2"></rect>
+        <text class="t-label" x="14" y="173">Tenant A</text>
+        <rect class="t-lane" x="304" y="152" width="52" height="34" rx="2"></rect>
+        <text class="t-date" x="310" y="173">vacant</text>
+        <rect class="t-lease" x="360" y="152" width="280" height="34" rx="2" opacity="0.78"></rect>
+        <text class="t-label" x="374" y="173">Tenant B</text>
+        <line class="t-tick" x1="302" y1="152" x2="302" y2="198"></line>
+        <text class="t-date" x="238" y="204">Aug 2023 · stopped early</text>
+        <text class="t-date" x="360" y="204">Oct 2023 · re-let</text>
+      </svg>
+    </div>
+    <figcaption>Scenario B is supported end to end today. In Scenario A everything to the right
+      of the first sale is unrecordable.</figcaption>
+  </figure>
+
+  <h2>What the data says right now</h2>
+  <p class="lede">Checked against the live database, 11 Sept 2026.</p>
+
+  <div class="facts">
+    <div class="fact"><span class="n">0</span><span class="k">of 875 units have been sold twice</span></div>
+    <div class="fact"><span class="n">8</span><span class="k">sold units hold a lease — every one of them the tenant buying their own unit</span></div>
+    <div class="fact"><span class="n">3</span><span class="k">units already re-let to a second tenant</span></div>
+  </div>
+
+  <p>So resale has genuinely never happened in the tracker yet. That matters: it tells us whether
+    we are backfilling history or only opening the door for deals to come — which is question 2.</p>
+
+  <h2 id="q1">The decision everything else waits on</h2>
+
+  <div class="q-blocking">
+    <p class="q-id">Question 1 · blocking</p>
+    <h3>When Prime sells a unit to a business and it is later leased to a tenant, who collects
+      that rent — and does Prime earn anything from it?</h3>
+    <p>Three answers are all plausible for a commercial developer, and they are not variations
+      on a theme. One is a reporting change; one is a new event type; one is a property-management
+      product.</p>
+    <div class="t-scroll">
+      <table>
+        <caption>Pick one</caption>
+        <thead>
+          <tr><th>Model</th><th>Rent is</th><th>Prime earns</th><th>Effort</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="model">Manage it</td>
+            <td>collected by Prime, paid over to the owner</td>
+            <td>a management fee</td>
+            <td>High</td>
+          </tr>
+          <tr>
+            <td class="model">Take it back</td>
+            <td>Prime's own, the unit returns to the book</td>
+            <td>the full rent</td>
+            <td>Medium</td>
+          </tr>
+          <tr class="rec">
+            <td class="model">Just record it</td>
+            <td>the owner's business, not Prime's</td>
+            <td>commission on the resale only</td>
+            <td>Low · suggested first step</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The tracker behaves like the third option today, except it hides the history instead of
+      showing it. Making that one honest and complete is a small job. The other two are worth
+      doing only if Prime actually works that way.</p>
+  </div>
+
+  <h2>The rest of the questions</h2>
+  <p class="lede">None of these block the first step, but each one shapes a later phase.</p>
+
+  <div class="q">
+    <p class="q-id">Question 2</p>
+    <h3>Has a unit ever actually been sold twice, or is this about future deals?</h3>
+    <p>Nothing in the system shows it happening. If it has happened off-system we need the old
+      records; if not, we only need the door opened.</p>
+  </div>
+
+  <div class="q">
+    <p class="q-id">Question 3</p>
+    <h3>Between the two sales, does Prime still own the unit?</h3>
+    <p>If yes, the first sale was reversed or bought back and we need to record that with its own
+      date. If no, the second sale is Prime brokering someone else's asset.</p>
+  </div>
+
+  <div class="q">
+    <p class="q-id">Question 4</p>
+    <h3>Should a resale count in "Closed Sales, all-time"?</h3>
+    <p>That figure reads <strong>$32.68M</strong> today. Adding resales to it counts the same
+      unit's value twice. Our recommendation is a separate resale line — but it is Prime's number
+      to define.</p>
+  </div>
+
+  <div class="q">
+    <p class="q-id">Question 5</p>
+    <h3>Does Prime take a commission on a resale?</h3>
+    <p>If so, we would track it exactly like the broker commissions already in the system,
+      including split installments.</p>
+  </div>
+
+  <div class="q">
+    <p class="q-id">Question 6</p>
+    <h3>On a past tenancy entered from a spreadsheet, was the security deposit collected?</h3>
+    <p>Past rent is already recorded as paid in full so old tenancies don't show up as money
+      owed. Deposits are not — every imported lease currently reports its deposit as still
+      outstanding. We plan to match the rent rule. Worth confirming: for a tenancy that has
+      already ended, should the deposit read as collected and then returned, or simply collected?</p>
+  </div>
+
+  <div class="q">
+    <p class="q-id">Question 7</p>
+    <h3>When a lease is stopped early and re-let, what usually happens to the deposit?</h3>
+    <p>Transferred to the new tenant, refunded, or put against what the old tenant owed. All
+      three work today — knowing the common one lets us pre-select it instead of asking every
+      time.</p>
+  </div>
+
+  <h2>How we would build it</h2>
+  <p class="lede">The first step needs no answers and is worth doing regardless.</p>
+
+  <div class="t-scroll">
+    <table>
+      <caption>Phases</caption>
+      <thead>
+        <tr><th>Step</th><th>What it delivers</th><th>Waits on</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="model">R0</td>
+          <td>A unit can carry a second sale, and its record shows sale, lease and sale
+            interleaved strictly by date. No money figures change.</td>
+          <td>nothing</td>
+        </tr>
+        <tr>
+          <td class="model">R1</td>
+          <td>Ownership becomes a dated fact rather than a yes/no flag, so the record can say who
+            owned the unit when.</td>
+          <td>Q2, Q3</td>
+        </tr>
+        <tr>
+          <td class="model">R2</td>
+          <td>A lease can be recorded on a unit Prime has sold — visible in history, marked
+            plainly as not Prime's income.</td>
+          <td>Q1</td>
+        </tr>
+        <tr>
+          <td class="model">R3</td>
+          <td>The money model: management fees and owner statements, or buy-back.</td>
+          <td>Q1</td>
+        </tr>
+        <tr>
+          <td class="model">R4</td>
+          <td>Resale commission, and resale reported separately from first sales.</td>
+          <td>Q4, Q5</td>
+        </tr>
+        <tr>
+          <td class="model">R5</td>
+          <td>Spreadsheet import understands multi-owner history.</td>
+          <td>R1</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Two smaller things from the same conversation</h2>
+
+  <h3>Deposits on imported leases</h3>
+  <p>A real inconsistency, and a small fix. Imported past rent is marked paid in full on purpose,
+    so a 2019 tenancy doesn't land in today's collections report. The security deposit on the same
+    lease is left as outstanding. Question 6 settles the one detail; the change itself is quick.</p>
+
+  <h3>Monthly collection detail from your own spreadsheet</h3>
+  <p class="note">Already works when you use the downloaded template — the "Ledger Exceptions" tab
+    reads the months that weren't paid in full and attaches them to the right unit's tenancy,
+    month by month. It does <em>not</em> work in "Upload your own spreadsheet" yet. Extending the
+    column mapper to accept a month and an amount collected closes that, and needs nothing from
+    Prime.</p>
+
+  <footer>
+    Verified against the Prime Tracker codebase and live database on 11 Sept 2026.
+    Engineering detail: <code>docs/client-discovery/UNIT_RESALE_AND_OWNERSHIP_ERAS_SPEC.md</code>.
+    Scenario B builds on the lease transition work confirmed with Prime on 13 Aug 2026.
+  </footer>
+
+</div>

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardBody, CardHeader, Button, Chip, Select, SelectItem, Input, addToast } from '@heroui/react';
 import { ImportStepRail, FileDropZone } from '../components/ImportFlow';
-import { FiArrowLeft, FiDownload, FiUpload, FiCheckCircle, FiAlertTriangle } from 'react-icons/fi';
+import { FiArrowLeft, FiDownload, FiUpload, FiCheckCircle, FiAlertTriangle, FiSlash } from 'react-icons/fi';
 import {
   useDownloadImportTemplate, usePreviewLeaseImport, useCommitLeaseImport,
   useAnalyzeGenericLeaseImport, usePreviewMappedLeaseImport,
@@ -130,11 +130,19 @@ export default function RentHistoryImportPage() {
   // simply never recorded — 11 rows of the client's own workbook have no Lease End.
   // rowOverrides is what's actually SENT and persists across reruns (e.g. after creating
   // missing units); rowFixes is the not-yet-applied in-progress input.
+  // Sheet Project labels the reviewer has confirmed mean THIS project. Empty is the norm:
+  // a label is only ever added here by an explicit click, because accepting one is what
+  // lets rows the server judged another project's be imported here.
+  const [acceptedProjectLabels, setAcceptedProjectLabels] = useState<string[]>([]);
   const [rowOverrides, setRowOverrides] = useState<Record<number, Record<string, unknown>>>({});
   const [rowFixes, setRowFixes] = useState<Record<number, RowFix>>({});
   const [applyingRowFixes, setApplyingRowFixes] = useState(false);
 
-  const handleFilePicked = async (file: File, overrideRows?: Record<number, Record<string, unknown>>) => {
+  const handleFilePicked = async (
+    file: File,
+    overrideRows?: Record<number, Record<string, unknown>>,
+    acceptLabels?: string[],
+  ) => {
     if (!projectId) return;
     setFileName(file.name);
     setResult(null);
@@ -142,6 +150,7 @@ export default function RentHistoryImportPage() {
     try {
       const data = await previewImport.mutateAsync({
         file, projectId, rowOverrides: overrideRows ?? rowOverrides,
+        acceptProjectLabels: acceptLabels ?? acceptedProjectLabels,
       });
       setPreview(data);
     } catch (e) {
@@ -172,7 +181,10 @@ export default function RentHistoryImportPage() {
     }
   };
 
-  const handleConfirmMapping = async (overrideRows?: Record<number, Record<string, unknown>>) => {
+  const handleConfirmMapping = async (
+    overrideRows?: Record<number, Record<string, unknown>>,
+    acceptLabels?: string[],
+  ) => {
     if (!projectId || !genericFile || !analyzeResult) return;
     const columns: { columnIndex: number; field: string; splitPart?: 'psf' | 'total' }[] = [];
     for (const [idxStr, sel] of Object.entries(colSelections)) {
@@ -208,12 +220,33 @@ export default function RentHistoryImportPage() {
       const data = await previewMapped.mutateAsync({
         file: genericFile, projectId, mapping: { orientation: analyzeResult.orientation, columns }, defaultBrokerId: brokerId,
         rowOverrides: overrideRows ?? rowOverrides,
+        acceptProjectLabels: acceptLabels ?? acceptedProjectLabels,
       });
       setPreview(data);
       // Persist so a LATER rerun (e.g. after creating missing units) keeps this fix.
       if (overrideRows) setRowOverrides(overrideRows);
     } catch (e) {
       addToast({ title: errMsg(e, 'Could not parse this file with the current mapping'), color: 'danger' });
+    }
+  };
+
+  /**
+   * Confirms one of the sheet's Project labels really does name THIS project, then
+   * re-checks the file with it accepted. The label is passed explicitly rather than read
+   * back from state, so the re-check can't race the setState.
+   *
+   * This is the only way a row the server judged another project's becomes importable, so
+   * it is a deliberate click per label and never inferred — the label our name-matching
+   * couldn't read is usually an internal code or a since-renamed site, but it is just as
+   * often genuinely another project, and only the person looking at it can tell.
+   */
+  const acceptProjectLabel = async (label: string) => {
+    const next = [...acceptedProjectLabels, label];
+    setAcceptedProjectLabels(next);
+    if (mode === 'template') {
+      if (templateFile) await handleFilePicked(templateFile, undefined, next);
+    } else {
+      await handleConfirmMapping(undefined, next);
     }
   };
 
@@ -224,7 +257,49 @@ export default function RentHistoryImportPage() {
   /** Staging values for the fill-every-row bar — they do nothing until applied. */
   const [bulkValues, setBulkValues] = useState<Record<string, string>>({});
 
-  const blockedRows: any[] = preview ? preview.tenancies.filter((t: any) => t.status === 'error') : [];
+  /**
+   * Sheet rows the reviewer has chosen to leave out of this import, by row number.
+   *
+   * A blocked row is not always something to fix. The client's sheets carry rows that
+   * genuinely should not become tenancies — a unit that was never let, a duplicate the
+   * sheet's own author left in, a line whose missing value nobody can now recover. Before
+   * this, the only way past one was to invent a value for it, because the row sat in the
+   * "10 rows still blocked" tally forever and there was nothing else to do with it.
+   *
+   * Skipping is presentational only and deliberately so: nothing is written either way,
+   * since only `ready` rows are ever committed. What it changes is the tally — a skipped
+   * row stops being counted as outstanding — and it survives a re-check, which matters
+   * because applying fixes re-runs the whole preview.
+   *
+   * Keyed by row NUMBER, not row identity, so skipping a multi-unit row ("104, 105, 106")
+   * leaves out every unit it expanded into. They are one lease; leaving half of it in
+   * would be worse than either answer.
+   */
+  const [skippedRows, setSkippedRows] = useState<Set<number>>(new Set());
+  const toggleSkip = (rowNumber: number) => setSkippedRows((prev) => {
+    const next = new Set(prev);
+    if (next.has(rowNumber)) next.delete(rowNumber); else next.add(rowNumber);
+    return next;
+  });
+
+  // Rows the file carries for a DIFFERENT project (see otherProject) are blocked, not
+  // broken — nothing about them is this project's to fix, so they stay out of the review
+  // table and out of every "create this" and "fix that" list below. They are summarised in
+  // the banner instead: 33 red rows nobody here can act on buried the handful that mattered,
+  // and the fix bars were offering a Broker picker for rows that can never import.
+  const hasProjectColumn = (preview?.projectLabels?.length ?? 0) > 0;
+  const ourRows: any[] = preview ? preview.tenancies.filter((t: any) => !t.otherProject) : [];
+  const otherProjectRows: any[] = preview ? preview.tenancies.filter((t: any) => t.otherProject) : [];
+
+  // Skipped rows drop out of every "still blocked" tally and every fix bar below — that
+  // is the whole point of skipping one. They stay visible in the table, marked.
+  const blockedRows: any[] = ourRows.filter((t: any) => t.status === 'error' && !skippedRows.has(t.rowNumber));
+  const skippedCount = ourRows.filter((t: any) => skippedRows.has(t.rowNumber)).length;
+  // What pressing Import will actually send. Not summary.ready — that is the server's
+  // count, which cannot know what the reviewer has since chosen to leave out.
+  const importableCount = ourRows.filter(
+    (t: any) => t.status === 'ready' && !skippedRows.has(t.rowNumber),
+  ).length;
   const rowsNeeding = (key: keyof RowFix) =>
     blockedRows.filter((t: any) => fixableFields(t.errors).has(key));
   const bulkFields = BULK_FIELDS.filter((f) => rowsNeeding(f.key).length >= 2);
@@ -310,15 +385,6 @@ export default function RentHistoryImportPage() {
       await handleConfirmMapping();
     }
   };
-
-  // Rows the file carries for a DIFFERENT project (see otherProject) are skipped, not
-  // broken — nothing about them is this project's to fix, so they stay out of every
-  // "create this" and "fix that" list below.
-  // When the sheet names projects at all, every row shows its own label — the only
-  // safeguard left for a file whose labels matched no project (nothing got filtered).
-  const hasProjectColumn = (preview?.projectLabels?.length ?? 0) > 0;
-  const ourRows: any[] = preview ? preview.tenancies.filter((t: any) => !t.otherProject) : [];
-  const otherProjectRows: any[] = preview ? preview.tenancies.filter((t: any) => t.otherProject) : [];
 
   // Whole-building rows, in full — a lease over an entire building has no unit to
   // resolve to, so it is shown in detail for manual entry rather than half-fixed here.
@@ -456,7 +522,9 @@ export default function RentHistoryImportPage() {
 
   const handleCommit = async () => {
     if (!preview) return;
-    const readyRows = preview.tenancies.filter((t: any) => t.status === 'ready').map((t: any) => t.data);
+    const readyRows = preview.tenancies
+      .filter((t: any) => t.status === 'ready' && !skippedRows.has(t.rowNumber))
+      .map((t: any) => t.data);
     if (readyRows.length === 0) return;
     try {
       const data = await commitImport.mutateAsync(readyRows);
@@ -485,6 +553,7 @@ export default function RentHistoryImportPage() {
     setRowOverrides({});
     setBulkValues({});
     setRowFixes({});
+    setAcceptedProjectLabels([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -672,7 +741,12 @@ export default function RentHistoryImportPage() {
           <CardHeader className="flex flex-col items-start gap-1">
             <p className="font-semibold text-sm">3. Review before importing</p>
             <div className="flex gap-2 mt-1">
-              <Chip size="sm" color="success" variant="flat">{preview.summary.ready} ready</Chip>
+              <Chip size="sm" color="success" variant="flat">{importableCount} ready</Chip>
+              {skippedCount > 0 && (
+                <Chip size="sm" variant="flat" title="Left out of this import by choice — nothing is written for these rows">
+                  {skippedCount} skipped
+                </Chip>
+              )}
               {preview.summary.errors > 0 && (
                 <Chip size="sm" color="danger" variant="flat">{preview.summary.errors} with errors</Chip>
               )}
@@ -779,8 +853,13 @@ export default function RentHistoryImportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.tenancies.map((t: any) => (
-                    <tr key={t.rowNumber} className="border-b border-gray-50">
+                  {ourRows.map((t: any) => {
+                    const isSkipped = skippedRows.has(t.rowNumber);
+                    return (
+                    <tr
+                      key={`${t.rowNumber}-${t.unitNumber}`}
+                      className={`border-b border-gray-50 ${isSkipped ? 'opacity-50' : ''}`}
+                    >
                       <td className="px-2 py-1.5 text-gray-500 tabular-nums">{t.rowNumber}</td>
                       {hasProjectColumn && (
                         <td className={`px-2 py-1.5 whitespace-nowrap ${t.otherProject ? 'text-rose-700' : 'text-gray-500'}`}>
@@ -817,7 +896,20 @@ export default function RentHistoryImportPage() {
                             ))}
                           </div>
                         )}
-                        {t.status === 'duplicate' ? (
+                        {isSkipped ? (
+                          <span className="inline-flex items-center gap-2 text-gray-600">
+                            <span className="inline-flex items-center gap-1">
+                              <FiSlash className="w-3.5 h-3.5" /> Not importing
+                            </span>
+                            <button
+                              type="button"
+                              className="text-blue-600 underline underline-offset-2"
+                              onClick={() => toggleSkip(t.rowNumber)}
+                            >
+                              Undo
+                            </button>
+                          </span>
+                        ) : t.status === 'duplicate' ? (
                           <span className="inline-flex items-center gap-1 text-gray-500" title="This tenancy is already on this unit with the same start date — skipped, not imported again">
                             <FiCheckCircle className="w-3.5 h-3.5" /> Already imported
                           </span>
@@ -938,9 +1030,22 @@ export default function RentHistoryImportPage() {
                             </span>
                           </span>
                         )}
+                        {!isSkipped && t.status !== 'duplicate' && (
+                          <div className="mt-1">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-rose-700 underline underline-offset-2"
+                              title="Leave this row out of the import. Nothing is written for it, and it stops counting as blocked."
+                              onClick={() => toggleSkip(t.rowNumber)}
+                            >
+                              <FiSlash className="w-3 h-3" /> Don't import this row
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -959,31 +1064,85 @@ export default function RentHistoryImportPage() {
               </div>
             )}
 
-            {(preview.projectLabels?.length ?? 0) > 1 && (
-              <div
-                className={`rounded-lg border p-3 ${preview.matchedProjectLabel
-                  ? 'border-gray-200 bg-gray-50' : 'border-amber-300 bg-amber-50'}`}
-              >
-                {preview.matchedProjectLabel ? (
-                  <p className="text-xs text-gray-600">
-                    This file's Project column covers {preview.projectLabels.length} projects. Only its{' '}
-                    <span className="font-semibold text-gray-800">"{preview.matchedProjectLabel}"</span> rows are
-                    being added here; {otherProjectRows.length} row{otherProjectRows.length === 1 ? '' : 's'} for{' '}
-                    {(preview.projectLabels as string[]).filter((l) => l !== preview.matchedProjectLabel).join(', ')}{' '}
-                    {otherProjectRows.length === 1 ? 'was' : 'were'} skipped. Upload the same file from each of
-                    those projects' Revenue tabs to bring them in.
-                  </p>
+            {hasProjectColumn && (() => {
+              const labels = (preview.projectLabels ?? []) as string[];
+              const unmatched = (preview.unmatchedProjectLabels ?? []) as string[];
+              const unreadable = (preview.unreadableProjectLabels ?? []) as string[];
+              const matched = preview.matchedProjectLabel as string | null;
+              const rechecking = previewImport.isPending || previewMapped.isPending;
+
+              // Nothing was held back. Either every label names this project, or the ones
+              // that name nothing at all are being read as this project's — which is an
+              // assumption, so it gets said out loud rather than passing silently.
+              if (unmatched.length === 0) {
+                return unreadable.length === 0 ? (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                    <p className="text-xs text-gray-600">
+                      This file's Project column reads{' '}
+                      <span className="font-semibold text-gray-800">"{labels.join('", "')}"</span> — read as this
+                      project, so every row is being added here.
+                    </p>
+                  </div>
                 ) : (
-                  <p className="text-xs text-amber-900">
-                    <span className="font-semibold">Check this preview carefully.</span> The file's Project
-                    column names {preview.projectLabels.length} projects
-                    ({(preview.projectLabels as string[]).join(', ')}), and none of them matches this project's
-                    name — so nothing could be filtered out automatically. Unit numbers repeat across projects,
-                    so a row from another project can resolve against a same-numbered unit here.
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+                    <p className="text-xs text-amber-900">
+                      <span className="font-semibold">Check these belong here.</span> This file's Project column
+                      says <span className="font-semibold">{unreadable.join(', ')}</span>, which{' '}
+                      {unreadable.length === 1 ? 'matches' : 'match'} no project in Prime Tracker — so{' '}
+                      {unreadable.length === 1 ? 'it is' : 'they are'} being read as this project's and every row
+                      is being added here. Nothing else could claim{' '}
+                      {unreadable.length === 1 ? 'it' : 'them'}, but unit numbers repeat across projects, so it
+                      is worth a look before you import.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  className={`rounded-lg border p-3 space-y-2 ${matched
+                    ? 'border-gray-200 bg-gray-50' : 'border-amber-300 bg-amber-50'}`}
+                >
+                  {matched ? (
+                    <p className="text-xs text-gray-600">
+                      One import adds to one project. Only this file's{' '}
+                      <span className="font-semibold text-gray-800">"{matched}"</span> rows are being added here;{' '}
+                      {otherProjectRows.length} row{otherProjectRows.length === 1 ? '' : 's'} for{' '}
+                      {unmatched.join(', ')} {otherProjectRows.length === 1 ? 'was' : 'were'} left out. Open this
+                      importer from those projects' Revenue tabs to bring them in.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-900">
+                      <span className="font-semibold">
+                        {otherProjectRows.length} row{otherProjectRows.length === 1 ? '' : 's'} held back.
+                      </span>{' '}
+                      This file's Project column says {unmatched.join(', ')}, and{' '}
+                      {unmatched.length === 1 ? 'that names another project' : 'those name other projects'} in
+                      Prime Tracker — not the one you opened this importer from. Unit numbers repeat across
+                      projects, so those rows are held rather than resolved against same-numbered units here.
+                      Open the importer from the project the file is for, or confirm below.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {unmatched.map((label) => (
+                      <Button
+                        key={label}
+                        size="sm"
+                        variant="flat"
+                        isDisabled={rechecking}
+                        onPress={() => acceptProjectLabel(label)}
+                      >
+                        "{label}" is this project
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-500">
+                    Only confirm a label you know names this project — an internal code, or a site since
+                    renamed. It re-checks the file with those rows counted as this project's.
                   </p>
-                )}
-              </div>
-            )}
+                </div>
+              );
+            })()}
 
             {wholeBuildingRows.length > 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
@@ -1217,11 +1376,11 @@ export default function RentHistoryImportPage() {
                 <Button
                   size="sm"
                   color="primary"
-                  isDisabled={preview.summary.ready === 0}
+                  isDisabled={importableCount === 0}
                   isLoading={commitImport.isPending}
                   onPress={handleCommit}
                 >
-                  Import {preview.summary.ready} ready row{preview.summary.ready === 1 ? '' : 's'}
+                  Import {importableCount} ready row{importableCount === 1 ? '' : 's'}
                 </Button>
               </div>
             )}

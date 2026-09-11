@@ -24,6 +24,11 @@ export interface FieldDef {
  * previously exposed to import), lease-term-as-duration, and per-installment commission
  * amounts were all present in real client data with nowhere to map to. */
 export const TENANCY_FIELD_DEFS: FieldDef[] = [
+  // Mapping this is what keeps ANOTHER project's rows out of an import launched from this
+  // one (see LeaseImportService.scopeToProject). It is never used to look a project UP —
+  // the project always comes from where the importer was opened. 'property' is deliberately
+  // left to Building, which already claims it.
+  { key: 'project', label: 'Project', synonyms: ['project name', 'scheme', 'development'] },
   { key: 'unitNumber', label: 'Unit Number', synonyms: ['unit no', 'unit num', 'unit #', 'suite', 'suite no', 'space'] },
   { key: 'building', label: 'Building', synonyms: ['bldg', 'property'] },
   { key: 'tenantName', label: 'Tenant Name', synonyms: ['tenant', 'lessee', 'occupant'] },

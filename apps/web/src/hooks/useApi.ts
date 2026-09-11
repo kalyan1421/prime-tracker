@@ -495,6 +495,36 @@ export function useEndTenancy() {
 }
 
 /**
+ * The live units of one multi-unit letting, plus anything that would block ending it on a
+ * given date. Read-only, so it can run as the dialog opens.
+ */
+export function useDealPreview(projectId: string, ref: string | null, terminationDate?: string) {
+  return useQuery({
+    queryKey: ['leases', 'deal', projectId, ref, terminationDate],
+    queryFn: () => api
+      .get('/leases/deal', { params: { projectId, ref, terminationDate } })
+      .then((r) => r.data),
+    enabled: !!projectId && !!ref,
+  });
+}
+
+/**
+ * End every lease of a multi-unit letting at once.
+ *
+ * Deliberately one request, never a loop over useEndTenancy: six units let under one
+ * signed lease end together or not at all, and six calls are six transactions — plus the
+ * tenth request of any second is refused by the API throttle.
+ */
+export function useEndDealTenancy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post('/leases/deal/end', data).then((r) => r.data),
+    onSuccess: () => invalidateAfterLeaseWrite(qc),
+  });
+}
+
+/**
  * Assign a lease to a new tenant. Unlike ending a tenancy this touches nothing but the
  * tenant's identity — but the unit timeline and the lease list both display the name,
  * so the same invalidation applies.
@@ -550,11 +580,13 @@ export function useDownloadImportTemplate() {
 /** Parses and validates an uploaded file — no writes. Returns the row-by-row preview. */
 export function usePreviewLeaseImport() {
   return useMutation({
-    mutationFn: ({ file, projectId, defaultBrokerId, rowOverrides }: {
+    mutationFn: ({ file, projectId, defaultBrokerId, rowOverrides, acceptProjectLabels }: {
       file: File; projectId: string;
       defaultBrokerId?: string;
       /** Values typed into the preview to fix a row, keyed by sheet row number. */
       rowOverrides?: Record<number, Record<string, unknown>>;
+      /** Sheet Project labels the reviewer confirmed mean THIS project. */
+      acceptProjectLabels?: string[];
     }) => {
       const form = new FormData();
       form.append('file', file);
@@ -562,6 +594,9 @@ export function usePreviewLeaseImport() {
       if (defaultBrokerId) form.append('defaultBrokerId', defaultBrokerId);
       if (rowOverrides && Object.keys(rowOverrides).length) {
         form.append('rowOverrides', JSON.stringify(rowOverrides));
+      }
+      if (acceptProjectLabels?.length) {
+        form.append('acceptProjectLabels', JSON.stringify(acceptProjectLabels));
       }
       // Content-Type deliberately NOT set — see usePresignedUpload's note on why.
       return api.post('/leases/backfill/import/preview', form).then((r) => r.data);
@@ -595,12 +630,14 @@ export function useAnalyzeGenericLeaseImport() {
 /** Same output shape as usePreviewLeaseImport, but parsed via a user-confirmed column mapping. */
 export function usePreviewMappedLeaseImport() {
   return useMutation({
-    mutationFn: ({ file, projectId, mapping, defaultBrokerId, rowBrokerOverrides, rowOverrides }: {
+    mutationFn: ({ file, projectId, mapping, defaultBrokerId, rowBrokerOverrides, rowOverrides, acceptProjectLabels }: {
       file: File; projectId: string;
       mapping: { orientation: 'rows' | 'columns'; columns: Array<{ columnIndex: number; field: string; splitPart?: 'psf' | 'total' }> };
       defaultBrokerId?: string;
       rowBrokerOverrides?: Record<number, string>;
       rowOverrides?: Record<number, Record<string, unknown>>;
+      /** Sheet Project labels the reviewer confirmed mean THIS project. */
+      acceptProjectLabels?: string[];
     }) => {
       const form = new FormData();
       form.append('file', file);
@@ -612,6 +649,9 @@ export function usePreviewMappedLeaseImport() {
       }
       if (rowOverrides && Object.keys(rowOverrides).length) {
         form.append('rowOverrides', JSON.stringify(rowOverrides));
+      }
+      if (acceptProjectLabels?.length) {
+        form.append('acceptProjectLabels', JSON.stringify(acceptProjectLabels));
       }
       return api.post('/leases/backfill/import/preview-mapped', form).then((r) => r.data);
     },

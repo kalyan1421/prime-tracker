@@ -63,6 +63,10 @@ export class UpdateSaleDto extends SaleCancellationFieldsDto {
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
 
+  /** See CreateSaleDto — editable so a grouping can be corrected or attached afterwards. */
+  @IsOptional() @IsString() @MaxLength(200)
+  combinedDealRef?: string;
+
   // Broker attribution (internal-only). Commission amount is computed server-side on close.
   @IsOptional() @IsString()
   brokerId?: string;

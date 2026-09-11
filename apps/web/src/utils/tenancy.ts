@@ -141,3 +141,229 @@ export function summariseChanges(changes: Array<{ label: string }> = []): string
   return `${changes[0].label}, ${changes[1].label} and ${changes.length - 2} more changed`;
 }
 
+
+/**
+ * One lease that happens to cover several units, gathered back into one thing.
+ *
+ * A multi-unit letting is stored as N separate `Lease` rows sharing `combinedDealRef` —
+ * the units stay separate on purpose, so any one of them can later be sold or re-let on
+ * its own. Nothing downstream knew that, so the six-unit We Fun lease rendered as six
+ * tenancies: six rent-roll rows, six tenant cards, six of everything, as though six
+ * businesses had moved in.
+ *
+ * This is the one place that regrouping is decided, so every surface collapses a deal the
+ * same way and none of them re-derive it.
+ *
+ * NOT the same thing as `UnitsService.combine()`, which physically MERGES units into one
+ * new unit and archives the sources. Nothing here changes a single record — it is a view
+ * over rows that stay exactly as they are. UI copy says "leased together", never
+ * "combined", so the two cannot be confused.
+ */
+export type DealGroup = {
+  /** The shared reference, or null for an ordinary single-unit lease. */
+  ref: string | null;
+  /** Members, in unit-number order. Always at least one. */
+  leases: any[];
+  /** The lease to act on / show details from — the one carrying the deal's deposit. */
+  primary: any;
+  /** "701–706", "606, 608", or just "101". */
+  unitLabel: string;
+  /** Summed across members: the rent for the whole letting. */
+  totalRent: number;
+  /** False for a lone lease AND for a ref with only one live member — both render as
+   *  ordinary rows. A "group of one" is not a group. */
+  isGroup: boolean;
+};
+
+/** The unit number a lease sits on, however the caller's payload happens to be shaped. */
+function unitNumberOf(lease: any): string {
+  return String(lease?.unit?.unitNumber ?? lease?.unitNumber ?? '');
+}
+
+/**
+ * "701, 702, 703, 704, 705, 706" is noise; "701–706" is the thing itself. Collapses to a
+ * range only when the numbers are purely numeric, all distinct and genuinely contiguous —
+ * "606, 608" must never render as "606–608", which would claim a unit 607 that is not in
+ * the letting.
+ */
+export function formatUnitLabel(unitNumbers: string[]): string {
+  const clean = unitNumbers.filter(Boolean);
+  if (clean.length === 0) return '—';
+  if (clean.length === 1) return clean[0];
+  const nums = clean.map((n) => Number(n));
+  const allNumeric = nums.every((n) => Number.isInteger(n));
+  if (allNumeric) {
+    const sorted = [...nums].sort((a, b) => a - b);
+    const contiguous = sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
+    if (contiguous && sorted.length > 2) return `${sorted[0]}–${sorted[sorted.length - 1]}`;
+    return sorted.join(', ');
+  }
+  return [...clean].sort().join(', ');
+}
+
+export function groupByCombinedDeal(leases: any[]): DealGroup[] {
+  const byRef = new Map<string, any[]>();
+  const singles: any[] = [];
+
+  for (const l of leases ?? []) {
+    const ref = (l?.combinedDealRef ?? '').trim();
+    if (!ref) { singles.push(l); continue; }
+    const list = byRef.get(ref) ?? [];
+    list.push(l);
+    byRef.set(ref, list);
+  }
+
+  const groups: DealGroup[] = [];
+
+  for (const [ref, members] of byRef) {
+    const ordered = [...members].sort((a, b) => unitNumberOf(a).localeCompare(unitNumberOf(b), undefined, { numeric: true }));
+    groups.push({
+      ref,
+      leases: ordered,
+      // The deposit is held whole on ONE member (client decision, 2026-09-12), so that is
+      // the lease a deal-level action has to target. Falls back to the first member for
+      // data that predates the rule.
+      primary: ordered.find((l) => Number(l?.securityDeposit ?? 0) > 0) ?? ordered[0],
+      unitLabel: formatUnitLabel(ordered.map(unitNumberOf)),
+      totalRent: ordered.reduce((sum, l) => sum + Number(l?.monthlyRent ?? 0), 0),
+      // A ref whose siblings were never imported (two exist in live data) is one unit
+      // wearing a group's name. Rendering it as a collapsible group of one is just noise.
+      isGroup: ordered.length > 1,
+    });
+  }
+
+  for (const l of singles) {
+    groups.push({
+      ref: null,
+      leases: [l],
+      primary: l,
+      unitLabel: unitNumberOf(l) || '—',
+      totalRent: Number(l?.monthlyRent ?? 0),
+      isGroup: false,
+    });
+  }
+
+  // Stable ordering by first unit, so a group sits where its lowest unit would have.
+  return groups.sort((a, b) => a.unitLabel.localeCompare(b.unitLabel, undefined, { numeric: true }));
+}
+
+/**
+ * The same regrouping, for a list of UNITS rather than leases.
+ *
+ * A unit list is inventory — every physical unit is real and none may be hidden. So a
+ * deal here is a collapsible row that opens to the units it covers, never a replacement
+ * for them. `units` is always the full set; the caller decides whether to show them.
+ */
+export type UnitDealGroup = {
+  ref: string | null;
+  units: any[];
+  unitLabel: string;
+  tenantName: string | null;
+  isGroup: boolean;
+};
+
+/** The live deal ref a unit is let under, if any. */
+function dealRefOfUnit(unit: any): string {
+  const lease = (unit?.leases ?? []).find((l: any) => l?.combinedDealRef) ?? unit?.leases?.[0];
+  // A SOLD unit's tenancy is not what the list is about — and a lease row surviving on one
+  // must not drag it into a letting group. Mirrors the rule the rent roll already applies.
+  if (unit?.status === 'SOLD') return '';
+  return String(lease?.combinedDealRef ?? '').trim();
+}
+
+export function groupUnitsByCombinedDeal(units: any[]): UnitDealGroup[] {
+  const byRef = new Map<string, any[]>();
+  const singles: any[] = [];
+
+  for (const u of units ?? []) {
+    const ref = dealRefOfUnit(u);
+    if (!ref) { singles.push(u); continue; }
+    const list = byRef.get(ref) ?? [];
+    list.push(u);
+    byRef.set(ref, list);
+  }
+
+  const out: UnitDealGroup[] = [];
+  for (const [ref, members] of byRef) {
+    const ordered = [...members].sort((a, b) =>
+      String(a?.unitNumber ?? '').localeCompare(String(b?.unitNumber ?? ''), undefined, { numeric: true }));
+    // A ref with one member in THIS list is not a group — it is one unit. That happens
+    // both for a half-imported deal and, routinely, when a building filter is applied.
+    if (ordered.length < 2) { singles.push(ordered[0]); continue; }
+    out.push({
+      ref,
+      units: ordered,
+      unitLabel: formatUnitLabel(ordered.map((u) => String(u?.unitNumber ?? ''))),
+      tenantName: ordered[0]?.leases?.[0]?.tenantName ?? null,
+      isGroup: true,
+    });
+  }
+
+  for (const u of singles) {
+    out.push({
+      ref: null,
+      units: [u],
+      unitLabel: String(u?.unitNumber ?? u?.name ?? '—'),
+      tenantName: u?.leases?.[0]?.tenantName ?? null,
+      isGroup: false,
+    });
+  }
+
+  return out.sort((a, b) => a.unitLabel.localeCompare(b.unitLabel, undefined, { numeric: true }));
+}
+
+/**
+ * The same regrouping for SALES — several units sold to one buyer as one negotiated deal.
+ *
+ * Lives beside the lease and unit versions because it is the same question about the same
+ * `combinedDealRef` idea, and keeping the three together is what stops a fourth being
+ * invented somewhere else with slightly different rules.
+ */
+export type SaleDealGroup = {
+  ref: string | null;
+  sales: any[];
+  primary: any;
+  unitLabel: string;
+  totalPrice: number;
+  isGroup: boolean;
+};
+
+export function groupSalesByCombinedDeal(sales: any[]): SaleDealGroup[] {
+  const byRef = new Map<string, any[]>();
+  const singles: any[] = [];
+  for (const s of sales ?? []) {
+    const ref = (s?.combinedDealRef ?? '').trim();
+    if (!ref) { singles.push(s); continue; }
+    const list = byRef.get(ref) ?? [];
+    list.push(s);
+    byRef.set(ref, list);
+  }
+
+  const out: SaleDealGroup[] = [];
+  for (const [ref, members] of byRef) {
+    const ordered = [...members].sort((a, b) =>
+      String(a?.unit?.unitNumber ?? '').localeCompare(String(b?.unit?.unitNumber ?? ''), undefined, { numeric: true }));
+    // One member here is one sale — a deal whose siblings sit in another pipeline column
+    // (two closed, one still under contract) must not render as a "group of one".
+    if (ordered.length < 2) { singles.push(ordered[0]); continue; }
+    out.push({
+      ref,
+      sales: ordered,
+      primary: ordered[0],
+      unitLabel: formatUnitLabel(ordered.map((s) => String(s?.unit?.unitNumber ?? ''))),
+      totalPrice: ordered.reduce((sum, s) => sum + Number(s?.salePrice ?? 0), 0),
+      isGroup: true,
+    });
+  }
+  for (const s of singles) {
+    out.push({
+      ref: null,
+      sales: [s],
+      primary: s,
+      unitLabel: String(s?.unit?.unitNumber ?? '—'),
+      totalPrice: Number(s?.salePrice ?? 0),
+      isGroup: false,
+    });
+  }
+  return out;
+}

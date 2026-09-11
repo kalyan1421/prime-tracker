@@ -159,11 +159,21 @@ export class SiteTrackerService {
           orderBy: { sortOrder: 'asc' },
         },
         // Tenant of record. Only ACTIVE leases — an expired tenancy is not who is in there.
+        //
+        //
+        // `combinedDealRef` rides along so the grid can collapse units let under one lease
+        // into a single row — but it stays INSIDE the canViewTenant gate rather than being
+        // selected for everyone. The client asked for that grouping "everywhere, including
+        // construction"; a viewer without lease:view must not learn tenancy structure, and
+        // "these six units are let as one" is tenancy structure. The gate is also asserted
+        // by a test that the leases relation is not even QUERIED for such a viewer, which
+        // is a deliberate posture, not an implementation detail. Those viewers keep the
+        // ungrouped grid they have today.
         ...(canViewTenant
           ? {
               leases: {
                 where: { status: 'ACTIVE', deletedAt: null },
-                select: { id: true, tenantName: true },
+                select: { id: true, tenantName: true, combinedDealRef: true },
                 orderBy: { leaseStart: 'desc' },
                 take: 1,
               },
@@ -250,6 +260,12 @@ export class SiteTrackerService {
         // its tenant column and its search.
         tenantName: canViewTenant
           ? (u.status === 'SOLD' ? null : (u.leases?.[0]?.tenantName ?? null))
+          : undefined,
+        // Same SOLD rule as tenantName: a tenancy surviving on a sold unit must not
+        // regroup the grid around a letting that no longer applies. Undefined — not null —
+        // for a viewer who cannot see tenancy, matching how tenantName reports absence.
+        combinedDealRef: canViewTenant
+          ? (u.status === 'SOLD' ? null : (u.leases?.[0]?.combinedDealRef ?? null))
           : undefined,
         totalStages: stages.length,
         doneStages: done,

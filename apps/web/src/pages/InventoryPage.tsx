@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card, CardBody, Input, Select, SelectItem, Chip, Button,
@@ -7,7 +7,9 @@ import {
 import { FiSearch, FiFilter, FiPackage, FiExternalLink, FiEdit2 } from 'react-icons/fi';
 import { useInventory, useProjects, useUpdateUnitStatus, useCustomOptions } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
-import { StatusBadge, LoadingState } from '../components/ui';
+import { StatusBadge, LoadingState, Pagination } from '../components/ui';
+import { usePagination } from '../hooks/usePagination';
+import { groupUnitsByCombinedDeal } from '../utils/tenancy';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { useAuthStore } from '../store/authStore';
 
@@ -41,7 +43,9 @@ export default function InventoryPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
-  const [page, setPage] = useState(1);
+  /** Which multi-unit letting is expanded. One at a time, as on the project Units tab. */
+  const [openDeal, setOpenDeal] = useState<string | null>(null);
+  
 
   // Quick-edit status modal
   const { isOpen: isStatusOpen, onOpen: onStatusOpen, onClose: onStatusClose } = useDisclosure();
@@ -90,11 +94,14 @@ export default function InventoryPage() {
     return counts;
   }, [allUnits]);
 
-  // Reset to first page whenever the filtered result set changes.
-  useEffect(() => { setPage(1); }, [search, statusFilter, typeFilter, projectFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(units.length / PAGE_SIZE));
-  const pagedUnits = units.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // usePagination owns the page clamp and the reset-on-filter-change that used to be a
+  // hand-rolled useState + useEffect here — the one list left out of the August pass.
+  const { page, setPage, totalPages, paged: pagedUnits } = usePagination(units, PAGE_SIZE, [
+    search, statusFilter, typeFilter, projectFilter,
+  ]);
+  // Paginate on UNITS first, then group — the same deliberate order the Site Tracker uses,
+  // so a page always holds PAGE_SIZE units however they happen to be let.
+  const unitGroups = groupUnitsByCombinedDeal(pagedUnits);
 
   const clearFilters = () => {
     setSearch('');
@@ -216,7 +223,38 @@ export default function InventoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {pagedUnits.map((u: any) => {
+                {unitGroups.map((g: any) => (
+                  <Fragment key={g.ref ?? g.units[0].id}>
+                  {/* Units let under ONE lease collapse to a single row that opens to them.
+                      Inventory, so no unit is ever hidden — only folded. */}
+                  {g.isGroup && (
+                    <tr
+                      className={`border-b border-gray-100 cursor-pointer ${openDeal === g.ref ? 'bg-blue-50/40' : 'bg-gray-50/60'}`}
+                      onClick={() => setOpenDeal((cur: string | null) => (cur === g.ref ? null : g.ref))}
+                    >
+                      <td className="py-2 px-3 font-medium">{g.unitLabel}</td>
+                      <td className="py-2 px-3 text-xs text-gray-600">{g.units[0].building?.project?.name}</td>
+                      <td className="py-2 px-3 text-xs text-gray-600">{g.units[0].building?.name}</td>
+                      <td className="py-2 px-3">
+                        <Chip size="sm" variant="flat" color="primary" className="text-[11px]">
+                          {g.units.length} units leased together
+                        </Chip>
+                      </td>
+                      <td className="py-2 px-3">
+                        {g.units.some((u: any) => u.sqft != null)
+                          ? g.units.reduce((sum: number, u: any) => sum + (u.sqft ?? 0), 0).toLocaleString()
+                          : '\u2014'}
+                      </td>
+                      {canSeeRentColumn && <td className="py-2 px-3" />}
+                      {canSeePriceColumns && <td className="py-2 px-3" />}
+                      <td className="py-2 px-3"><StatusBadge status={g.units[0].status} /></td>
+                      {(canSeeRentColumn || canSeePriceColumns) && (
+                        <td className="py-2 px-3">{g.tenantName || '\u2014'}</td>
+                      )}
+                      <td className="py-2 px-3" />
+                    </tr>
+                  )}
+                  {(!g.isGroup || openDeal === g.ref) && g.units.map((u: any) => {
                   const activeLease = u.leases?.[0];
                   const activeSale = u.sales?.find((s: any) => !['CANCELLED'].includes(s.status));
                   return (
@@ -296,36 +334,22 @@ export default function InventoryPage() {
                     </tr>
                   );
                 })}
+                  </Fragment>
+                ))}
               </tbody>
             </table></div>
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-3 py-2.5 border-t border-gray-100">
-                <span className="text-xs text-gray-500">
-                  {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, units.length)} of {units.length} units
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    isDisabled={page === 1}
-                    onPress={() => setPage((p) => p - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <span className="text-xs text-gray-500 px-2 tabular-nums">
-                    Page {page} / {totalPages}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    isDisabled={page === totalPages}
-                    onPress={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
+            {/* The shared control, so this list counts and clamps like every other one. */}
+            <div className="px-3 py-2.5 border-t border-gray-100">
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                onPrev={() => setPage(page - 1)}
+                onNext={() => setPage(page + 1)}
+                total={units.length}
+                pageSize={PAGE_SIZE}
+                itemLabel="units"
+              />
+            </div>
           </CardBody>
         </Card>
       )}

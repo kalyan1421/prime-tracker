@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   TENANTED_STATUSES, tenancyState, changeDelta, summariseChanges, fmtChangeValue,
+  groupByCombinedDeal, formatUnitLabel, groupUnitsByCombinedDeal,
 } from './tenancy';
 
 /** N days from now, as an ISO date the helpers accept. */
@@ -145,5 +146,130 @@ describe('fmtChangeValue', () => {
   it('puts strings back into the shape they were stored from', () => {
     expect(fmtChangeValue('1500', 'money')).toBe('$1,500');
     expect(fmtChangeValue('Acme', 'text')).toBe('Acme');
+  });
+});
+
+
+describe('formatUnitLabel', () => {
+  it('collapses a genuinely contiguous run', () => {
+    expect(formatUnitLabel(['701', '702', '703', '704', '705', '706'])).toBe('701–706');
+  });
+
+  it('never invents a unit that is not in the letting', () => {
+    // "606–608" would claim a 607 that is not part of the deal.
+    expect(formatUnitLabel(['606', '608'])).toBe('606, 608');
+    expect(formatUnitLabel(['104', '105', '107'])).toBe('104, 105, 107');
+  });
+
+  it('leaves a pair as a list rather than a two-element range', () => {
+    expect(formatUnitLabel(['203', '204'])).toBe('203, 204');
+  });
+
+  it('handles one unit, none, and non-numeric numbers', () => {
+    expect(formatUnitLabel(['101'])).toBe('101');
+    expect(formatUnitLabel([])).toBe('—');
+    expect(formatUnitLabel(['12B', '12A'])).toBe('12A, 12B');
+  });
+});
+
+describe('groupByCombinedDeal', () => {
+  const lease = (unitNumber: string, over: Record<string, unknown> = {}) => ({
+    id: `l-${unitNumber}`, unitNumber, monthlyRent: 1000, combinedDealRef: null, ...over,
+  });
+
+  it('gathers a six-unit deal into one group carrying the whole rent', () => {
+    const rows = ['701', '702', '703', '704', '705', '706'].map((n) =>
+      lease(n, { combinedDealRef: 'CEN-B7-701-706', monthlyRent: 4061.56 }));
+    const groups = groupByCombinedDeal(rows);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].isGroup).toBe(true);
+    expect(groups[0].unitLabel).toBe('701–706');
+    expect(groups[0].leases).toHaveLength(6);
+    expect(Math.round(groups[0].totalRent * 100) / 100).toBe(24369.36);
+  });
+
+  it('treats a ref with only one live member as an ordinary lease', () => {
+    // Two such refs exist in live data — siblings that were never imported.
+    const groups = groupByCombinedDeal([lease('1001', { combinedDealRef: 'RRC2-B10-1001-1002' })]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].isGroup).toBe(false);
+    expect(groups[0].unitLabel).toBe('1001');
+  });
+
+  it('leaves ordinary leases alone and keeps them separate', () => {
+    const groups = groupByCombinedDeal([lease('101'), lease('102')]);
+    expect(groups).toHaveLength(2);
+    expect(groups.every((g) => !g.isGroup && g.ref === null)).toBe(true);
+  });
+
+  it('mixes grouped and ungrouped, ordered by unit', () => {
+    const groups = groupByCombinedDeal([
+      lease('901'),
+      lease('606', { combinedDealRef: 'CEN-B6-606-608' }),
+      lease('101'),
+      lease('608', { combinedDealRef: 'CEN-B6-606-608' }),
+    ]);
+    expect(groups.map((g) => g.unitLabel)).toEqual(['101', '606, 608', '901']);
+    expect(groups[1].isGroup).toBe(true);
+  });
+
+  it('picks the deposit-bearing lease as the one to act on', () => {
+    // The deposit is held whole on one member, so a deal-level action must target it.
+    const groups = groupByCombinedDeal([
+      lease('705', { combinedDealRef: 'D', securityDeposit: 0 }),
+      lease('701', { combinedDealRef: 'D', securityDeposit: 40412.59 }),
+    ]);
+    expect(groups[0].primary.unitNumber).toBe('701');
+  });
+
+  it('reads a unit number nested under unit, as the lease endpoints return it', () => {
+    const groups = groupByCombinedDeal([
+      { id: 'a', combinedDealRef: 'D', monthlyRent: 10, unit: { unitNumber: '104' } },
+      { id: 'b', combinedDealRef: 'D', monthlyRent: 10, unit: { unitNumber: '105' } },
+    ]);
+    expect(groups[0].unitLabel).toBe('104, 105');
+  });
+
+  it('survives an empty list', () => {
+    expect(groupByCombinedDeal([])).toEqual([]);
+  });
+});
+
+
+describe('groupUnitsByCombinedDeal', () => {
+  const unit = (unitNumber: string, ref: string | null = null, over: Record<string, unknown> = {}) => ({
+    id: `u-${unitNumber}`, unitNumber, status: 'LEASED',
+    leases: ref ? [{ combinedDealRef: ref, tenantName: 'We Fun' }] : [],
+    ...over,
+  });
+
+  it('collapses units let under one deal, keeping every unit available', () => {
+    const groups = groupUnitsByCombinedDeal(
+      ['701', '702', '703'].map((n) => unit(n, 'CEN-B7-701-706')));
+    expect(groups).toHaveLength(1);
+    expect(groups[0].isGroup).toBe(true);
+    expect(groups[0].units).toHaveLength(3);
+    expect(groups[0].unitLabel).toBe('701–703');
+    expect(groups[0].tenantName).toBe('We Fun');
+  });
+
+  it('does not group a unit whose deal has only one member here', () => {
+    // Happens whenever a building filter narrows the list to one of the deal's units.
+    const groups = groupUnitsByCombinedDeal([unit('701', 'CEN-B7-701-706'), unit('101')]);
+    expect(groups.every((g) => !g.isGroup)).toBe(true);
+    expect(groups.map((g) => g.unitLabel)).toEqual(['101', '701']);
+  });
+
+  it('never groups a SOLD unit by a lease that outlived the sale', () => {
+    const groups = groupUnitsByCombinedDeal([
+      unit('701', 'CEN-B7-701-706', { status: 'SOLD' }),
+      unit('702', 'CEN-B7-701-706'),
+    ]);
+    expect(groups.every((g) => !g.isGroup)).toBe(true);
+  });
+
+  it('leaves an ordinary inventory list untouched', () => {
+    const groups = groupUnitsByCombinedDeal([unit('102'), unit('101')]);
+    expect(groups.map((g) => g.unitLabel)).toEqual(['101', '102']);
   });
 });

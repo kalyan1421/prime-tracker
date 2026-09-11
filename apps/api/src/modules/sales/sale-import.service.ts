@@ -1,9 +1,11 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { PrismaService } from '../../prisma/prisma.service';
+import { apportion } from '../leases/rent-apportionment';
 import { SalesService, BackfillSaleInput } from './sales.service';
 import {
   addColumnarSheet, assertHeaderMatches, cellText, cellDateIso, cellNumber, resolveUnit, resolveBroker, joinKey,
+  parseMultiUnitRef,
 } from '../../common/utils/xlsx-import';
 
 const SHEET_SALES = 'Sales';
@@ -178,6 +180,94 @@ export interface SaleImportCommitResult {
   }>;
 }
 
+/** Shape the sale sheet parses into, before validation. */
+type RawSale = {
+  rowNumber: number;
+  unitNumber: string;
+  building: string;
+  sqft?: number;
+  seller: string;
+  buyer: string;
+  purchasePrice?: number;
+  depositAmount?: number;
+  depositDate?: string;
+  secondPaymentAmount?: number;
+  secondPaymentDate?: string;
+  agreementDate?: string;
+  closingDate?: string;
+  brokerName: string;
+  notes: string;
+  /** Set when one Unit Number cell named several units — they were sold as one deal. */
+  combinedDealRef?: string;
+  errors: string[];
+  warnings?: string[];
+  edited: SaleOverrideField[];
+};
+
+/**
+ * Turns one multi-unit sale row into one row PER unit, linked as a single deal.
+ *
+ * The mirror of the rent importer's expandMultiUnitRows, and deliberately the same shape:
+ * the client's sheets record "104, 105, 106" for a sale exactly as often as for a letting,
+ * and a sale row naming three units could not be imported at all before this.
+ *
+ * The units stay SEPARATE Sale rows sharing a reference rather than becoming one merged
+ * unit — the same decision taken for leases on 2026-09-12, and for the same reason: each
+ * unit keeps its own price, its own paperwork and its own closing.
+ *
+ * The price in the cell is the DEAL total and is apportioned across the units by floor
+ * area where every one has a recorded area, evenly otherwise — the same helper the rent
+ * split uses, so the two cannot disagree. Deposits and second payments stay whole on the
+ * first unit: they are single instruments, not per-unit figures.
+ */
+function expandMultiUnitSaleRows(
+  raw: RawSale[],
+  existingUnitNumbers: Set<string>,
+  units: Array<{ unitNumber: string; sqft?: number | null }>,
+): RawSale[] {
+  const areaByNumber = new Map(units.map((u) => [u.unitNumber.trim().toLowerCase(), u.sqft ?? null]));
+  const out: RawSale[] = [];
+  for (const r of raw) {
+    // A unit whose REAL name contains a separator ("1001 & 1002" exists in live data) is
+    // never split into units that do not exist.
+    if (existingUnitNumbers.has(r.unitNumber.trim().toLowerCase())) { out.push(r); continue; }
+    const parts = parseMultiUnitRef(r.unitNumber);
+    if (parts.length < 2) { out.push(r); continue; }
+
+    const ref = r.combinedDealRef || `SALE-ROW-${r.rowNumber}`;
+    const split = r.purchasePrice != null
+      ? apportion(r.purchasePrice, parts.map((n) => ({ key: n, area: areaByNumber.get(n.toLowerCase()) ?? null })))
+      : null;
+    const amountByPart = new Map<string, number>(
+      (split?.shares ?? []).map((x: { key: string; amount: number }) => [x.key, x.amount]),
+    );
+
+    parts.forEach((unitNumber, i) => {
+      out.push({
+        ...r,
+        unitNumber,
+        combinedDealRef: ref,
+        purchasePrice: r.purchasePrice != null ? amountByPart.get(unitNumber) : undefined,
+        // One deposit is one instrument — copying it to each unit would multiply it, the
+        // same defect the rent importer had with security deposits.
+        depositAmount: i === 0 ? r.depositAmount : undefined,
+        depositDate: i === 0 ? r.depositDate : undefined,
+        secondPaymentAmount: i === 0 ? r.secondPaymentAmount : undefined,
+        secondPaymentDate: i === 0 ? r.secondPaymentDate : undefined,
+        sqft: undefined,
+        errors: [...r.errors],
+        warnings: [
+          ...(r.warnings ?? []),
+          `Unit "${r.unitNumber}" names ${parts.length} units; imported as ${parts.length} sales `
+          + `(${parts.join(', ')}) sharing one deal${r.purchasePrice != null
+            ? `, with the price divided ${split?.basis === 'sqft' ? 'by floor area' : 'equally'}` : ''}.`,
+        ],
+      });
+    });
+  }
+  return out;
+}
+
 @Injectable()
 export class SaleImportService {
   constructor(
@@ -212,26 +302,7 @@ export class SaleImportService {
 
     assertHeaderMatches(saleSheet, SHEET_SALES, SALE_COLUMNS);
 
-    type RawSale = {
-      rowNumber: number;
-      unitNumber: string;
-      building: string;
-      sqft?: number;
-      seller: string;
-      buyer: string;
-      purchasePrice?: number;
-      depositAmount?: number;
-      depositDate?: string;
-      secondPaymentAmount?: number;
-      secondPaymentDate?: string;
-      agreementDate?: string;
-      closingDate?: string;
-      brokerName: string;
-      notes: string;
-      errors: string[];
-      edited: SaleOverrideField[];
-    };
-    const raw: RawSale[] = [];
+    let raw: RawSale[] = [];
     saleSheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return; // header
       const get = (key: string) => row.getCell(SALE_COLUMNS.findIndex((c) => c.key === key) + 1);
@@ -290,6 +361,13 @@ export class SaleImportService {
       where: { deletedAt: null, building: { projectId, deletedAt: null } },
       select: { id: true, unitNumber: true, building: { select: { name: true } } },
     });
+    // Multi-unit cells become one row per unit, exactly as the rent importer does — the
+    // client's sheets record a sale of several units in one cell ("104, 105, 106",
+    // "201+203") just as often as they do a letting. Runs AFTER the units are loaded so a
+    // unit whose real name contains a separator is never split, and after the overrides so
+    // a corrected Unit Number is what gets expanded.
+    raw = expandMultiUnitSaleRows(raw, new Set(units.map((u) => u.unitNumber.trim().toLowerCase())), units);
+
     const brokers = await this.prisma.broker.findMany({
       where: { deletedAt: null },
       select: { id: true, name: true },
@@ -324,7 +402,8 @@ export class SaleImportService {
 
     const sales: SalePreviewRow[] = raw.map((r) => {
       const errors = [...r.errors];
-      const warnings: string[] = [];
+      // Carries anything the multi-unit expansion already said about this row.
+      const warnings: string[] = [...(r.warnings ?? [])];
 
       if (!r.unitNumber) errors.push('Unit Number is required.');
       if (!r.buyer) errors.push('Buyer is required.');
@@ -403,6 +482,7 @@ export class SaleImportService {
           closingDate: r.closingDate ?? '',
           notes: r.notes || undefined,
           brokerId,
+          combinedDealRef: r.combinedDealRef,
           payments: payments.length ? payments : undefined,
         },
       };

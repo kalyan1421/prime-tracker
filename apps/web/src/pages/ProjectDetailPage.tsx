@@ -155,6 +155,7 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
   );
 }
 import { fmt, fmtPct, fmtDate, errMsg } from '../utils/fmt';
+import { groupByCombinedDeal, groupUnitsByCombinedDeal, groupSalesByCombinedDeal } from '../utils/tenancy';
 import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields, leaseToForm } from '../components/LeaseFormFields';
 import { FormError } from '../components/FormError';
 import {
@@ -2727,6 +2728,10 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
   const [editId, setEditId] = useState<string | null>(null);
   const [statusTarget, setStatusTarget] = useState<{ id: string; unitNumber: string; currentStatus: string; newStatus: string; notes: string } | null>(null);
   const [activeLeaseId, setActiveLeaseId] = useState<string | null>(null);
+  // Which multi-unit letting is open in this list. One at a time, like the lease rows.
+  // Declared with the other hooks, ABOVE the isLoading/error early returns — placing it
+  // next to renderUnitRow put it after them and changed the hook count between renders.
+  const [expandedUnitDeal, setExpandedUnitDeal] = useState<string | null>(null);
   // loanCount is shown but does NOT gate the force checkbox: the server's guard trips on
   // leases-or-sales only, so requiring force for a loan-only unit would demand a
   // confirmation the API never asks for.
@@ -3394,7 +3399,48 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
                     <div className="overflow-x-auto">
                       <div className="responsive-table-wrap"><table className="w-full text-sm min-w-[560px]">
                         <thead>{unitTableHeaders}</thead>
-                        <tbody>{bUnits.map(renderUnitRow)}</tbody>
+                        <tbody>
+                          {/* Units let under ONE lease collapse to a single row that opens
+                              to the units it covers. Inventory, so nothing is ever hidden:
+                              every unit is still here, one click away. */}
+                          {groupUnitsByCombinedDeal(bUnits).map((g: any) => {
+                            if (!g.isGroup) return renderUnitRow(g.units[0]);
+                            const open = expandedUnitDeal === g.ref;
+                            return (
+                              <React.Fragment key={`deal-${g.ref}`}>
+                                <tr
+                                  className={`border-b border-gray-100 cursor-pointer ${open ? 'bg-blue-50/40' : 'bg-gray-50/60'}`}
+                                  onClick={() => setExpandedUnitDeal((cur) => (cur === g.ref ? null : g.ref))}
+                                >
+                                  <td className="py-2 px-2 font-medium">
+                                    <span className="inline-flex items-center gap-1.5">
+                                      {open ? <FiChevronDown className="shrink-0 text-xs" /> : <FiChevronRight className="shrink-0 text-xs" />}
+                                      {g.unitLabel}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-2">
+                                    <Chip size="sm" variant="flat" color="primary" className="text-[11px]">
+                                      {g.units.length} units leased together
+                                    </Chip>
+                                  </td>
+                                  <td className="py-2 px-2 text-right">
+                                    {/* A dash when NO member has a floor area on record —
+                                        summing nulls to 0 claimed these units measure zero
+                                        square feet, which is a statement, not a blank. */}
+                                    {g.units.some((u: any) => u.sqft != null)
+                                      ? g.units.reduce((sum: number, u: any) => sum + (u.sqft ?? 0), 0).toLocaleString()
+                                      : '\u2014'}
+                                  </td>
+                                  <td className="py-2 px-2"><StatusBadge status={g.units[0].status} /></td>
+                                  <td className="py-2 px-2" />
+                                  <td className="py-2 px-2">{g.tenantName || '\u2014'}</td>
+                                  <td className="py-2 px-2" colSpan={4} />
+                                </tr>
+                                {open && g.units.map(renderUnitRow)}
+                              </React.Fragment>
+                            );
+                          })}
+                        </tbody>
                       </table></div>
                     </div>
                   </CardBody>
@@ -4124,6 +4170,9 @@ function LeasesTab({ projectId }: { projectId: string }) {
   // Rent schedule + deposits are per-lease detail: one row expanded at a time, mirroring
   // the SalesTab card-expansion pattern rather than opening yet another modal.
   const [expandedLease, setExpandedLease] = useState<string | null>(null);
+  // Separate from expandedLease on purpose: a deal expands to reveal its UNITS, and each
+  // of those units then expands to its own rent schedule. Two different questions.
+  const [expandedDeal, setExpandedDeal] = useState<string | null>(null);
   const { data: leases, isLoading: ll } = useLeases(projectId);
   const { data: rentRoll, isLoading: rl } = useRentRoll(projectId);
   const { data: unitsData } = useUnits(projectId);
@@ -4196,6 +4245,9 @@ function LeasesTab({ projectId }: { projectId: string }) {
 
   if (ll || rl) return <LoadingState />;
   const leaseList = (leases as any[]) || [];
+  // One lease over six units is ONE letting, not six tenancies. Before this, the We Fun
+  // deal filled six rows here and six tenant cards below — the same tenant twelve times.
+  const dealGroups = groupByCombinedDeal(leaseList);
   const rr = rentRoll as any;
 
   // Units already leased (any non-terminated/expired lease) or sold — excluded from the
@@ -4213,7 +4265,12 @@ function LeasesTab({ projectId }: { projectId: string }) {
   return (
     <div className="mt-4">
       <div className="flex justify-between items-center mb-4">
-        <p className="font-semibold text-sm text-gray-600">{leaseList.length} leases</p>
+        <p className="font-semibold text-sm text-gray-600">
+          {dealGroups.length} lease{dealGroups.length === 1 ? '' : 's'}
+          {dealGroups.length !== leaseList.length && (
+            <span className="text-gray-500 font-normal"> · {leaseList.length} units let</span>
+          )}
+        </p>
         <div className="flex gap-2">
           {/* Deliberately not next to "Add Lease" in the same visual weight — this one
               writes a whole batch of complete ledgers, and the one that does more should
@@ -4278,9 +4335,46 @@ function LeasesTab({ projectId }: { projectId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {leaseList.map((l: any) => (
+                {dealGroups.map((g: any) => (
+                  <React.Fragment key={g.ref ?? g.primary.id}>
+                  {/* A multi-unit letting gets ONE row. It opens to the units it covers,
+                      each of which still opens to its own rent schedule — the letting and
+                      the unit are two different questions. */}
+                  {g.isGroup && (
+                    <tr
+                      className={`border-b border-gray-100 ${expandedDeal === g.ref ? 'bg-blue-50/40' : 'bg-gray-50/60'}`}
+                    >
+                      <td className="py-2 px-2 font-medium">
+                        <div className="flex items-center gap-2">
+                          <span>{g.primary.tenantBrand || g.primary.tenantName}</span>
+                          <Chip size="sm" variant="flat" color="primary" className="text-[11px]">
+                            {g.leases.length} units leased together
+                          </Chip>
+                        </div>
+                      </td>
+                      <td className="py-2 px-2 font-medium">{g.unitLabel}</td>
+                      <td className="py-2 px-2 text-right font-semibold">{fmt(g.totalRent)}</td>
+                      <td className="py-2 px-2">{fmtDate(g.primary.leaseStart)}</td>
+                      <td className="py-2 px-2">{fmtDate(g.primary.leaseEnd)}</td>
+                      <td className="py-2 px-2 text-right">{g.primary.escalationPct ? `${g.primary.escalationPct}%` : '\u2014'}</td>
+                      <td className="py-2 px-2"><StatusBadge status={g.primary.status} /></td>
+                      <td className="py-2 px-2">
+                        <Button
+                          size="sm"
+                          variant="light"
+                          onPress={() => setExpandedDeal((cur) => (cur === g.ref ? null : g.ref))}
+                          aria-expanded={expandedDeal === g.ref}
+                          title={expandedDeal === g.ref ? 'Hide the units in this lease' : 'Show the units in this lease'}
+                        >
+                          {expandedDeal === g.ref ? <FiChevronUp className="text-xs" /> : <FiChevronDown className="text-xs" />}
+                          <span className="text-xs">{expandedDeal === g.ref ? 'Hide units' : 'Units'}</span>
+                        </Button>
+                      </td>
+                    </tr>
+                  )}
+                  {(!g.isGroup || expandedDeal === g.ref) && g.leases.map((l: any) => (
                   <React.Fragment key={l.id}>
-                  <tr className="border-b border-gray-50">
+                  <tr className={g.isGroup ? 'border-b border-gray-50 bg-white' : 'border-b border-gray-50'}>
                     <td className="py-2 px-2 font-medium">
                       <div>
                         <span>{l.tenantBrand || l.tenantName}</span>
@@ -4357,6 +4451,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
                     </tr>
                   )}
                   </React.Fragment>
+                  ))}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table></div>
@@ -4405,16 +4501,18 @@ function LeasesTab({ projectId }: { projectId: string }) {
           <div className="flex items-center gap-2.5 px-5 pt-4 pb-3 border-b border-gray-100">
             <FiUsers className="w-4 h-4 text-blue-600" />
             <h2 className="font-semibold text-sm text-gray-800">
-              Tenant Profiles <span className="text-gray-500 font-normal">({leaseList.length})</span>
+              Tenant Profiles <span className="text-gray-500 font-normal">({dealGroups.length})</span>
             </h2>
           </div>
           <div className="p-4 sm:p-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {leaseList.map((l: any) => (
+            {/* One card per LETTING. A six-unit deal used to print the same tenant six
+                times here, directly under the six rows that already said it. */}
+            {dealGroups.map((g: any) => (
               <div
-                key={`profile-${l.id}`}
+                key={`profile-${g.ref ?? g.primary.id}`}
                 className="rounded-xl border border-gray-200 bg-gray-50/40 p-4 hover:border-gray-300 transition-colors"
               >
-                <TenantProfilePanel lease={l} unitNumber={l.unit?.unitNumber} />
+                <TenantProfilePanel lease={g.primary} unitNumber={g.unitLabel} />
               </div>
             ))}
           </div>
@@ -4797,7 +4895,26 @@ function SalesTab({ projectId }: { projectId: string }) {
                 )}
                 {/* Scrollable card list \u2014 caps board height even with 50+ closed deals */}
                 <div className="max-h-[58vh] flex-1 space-y-2 overflow-y-auto px-3 pb-3">
-                  {sales.map((s: any) => {
+                  {/* Units sold TOGETHER show as one card carrying the deal's total, opening
+                      to the individual sales — each of which still closes on its own, since
+                      the paperwork and discount checks are per unit. */}
+                  {groupSalesByCombinedDeal(sales).map((g: any) => g.isGroup && expandedSale !== g.ref ? (
+                    <button
+                      key={`deal-${g.ref}`}
+                      type="button"
+                      onClick={() => setExpandedSale(g.ref)}
+                      className="w-full rounded-lg border border-blue-200 bg-blue-50/40 p-2.5 text-left shadow-sm transition-shadow hover:shadow"
+                    >
+                      <p className="truncate text-sm font-semibold text-gray-800">{g.primary.buyer || 'Unnamed'}</p>
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        Units {g.unitLabel}
+                        <span className="ml-1.5 font-medium text-gray-700">{fmt(g.totalPrice)}</span>
+                      </p>
+                      <span className="mt-1 inline-flex items-center rounded-full bg-blue-100 px-1.5 text-[11px] font-medium text-blue-700">
+                        {g.sales.length} units sold together
+                      </span>
+                    </button>
+                  ) : g.sales.map((s: any) => {
                     const isOpen = expandedSale === s.id;
                     const asking = s.unit?.askingPrice ? Number(s.unit.askingPrice) : null;
                     const price = s.salePrice ? Number(s.salePrice) : null;
@@ -4862,7 +4979,7 @@ function SalesTab({ projectId }: { projectId: string }) {
                         )}
                       </div>
                     );
-                  })}
+                  }))}
                   {sales.length === 0 && (
                     <p className="py-6 text-center text-xs italic text-gray-600">Empty</p>
                   )}

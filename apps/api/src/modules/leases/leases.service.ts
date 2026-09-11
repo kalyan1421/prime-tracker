@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException, ForbiddenEx
 import { PrismaService } from '../../prisma/prisma.service';
 import { NOT_ON_SOLD_UNIT } from './lease-filters';
 import { Prisma } from '@prisma/client';
+import { apportion } from './rent-apportionment';
 import {
   LeaseRentPeriodService, startOfUtcDay, addMonthsUtc, monthsBetweenUtc,
 } from './lease-rent-period.service';
@@ -277,6 +278,233 @@ export class LeasesService {
    * One transaction. A lease marked terminated whose schedule still runs, or whose unit
    * still reads LEASED, is worse than a refusal.
    */
+  /** What the reviewer intends for a unit NEXT. Intent only — this records words, not state. */
+  /**
+   * Every live lease of one combined deal, scoped to the project it was launched from.
+   *
+   * `combinedDealRef` has no unique index and must never get one — a renewal legitimately
+   * reuses a deal's label across time, and the refs come from a client spreadsheet cell.
+   * So a ref alone never identifies a group: it is always read with the project and with
+   * liveness, exactly as the rent roll reads leases.
+   */
+  async resolveDealGroup(projectId: string, combinedDealRef: string) {
+    return this.prisma.lease.findMany({
+      where: {
+        combinedDealRef,
+        deletedAt: null,
+        unitId: { not: null },
+        unit: { deletedAt: null, building: { projectId, deletedAt: null } },
+      },
+      include: { unit: { select: { id: true, unitNumber: true, status: true } } },
+      orderBy: { unit: { unitNumber: 'asc' } },
+    });
+  }
+
+  /**
+   * Everything that would stop this group ending on this date — ALL of it, in one pass.
+   *
+   * endTenancyWithin throws on the first lease it dislikes, which for a six-unit deal
+   * tells the reviewer nothing about the other five. They would fix one, retry, and meet
+   * the next. Collecting every blocker up front is the whole reason this exists.
+   */
+  async assertGroupCanEnd(
+    leases: Array<{ id: string; terminationDate: Date | null; unit: { unitNumber: string } | null }>,
+    terminationDate: Date,
+  ) {
+    const blockers: Array<{ leaseId: string; unitNumber: string; code: string; message: string }> = [];
+
+    for (const l of leases) {
+      const unitNumber = l.unit?.unitNumber ?? '?';
+      if (l.terminationDate) {
+        blockers.push({
+          leaseId: l.id, unitNumber, code: 'ALREADY_ENDED',
+          message: `Unit ${unitNumber}'s tenancy already ended on `
+            + `${l.terminationDate.toISOString().slice(0, 10)}.`,
+        });
+        continue;
+      }
+      const paid = await this.invoices.paidAfter(l.id, terminationDate);
+      if (paid.length > 0) {
+        const months = paid.map((x) => x.periodMonth.toISOString().slice(0, 7)).join(', ');
+        blockers.push({
+          leaseId: l.id, unitNumber, code: 'RENT_COLLECTED_AFTER',
+          message: `Rent has already been collected for ${months} on unit ${unitNumber}, after `
+            + `the move-out date of ${terminationDate.toISOString().slice(0, 10)}.`,
+        });
+      }
+    }
+    return blockers;
+  }
+
+  /**
+   * End every lease of one combined deal, on ONE move-out date, in ONE transaction.
+   *
+   * Six units let under one signed lease end together or not at all: "3 of 6 ended" is not
+   * a true state of the world, so it must not be a reachable state of the database. That is
+   * also why the client must never loop the single-lease endpoint — six calls are six
+   * transactions, and the tenth request of any second is refused by the throttler anyway.
+   *
+   * The per-lease deposit disposition is deliberately neutralised to DECIDE_LATER and the
+   * deposit settled ONCE afterwards, at group level: the deposit is held whole on a single
+   * member (client decision, 2026-09-12), so only code that can see the whole group can
+   * decide it correctly.
+   */
+  async endDealTenancy(
+    input: {
+      projectId: string;
+      combinedDealRef: string;
+      terminationDate: string;
+      terminationReason: TerminationReason;
+      terminationNote?: string;
+      units: Array<{ leaseId: string; outcome: string; terminationNote?: string }>;
+      depositDisposition?: DepositDisposition;
+      depositNote?: string;
+    },
+    userId?: string,
+  ) {
+    const terminationDate = startOfUtcDay(new Date(input.terminationDate));
+    if (Number.isNaN(terminationDate.getTime())) {
+      throw new BadRequestException('The move-out date must be a valid date');
+    }
+    // TENANT_BOUGHT / LEASE_TRANSFERRED_WITH_SALE demand a unit that is already SOLD. At
+    // group-end time no unit in the group is sold — the sale has not closed — so accepting
+    // one guarantees a 400 from inside the transaction, or invites someone to hand-flip a
+    // unit to SOLD first, which runs the destructive cap/void path on a sale that has not
+    // happened. Checked here, on the input alone, so the reviewer gets this message rather
+    // than whatever the group resolution happens to complain about first.
+    if (REQUIRES_SOLD_UNIT.includes(input.terminationReason)) {
+      throw new BadRequestException(
+        `"${input.terminationReason}" is set by closing the sale, which ends the tenancy as `
+        + 'part of the same transaction. End the deal with the reason the tenant actually '
+        + 'left on, and mark the units being sold with the SOLD outcome.',
+      );
+    }
+    if (input.depositDisposition === 'TRANSFER') {
+      // The follow-on lease cannot exist yet: until this end commits, the old leases still
+      // claim their units through their CONTRACTED leaseEnd, so lease_unit_no_overlap
+      // rejects the new one. And loadSuccessor reads outside the transaction, so a lease
+      // created alongside would be invisible to it either way.
+      throw new BadRequestException(
+        'A deposit cannot be transferred to a lease that does not exist yet. End the group '
+        + 'with the deposit left open, create the new lease, then transfer the balance onto it.',
+      );
+    }
+
+    const group = await this.resolveDealGroup(input.projectId, input.combinedDealRef);
+    if (group.length === 0) {
+      throw new NotFoundException('No live leases found for this deal in this project');
+    }
+
+    // The caller echoes back exactly the set it was shown. Any difference means the group
+    // changed since the dialog opened, and silently ending a different set of units than
+    // the reviewer approved is the one outcome worth refusing outright.
+    const resolved = new Set(group.map((l) => l.id));
+    const claimed = new Set(input.units.map((u) => u.leaseId));
+    const sameSet = resolved.size === claimed.size && [...resolved].every((id) => claimed.has(id));
+    if (!sameSet) {
+      throw new BadRequestException(
+        'This deal has changed since the screen was opened — it now covers '
+        + `${group.map((l) => l.unit?.unitNumber).join(', ')}. Reload and check it before ending.`,
+      );
+    }
+
+    const blockers = await this.assertGroupCanEnd(group as any, terminationDate);
+    if (blockers.length > 0) {
+      throw new BadRequestException({
+        message: `This lease cannot end on that date: ${blockers.map((b) => b.message).join(' ')}`,
+        blockers,
+      });
+    }
+
+    const noteByLease = new Map(input.units.map((u) => [u.leaseId, u.terminationNote]));
+    const outcomeByLease = new Map(input.units.map((u) => [u.leaseId, u.outcome]));
+
+    const results = await this.prisma.$transaction(async (tx) => {
+      const out = [];
+      for (const l of group) {
+        out.push(await this.endTenancyWithin(tx, l.id, {
+          terminationDate,
+          terminationReason: input.terminationReason,
+          terminationNote: noteByLease.get(l.id) ?? input.terminationNote,
+          // Settled once, below — see the method comment.
+          depositDisposition: 'DECIDE_LATER',
+        }, userId));
+      }
+      return out;
+    });
+
+    // Deposit, once, now that every member has ended. REFUND and FORFEIT are note-only in
+    // settleDeposit, so applying them to the holder is the whole action.
+    let deposit: unknown = { applied: false, reason: 'left open for Finance' };
+    const holder = group.find((l) => Number(l.securityDeposit ?? 0) > 0) ?? group[0];
+    if (input.depositDisposition && input.depositDisposition !== 'DECIDE_LATER') {
+      deposit = await this.prisma.$transaction((tx) =>
+        this.settleDeposit(
+          tx,
+          holder.id,
+          {
+            terminationDate,
+            terminationReason: input.terminationReason,
+            depositDisposition: input.depositDisposition,
+            depositNote: input.depositNote,
+          },
+          // No successor: TRANSFER is refused above, and the other dispositions never use one.
+          undefined,
+          terminationDate,
+        ),
+      );
+    }
+
+    // After commit, never inside it: a notification must not go out for a termination that
+    // then rolls back. One event per lease rather than a new group type — the audience and
+    // the required action are identical, and a new type is a handler somebody forgets.
+    for (const [i, l] of group.entries()) {
+      this.bus.emit({
+        type: 'lease.terminated',
+        leaseId: l.id,
+        projectId: input.projectId,
+        tenantName: l.tenantName,
+        reason: input.terminationReason,
+      } as any);
+      await this.auditTenancyEnd(l.id, {
+        terminationDate,
+        terminationReason: input.terminationReason,
+        terminationNote: noteByLease.get(l.id) ?? input.terminationNote,
+      }, results[i], userId);
+    }
+
+    await this.audit.log({
+      userId,
+      action: 'LEASE_DEAL_TENANCY_ENDED',
+      entity: 'Lease',
+      entityId: holder.id,
+      newValues: {
+        combinedDealRef: input.combinedDealRef,
+        terminationDate: terminationDate.toISOString().slice(0, 10),
+        units: group.map((l) => ({
+          unitNumber: l.unit?.unitNumber,
+          leaseId: l.id,
+          outcome: outcomeByLease.get(l.id) ?? 'VACANT',
+        })),
+        depositDisposition: input.depositDisposition ?? 'DECIDE_LATER',
+        depositHolderLeaseId: holder.id,
+      },
+    });
+
+    return {
+      combinedDealRef: input.combinedDealRef,
+      terminationDate,
+      ended: results.length,
+      units: group.map((l, i) => ({
+        leaseId: l.id,
+        unitNumber: l.unit?.unitNumber,
+        outcome: outcomeByLease.get(l.id) ?? 'VACANT',
+        unitReleased: (results[i] as any).unitReleased,
+      })),
+      deposit,
+    };
+  }
+
   async endTenancy(id: string, input: EndTenancyInput, userId?: string) {
     const result = await this.prisma.$transaction((tx) =>
       this.endTenancyWithin(tx, id, input, userId),
@@ -1258,9 +1486,15 @@ export class LeasesService {
     return this.prisma.lease.findMany({
       where: {
         deletedAt: null,
+        // A soft-deleted unit is gone from the app — but deleting one never touched the
+        // leases on it, so their rows stayed live and kept counting. On 2026-09-12 that
+        // put 11 phantom tenancies in the rent roll across two projects, $47,923/month of
+        // rent Prime does not collect (CENTRO read $90,979 against a true $66,261). The
+        // same applies a level up: deleting a BUILDING does not cascade to its units'
+        // leases either.
         OR: [
-          { unit: { building: { projectId } } },
-          { building: { projectId } },
+          { unit: { deletedAt: null, building: { projectId, deletedAt: null } } },
+          { building: { projectId, deletedAt: null } },
         ],
       },
       include: {
@@ -1294,9 +1528,15 @@ export class LeasesService {
         deletedAt: null,
         // Rent on a sold unit is not Prime's to report.
         ...NOT_ON_SOLD_UNIT,
+        // A soft-deleted unit is gone from the app — but deleting one never touched the
+        // leases on it, so their rows stayed live and kept counting. On 2026-09-12 that
+        // put 11 phantom tenancies in the rent roll across two projects, $47,923/month of
+        // rent Prime does not collect (CENTRO read $90,979 against a true $66,261). The
+        // same applies a level up: deleting a BUILDING does not cascade to its units'
+        // leases either.
         OR: [
-          { unit: { building: { projectId } } },
-          { building: { projectId } },
+          { unit: { deletedAt: null, building: { projectId, deletedAt: null } } },
+          { building: { projectId, deletedAt: null } },
         ],
       },
       include: {
@@ -1674,6 +1914,158 @@ export class LeasesService {
       return new BadRequestException('Move-out date cannot be before the lease start date');
     }
     return e;
+  }
+
+  /**
+   * Create ONE letting that spans several units — N Lease rows sharing a deal ref.
+   *
+   * The units stay separate records on purpose (client decision, 2026-09-12): that is what
+   * lets two of them be sold later while a third is re-let, with no un-merge step.
+   *
+   * Deliberately one request rather than N calls to POST /leases from the client: the API
+   * refuses the tenth request of any second, and three independent calls would apportion
+   * rent three times over with no guarantee the shares sum to the deal.
+   *
+   * KNOWN LIMITATION, stated rather than hidden: the N creates are sequential, not one
+   * transaction — create() opens its own, and threading a tx through it (and through
+   * assertNoOverlappingLease, which reads outside one) is a wider refactor than this
+   * earns. Everything that realistically fails is therefore checked BEFORE the first
+   * write — every unit resolved, none sold, none already let over these dates — and if a
+   * later create still fails, the response names exactly which leases exist so the
+   * half-made group can be finished or removed rather than guessed at.
+   */
+  async createDealLeases(
+    input: {
+      projectId: string;
+      combinedDealRef?: string;
+      totalMonthlyRent?: number;
+      units: Array<{ unitId: string; monthlyRent?: number; securityDeposit?: number; tiAllowance?: number }>;
+      [key: string]: unknown;
+    },
+    createdById?: string,
+  ) {
+    const { projectId, units: unitInputs, totalMonthlyRent, combinedDealRef, ...shared } = input;
+    if (!Array.isArray(unitInputs) || unitInputs.length < 2) {
+      // A one-unit "deal" is an ordinary lease. Minting a ref for it would advertise a
+      // multi-unit letting that does not exist.
+      throw new BadRequestException('A multi-unit lease needs at least two units — use the ordinary lease form for one');
+    }
+
+    const units = await this.prisma.unit.findMany({
+      where: {
+        id: { in: unitInputs.map((u) => u.unitId) },
+        deletedAt: null,
+        building: { projectId, deletedAt: null },
+      },
+      select: { id: true, unitNumber: true, status: true, sqft: true },
+    });
+    if (units.length !== unitInputs.length) {
+      throw new BadRequestException('One or more units were not found in this project');
+    }
+    // syncUnitFromLease silently does nothing on a SOLD unit, and NOT_ON_SOLD_UNIT then
+    // removes the lease from every money path — so a lease created on one is invisible
+    // rather than wrong-looking. Refuse instead, naming the unit.
+    const sold = units.filter((u) => u.status === 'SOLD');
+    if (sold.length > 0) {
+      throw new BadRequestException(
+        `Cannot let ${sold.map((u) => u.unitNumber).join(', ')} — already sold. Remove them from the deal.`,
+      );
+    }
+
+    // Rent: per-unit figures OR a deal total, never a mix. Identical to the importer's
+    // "exactly one row must carry the total" refusal, for the same reason — a mix means
+    // nobody can say what the deal is worth.
+    const withRent = unitInputs.filter((u) => u.monthlyRent != null);
+    let basis: 'sqft' | 'even' | 'explicit' = 'explicit';
+    let rentByUnit = new Map<string, number>(withRent.map((u) => [u.unitId, u.monthlyRent as number]));
+    if (withRent.length === 0) {
+      if (totalMonthlyRent == null) {
+        throw new BadRequestException('Give either a rent per unit, or one total for the whole deal');
+      }
+      const areaById = new Map(units.map((u) => [u.id, u.sqft ?? null]));
+      const result = apportion(totalMonthlyRent, unitInputs.map((u) => ({ key: u.unitId, area: areaById.get(u.unitId) })));
+      basis = result.basis;
+      rentByUnit = new Map(result.shares.map((x) => [x.key, x.amount]));
+    } else if (withRent.length !== unitInputs.length) {
+      throw new BadRequestException(
+        'Give a rent for every unit, or none at all with one deal total — a mix leaves the deal total undefined',
+      );
+    }
+
+    // One deposit is one instrument (client decision, 2026-09-12) — never divided, and so
+    // never on more than one member, or the deal would claim to hold it twice.
+    const withDeposit = unitInputs.filter((u) => Number(u.securityDeposit ?? 0) > 0);
+    if (withDeposit.length > 1) {
+      throw new BadRequestException(
+        'A deal holds ONE deposit. Put the whole amount on a single unit rather than splitting it.',
+      );
+    }
+
+    const leaseStart = new Date(shared.leaseStart as string);
+    const leaseEnd = new Date(shared.leaseEnd as string);
+    // Every overlap checked before the first write — this is the failure that actually
+    // happens, and catching it here is what keeps the sequential creates below safe.
+    for (const u of units) {
+      await this.assertNoOverlappingLease({ unitId: u.id, buildingId: null }, leaseStart, leaseEnd, undefined, null);
+    }
+
+    const ref = (combinedDealRef ?? '').trim() || await this.mintDealRef(projectId, units.map((u) => u.unitNumber));
+
+    const created: Array<{ leaseId: string; unitId: string; unitNumber: string; monthlyRent: number }> = [];
+    try {
+      for (const u of unitInputs) {
+        const unit = units.find((x) => x.id === u.unitId)!;
+        const lease = await this.create({
+          ...(shared as any),
+          unitId: u.unitId,
+          buildingId: null,
+          combinedDealRef: ref,
+          monthlyRent: rentByUnit.get(u.unitId) as any,
+          securityDeposit: (u.securityDeposit ?? null) as any,
+          tiAllowance: (u.tiAllowance ?? null) as any,
+        } as Prisma.LeaseUncheckedCreateInput, createdById);
+        created.push({
+          leaseId: lease.id, unitId: u.unitId, unitNumber: unit.unitNumber,
+          monthlyRent: Number(rentByUnit.get(u.unitId)),
+        });
+      }
+    } catch (err: unknown) {
+      // Name what exists. A half-made group that nobody can see is worse than the error.
+      throw new BadRequestException(
+        `Created ${created.length} of ${unitInputs.length} leases (${created.map((c) => c.unitNumber).join(', ') || 'none'}) `
+        + `before failing: ${(err as Error)?.message ?? 'unknown error'}. `
+        + 'Finish or remove those before retrying.',
+      );
+    }
+
+    return { combinedDealRef: ref, rentBasis: basis, leases: created };
+  }
+
+  /**
+   * A label for a new deal, in the shape Prime's own workbook uses (CEN-B7-701-706):
+   * first and last unit, suffixed on collision.
+   *
+   * Not a cuid — the ref is shown to people ("part of a 3-unit lease with 104, 105"), and
+   * Prime recognises these. The collision check is advisory: the column has no unique
+   * index and must not get one, since a later re-letting of the same units legitimately
+   * reuses the label.
+   */
+  private async mintDealRef(projectId: string, unitNumbers: string[]) {
+    const sorted = [...unitNumbers].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const base = `DEAL-${sorted[0]}-${sorted[sorted.length - 1]}`;
+    for (let i = 0; i < 50; i++) {
+      const candidate = i === 0 ? base : `${base}-${i + 1}`;
+      const clash = await this.prisma.lease.findFirst({
+        where: {
+          combinedDealRef: candidate,
+          deletedAt: null,
+          unit: { deletedAt: null, building: { projectId, deletedAt: null } },
+        },
+        select: { id: true },
+      });
+      if (!clash) return candidate;
+    }
+    return `${base}-${Date.now()}`;
   }
 
   async create(data: Prisma.LeaseUncheckedCreateInput, createdById?: string) {

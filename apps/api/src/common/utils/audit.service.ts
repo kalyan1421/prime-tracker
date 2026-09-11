@@ -83,6 +83,9 @@ const ACTIVITY_VERBS: Record<string, string> = {
   LEASE_HISTORY_BACKFILLED: 'backfilled history on',
   SALE_HISTORY_BACKFILLED: 'backfilled sale history on',
   LEASE_TENANCY_ENDED: 'ended a tenancy on',
+  // Written once alongside the per-lease rows when a multi-unit deal ends, so the feed
+  // says "ended a 6-unit lease" rather than repeating the same sentence six times.
+  LEASE_DEAL_TENANCY_ENDED: 'ended a multi-unit lease on',
   LEASE_TERMS_CHANGED: 'changed terms on',
   LEASE_HISTORICAL_DELETED: 'deleted historical records on',
 };

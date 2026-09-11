@@ -23,7 +23,7 @@ import {
   Select, SelectItem, Textarea, addToast,
 } from '@heroui/react';
 import { FiAlertTriangle, FiArrowRight, FiLogOut, FiRepeat } from 'react-icons/fi';
-import { useEndTenancy, useAssignTenant, useLeases } from '../hooks/useApi';
+import { useDealPreview, useEndDealTenancy, useEndTenancy, useAssignTenant, useLeases } from '../hooks/useApi';
 import { errMsg, fmtDate } from '../utils/fmt';
 
 // Values must match TERMINATION_REASONS in leases.service.ts. Ordered by how often
@@ -82,8 +82,14 @@ export function EndTenancyDialog({
   projectId?: string;
 }) {
   const endTenancy = useEndTenancy();
+  const endDeal = useEndDealTenancy();
   const [form, setForm] = useState<Record<string, string>>({});
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  // What happens to each unit NEXT, keyed by lease id. Recorded with the end so the
+  // follow-on step knows which units to re-let and which are going to a sale; it changes
+  // no state by itself — in particular SOLD does not mark a unit sold.
+  const [outcomes, setOutcomes] = useState<Record<string, string>>({});
 
   // Candidate successors: any other lease, so a relocation can point at a lease on a
   // different unit. Filtered to those that have not themselves ended.
@@ -96,10 +102,19 @@ export function EndTenancyDialog({
     [leases, lease?.id],
   );
 
-  if (!lease) return null;
+  // A lease that covers several units ends on ALL of them, on one date. Looked up rather
+  // than inferred from the lease row alone, because the row knows its deal label but not
+  // which other units still answer to it.
+  const dealRef = (lease as any)?.combinedDealRef ?? null;
+  const { data: deal } = useDealPreview(projectId ?? '', dealRef, form.terminationDate);
+  const dealLeases: any[] = deal?.leases ?? [];
+  const isDeal = dealLeases.length > 1;
+  const blockers: any[] = deal?.blockers ?? [];
 
   const reason = form.terminationReason ?? '';
   const wantsSuccessor = CONTINUING_REASONS.includes(reason);
+  if (!lease) return null;
+
   const terminationDate = form.terminationDate ?? today();
   const contractedEnd = lease.leaseEnd ? lease.leaseEnd.slice(0, 10) : null;
   // Shown before submitting, because "will this count as early?" is the question the
@@ -116,6 +131,44 @@ export function EndTenancyDialog({
       addToast({ title: 'Transferring the deposit needs a successor lease', color: 'warning' });
       return;
     }
+    // A multi-unit letting goes through the deal endpoint: one request, one transaction,
+    // one move-out date for every unit. Never a loop over the single-lease call — that is
+    // six transactions, and the API refuses the tenth request of any second.
+    if (isDeal) {
+      if (form.depositDisposition === 'TRANSFER') {
+        addToast({
+          title: 'End the lease with the deposit left open, then transfer it onto the new lease once it exists',
+          color: 'warning',
+        });
+        return;
+      }
+      try {
+        const res = await endDeal.mutateAsync({
+          projectId,
+          combinedDealRef: dealRef,
+          terminationDate,
+          terminationReason: reason,
+          terminationNote: form.terminationNote || undefined,
+          depositDisposition: form.depositDisposition || undefined,
+          depositNote: form.depositNote || undefined,
+          units: dealLeases.map((l: any) => ({
+            leaseId: l.id,
+            outcome: outcomes[l.id] || 'VACANT',
+          })),
+        });
+        addToast({
+          title: `Lease ended on ${res.ended} unit${res.ended === 1 ? '' : 's'}`,
+          color: 'success',
+        });
+        setForm({});
+        setOutcomes({});
+        onClose();
+      } catch (err) {
+        addToast({ title: errMsg(err, 'Could not end the lease'), color: 'danger' });
+      }
+      return;
+    }
+
     try {
       const res = await endTenancy.mutateAsync({
         id: lease.id,
@@ -155,6 +208,52 @@ export function EndTenancyDialog({
             date, unpaid invoices billed after it are voided, and the unit is released —
             unless another lease continues the tenancy.
           </p>
+
+          {/* A lease over several units ends on all of them, on one date. Said once here
+              rather than as N repeated warnings, and each unit gets its own next step so
+              two can go to a sale while a third is re-let. */}
+          {isDeal && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3 space-y-2.5">
+              <p className="text-xs text-gray-700">
+                <span className="font-semibold">
+                  This lease covers {dealLeases.length} units.
+                </span>{' '}
+                Ending it ends the tenancy on every one of them, on the same move-out date.
+                Choose what happens to each next — that is recorded now and drives the
+                follow-up; it does not move any unit into a sale by itself.
+              </p>
+              <div className="space-y-1.5">
+                {dealLeases.map((l: any) => (
+                  <div key={l.id} className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-gray-700">
+                      Unit {l.unit?.unitNumber}
+                    </span>
+                    <Select
+                      size="sm"
+                      aria-label={`What happens next to unit ${l.unit?.unitNumber}`}
+                      className="max-w-[190px]"
+                      selectedKeys={[outcomes[l.id] || 'VACANT']}
+                      onSelectionChange={(k) =>
+                        setOutcomes((o) => ({ ...o, [l.id]: String(Array.from(k)[0] ?? 'VACANT') }))}
+                    >
+                      <SelectItem key="VACANT" textValue="Leave vacant">Leave vacant</SelectItem>
+                      <SelectItem key="RE_LET" textValue="Re-let">Re-let</SelectItem>
+                      <SelectItem key="SOLD" textValue="Sell">Sell</SelectItem>
+                    </Select>
+                  </div>
+                ))}
+              </div>
+              {blockers.length > 0 && (
+                <div className="rounded-md bg-rose-50 border border-rose-200 p-2 space-y-1">
+                  {/* Every blocker at once — fixing them one failed submit at a time is
+                      exactly what this list exists to avoid. */}
+                  {blockers.map((b: any) => (
+                    <p key={b.leaseId} className="text-[11px] text-rose-700">{b.message}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Input

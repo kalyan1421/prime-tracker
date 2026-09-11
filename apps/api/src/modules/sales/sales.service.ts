@@ -6,6 +6,7 @@ import { UnitStatusEventService } from '../../common/utils/unit-status-event.ser
 import { LeasesService, TerminationReason } from '../leases/leases.service';
 import { startOfUtcDay } from '../leases/lease-rent-period.service';
 import { SalePaymentsService } from './sale-payments.service';
+import { apportion } from '../leases/rent-apportionment';
 import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 import { AuditService } from '../../common/utils/audit.service';
@@ -42,6 +43,8 @@ export interface BackfillSaleInput {
   brokerCommissionPct?: number | null;
   payments?: { label: string; amount: number; paidAt?: string }[];
   commissionInstallments?: { amount: number; paidAt?: string }[];
+  /** Links this sale to its siblings when several units were sold as ONE deal. */
+  combinedDealRef?: string | null;
 }
 
 /** Money is compared at the precision it is stored at — Decimal(14,2). */
@@ -172,7 +175,19 @@ export class SalesService {
 
   async findByProject(projectId: string) {
     return this.prisma.sale.findMany({
-      where: { projectId, deletedAt: null },
+      where: {
+        projectId,
+        deletedAt: null,
+        // A soft-deleted unit is gone from the app, but deleting one never touched the
+        // sales on it — so they stayed live and kept counting in the pipeline and in
+        // closed revenue. 2 such sales worth $1,752,892 were sitting in Lewisville Phase 1
+        // on 2026-09-12. Building-level sales have no unit and must still be returned,
+        // hence the `is: null` branch rather than a bare filter.
+        OR: [
+          { unitId: null },
+          { unit: { deletedAt: null, building: { deletedAt: null } } },
+        ],
+      },
       include: { unit: { include: { building: { select: { name: true } } } } },
       orderBy: { updatedAt: 'desc' },
     });
@@ -215,6 +230,104 @@ export class SalesService {
     });
     if (!s || s.deletedAt) throw new NotFoundException('Sale not found');
     return s;
+  }
+
+  /**
+   * Every sale of one grouped deal, scoped to its project. Same shape and same reasoning
+   * as LeasesService.resolveDealGroup — the ref is free text and not unique, so it is
+   * never read without the project and liveness alongside it.
+   */
+  async findDeal(projectId: string, combinedDealRef: string) {
+    const sales = await this.prisma.sale.findMany({
+      where: {
+        combinedDealRef,
+        projectId,
+        deletedAt: null,
+        unit: { deletedAt: null, building: { deletedAt: null } },
+      },
+      include: { unit: { select: { id: true, unitNumber: true, status: true } } },
+      orderBy: { unit: { unitNumber: 'asc' } },
+    });
+    return {
+      combinedDealRef,
+      sales,
+      totalSalePrice: sales.reduce((sum, x) => sum + Number(x.salePrice ?? 0), 0),
+      // "two closed, one still under contract" has to be answerable — closing is per sale.
+      closed: sales.filter((x) => x.status === 'CLOSED').length,
+    };
+  }
+
+  /**
+   * Sell several units TOGETHER — one buyer, one negotiated deal, N Sale rows sharing a ref.
+   *
+   * Creates only. Closing stays per sale, through the ordinary update path, and that is a
+   * deliberate line rather than an omission: the close is where the discount-approval gate,
+   * the per-saleId document gate, the commission stamp and the tenancy handover all live,
+   * and those are genuinely per-unit decisions — 104 may have its deed while 105 does not.
+   * A group close that half-failed would be the worst possible state for a sale, so the UI
+   * drives the group from one screen and closes them one at a time, showing "1 of 2 closed",
+   * which is at least true.
+   */
+  async createDealSales(
+    input: {
+      projectId: string;
+      combinedDealRef?: string;
+      totalSalePrice?: number;
+      units: Array<{ unitId: string; salePrice?: number }>;
+      [key: string]: unknown;
+    },
+    createdById?: string,
+  ) {
+    const { projectId, units: unitInputs, totalSalePrice, combinedDealRef, ...shared } = input;
+    if (!Array.isArray(unitInputs) || unitInputs.length < 2) {
+      throw new BadRequestException('Selling units together needs at least two — use the ordinary sale form for one');
+    }
+    if ((shared as Record<string, unknown>).status === 'CLOSED') {
+      throw new BadRequestException(
+        'Create the sales first, then close each one. Closing runs the document and discount '
+        + 'checks per unit, which cannot be answered for a whole group at once.',
+      );
+    }
+
+    const units = await this.prisma.unit.findMany({
+      where: { id: { in: unitInputs.map((u) => u.unitId) }, deletedAt: null, building: { projectId, deletedAt: null } },
+      select: { id: true, unitNumber: true, sqft: true },
+    });
+    if (units.length !== unitInputs.length) {
+      throw new BadRequestException('One or more units were not found in this project');
+    }
+
+    const withPrice = unitInputs.filter((u) => u.salePrice != null);
+    let priceByUnit = new Map<string, number>(withPrice.map((u) => [u.unitId, u.salePrice as number]));
+    if (withPrice.length === 0) {
+      if (totalSalePrice == null) {
+        throw new BadRequestException('Give either a price per unit, or one total for the whole deal');
+      }
+      // Same apportionment rule as rent — by floor area where every unit has one, evenly
+      // otherwise, remainder on the largest so the parts sum to the deal exactly.
+      const areaById = new Map(units.map((u) => [u.id, u.sqft ?? null]));
+      const { shares } = apportion(totalSalePrice, unitInputs.map((u) => ({ key: u.unitId, area: areaById.get(u.unitId) })));
+      priceByUnit = new Map(shares.map((x) => [x.key, x.amount]));
+    } else if (withPrice.length !== unitInputs.length) {
+      throw new BadRequestException('Give a price for every unit, or none at all with one deal total');
+    }
+
+    const ref = (combinedDealRef ?? '').trim()
+      || `SALE-${[...units].map((u) => u.unitNumber).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).filter((_, i, arr) => i === 0 || i === arr.length - 1).join('-')}`;
+
+    const created: Array<{ saleId: string; unitId: string; unitNumber: string; salePrice: number }> = [];
+    for (const u of unitInputs) {
+      const unit = units.find((x) => x.id === u.unitId)!;
+      const sale = await this.create({
+        ...(shared as any),
+        projectId,
+        unitId: u.unitId,
+        combinedDealRef: ref,
+        salePrice: priceByUnit.get(u.unitId) as any,
+      } as Prisma.SaleUncheckedCreateInput, createdById);
+      created.push({ saleId: sale.id, unitId: u.unitId, unitNumber: unit.unitNumber, salePrice: Number(priceByUnit.get(u.unitId)) });
+    }
+    return { combinedDealRef: ref, sales: created };
   }
 
   async create(data: Prisma.SaleUncheckedCreateInput, createdById?: string) {
@@ -943,6 +1056,9 @@ export class SalesService {
           contractDate,
           closingDate,
           notes: input.notes ?? null,
+          // Several units sold as one deal — see Sale.combinedDealRef. The importer sets
+          // this when a Unit Number cell named more than one unit.
+          combinedDealRef: input.combinedDealRef ?? null,
           brokerId: input.brokerId ?? null,
           brokerCommissionPct: input.brokerCommissionPct ?? null,
           brokerCommissionAmt,

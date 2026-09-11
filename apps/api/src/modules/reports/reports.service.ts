@@ -320,6 +320,10 @@ export class ReportsService {
         return {
           id: l.id,
           tenantName: l.tenantName,
+          // One lease over six units is ONE expiry to act on, not six. Carried through so
+          // the report can collapse the group instead of listing the same tenant six times
+          // with six identical dates.
+          combinedDealRef: l.combinedDealRef,
           unitNumber: l.unit.unitNumber,
           buildingName: l.unit.building.name,
           projectName: l.unit.building.project.name,
@@ -361,7 +365,12 @@ export class ReportsService {
       kpis: {
         totalMonthlyRent,
         totalAnnualRent,
-        activeLeaseCount: activeLeases.length,
+        // Distinct LETTINGS. A six-unit deal is one tenancy, not six — counting rows
+        // inflated this the moment multi-unit leases were imported. Leases with no
+        // combinedDealRef each count once, so single-unit portfolios are unchanged.
+        activeLeaseCount: new Set(
+          activeLeases.map((l) => l.combinedDealRef || `lease:${l.id}`),
+        ).size,
         portfolioOccupancy: Math.round(portfolioOccupancy * 10) / 10,
       },
       expiringLeases,

@@ -612,7 +612,9 @@ export class UnitsService {
             project: { select: { id: true, name: true, status: true, phase: true } },
           },
         },
-        leases: { where: { status: 'ACTIVE', deletedAt: null }, select: { id: true, tenantName: true, leaseEnd: true } },
+        // combinedDealRef: the inventory list collapses a multi-unit lease into one row,
+        // so it has to be able to tell which units are let together.
+        leases: { where: { status: 'ACTIVE', deletedAt: null }, select: { id: true, tenantName: true, leaseEnd: true, combinedDealRef: true } },
         sales: { where: { deletedAt: null }, select: { id: true, status: true, buyer: true, salePrice: true } },
       },
       orderBy: [
@@ -638,7 +640,10 @@ export class UnitsService {
       where: {
         status: 'ACTIVE',
         deletedAt: null,
-        unit: { building: { projectId } },
+        // Same liveness guard as LeasesService.findByProject: deleting a unit never
+        // deleted the leases on it, so this card was adding up rent from units that no
+        // longer exist — $90,979 against a real $66,261 on CENTRO.
+        unit: { deletedAt: null, building: { projectId, deletedAt: null } },
       },
       include: {
         unit: {

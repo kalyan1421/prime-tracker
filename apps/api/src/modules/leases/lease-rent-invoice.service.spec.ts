@@ -567,6 +567,10 @@ describe('summariseInvoices (pure)', () => {
 const mockPrisma: any = {
   lease: { findUnique: jest.fn(), findMany: jest.fn() },
   leaseRentPeriod: { findMany: jest.fn() },
+  // capAtSale reads both when the lease sits on a unit. The default answers are the
+  // benign ones — a live unit with no sale — so existing cases stay about billing.
+  unit: { findUnique: jest.fn().mockResolvedValue({ status: 'LEASED' }) },
+  sale: { findFirst: jest.fn().mockResolvedValue(null) },
   leaseRentInvoice: {
     findMany: jest.fn(),
     findUnique: jest.fn(),
@@ -686,6 +690,38 @@ describe('LeaseRentInvoiceService.generateForLease', () => {
     expect(data.slice(0, 2).map((r: any) => r.status)).toEqual(['FREE', 'FREE']);
     expect(data.slice(0, 2).every((r: any) => new Prisma.Decimal(r.amountDue).isZero())).toBe(true);
     expect(data[2].status).toBe('DUE');
+  });
+
+  describe('a SOLD unit', () => {
+    it('bills up to the closing date and no further', async () => {
+      mockPrisma.unit.findUnique.mockResolvedValue({ status: 'SOLD' });
+      mockPrisma.sale.findFirst.mockResolvedValue({ closingDate: d('2026-04-30') });
+      mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, unitId: 'u1' });
+      await service.generateForLease('lease-1', { through: d('2027-01-15') });
+      const { data } = mockPrisma.leaseRentInvoice.createMany.mock.calls[0][0];
+      expect(data).toHaveLength(4); // Jan..Apr, stopping at the sale
+    });
+
+    it('bills nothing more for a STILL-RUNNING lease when no closing date is recorded', async () => {
+      // The guard that matters: a live lease must not keep invoicing on a unit Prime no
+      // longer owns just because someone hand-flipped the status without a sale record.
+      mockPrisma.unit.findUnique.mockResolvedValue({ status: 'SOLD' });
+      mockPrisma.sale.findFirst.mockResolvedValue(null);
+      mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, unitId: 'u1', terminationDate: null });
+      await service.generateForLease('lease-1', { through: d('2027-01-15') });
+      expect(mockPrisma.leaseRentInvoice.createMany).not.toHaveBeenCalled();
+    });
+
+    it('still bills a tenancy that ALREADY ENDED — that is recorded history, not forward billing', async () => {
+      // Entering the tenancy that ran before the sale is exactly what the client asked
+      // for; the epoch cap used to swallow it and produce an empty ledger in silence.
+      mockPrisma.unit.findUnique.mockResolvedValue({ status: 'SOLD' });
+      mockPrisma.sale.findFirst.mockResolvedValue(null);
+      mockPrisma.lease.findUnique.mockResolvedValue({ ...LEASE, unitId: 'u1', terminationDate: d('2026-03-31') });
+      await service.generateForLease('lease-1', { through: d('2027-01-15') });
+      const { data } = mockPrisma.leaseRentInvoice.createMany.mock.calls[0][0];
+      expect(data).toHaveLength(3); // Jan..Mar, capped at the move-out date
+    });
   });
 
   it('defaults the horizon to today', async () => {

@@ -16,6 +16,8 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { CreateLeaseDto, UpdateLeaseDto } from './dto/create-lease.dto';
 import { EndTenancyDto } from './dto/end-tenancy.dto';
+import { EndDealTenancyDto } from './dto/end-deal-tenancy.dto';
+import { CreateDealLeaseDto } from './dto/create-deal-lease.dto';
 import { AssignTenantDto } from './dto/assign-tenant.dto';
 import { BackfillTenancyDto } from './dto/backfill-tenancy.dto';
 import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
@@ -39,6 +41,28 @@ import {
   UpdateLeaseObligationDto,
   WaiveLeaseObligationDto,
 } from './dto/lease-obligation.dto';
+
+/**
+ * The sheet-project labels a reviewer has confirmed mean the project this import was
+ * launched from. JSON-encoded because both import endpoints are multipart.
+ *
+ * Validated strictly: this is the one lever that can turn "another project's rows" into
+ * "ours", so a malformed value has to fail loudly rather than be quietly dropped and leave
+ * the reviewer's confirmation looking applied when it wasn't.
+ */
+function parseLabels(raw: string | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new BadRequestException('acceptProjectLabels is not valid JSON');
+  }
+  if (!Array.isArray(parsed) || parsed.some((v) => typeof v !== 'string')) {
+    throw new BadRequestException('acceptProjectLabels must be an array of strings');
+  }
+  return parsed as string[];
+}
 
 @ApiTags('Leases')
 @ApiBearerAuth()
@@ -192,6 +216,57 @@ export class LeasesController {
   })
   clearInvoiceReview(@Param('invoiceId') invoiceId: string) {
     return this.rentPeriods.clearInvoiceReview(invoiceId);
+  }
+
+  // Declared BEFORE the ":id" routes — Nest matches in declaration order, and "deal"
+  // would otherwise be read as a lease id. Same reason "rent-roll" sits where it does.
+  @Get('deal')
+  @RequirePermissions('lease:view')
+  @ApiOperation({
+    summary: 'The live leases of one multi-unit deal, with anything that would block ending it',
+    description:
+      'Read-only. Returns every unit the deal covers plus a blockers list computed against '
+      + 'the proposed move-out date, so the screen can show all of them at once rather than '
+      + 'surfacing them one failed submit at a time.',
+  })
+  async previewDeal(
+    @Query('projectId') projectId: string,
+    @Query('ref') ref: string,
+    @Query('terminationDate') terminationDate?: string,
+  ) {
+    const leases = await this.service.resolveDealGroup(projectId, ref);
+    const date = terminationDate ? new Date(terminationDate) : new Date();
+    const blockers = leases.length
+      ? await this.service.assertGroupCanEnd(leases as any, date)
+      : [];
+    return { combinedDealRef: ref, leases, blockers };
+  }
+
+  @Post('deal')
+  @RequirePermissions('lease:edit')
+  @ApiOperation({
+    summary: 'Create one letting that spans several units',
+    description:
+      'Writes one lease per unit, linked by a shared deal reference, with the rent either '
+      + 'given per unit or apportioned from a deal total by floor area. The units stay '
+      + 'separate records, which is what lets any one of them be sold or re-let later.',
+  })
+  createDealLeases(@Body() body: CreateDealLeaseDto, @CurrentUser('sub') userId: string) {
+    return this.service.createDealLeases(body as any, userId);
+  }
+
+  @Post('deal/end')
+  @RequirePermissions('lease:edit')
+  @ApiOperation({
+    summary: 'End every lease of one multi-unit deal on a single move-out date',
+    description:
+      'Six units let under one signed lease end together or not at all — one transaction, '
+      + 'one date. The deposit is settled once at deal level rather than per unit. Each unit '
+      + 'carries an intended outcome (VACANT / RE_LET / SOLD) which is recorded for the '
+      + 'follow-on step but changes no state by itself.',
+  })
+  endDealTenancy(@Body() body: EndDealTenancyDto, @CurrentUser('sub') userId: string) {
+    return this.service.endDealTenancy(body as any, userId);
   }
 
   @Get(':id')
@@ -381,6 +456,7 @@ export class LeasesController {
     @Body('defaultBrokerId') defaultBrokerId?: string,
     @Body('rowBrokerOverrides') rowBrokerOverrides?: string,
     @Body('rowOverrides') rowOverrides?: string,
+    @Body('acceptProjectLabels') acceptProjectLabels?: string,
   ) {
     if (!file) throw new BadRequestException('No file was received');
     if (!projectId) throw new BadRequestException('projectId is required');
@@ -403,6 +479,7 @@ export class LeasesController {
       defaultBrokerId: defaultBrokerId || undefined,
       rowBrokerOverrides: parse(rowBrokerOverrides, 'rowBrokerOverrides'),
       rowOverrides: parse(rowOverrides, 'rowOverrides'),
+      acceptProjectLabels: parseLabels(acceptProjectLabels),
     });
   }
 
@@ -442,6 +519,7 @@ export class LeasesController {
     @Body('defaultBrokerId') defaultBrokerId?: string,
     @Body('rowBrokerOverrides') rowBrokerOverridesRaw?: string,
     @Body('rowOverrides') rowOverridesRaw?: string,
+    @Body('acceptProjectLabels') acceptProjectLabelsRaw?: string,
   ) {
     if (!file) throw new BadRequestException('No file was received');
     if (!projectId) throw new BadRequestException('projectId is required');
@@ -473,6 +551,7 @@ export class LeasesController {
     }
     return this.importService.previewMappedImport(
       file.buffer, projectId, mapping, defaultBrokerId || undefined, rowBrokerOverrides, rowOverrides,
+      parseLabels(acceptProjectLabelsRaw),
     );
   }
 

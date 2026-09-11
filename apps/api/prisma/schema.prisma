@@ -1091,6 +1091,17 @@ model Sale {
   // vacant unit both values close identically. Defaults to SITTING_TENANT so every sale
   // written before this field existed keeps exactly the behaviour it had.
   buyerType              SaleBuyerType @default(SITTING_TENANT)
+  /// Links this sale to its siblings when several units are sold TOGETHER — one buyer,
+  /// one negotiated deal. Mirrors Lease.combinedDealRef exactly, and for the same reason:
+  /// the units stay separate, independently priced and independently closable records.
+  ///
+  /// One difference from the lease side, which says it never aggregates: a sale group DOES
+  /// have one legitimate aggregate — the deal's total price, summed for display on the
+  /// grouped row. Nothing else aggregates on it, and it is never a relation.
+  ///
+  /// Nullable with no default and no backfill, so every sale written before this keeps
+  /// exactly the behaviour it had — the same reasoning as buyerType above.
+  combinedDealRef        String?
   salePrice              Decimal?      @db.Decimal(14, 2)
   depositAmt             Decimal?      @db.Decimal(14, 2)
   status                 String        @default("PROSPECT")
@@ -1150,6 +1161,7 @@ model Sale {
   @@index([status, lastActivityAt])
   @@index([deletedAt])
   @@index([brokerId])
+  @@index([combinedDealRef])
   @@map("sales")
 }
 

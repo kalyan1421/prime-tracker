@@ -167,3 +167,34 @@ export function resolveBroker(brokers: BrokerCandidate[], brokerName: string): {
 export function joinKey(unit: string, secondary: string): string {
   return `${unit.trim().toLowerCase()}::${secondary.trim().toLowerCase()}`;
 }
+
+/**
+ * The individual unit numbers a single Unit Number cell names, when it names more than one.
+ *
+ * Client sheets routinely record one lease over several units in one cell — "104, 105, 106",
+ * "201+203", "700 and 701", "1001 & 1002". Until now those rows simply could not be imported:
+ * the cell matched no unit, and creating a unit literally called "104, 105, 106" would have
+ * put fake inventory in the system alongside the real ones.
+ *
+ * Returns [] for an ordinary single-unit cell, so callers can treat "did this expand?" as
+ * "did this return anything?". Deliberately conservative — every part must look like a unit
+ * number (digits, optionally with a letter suffix like "12A"), so prose that happens to
+ * contain a comma ("Building 6, whole") is left alone rather than shredded into nonsense.
+ */
+export function parseMultiUnitRef(unitNumber: string): string[] {
+  const v = (unitNumber ?? '').trim();
+  if (!v) return [];
+  // "101 (prior)" and friends name ONE unit with a marker on it; splitting them is wrong.
+  if (/\(\s*prior\s*\)$/i.test(v)) return [];
+  const parts = v
+    .split(/\s*(?:,|\+|&|\band\b)\s*/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return [];
+  // Every part must be a plausible unit number, or this was never a unit list.
+  if (!parts.every((p) => /^\d{1,6}[A-Za-z]?$/.test(p))) return [];
+  // A repeated part ("104, 104") is a typo, not two units.
+  const unique = [...new Set(parts.map((p) => p.toUpperCase()))];
+  if (unique.length !== parts.length) return [];
+  return parts;
+}
