@@ -35,10 +35,12 @@ export class BuildingsController {
     @Query('archived', new DefaultValuePipe(false), ParseBoolPipe) archived: boolean,
     @CurrentUser('permissions') permissions?: string[],
   ) {
-    // Archived buildings are only ever returned to someone who could act on them — the
-    // same gate the archive view itself sits behind. Everyone else gets the live list,
-    // whatever they ask for.
-    const canSeeArchived = (permissions ?? []).includes('building:hardDelete');
+    // Gated on building:edit, NOT building:hardDelete. Whoever can archive a building must
+    // be able to see what they archived and undo it — gating the VIEW on the permanent
+    // delete meant a Project Manager could hide a building and then had to ask a Founder
+    // to get it back. Erasing one for good is the narrower right, and it is gated
+    // separately on the route that does it.
+    const canSeeArchived = (permissions ?? []).includes('building:edit');
     return this.service.findByProject(projectId, permissions ?? [], archived && canSeeArchived);
   }
 

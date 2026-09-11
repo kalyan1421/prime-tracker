@@ -5125,11 +5125,12 @@ function BuildingCover({ building }: { building: any }) {
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('building:edit');
-  // Only a role that can permanently remove a building is shown the archive — there is
-  // nothing actionable there otherwise, and it mirrors how archived PROJECTS are gated.
+  // Seeing the archive follows building:edit — whoever can archive a building has to be
+  // able to find it again and restore it. Erasing one permanently is the narrower right
+  // and is gated on its own below.
   const canHardDelete = hasPermission('building:hardDelete');
   const [showArchived, setShowArchived] = useState(false);
-  const { data, isLoading, error } = useBuildings(projectId, showArchived && canHardDelete);
+  const { data, isLoading, error } = useBuildings(projectId, showArchived && canEdit);
   const deleteBuilding = useDeleteBuilding();
   const restoreBuilding = useRestoreBuilding();
   const hardDeleteBuilding = useHardDeleteBuilding();
@@ -5243,7 +5244,7 @@ function BuildingsTab({ projectId }: { projectId: string }) {
           )}
           {/* The archive. Before this there was no way to see an archived building at all,
               let alone bring one back — it simply vanished. */}
-          {!isLoading && !isReorderMode && canHardDelete && (
+          {!isLoading && !isReorderMode && canEdit && (
             <Button
               size="sm"
               variant={showArchived ? 'solid' : 'flat'}
@@ -5401,14 +5402,16 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                     >
                       Restore
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      color="danger"
-                      onPress={() => { setPurgeTarget(b); setPurgeConfirm(''); }}
-                    >
-                      Delete permanently
-                    </Button>
+                    {canHardDelete && (
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="danger"
+                        onPress={() => { setPurgeTarget(b); setPurgeConfirm(''); }}
+                      >
+                        Delete permanently
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}
