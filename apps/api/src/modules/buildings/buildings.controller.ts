@@ -30,8 +30,16 @@ export class BuildingsController {
       'would go dark if the building were archived, counting both direct attachments and everything ' +
       'under its units. Intended for the delete-confirmation dialog.',
   })
-  findByProject(@Query('projectId') projectId: string, @CurrentUser('permissions') permissions?: string[]) {
-    return this.service.findByProject(projectId, permissions ?? []);
+  findByProject(
+    @Query('projectId') projectId: string,
+    @Query('archived', new DefaultValuePipe(false), ParseBoolPipe) archived: boolean,
+    @CurrentUser('permissions') permissions?: string[],
+  ) {
+    // Archived buildings are only ever returned to someone who could act on them — the
+    // same gate the archive view itself sits behind. Everyone else gets the live list,
+    // whatever they ask for.
+    const canSeeArchived = (permissions ?? []).includes('building:hardDelete');
+    return this.service.findByProject(projectId, permissions ?? [], archived && canSeeArchived);
   }
 
   @Patch('reorder')
@@ -71,5 +79,25 @@ export class BuildingsController {
     @Query('force', new DefaultValuePipe(false), ParseBoolPipe) force: boolean,
   ) {
     return this.service.delete(id, force);
+  }
+
+  @Post(':id/restore')
+  @RequirePermissions('building:edit')
+  @ApiOperation({ summary: 'Un-archive a building, bringing back the units archived alongside it' })
+  restore(@Param('id') id: string) {
+    return this.service.restore(id);
+  }
+
+  @Delete(':id/hard')
+  @RequirePermissions('building:hardDelete')
+  @ApiOperation({
+    summary: 'Permanently delete a building — irreversible, cascades to everything beneath it',
+    description:
+      'Unlike the archive, this destroys the units AND every lease, sale, loan, draw, '
+      + 'document and checklist record hanging off them. Nothing survives but the audit '
+      + 'entry. Restricted to SUPER_ADMIN and FOUNDER.',
+  })
+  hardDelete(@Param('id') id: string) {
+    return this.service.hardDelete(id);
   }
 }

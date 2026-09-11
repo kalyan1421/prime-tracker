@@ -234,6 +234,13 @@ export const PERMISSIONS = {
   // Buildings & Units
   BUILDING_VIEW: 'building:view',
   BUILDING_EDIT: 'building:edit',
+  /**
+   * Permanently and unrecoverably erase a building. Distinct from BUILDING_EDIT, which
+   * covers the ordinary archive — the archive keeps every lease, sale and loan beneath the
+   * building, and this destroys them. Mirrors PROJECT_HARD_DELETE, and like it lands only
+   * on SUPER_ADMIN and FOUNDER (every other role has an explicit permission list).
+   */
+  BUILDING_HARD_DELETE: 'building:hardDelete',
   UNIT_VIEW: 'unit:view',
   UNIT_EDIT: 'unit:edit',
   /**
@@ -784,7 +791,7 @@ export const PROJECT_MEMBER_ROLE_META: Record<ProjectMemberRole, { label: string
 
 export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: string[] }[] = [
   { key: 'projects', label: 'Projects', permissions: ['project:view', 'project:create', 'project:edit', 'project:delete', 'project:hardDelete'] },
-  { key: 'buildings', label: 'Buildings & Units', permissions: ['building:view', 'building:edit', 'unit:view', 'unit:edit'] },
+  { key: 'buildings', label: 'Buildings & Units', permissions: ['building:view', 'building:edit', 'building:hardDelete', 'unit:view', 'unit:edit'] },
   { key: 'financial', label: 'Financial', permissions: ['financial:view', 'financial:edit', 'financial:export', 'budget:view', 'budget:edit', 'actual:view', 'actual:edit'] },
   { key: 'loans', label: 'Loans & Draws', permissions: ['loan:view', 'loan:edit', 'draw:view', 'draw:edit', 'draw:approve'] },
   { key: 'sales_leasing', label: 'Sales & Leasing', permissions: ['sales:view', 'sales:edit', 'lease:view', 'lease:edit', 'rent:collect', 'lead:view', 'lead:create', 'lead:edit', 'lead:delete', 'lead:convert'] },

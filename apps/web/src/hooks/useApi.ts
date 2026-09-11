@@ -1186,10 +1186,14 @@ export function useCombineUnits() {
 }
 
 // ---- Building Queries ----
-export function useBuildings(projectId: string) {
+export function useBuildings(projectId: string, archived = false) {
   return useQuery({
-    queryKey: ['buildings', projectId],
-    queryFn: () => api.get('/buildings', { params: { projectId } }).then((r) => r.data),
+    // `archived` is part of the key: the two lists are different answers to the same
+    // question, and sharing one cache entry made the toggle show stale rows.
+    queryKey: ['buildings', projectId, archived],
+    queryFn: () => api
+      .get('/buildings', { params: { projectId, ...(archived ? { archived: true } : {}) } })
+      .then((r) => r.data),
     enabled: !!projectId,
   });
 }
@@ -1241,6 +1245,38 @@ export function useDeleteBuilding() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['buildings'] });
       qc.invalidateQueries({ queryKey: ['units'] });
+    },
+  });
+}
+
+/** Un-archive a building, bringing back the units archived alongside it. */
+export function useRestoreBuilding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/buildings/${id}/restore`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['buildings'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
+}
+
+/**
+ * Permanently delete a building. Irreversible, and NOT the same as the archive: this
+ * destroys every unit, lease, sale and loan beneath it. Gated on building:hardDelete.
+ */
+export function useHardDeleteBuilding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/buildings/${id}/hard`).then((r) => r.data),
+    onSuccess: () => {
+      // Everything downstream of a building can have gone with it.
+      qc.invalidateQueries({ queryKey: ['buildings'] });
+      qc.invalidateQueries({ queryKey: ['units'] });
+      qc.invalidateQueries({ queryKey: ['leases'] });
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
     },
   });
 }

@@ -118,7 +118,7 @@ export class BuildingsService {
     };
   }
 
-  async findByProject(projectId: string, viewerPermissions: string[] = []) {
+  async findByProject(projectId: string, viewerPermissions: string[] = [], archived = false) {
     if (!projectId) {
       throw new BadRequestException('projectId query parameter is required');
     }
@@ -129,7 +129,11 @@ export class BuildingsService {
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
     const buildings = await this.prisma.building.findMany({
-      where: { projectId },
+      // Archived buildings are EXCLUDED by default. They were not before, and nothing in
+      // the UI distinguished them either — so a "deleted" building carried on rendering
+      // beside the live ones, which is indistinguishable from the delete not working.
+      // `archived: true` is the explicit opt-in the archive view asks for.
+      where: { projectId, ...(archived ? {} : { deletedAt: null }) },
       // `units` is deliberately left UNFILTERED: it is the number delete()'s guard trips
       // on (and the web dialog's force gate reads), and both have always counted every
       // unit row. The polymorphic children below ARE filtered — a soft-deleted lease is
@@ -245,6 +249,63 @@ export class BuildingsService {
     // Same shape as the reads, so an updated row can replace a list-cache entry without
     // the dialog losing its blast radius. One extra query, on a write path only.
     return this.withBlastRadius(updated, await this.nestedCounts([id]));
+  }
+
+  /**
+   * Reverses delete() — brings an archived building back, with the units archived
+   * alongside it.
+   *
+   * Only units archived at the SAME INSTANT return. delete(force) stamps the building and
+   * its live units with one timestamp, so matching on it restores exactly what that action
+   * hid — and leaves alone any unit that had been archived on its own beforehand, which
+   * was never the building's to resurrect.
+   */
+  async restore(id: string) {
+    const building = await this.prisma.building.findUnique({
+      where: { id },
+      select: { id: true, name: true, deletedAt: true, projectId: true, project: { select: { deletedAt: true } } },
+    });
+    if (!building) throw new NotFoundException('Building not found');
+    if (!building.deletedAt) throw new ConflictException('This building is not archived');
+    if (building.project?.deletedAt) {
+      // Restoring into an archived project would produce a live building nobody can reach.
+      throw new ConflictException('Restore the project first — this building belongs to an archived project');
+    }
+
+    const archivedAt = building.deletedAt;
+    const result = await this.prisma.$transaction(async (tx) => {
+      const units = await tx.unit.updateMany({
+        where: { buildingId: id, deletedAt: archivedAt },
+        data: { deletedAt: null },
+      });
+      const restored = await tx.building.update({ where: { id }, data: { deletedAt: null } });
+      return { building: restored, unitsRestored: units.count };
+    });
+    await this.projectPhase.recompute(building.projectId);
+    return result;
+  }
+
+  /**
+   * Hard delete — irreversible, and genuinely different from delete().
+   *
+   * delete() archives: the building disappears but every lease, sale and loan beneath it
+   * and beneath its units is kept. This removes the row, which cascades at the database
+   * level through every table hanging off the building AND its units — units, leases,
+   * sales, loans, draws, documents, comments, checklist stages, daily logs. Nothing
+   * survives but the audit entry recording that it happened (audit_events carries no FK
+   * to Building, by design, so it cannot itself be cascaded away).
+   *
+   * Mirrors ProjectsService.hardDelete, including its contract: this does exactly what it
+   * is told, on any building regardless of archive state. Confirming intent — a
+   * name-match, the blast radius — belongs above this layer, and the permission
+   * (building:hardDelete) restricts it to SUPER_ADMIN and FOUNDER.
+   */
+  async hardDelete(id: string) {
+    const building = await this.findById(id, ['lease:view', 'sales:view', 'financial:view', 'loan:view']);
+    const blast = building.blastRadius;
+    await this.prisma.building.delete({ where: { id } });
+    await this.projectPhase.recompute(building.projectId);
+    return { deleted: true, name: building.name, destroyed: blast };
   }
 
   async delete(id: string, force = false) {

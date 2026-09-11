@@ -2,7 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { BuildingsService } from './buildings.service';
 
 const mockPrisma: any = {
-  building: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
+  building: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn() },
   project: { findUnique: jest.fn() },
   unit: { findMany: jest.fn(), updateMany: jest.fn() },
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
@@ -220,7 +220,11 @@ describe('BuildingsService.delete', () => {
   it('soft-deletes a building with no units, never hard-deletes', async () => {
     stubBuilding(0);
     await service.delete('b1', false);
-    expect(mockPrisma.building.delete).toBeUndefined(); // hard delete must not exist on this path
+    // A real hardDelete() now exists on the service, so "the mock has no delete method" is
+    // no longer how this is proved. The claim is unchanged and is what actually matters:
+    // archiving must never reach prisma.building.delete, whose cascade would erase every
+    // lease, sale and loan under the building.
+    expect(mockPrisma.building.delete).not.toHaveBeenCalled();
     expect(mockPrisma.unit.updateMany).not.toHaveBeenCalled();
     expect(mockPrisma.building.update).toHaveBeenCalledWith({
       where: { id: 'b1' },
@@ -249,5 +253,96 @@ describe('BuildingsService.delete', () => {
     const unitStamp = mockPrisma.unit.updateMany.mock.calls[0][0].data.deletedAt;
     const buildingStamp = mockPrisma.building.update.mock.calls[0][0].data.deletedAt;
     expect(unitStamp).toEqual(buildingStamp);
+  });
+});
+
+describe('BuildingsService — archive view, restore and hard delete', () => {
+  let service: BuildingsService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = makeService();
+    mockPrisma.project.findUnique.mockResolvedValue({ id: 'p1' });
+    mockPrisma.building.findMany.mockResolvedValue([]);
+    mockPrisma.unit.findMany.mockResolvedValue([]);
+  });
+
+  describe('findByProject', () => {
+    it('hides archived buildings by default', async () => {
+      // They used to come back unfiltered AND render with no distinction, so a "deleted"
+      // building carried on sitting in the list looking live.
+      await service.findByProject('p1', FULL_VISIBILITY);
+      expect(mockPrisma.building.findMany.mock.calls[0][0].where).toEqual({ projectId: 'p1', deletedAt: null });
+    });
+
+    it('includes them only when the archive view asks', async () => {
+      await service.findByProject('p1', FULL_VISIBILITY, true);
+      expect(mockPrisma.building.findMany.mock.calls[0][0].where).toEqual({ projectId: 'p1' });
+    });
+  });
+
+  describe('restore', () => {
+    const archivedAt = new Date('2026-09-12T10:00:00Z');
+
+    it('brings back only the units archived in the SAME action', async () => {
+      // A unit archived on its own beforehand was never the building's to resurrect.
+      mockPrisma.building.findUnique.mockResolvedValue({
+        id: 'b1', name: 'B', deletedAt: archivedAt, projectId: 'p1', project: { deletedAt: null },
+      });
+      mockPrisma.unit.updateMany.mockResolvedValue({ count: 3 });
+      mockPrisma.building.update.mockResolvedValue({ id: 'b1', deletedAt: null });
+
+      const out = await service.restore('b1');
+
+      expect(mockPrisma.unit.updateMany).toHaveBeenCalledWith({
+        where: { buildingId: 'b1', deletedAt: archivedAt },
+        data: { deletedAt: null },
+      });
+      expect(out.unitsRestored).toBe(3);
+      expect(mockProjectPhase.recompute).toHaveBeenCalledWith('p1');
+    });
+
+    it('refuses a building that is not archived', async () => {
+      mockPrisma.building.findUnique.mockResolvedValue({
+        id: 'b1', name: 'B', deletedAt: null, projectId: 'p1', project: { deletedAt: null },
+      });
+      await expect(service.restore('b1')).rejects.toThrow(/not archived/);
+      expect(mockPrisma.building.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to restore into an archived project', async () => {
+      // It would produce a live building nobody can reach.
+      mockPrisma.building.findUnique.mockResolvedValue({
+        id: 'b1', name: 'B', deletedAt: archivedAt, projectId: 'p1', project: { deletedAt: new Date() },
+      });
+      await expect(service.restore('b1')).rejects.toThrow(/Restore the project first/);
+      expect(mockPrisma.building.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hardDelete', () => {
+    it('removes the row (cascading) and reports what it destroyed', async () => {
+      mockPrisma.building.findUnique.mockResolvedValue({
+        id: 'b1', name: 'Building 7', projectId: 'p1', units: [],
+        _count: directCounts({ units: 2, leases: 1 }),
+      });
+      mockPrisma.unit.findMany.mockResolvedValue([]);
+
+      const out = await service.hardDelete('b1');
+
+      expect(mockPrisma.building.delete).toHaveBeenCalledWith({ where: { id: 'b1' } });
+      expect(out).toMatchObject({ deleted: true, name: 'Building 7' });
+      expect(out.destroyed).toBeDefined();
+      expect(mockProjectPhase.recompute).toHaveBeenCalledWith('p1');
+    });
+
+    it('does NOT require the building to be archived first', async () => {
+      // Same contract as ProjectsService.hardDelete — it does what it is told, and
+      // confirming intent belongs above this layer.
+      mockPrisma.building.findUnique.mockResolvedValue({
+        id: 'b1', name: 'Live One', projectId: 'p1', units: [], _count: directCounts(),
+      });
+      await expect(service.hardDelete('b1')).resolves.toMatchObject({ deleted: true });
+    });
   });
 });

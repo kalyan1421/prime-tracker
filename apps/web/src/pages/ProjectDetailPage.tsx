@@ -42,6 +42,7 @@ import {
   useCreateBudget, useUpdateBudget, useDeleteBudget, useProjectBudgetRevisions, useSetApprovedBudget,
   useUnitComments, useProjectComments, useCreateComment, useDeleteComment,
   useCreateBuilding, useUpdateBuilding, useDeleteBuilding, useReorderBuildings,
+  useRestoreBuilding, useHardDeleteBuilding,
   useMonthlyLeaseIncome, useMonthlyPayments,
   useLeads, useCreateLead, useUpdateLead, useDeleteLead, useAddLeadActivity, useLeadActivities, useConvertLead,
   useLead,
@@ -5124,9 +5125,18 @@ function BuildingCover({ building }: { building: any }) {
 function BuildingsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('building:edit');
-  const { data, isLoading, error } = useBuildings(projectId);
+  // Only a role that can permanently remove a building is shown the archive — there is
+  // nothing actionable there otherwise, and it mirrors how archived PROJECTS are gated.
+  const canHardDelete = hasPermission('building:hardDelete');
+  const [showArchived, setShowArchived] = useState(false);
+  const { data, isLoading, error } = useBuildings(projectId, showArchived && canHardDelete);
   const deleteBuilding = useDeleteBuilding();
+  const restoreBuilding = useRestoreBuilding();
+  const hardDeleteBuilding = useHardDeleteBuilding();
   const reorderBuildings = useReorderBuildings();
+  /** The building awaiting a typed-name confirmation before being erased for good. */
+  const [purgeTarget, setPurgeTarget] = useState<any | null>(null);
+  const [purgeConfirm, setPurgeConfirm] = useState('');
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
@@ -5230,6 +5240,18 @@ function BuildingsTab({ projectId }: { projectId: string }) {
                 <span className="text-gray-500 font-normal"> of {allBuildings.length}</span>
               )}
             </p>
+          )}
+          {/* The archive. Before this there was no way to see an archived building at all,
+              let alone bring one back — it simply vanished. */}
+          {!isLoading && !isReorderMode && canHardDelete && (
+            <Button
+              size="sm"
+              variant={showArchived ? 'solid' : 'flat'}
+              color={showArchived ? 'warning' : 'default'}
+              onPress={() => setShowArchived((v) => !v)}
+            >
+              {showArchived ? 'Hide archived' : 'Show archived'}
+            </Button>
           )}
           {isReorderMode && (
             <p className="text-sm text-gray-500 flex items-center gap-1.5">
@@ -5355,7 +5377,41 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       {!isReorderMode && !isLoading && !error && buildings.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {buildings.map((b: any) => (
-            <Card key={b.id} shadow="sm">
+            <Card key={b.id} shadow="sm" className={b.deletedAt ? 'opacity-70 border border-amber-200' : ''}>
+              {b.deletedAt && (
+                <div className="flex items-center justify-between gap-2 bg-amber-50 px-3 py-1.5 border-b border-amber-200">
+                  <span className="text-[11px] font-medium text-amber-800">
+                    Archived {fmtDate(b.deletedAt)} — hidden everywhere, nothing deleted
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      onPress={async () => {
+                        try {
+                          const r = await restoreBuilding.mutateAsync(b.id);
+                          addToast({
+                            title: `${b.name} restored${r?.unitsRestored ? ` with ${r.unitsRestored} unit(s)` : ''}`,
+                            color: 'success',
+                          });
+                        } catch (e) {
+                          addToast({ title: errMsg(e, 'Could not restore this building'), color: 'danger' });
+                        }
+                      }}
+                    >
+                      Restore
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="danger"
+                      onPress={() => { setPurgeTarget(b); setPurgeConfirm(''); }}
+                    >
+                      Delete permanently
+                    </Button>
+                  </div>
+                </div>
+              )}
               {/* Cover band — ALWAYS rendered, at a fixed height.
                   It used to be conditional, so within one grid row a building with a
                   photo pushed its title 112px down while a building without one kept its
@@ -5430,6 +5486,63 @@ function BuildingsTab({ projectId }: { projectId: string }) {
       />
 
       {/* Delete Confirmation — shows unit count and requires explicit force checkbox */}
+      {/* Permanent delete. Deliberately a SEPARATE dialog from the archive above, with a
+          typed-name gate: the archive keeps every lease, sale and loan under the building,
+          and this erases them. The two must never be one button with a checkbox. */}
+      <Modal isOpen={!!purgeTarget} onClose={() => setPurgeTarget(null)} isDismissable={false} size="md">
+        <ModalContent>
+          <ModalHeader className="text-danger">Permanently delete {purgeTarget?.name}</ModalHeader>
+          <ModalBody className="gap-3">
+            <p className="text-sm text-gray-700">
+              This cannot be undone. It erases the building and everything recorded beneath
+              it — units, and their leases, sales, loans, documents and checklists. Archiving
+              hides a building; this destroys its history.
+            </p>
+            {purgeTarget?.blastRadius && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                <p className="font-semibold mb-1">About to be destroyed</p>
+                <p>
+                  {[
+                    `${purgeTarget.blastRadius.units} unit(s)`,
+                    `${purgeTarget.blastRadius.leases} lease(s)`,
+                    `${purgeTarget.blastRadius.sales} sale(s)`,
+                    `${purgeTarget.blastRadius.loans} loan(s)`,
+                  ].join(' · ')}
+                </p>
+              </div>
+            )}
+            <Input
+              size="sm"
+              labelPlacement="outside"
+              label={`Type "${purgeTarget?.name ?? ''}" to confirm`}
+              placeholder={purgeTarget?.name}
+              value={purgeConfirm}
+              onChange={(e) => setPurgeConfirm(e.target.value)}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={() => setPurgeTarget(null)}>Cancel</Button>
+            <Button
+              size="sm"
+              color="danger"
+              isDisabled={purgeConfirm.trim() !== (purgeTarget?.name ?? '').trim()}
+              isLoading={hardDeleteBuilding.isPending}
+              onPress={async () => {
+                try {
+                  await hardDeleteBuilding.mutateAsync(purgeTarget.id);
+                  addToast({ title: `${purgeTarget.name} permanently deleted`, color: 'success' });
+                  setPurgeTarget(null);
+                } catch (e) {
+                  addToast({ title: errMsg(e, 'Could not delete this building'), color: 'danger' });
+                }
+              }}
+            >
+              Delete permanently
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       <Modal isOpen={isDeleteOpen} onClose={onDeleteClose} isDismissable={false} size="sm">
         <ModalContent>
           <ModalHeader>Delete Building</ModalHeader>
