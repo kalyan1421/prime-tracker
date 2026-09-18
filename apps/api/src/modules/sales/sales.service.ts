@@ -188,7 +188,12 @@ export class SalesService {
           { unit: { deletedAt: null, building: { deletedAt: null } } },
         ],
       },
-      include: { unit: { include: { building: { select: { name: true } } } } },
+      include: {
+        unit: { include: { building: { select: { name: true } } } },
+        // A whole-building sale has no unit, so without this the pipeline card had
+        // nothing to label itself with. Matches LeasesService.findByProject.
+        building: { select: { id: true, name: true } },
+      },
       orderBy: { updatedAt: 'desc' },
     });
   }
