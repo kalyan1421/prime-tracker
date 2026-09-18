@@ -10,6 +10,12 @@ import { Input, Select, SelectItem, Switch } from '@heroui/react';
 import { useBrokers } from '../hooks/useApi';
 
 export const EMPTY_LEASE = {
+  // A lease is polymorphic: it hangs off ONE unit or off a whole building (the schema's
+  // own example is "Leander Building 1 leased as one whole asset"). Which one is tracked
+  // explicitly rather than inferred from whichever id is non-empty, because there is a
+  // real moment in between — the scope is switched to BUILDING before a building is
+  // picked — and an inferred scope would snap back to UNIT underneath the user.
+  assetType: 'UNIT', buildingId: '',
   unitId: '', tenantName: '', tenantLegalName: '', tenantBrand: '',
   tenantContact: '', tenantEmail: '', tenantPhone: '', monthlyRent: '', rentPerSqft: '',
   nnnPerSqft: '', nnnTotalAmount: '',
@@ -71,6 +77,13 @@ export function validateLeaseForm(
   opts: { isHistorical?: boolean } = {},
 ): Record<string, string> {
   const errs: Record<string, string> = {};
+  // Exactly one of (unitId, buildingId) — the same rule LeasesService enforces. Caught
+  // here so the whole-building path fails in the form rather than as a 400.
+  if (form.assetType === 'BUILDING') {
+    if (!form.buildingId) errs.buildingId = 'Required — pick the building this lease covers';
+  } else if (!form.unitId) {
+    errs.unitId = 'Required — pick the unit this lease covers';
+  }
   if (!form.tenantName.trim()) errs.tenantName = 'Required';
   if (!form.monthlyRent) errs.monthlyRent = 'Required';
   else if (Number(form.monthlyRent) < 0) errs.monthlyRent = 'Cannot be negative';
@@ -142,6 +155,8 @@ export function leaseToForm(l: any, fallbackUnitId = ''): Record<string, string>
   const num = (v: any) => (v != null && v !== '' ? String(Number(v)) : '');
   return {
     ...EMPTY_LEASE,
+    assetType: (l.buildingId || l.building?.id) && !(l.unitId || l.unit?.id) ? 'BUILDING' : 'UNIT',
+    buildingId: l.buildingId || l.building?.id || '',
     unitId: l.unitId || l.unit?.id || fallbackUnitId || '',
     tenantName: l.tenantName || '',
     tenantLegalName: l.tenantLegalName || '',
@@ -235,14 +250,22 @@ export function buildLeasePayload(form: Record<string, string>): Record<string, 
  * UnitsTab post-status-change prompt so the two can never drift apart.
  */
 export function LeaseFormFields({
-  form, setForm, errors = {}, clearError, unitOptions, lockUnit = false, isHistorical = false,
+  form, setForm, errors = {}, clearError, unitOptions, buildingOptions, lockUnit = false,
+  lockAsset = false, isHistorical = false,
 }: {
   form: Record<string, string>;
   setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   errors?: Record<string, string>;
   clearError?: (field: string) => void;
   unitOptions: any[];
+  /** Omit to keep this form unit-only. Passing the project's buildings is what offers
+   *  "the whole building" as an alternative to a unit. */
+  buildingOptions?: any[];
   lockUnit?: boolean;
+  /** Edit mode. A lease's asset link is immutable — UpdateLeaseDto rejects unitId and
+   *  buildingId outright — so the pickers are shown as read-only rather than as
+   *  controls whose only possible outcome is a rejected save. */
+  lockAsset?: boolean;
   /** Hides fields the backfill endpoint (POST /leases/backfill) has nowhere to put —
    *  otherwise a value typed here would be silently discarded on save. Mirrors exactly
    *  what BackfillTenancyDialog exposes today. */
@@ -260,15 +283,25 @@ export function LeaseFormFields({
 
   const term = deriveTermMonths(form);
   const gapDays = fitOutDays(form);
+  const buildings: any[] = buildingOptions || [];
+  const isBuildingLease = form.assetType === 'BUILDING';
+  // Only offered where the caller supplied buildings, and never on a form already
+  // locked to one asset (the Units-tab prompt, the Unit Detail page).
+  const canPickAsset = buildings.length > 0 && !lockUnit;
+
   // The annual NNN total shown live beside the rate, so the per-sqft figure is
   // checkable against the sum the monthly charge (nnnTotalAmount / 12) is derived
-  // from. Falls back to the unit's sqft from the option list; the server recomputes
+  // from. Falls back to the asset's area from the option list — a unit's sqft, or the
+  // building's totalSqft when the whole building is let; the server recomputes
   // authoritatively on save.
   const selectedUnit = unitOptions.find((u: any) => u.id === form.unitId);
-  const unitSqft = Number(selectedUnit?.sqft) || 0;
+  const selectedBuilding = buildings.find((b: any) => b.id === form.buildingId);
+  const assetSqft = isBuildingLease
+    ? Number(selectedBuilding?.totalSqft) || 0
+    : Number(selectedUnit?.sqft) || 0;
   const nnnRate = parseFloat(form.nnnPerSqft);
   const derivedNnnTotal =
-    Number.isFinite(nnnRate) && unitSqft > 0 ? Math.round(nnnRate * unitSqft * 100) / 100 : null;
+    Number.isFinite(nnnRate) && assetSqft > 0 ? Math.round(nnnRate * assetSqft * 100) / 100 : null;
 
   /** rate x sqft, rounded to cents — same rounding rule the server uses. */
   const deriveMonthlyRent = (rate: string, sqft: number): string | null => {
@@ -276,36 +309,94 @@ export function LeaseFormFields({
     if (!Number.isFinite(parsed) || sqft <= 0) return null;
     return String(Math.round(parsed * sqft * 100) / 100);
   };
-  const derivedMonthlyRent = deriveMonthlyRent(form.rentPerSqft, unitSqft);
+  const derivedMonthlyRent = deriveMonthlyRent(form.rentPerSqft, assetSqft);
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <Select
-        size="sm"
-        label="Unit"
-        isRequired
-        isDisabled={lockUnit}
-        description={lockUnit ? 'Locked to the unit you just updated' : undefined}
-        selectedKeys={form.unitId ? [form.unitId] : []}
-        onSelectionChange={(keys) => {
-          const val = Array.from(keys)[0] as string;
-          if (!val) return;
-          setForm((f) => {
-            const next: Record<string, string> = { ...f, unitId: val };
-            // A $/sqft rate already typed re-derives Monthly Rent against the NEWLY
-            // selected unit's area — otherwise switching units silently leaves the
-            // old unit's rent behind.
-            const newSqft = Number(unitOptions.find((u: any) => u.id === val)?.sqft) || 0;
-            const derived = deriveMonthlyRent(f.rentPerSqft, newSqft);
-            if (derived != null) next.monthlyRent = derived;
-            return next;
-          });
-        }}
-      >
-        {unitOptions.map((u: any) => (
-          <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
-        ))}
-      </Select>
+      {canPickAsset && (
+        <Select
+          size="sm"
+          label="Leased asset"
+          isRequired
+          isDisabled={lockAsset}
+          description={lockAsset ? 'A lease cannot be moved to another asset' : undefined}
+          selectedKeys={[isBuildingLease ? 'BUILDING' : 'UNIT']}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            if (!val) return;
+            // Both ids cleared on every switch: the server requires exactly one, and a
+            // leftover id from the other scope is precisely what it refuses.
+            setForm((f) => ({ ...f, assetType: val, unitId: '', buildingId: '' }));
+            clearError?.('unitId');
+            clearError?.('buildingId');
+          }}
+        >
+          <SelectItem key="UNIT" textValue="A single unit">A single unit</SelectItem>
+          <SelectItem key="BUILDING" textValue="The whole building">The whole building</SelectItem>
+        </Select>
+      )}
+      {isBuildingLease ? (
+        <Select
+          size="sm"
+          label="Building"
+          isRequired
+          isDisabled={lockAsset}
+          description={
+            lockAsset ? undefined
+              : 'Every unit inside it is covered by this one lease'
+          }
+          isInvalid={!!errors.buildingId}
+          errorMessage={errors.buildingId}
+          selectedKeys={form.buildingId ? [form.buildingId] : []}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            if (!val) return;
+            setForm((f) => {
+              const next: Record<string, string> = { ...f, buildingId: val, unitId: '' };
+              // Same re-derivation as the unit picker, against the building's area.
+              const newSqft = Number(buildings.find((b: any) => b.id === val)?.totalSqft) || 0;
+              const derived = deriveMonthlyRent(f.rentPerSqft, newSqft);
+              if (derived != null) next.monthlyRent = derived;
+              return next;
+            });
+            clearError?.('buildingId');
+          }}
+        >
+          {buildings.map((b: any) => (
+            <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+          ))}
+        </Select>
+      ) : (
+        <Select
+          size="sm"
+          label="Unit"
+          isRequired
+          isDisabled={lockUnit || lockAsset}
+          description={lockUnit ? 'Locked to the unit you just updated' : undefined}
+          isInvalid={!!errors.unitId}
+          errorMessage={errors.unitId}
+          selectedKeys={form.unitId ? [form.unitId] : []}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            if (!val) return;
+            setForm((f) => {
+              const next: Record<string, string> = { ...f, unitId: val, buildingId: '' };
+              // A $/sqft rate already typed re-derives Monthly Rent against the NEWLY
+              // selected unit's area — otherwise switching units silently leaves the
+              // old unit's rent behind.
+              const newSqft = Number(unitOptions.find((u: any) => u.id === val)?.sqft) || 0;
+              const derived = deriveMonthlyRent(f.rentPerSqft, newSqft);
+              if (derived != null) next.monthlyRent = derived;
+              return next;
+            });
+            clearError?.('unitId');
+          }}
+        >
+          {unitOptions.map((u: any) => (
+            <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
+          ))}
+        </Select>
+      )}
       <Input size="sm" label="Tenant Name" isRequired value={form.tenantName} onChange={set('tenantName')} isInvalid={!!errors.tenantName} errorMessage={errors.tenantName} />
       <Input
         size="sm"
@@ -399,7 +490,7 @@ export function LeaseFormFields({
               const rate = e.target.value;
               setForm((f) => {
                 const next: Record<string, string> = { ...f, rentPerSqft: rate };
-                const derived = deriveMonthlyRent(rate, unitSqft);
+                const derived = deriveMonthlyRent(rate, assetSqft);
                 if (derived != null) next.monthlyRent = derived;
                 return next;
               });
@@ -408,10 +499,18 @@ export function LeaseFormFields({
             }}
             description={
               derivedMonthlyRent != null
-                ? `= $${Number(derivedMonthlyRent).toLocaleString()}/mo on ${unitSqft.toLocaleString()} sqft — fills Monthly Rent above`
-                : unitSqft > 0
+                ? `= $${Number(derivedMonthlyRent).toLocaleString()}/mo on ${assetSqft.toLocaleString()} sqft — fills Monthly Rent above`
+                : assetSqft > 0
                   ? 'Optional. Fills Monthly Rent above once a rate is entered.'
-                  : 'Optional. Select a unit first so a rate can fill Monthly Rent above.'
+                  : isBuildingLease
+                    // Two different reasons for a zero area, and they need different
+                    // sentences: nothing picked yet, versus a building with no
+                    // totalSqft on file. "Select a building" when one IS selected
+                    // reads as a bug.
+                    ? selectedBuilding
+                      ? 'Optional. This building has no total sqft recorded, so enter Monthly Rent directly.'
+                      : 'Optional. Select a building first so a rate can fill Monthly Rent above.'
+                    : 'Optional. Select a unit first so a rate can fill Monthly Rent above.'
             }
           />
           <Input
@@ -425,7 +524,7 @@ export function LeaseFormFields({
             errorMessage={errors.nnnPerSqft}
             description={
               derivedNnnTotal != null
-                ? `= $${derivedNnnTotal.toLocaleString()}/yr on ${unitSqft.toLocaleString()} sqft ` +
+                ? `= $${derivedNnnTotal.toLocaleString()}/yr on ${assetSqft.toLocaleString()} sqft ` +
                   `($${Math.round((derivedNnnTotal / 12) * 100) / 100}/mo)`
                 : 'Quoted annual rate. Billed monthly (rate x sqft ÷ 12). Enter 0 if this lease has no NNN.'
             }

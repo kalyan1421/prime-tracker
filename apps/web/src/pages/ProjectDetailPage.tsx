@@ -4182,6 +4182,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const { data: leases, isLoading: ll } = useLeases(projectId);
   const { data: rentRoll, isLoading: rl } = useRentRoll(projectId);
   const { data: unitsData } = useUnits(projectId);
+  const { data: buildingsData } = useBuildings(projectId);
   const createLease = useCreateLease();
   const updateLease = useUpdateLease();
   const deleteLease = useDeleteLease();
@@ -4196,6 +4197,7 @@ function LeasesTab({ projectId }: { projectId: string }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const units = (unitsData as any[]) || [];
+  const buildings = (buildingsData as any[]) || [];
 
   const openCreate = () => {
     setEditId(null);
@@ -4223,7 +4225,13 @@ function LeasesTab({ projectId }: { projectId: string }) {
         await updateLease.mutateAsync({ id: editId, data: payload });
         addToast({ title: 'Lease updated', color: 'success' });
       } else {
-        await createLease.mutateAsync({ ...payload, unitId: form.unitId });
+        await createLease.mutateAsync({
+          ...payload,
+          // Exactly one of the two — LeasesService refuses both and refuses neither.
+          ...(form.assetType === 'BUILDING'
+            ? { buildingId: form.buildingId }
+            : { unitId: form.unitId }),
+        });
         addToast({ title: 'Lease created', color: 'success' });
       }
       onFormClose();
@@ -4401,7 +4409,11 @@ function LeasesTab({ projectId }: { projectId: string }) {
                         </div>
                       )}
                     </td>
-                    <td className="py-2 px-2">{l.unit?.unitNumber || l.unit?.name || '\u2014'}</td>
+                    <td className="py-2 px-2">
+                      {l.buildingId || (l.building?.id && !l.unitId)
+                        ? `${l.building?.name || 'Building'} (whole)`
+                        : l.unit?.unitNumber || l.unit?.name || '\u2014'}
+                    </td>
                     <td className="py-2 px-2 text-right">{fmt(l.monthlyRent)}</td>
                     <td className="py-2 px-2">{fmtDate(l.leaseStart || l.startDate)}</td>
                     <td className="py-2 px-2">{fmtDate(l.leaseEnd || l.endDate)}</td>
@@ -4478,6 +4490,8 @@ function LeasesTab({ projectId }: { projectId: string }) {
               errors={leaseErrors}
               clearError={clearLeaseError}
               unitOptions={availableForLease}
+              buildingOptions={buildings}
+              lockAsset={!!editId}
             />
           </ModalBody>
           <ModalFooter>
@@ -4530,6 +4544,10 @@ function LeasesTab({ projectId }: { projectId: string }) {
 
 // ---- Sales Tab ----
 const EMPTY_SALE = {
+  // Polymorphic, exactly as a lease is: a sale is of ONE unit or of a whole building.
+  // See EMPTY_LEASE in LeaseFormFields for why the scope is a field of its own rather
+  // than inferred from whichever id happens to be set.
+  assetType: 'UNIT', buildingId: '',
   unitId: '', buyer: '', salePrice: '', depositAmt: '', status: 'PROSPECT',
   loiDate: '', contractDate: '', closingDate: '', notes: '',
   lostReason: '', lostReasonNote: '', expectedCloseDate: '',
@@ -4554,7 +4572,15 @@ function buildSalePayload(
   mode: 'create' | 'update' = 'create',
 ): Record<string, unknown> {
   return {
-    ...(mode === 'create' ? { projectId, unitId: form.unitId } : {}),
+    ...(mode === 'create'
+      ? {
+          projectId,
+          // Exactly one of the two — SalesService refuses both and refuses neither.
+          ...(form.assetType === 'BUILDING'
+            ? { buildingId: form.buildingId }
+            : { unitId: form.unitId }),
+        }
+      : {}),
     buyer: form.buyer || undefined,
     salePrice: form.salePrice ? parseFloat(form.salePrice) : undefined,
     depositAmt: form.depositAmt ? parseFloat(form.depositAmt) : undefined,
@@ -4576,14 +4602,25 @@ function buildSalePayload(
  * UnitsTab post-status-change prompt so the two can never drift apart.
  */
 function SaleFormFields({
-  form, setForm, unitOptions, formError = null, lockUnit = false,
+  form, setForm, unitOptions, buildingOptions, formError = null, lockUnit = false,
+  lockAsset = false,
 }: {
   form: Record<string, string>;
   setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   unitOptions: any[];
+  /** Omit to keep this form unit-only. Passing the project's buildings is what offers
+   *  "the whole building" as an alternative to a unit. */
+  buildingOptions?: any[];
   formError?: string | null;
   lockUnit?: boolean;
+  /** Edit mode. A sale's asset link is immutable — UpdateSaleDto rejects unitId and
+   *  buildingId outright — so the pickers are read-only rather than controls whose
+   *  only possible outcome is a rejected save. */
+  lockAsset?: boolean;
 }) {
+  const buildings: any[] = buildingOptions || [];
+  const isBuildingSale = form.assetType === 'BUILDING';
+  const canPickAsset = buildings.length > 0 && !lockUnit;
   // Fetched here rather than passed in, so every caller gets the same option lists without
   // firing a broker:view request on tabs that never open this form.
   const { data: saleStatusOpts = [] } = useCustomOptions('sale_status');
@@ -4593,22 +4630,64 @@ function SaleFormFields({
     setForm((f) => ({ ...f, [field]: e.target.value }));
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <Select
-        size="sm"
-        label="Unit"
-        isRequired
-        isDisabled={lockUnit}
-        description={lockUnit ? 'Locked to the unit you just updated' : undefined}
-        selectedKeys={form.unitId ? [form.unitId] : []}
-        onSelectionChange={(keys) => {
-          const val = Array.from(keys)[0] as string;
-          if (val) setForm((f) => ({ ...f, unitId: val }));
-        }}
-      >
-        {unitOptions.map((u: any) => (
-          <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
-        ))}
-      </Select>
+      {canPickAsset && (
+        <Select
+          size="sm"
+          label="Asset sold"
+          isRequired
+          isDisabled={lockAsset}
+          description={lockAsset ? 'A sale cannot be moved to another asset' : undefined}
+          selectedKeys={[isBuildingSale ? 'BUILDING' : 'UNIT']}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            if (!val) return;
+            // Both ids cleared on every switch: the server requires exactly one, and a
+            // leftover id from the other scope is precisely what it refuses.
+            setForm((f) => ({ ...f, assetType: val, unitId: '', buildingId: '' }));
+          }}
+        >
+          <SelectItem key="UNIT" textValue="A single unit">A single unit</SelectItem>
+          <SelectItem key="BUILDING" textValue="The whole building">The whole building</SelectItem>
+        </Select>
+      )}
+      {isBuildingSale ? (
+        <Select
+          size="sm"
+          label="Building"
+          isRequired
+          isDisabled={lockAsset}
+          description={
+            lockAsset ? undefined
+              : 'Closing it marks every unit inside SOLD and ends their tenancies'
+          }
+          selectedKeys={form.buildingId ? [form.buildingId] : []}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            if (val) setForm((f) => ({ ...f, buildingId: val, unitId: '' }));
+          }}
+        >
+          {buildings.map((b: any) => (
+            <SelectItem key={b.id} textValue={b.name}>{b.name}</SelectItem>
+          ))}
+        </Select>
+      ) : (
+        <Select
+          size="sm"
+          label="Unit"
+          isRequired
+          isDisabled={lockUnit || lockAsset}
+          description={lockUnit ? 'Locked to the unit you just updated' : undefined}
+          selectedKeys={form.unitId ? [form.unitId] : []}
+          onSelectionChange={(keys) => {
+            const val = Array.from(keys)[0] as string;
+            if (val) setForm((f) => ({ ...f, unitId: val, buildingId: '' }));
+          }}
+        >
+          {unitOptions.map((u: any) => (
+            <SelectItem key={u.id} textValue={u.unitNumber || u.name}>{u.unitNumber || u.name}</SelectItem>
+          ))}
+        </Select>
+      )}
       <Input size="sm" label="Buyer" value={form.buyer} onChange={set('buyer')} />
       <Input size="sm" label="Sale Price ($)" type="number" value={form.salePrice} onChange={set('salePrice')} />
       <Input size="sm" label="Deposit Amount ($)" type="number" value={form.depositAmt} onChange={set('depositAmt')} />
@@ -4689,6 +4768,7 @@ function SalesTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useSalesPipeline(projectId);
   const { data: forecast } = useSalesForecast(projectId);
   const { data: unitsData } = useUnits(projectId);
+  const { data: buildingsData } = useBuildings(projectId);
   const createSale = useCreateSale();
   const updateSale = useUpdateSale();
   const deleteSale = useDeleteSale();
@@ -4721,6 +4801,7 @@ function SalesTab({ projectId }: { projectId: string }) {
     });
 
   const units = (unitsData as any[]) || [];
+  const buildings = (buildingsData as any[]) || [];
 
   const openCreate = () => {
     setEditId(null);
@@ -4733,6 +4814,11 @@ function SalesTab({ projectId }: { projectId: string }) {
     setEditId(s.id);
     setEditStatus(s.status || 'PROSPECT');
     setForm({
+      ...EMPTY_SALE,
+      // A building-level sale has no unit; reading the scope off the row is what makes
+      // the Edit dialog show "The whole building" instead of an empty Unit picker.
+      assetType: (s.buildingId || s.building?.id) && !(s.unitId || s.unit?.id) ? 'BUILDING' : 'UNIT',
+      buildingId: s.buildingId || s.building?.id || '',
       unitId: s.unitId || s.unit?.id || '',
       buyer: s.buyer || s.buyerName || '',
       salePrice: s.salePrice?.toString() || '',
@@ -4752,6 +4838,18 @@ function SalesTab({ projectId }: { projectId: string }) {
 
   const handleSave = async () => {
     setSaleFormError(null);
+    // Exactly one of (unitId, buildingId) — the rule SalesService enforces. Only on
+    // create: the link is immutable afterwards and the payload omits it entirely.
+    if (!editId) {
+      if (form.assetType === 'BUILDING' && !form.buildingId) {
+        setSaleFormError('Pick the building this sale covers');
+        return;
+      }
+      if (form.assetType !== 'BUILDING' && !form.unitId) {
+        setSaleFormError('Pick the unit this sale covers');
+        return;
+      }
+    }
     // Slice 6: forced lost-reason picker — frontend insists before submit so the
     // user understands the audit captures *why* deals die.
     if (form.status === 'CANCELLED' && !form.lostReason) {
@@ -4932,7 +5030,9 @@ function SalesTab({ projectId }: { projectId: string }) {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold text-gray-800">{s.buyer || s.buyerName || 'Unnamed'}</p>
                             <p className="mt-0.5 text-xs text-gray-500">
-                              Unit {s.unit?.unitNumber || '\u2014'}
+                              {s.buildingId || s.building?.id
+                                ? `${s.building?.name || 'Building'} \u00b7 whole building`
+                                : `Unit ${s.unit?.unitNumber || '\u2014'}`}
                               {price != null && <span className="ml-1.5 font-medium text-gray-700">{fmt(price)}</span>}
                             </p>
                             {discountPct != null && (
@@ -5020,6 +5120,8 @@ function SalesTab({ projectId }: { projectId: string }) {
               form={form}
               setForm={setForm}
               unitOptions={units}
+              buildingOptions={buildings}
+              lockAsset={!!editId}
               formError={saleFormError}
             />
             {/* The gate's paperwork, where the refusal is read. Renders only when the
