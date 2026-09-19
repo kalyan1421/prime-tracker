@@ -613,6 +613,15 @@ export class TasksService {
         });
     }
 
+    /** One attachment row, for the authenticated download route. */
+    async findAttachment(attachmentId: string) {
+        const attachment = await this.prisma.taskAttachment.findUnique({
+            where: { id: attachmentId },
+        });
+        if (!attachment) throw new NotFoundException('Attachment not found');
+        return attachment;
+    }
+
     async deleteAttachment(attachmentId: string, userId: string, userRole: string) {
         const attachment = await this.prisma.taskAttachment.findUnique({ where: { id: attachmentId } });
         if (!attachment) throw new NotFoundException('Attachment not found');

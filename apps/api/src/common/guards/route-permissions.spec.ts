@@ -181,7 +181,15 @@ describe('the routes added this cycle carry the permission they are meant to', (
     ['LeasesController', 'endTenancy', ['lease:edit']],
     ['LeasesController', 'assignTenant', ['lease:edit']],
     ['LeasesController', 'assignments', ['lease:view']],
-    ['TasksController', 'getUpdates', ['project:view']],
+    // task:view, not project:view — TasksController's reads used to accept the baseline
+    // permission every role holds, which let VIEWER and LEGAL (deliberately denied
+    // task:view, and correctly filtered out of Tasks events on the Activity Log) read every
+    // task in the portfolio.
+    ['TasksController', 'getUpdates', ['task:view']],
+    ['TasksController', 'findAll', ['task:view']],
+    ['TasksController', 'findOne', ['task:view']],
+    ['TasksController', 'getComments', ['task:view']],
+    ['TasksController', 'downloadAttachment', ['task:view']],
     ['TasksController', 'addUpdate', ['task:edit']],
     ['TasksController', 'addUpdatePhoto', ['task:edit']],
     ['TasksController', 'deleteUpdate', ['task:edit']],

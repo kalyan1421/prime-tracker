@@ -2199,17 +2199,22 @@ export function useTasks(params?: {
   /** 'TASK' = admin work items, 'CONSTRUCTION' = the site board. Omit for both. */
   kind?: string;
 }) {
+  // task:view, not project:view — TasksController enforces the former on its reads now,
+  // so VIEWER and LEGAL (who are deliberately not granted it) must not ask.
+  const can = useCan('task:view');
   return useQuery({
     queryKey: ['tasks', params],
     queryFn: () => api.get('/tasks', { params }).then((r) => r.data),
+    enabled: can,
   });
 }
 
 export function useTask(id: string) {
+  const can = useCan('task:view');
   return useQuery({
     queryKey: ['task', id],
     queryFn: () => api.get(`/tasks/${id}`).then((r) => r.data),
-    enabled: !!id,
+    enabled: !!id && can,
   });
 }
 
@@ -2244,10 +2249,11 @@ export function useDeleteTask() {
 
 /** Day-wise progress updates on one item, newest day first. */
 export function useTaskUpdates(taskId?: string) {
+  const can = useCan('task:view');
   return useQuery({
     queryKey: ['task-updates', taskId],
     queryFn: () => api.get(`/tasks/${taskId}/updates`).then((r) => r.data),
-    enabled: !!taskId,
+    enabled: !!taskId && can,
   });
 }
 
@@ -2287,10 +2293,11 @@ export function useDeleteTaskUpdate() {
 }
 
 export function useTaskComments(taskId: string) {
+  const can = useCan('task:view');
   return useQuery({
     queryKey: ['task-comments', taskId],
     queryFn: () => api.get(`/tasks/${taskId}/comments`).then((r) => r.data),
-    enabled: !!taskId,
+    enabled: !!taskId && can,
   });
 }
 
@@ -2339,6 +2346,34 @@ export function useDeleteTaskAttachment() {
       api.delete(`/tasks/${taskId}/attachments/${attachmentId}`).then((r) => r.data),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['task', vars.taskId] });
+    },
+  });
+}
+
+/**
+ * Download a task attachment.
+ *
+ * The link used to point straight at `/uploads/tasks/<name>`, a static mount that no
+ * guard covered and that neither nginx nor the Vite dev proxy forwarded — so the file was
+ * readable by anyone holding the URL and the button saved the SPA's own index.html. The
+ * bytes now come from an authenticated `/api` route, which means the same treatment as the
+ * import templates above: a bare browser navigation would not carry the Authorization
+ * header axios attaches, so fetch as a blob and save via a throwaway object URL.
+ */
+export function useDownloadTaskAttachment() {
+  return useMutation({
+    mutationFn: async ({ attachmentId, fileName }: { attachmentId: string; fileName: string }) => {
+      const res = await api.get(`/tasks/attachments/${attachmentId}/download`, {
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     },
   });
 }

@@ -171,9 +171,19 @@ export class DocumentsController {
     return this.service.replaceFile(id, file, body.fileName);
   }
 
+  /**
+   * document:delete, not document:upload.
+   *
+   * This required document:upload, which made the right to add a file the right to remove
+   * anyone else's — every role that can upload (Finance, Accounting, AR/AP, PM,
+   * Construction, Sales, Marketing, Legal) could clear another department's Deed or lien
+   * waiver out of the vault. It is a soft delete, so nothing was destroyed, but the document
+   * vanishes from every list and getDownloadUrl refuses it, which is enough. See the comment
+   * on DOCUMENT_DELETE in shared for who holds it and why.
+   */
   @Delete(':id')
-  @RequirePermissions('document:upload')
-  @ApiOperation({ summary: 'Delete a document' })
+  @RequirePermissions('document:delete')
+  @ApiOperation({ summary: 'Delete a document (soft — the stored object survives)' })
   delete(@Param('id') id: string) {
     return this.service.delete(id);
   }

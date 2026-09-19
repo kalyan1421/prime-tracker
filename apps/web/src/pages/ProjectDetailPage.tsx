@@ -206,16 +206,17 @@ const TAB_TITLE_MAP: Record<string, string> = {
  * now reads from it and there is only one place left to change.
  *
  * Each permission below is the one the tab's own list endpoint actually enforces —
- * verified against the controllers, not inferred from the name. Notably `tasks` is
- * gated by project:view (task:view is defined but never enforced) and `comments` by
- * unit:view.
+ * verified against the controllers, not inferred from the name. Notably `comments` is
+ * gated by unit:view. `tasks` and `board` are task:view: that permission is granted to
+ * ten roles and withheld from VIEWER/LEGAL, and TasksController now enforces it on reads
+ * rather than accepting the baseline project:view.
  */
 const TAB_PERMISSIONS: Record<string, string[]> = {
   overview: [],                    // reachable by anyone who can open the project
   construction: ['building:view'],
-  // Same bar as the Tasks tab it shares a table with: reading needs only project:view,
-  // and the board itself gates writing on task:edit.
-  board: ['project:view'],
+  // Same bar as the Tasks tab it shares a table with: reading needs task:view, and the
+  // board itself gates writing on task:edit.
+  board: ['task:view'],
   budget: ['budget:view'],
   // Composed tab: Sales pipeline + Leases. Visible with EITHER, and each section is
   // gated separately below so a lease-only role never triggers a sales 403.
@@ -227,7 +228,7 @@ const TAB_PERMISSIONS: Record<string, string[]> = {
   draws: ['draw:view'],
   vendors: ['vendor:view'],
   documents: ['document:view'],
-  tasks: ['project:view'],
+  tasks: ['task:view'],
   comments: ['unit:view'],
   activity: ['audit:view'],
 };
@@ -8135,11 +8136,13 @@ function docIcon(mime: string) {
 
 function DocumentsTab({ projectId }: { projectId: string }) {
   const { hasPermission } = useAuthStore();
-  // 'document:upload' — NOT 'document:edit', which is not a permission at all. Delete is
-  // bundled under this same permission too (see BuildingDetailPage.tsx/UnitDetailPage.tsx —
-  // same rule there). The name must match what the upload/rename/replace/delete endpoints
-  // enforce, or these controls render for everyone and 403 for most of them.
+  // 'document:upload' — NOT 'document:edit', which is not a permission at all. It covers
+  // upload, rename and replace. Delete is SEPARATE now: DELETE /documents/:id enforces
+  // 'document:delete', because the right to add a file should not be the right to remove
+  // someone else's. The names must match what each endpoint enforces, or these controls
+  // render for everyone and 403 for most of them.
   const canUploadDocs = hasPermission('document:upload');
+  const canDeleteDocs = hasPermission('document:delete');
   const { data: docs = [], isLoading } = useDocuments({ projectId });
   const uploadDoc = useUploadDocument();
   const deleteDoc = useDeleteDocument();
@@ -8281,14 +8284,14 @@ function DocumentsTab({ projectId }: { projectId: string }) {
                         <Button size="sm" variant="flat" className="w-full" startContent={<FiDownload />}>Download</Button>
                       </a>
                       {canUploadDocs && (
-                        <>
-                          <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(doc)} aria-label="Edit">
-                            <FiEdit2 className="w-3.5 h-3.5 text-gray-400" />
-                          </Button>
-                          <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)}>
-                            <FiTrash2 />
-                          </Button>
-                        </>
+                        <Button size="sm" variant="light" isIconOnly onPress={() => openEdit(doc)} aria-label="Edit">
+                          <FiEdit2 className="w-3.5 h-3.5 text-gray-400" />
+                        </Button>
+                      )}
+                      {canDeleteDocs && (
+                        <Button size="sm" variant="light" color="danger" isIconOnly onPress={() => handleDelete(doc.id)} aria-label="Delete">
+                          <FiTrash2 />
+                        </Button>
                       )}
                     </div>
                   </>

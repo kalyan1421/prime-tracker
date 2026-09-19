@@ -2556,6 +2556,8 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
   const replaceDoc = useReplaceDocument();
   const { hasPermission } = useAuthStore();
   const canUpload = hasPermission('document:upload');
+  // Separate from upload: DELETE /documents/:id enforces 'document:delete'.
+  const canDelete = hasPermission('document:delete');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState('GENERAL');
   const [displayName, setDisplayName] = useState('');
@@ -2879,6 +2881,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                       >
                         <FiEdit2 className="w-3.5 h-3.5" />
                       </button>
+                      {canDelete && (
                       <button
                         onClick={() => handleDelete(d.id, d.fileName || d.name)}
                         className="p-1.5 text-gray-300 hover:text-red-700 transition-colors rounded opacity-0 group-hover:opacity-100"
@@ -2886,6 +2889,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                       >
                         <FiTrash2 className="w-3.5 h-3.5" />
                       </button>
+                      )}
                     </>
                   )}
                 </div>

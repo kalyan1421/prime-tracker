@@ -86,7 +86,10 @@ export class UsersService {
     private audit: AuditService,
   ) {}
 
-  async create(data: { email: string; name: string; role?: UserRole; roles?: UserRole[]; password?: string }) {
+  async create(
+    data: { email: string; name: string; role?: UserRole; roles?: UserRole[]; password?: string },
+    actorId: string,
+  ) {
     const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
     if (existing) throw new ConflictException('User with this email already exists');
 
@@ -94,6 +97,35 @@ export class UsersService {
     // MultiRolePicker); primary role is the first entry, matching updateRoles() below.
     const roles = data.roles?.length ? data.roles : [data.role || ('VIEWER' as UserRole)];
     const primaryRole = roles[0];
+
+    // The same ceiling updateRole()/updateRoles()/setPassword() enforce, applied to the
+    // one path that was missing it.
+    //
+    // user:manage is held by FOUNDER as well as SUPER_ADMIN (FOUNDER_PERMISSIONS is every
+    // permission bar SYSTEM_CONFIG), and promoting an existing user to SUPER_ADMIN is
+    // already refused for them. Creating one from scratch was not — so
+    // `POST /users {roles:['SUPER_ADMIN'], password:'…'}` minted a full super admin with a
+    // known password and then signed in as it via POST /auth/login. The admin UI already
+    // hides SUPER_ADMIN from non-super-admins (AdminPage `availableRoles`), so this only
+    // ever closes a gap between the UI's rule and the API's.
+    const actor = await this.prisma.user.findUniqueOrThrow({ where: { id: actorId } });
+    const actorIsSuperAdmin =
+      actor.role === 'SUPER_ADMIN' || (actor.roles ?? []).includes('SUPER_ADMIN' as UserRole);
+    if (roles.includes('SUPER_ADMIN' as UserRole) && !actorIsSuperAdmin) {
+      throw new ForbiddenException('Only a Super Admin can assign the Super Admin role');
+    }
+
+    // CLIENT is the buyer portal (Phase 2) and its permission list is deliberately empty,
+    // so a CLIENT account can authenticate and then 403 on the dashboard and on every nav
+    // item that carries no permission key. Until the portal's own "own unit only" scoping
+    // exists, creating one produces a user who can log in and do nothing — so refuse it
+    // here rather than shipping a dead-end account. The admin UI never offered it; only
+    // this route (which had no validation at all) could produce one.
+    if (roles.includes('CLIENT' as UserRole)) {
+      throw new BadRequestException(
+        'The Client role is reserved for the buyer portal, which is not built yet, and grants no access.',
+      );
+    }
 
     // Password is optional — leaving it unset keeps the user Google-OAuth-only (today's
     // default). Setting one additionally enables POST /auth/login for accounts without a
@@ -103,7 +135,7 @@ export class UsersService {
     }
     const passwordHash = data.password ? await bcrypt.hash(data.password, 12) : undefined;
 
-    return this.prisma.user.create({
+    const created = await this.prisma.user.create({
       data: {
         email: data.email,
         name: data.name,
@@ -115,6 +147,21 @@ export class UsersService {
       // straight back to the Add-User modal). See userSelect below.
       select: this.userSelect,
     });
+
+    // Granting someone their initial roles is the same act as changing them later, and
+    // every other mutation in this file logs. This one did not — and UsersController has
+    // no AuditInterceptor — so the single most privilege-granting operation in the app was
+    // the one leaving no trace in audit_events. `hasPassword` rather than the password:
+    // whether the account can sign in without Google is the reviewable fact.
+    await this.audit.log({
+      userId: actorId,
+      action: 'CREATE',
+      entity: 'User',
+      entityId: created.id,
+      newValues: { email: created.email, role: primaryRole, roles, hasPassword: !!passwordHash },
+    });
+
+    return created;
   }
 
   private userSelect = {
@@ -242,11 +289,32 @@ export class UsersService {
     return counts;
   }
 
+  /**
+   * Activate or deactivate an account.
+   *
+   * Deactivating also REVOKES every outstanding refresh token, the way changePassword() and
+   * setPassword() already do. Without that, deactivation only stopped the next REST request
+   * (jwt.strategy re-checks isActive); the user kept a valid 7-day refresh token and could
+   * mint fresh access tokens from the public /auth/refresh — which the notifications
+   * WebSocket gateway accepts, since it only verifies the signature. Offboarding has to end
+   * the session, not just the next call.
+   *
+   * Reactivating deliberately does NOT restore tokens: the user signs in again.
+   */
   async toggleActive(id: string, isActive: boolean, actorId: string) {
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: { isActive },
-      select: this.userSelect,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id },
+        data: { isActive },
+        select: this.userSelect,
+      });
+      if (!isActive) {
+        await tx.refreshToken.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+      return user;
     });
 
     await this.audit.log({

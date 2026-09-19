@@ -4,10 +4,11 @@ import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetUserPasswordDto } from './dto/set-password.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserRoleDto, UpdateUserRolesDto, UpdateUserStatusDto } from './dto/update-roles.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
-import { UserRole } from '@prisma/client';
 import { ROLE_PERMISSIONS, ROLE_META, PERMISSION_CATEGORIES } from '@prime-tracker/shared';
 import { UserRole as SharedUserRole } from '@prime-tracker/shared';
 
@@ -28,8 +29,8 @@ export class UsersController {
   @Post()
   @RequirePermissions('user:manage')
   @ApiOperation({ summary: 'Create a new user' })
-  create(@Body() body: { email: string; name: string; role?: UserRole; roles?: UserRole[]; password?: string }) {
-    return this.usersService.create(body);
+  create(@Body() body: CreateUserDto, @CurrentUser('sub') actorId: string) {
+    return this.usersService.create(body, actorId);
   }
 
   @Get('roles')
@@ -86,7 +87,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Change user role' })
   updateRole(
     @Param('id') id: string,
-    @Body() body: { role: UserRole },
+    @Body() body: UpdateUserRoleDto,
     @CurrentUser('sub') actorId: string,
   ) {
     return this.usersService.updateRole(id, body.role, actorId);
@@ -97,7 +98,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Set multiple roles for a user' })
   updateRoles(
     @Param('id') id: string,
-    @Body() body: { roles: UserRole[] },
+    @Body() body: UpdateUserRolesDto,
     @CurrentUser('sub') actorId: string,
   ) {
     return this.usersService.updateRoles(id, body.roles, actorId);
@@ -108,7 +109,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Activate/deactivate user' })
   toggleActive(
     @Param('id') id: string,
-    @Body() body: { isActive: boolean },
+    @Body() body: UpdateUserStatusDto,
     @CurrentUser('sub') actorId: string,
   ) {
     return this.usersService.toggleActive(id, body.isActive, actorId);

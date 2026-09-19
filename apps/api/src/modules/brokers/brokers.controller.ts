@@ -5,13 +5,27 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { BrokersService } from './brokers.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateBrokerDto, UpdateBrokerDto } from './dto/create-broker.dto';
 
+/**
+ * Brokers themselves are portfolio-wide records with no project of their own, but almost
+ * everything hanging off one is project-scoped: the sales and leases they are attributed to,
+ * and the commission installments on those.
+ *
+ * ProjectAccessGuard was missing here, and BrokersService did no membership filtering of its
+ * own — so a SALES or MARKETING user (both project-scoped roles that hold broker:view and
+ * broker:edit) assigned to one project could read buyer names, sale prices and tenant rents
+ * from the entire portfolio via `:id/sales` and `:id/leases`, and could mark another
+ * project's commission paid. The guard resolves `saleId` and `leaseId` from the path, and
+ * `installmentId` via the `commissionInstallment` resolver; the two broker-wide reads that
+ * carry no such id (`report` and the `:id/...` drilldowns) are filtered inside the service.
+ */
 @ApiTags('Brokers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @UseInterceptors(AuditInterceptor)
 @Controller('brokers')
 export class BrokersController {
@@ -20,8 +34,12 @@ export class BrokersController {
   @Get('report')
   @RequirePermissions('broker:view')
   @ApiOperation({ summary: 'Broker performance report (leads, closed sales, value, commission, conversion)' })
-  report() {
-    return this.service.report();
+  report(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.service.report({ userId, role, roles });
   }
 
   @Get()
@@ -32,8 +50,13 @@ export class BrokersController {
 
   @Get(':id')
   @RequirePermissions('broker:view')
-  findOne(@Param('id') id: string) {
-    return this.service.findById(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.service.findById(id, { userId, role, roles });
   }
 
   @Post()
@@ -60,15 +83,25 @@ export class BrokersController {
   @Get(':id/sales')
   @RequirePermissions('broker:view')
   @ApiOperation({ summary: 'List sales attributed to a broker (up to 100, with unit context)' })
-  getSalesByBroker(@Param('id') id: string) {
-    return this.service.getSalesByBroker(id);
+  getSalesByBroker(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.service.getSalesByBroker(id, { userId, role, roles });
   }
 
   @Get(':id/leases')
   @RequirePermissions('broker:view')
   @ApiOperation({ summary: 'Leases attributed to a broker (leasing commission drilldown)' })
-  leasesByBroker(@Param('id') id: string) {
-    return this.service.getLeasesByBroker(id);
+  leasesByBroker(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.service.getLeasesByBroker(id, { userId, role, roles });
   }
 
   @Patch('leases/:leaseId/mark-commission-paid')
@@ -129,18 +162,27 @@ export class BrokersController {
     );
   }
 
-  @Patch('commission-installments/:id/mark-paid')
+  // ":installmentId", not ":id" — a bare ":id" on this controller is a Broker, and
+  // ProjectAccessGuard cannot tell the two apart from the param name alone. Naming it
+  // distinctly is what lets the guard resolve the installment to its sale/lease project.
+  @Patch('commission-installments/:installmentId/mark-paid')
   @RequirePermissions('broker:edit')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark a single commission installment as paid' })
-  markCommissionInstallmentPaid(@Param('id') id: string, @Body() body: { paidAt?: string }) {
-    return this.service.markCommissionInstallmentPaid(id, body?.paidAt ? new Date(body.paidAt) : undefined);
+  markCommissionInstallmentPaid(
+    @Param('installmentId') installmentId: string,
+    @Body() body: { paidAt?: string },
+  ) {
+    return this.service.markCommissionInstallmentPaid(
+      installmentId,
+      body?.paidAt ? new Date(body.paidAt) : undefined,
+    );
   }
 
-  @Delete('commission-installments/:id')
+  @Delete('commission-installments/:installmentId')
   @RequirePermissions('broker:edit')
   @ApiOperation({ summary: 'Remove a commission installment (e.g. entered by mistake)' })
-  removeCommissionInstallment(@Param('id') id: string) {
-    return this.service.removeCommissionInstallment(id);
+  removeCommissionInstallment(@Param('installmentId') installmentId: string) {
+    return this.service.removeCommissionInstallment(installmentId);
   }
 }

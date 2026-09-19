@@ -187,11 +187,19 @@ pnpm --filter @prime-tracker/api exec prisma generate 2>&1 | tail -8
 # start-or-restart. \`pm2 restart\` errors with "Process or Namespace not found" on a
 # FIRST deploy to a new box, which fails the whole run after migrations have already
 # applied — the worst place to stop. \`describe\` is the cheap existence check.
+#
+# NODE_ENV is passed to pm2 explicitly. It is written into apps/api/.env above, but nothing
+# here sources that file, so the node process started below inherited an environment with
+# no NODE_ENV in it. main.ts now reads it through ConfigService (which does load the file),
+# so the app is correct either way — but anything that legitimately checks
+# \`process.env.NODE_ENV\` before Nest boots, in a library or a future edit, should see the
+# truth. \`--update-env\` makes pm2 re-read it on a restart rather than reusing the
+# environment the process was first started with.
 if sudo -u ubuntu HOME=/home/ubuntu pm2 describe prime-api >/dev/null 2>&1; then
-  sudo -u ubuntu HOME=/home/ubuntu pm2 restart prime-api --update-env 2>&1
+  sudo -u ubuntu HOME=/home/ubuntu NODE_ENV=production pm2 restart prime-api --update-env 2>&1
 else
   echo "=== prime-api not registered yet — first-time pm2 start ==="
-  sudo -u ubuntu HOME=/home/ubuntu pm2 start dist/main.js --name prime-api \\
+  sudo -u ubuntu HOME=/home/ubuntu NODE_ENV=production pm2 start dist/main.js --name prime-api \\
     --cwd /home/ubuntu/prime-tracker/apps/api --update-env 2>&1
   sudo -u ubuntu HOME=/home/ubuntu pm2 save 2>&1 | tail -1
   # survive a reboot

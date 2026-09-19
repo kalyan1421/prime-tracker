@@ -305,6 +305,20 @@ export const PERMISSIONS = {
   // Documents
   DOCUMENT_VIEW: 'document:view',
   DOCUMENT_UPLOAD: 'document:upload',
+  /**
+   * Remove a document from the vault (a SOFT delete — `deletedAt` is stamped, the stored
+   * object survives, and the row can be restored).
+   *
+   * This existed but was granted to no role and enforced nowhere: DELETE /documents/:id
+   * required document:upload, so the right to ADD a file was the right to remove anyone
+   * else's. That is the wrong shape for a vault holding DEED, NOC and POSSESSION_CERTIFICATE
+   * records — the codebase already splits add from destroy everywhere else
+   * (PROJECT_HARD_DELETE, BUILDING_HARD_DELETE, UNIT_HISTORY_DELETE).
+   *
+   * The grant below is a conservative DEFAULT, not a client decision: the roles that curate
+   * a document set (Finance, Accounting, PM, Legal) hold it; the roles that mainly contribute
+   * to one (Construction, Sales, Marketing, AR/AP) upload and ask. Prime can widen it.
+   */
   DOCUMENT_DELETE: 'document:delete',
 
   // Comments
@@ -425,6 +439,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PAYMENT_APPROVE,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.INVESTOR_VIEW,
     PERMISSIONS.INVESTOR_MANAGE,
     PERMISSIONS.COMMENT_VIEW,
@@ -466,6 +481,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_VIEW,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.QB_MANAGE,
@@ -536,6 +552,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_EDIT,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.REPORT_PORTFOLIO,
@@ -662,6 +679,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_VIEW,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.UPDATE_BOARD_VIEW,

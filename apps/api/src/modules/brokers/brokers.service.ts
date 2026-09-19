@@ -1,7 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 import { CreateBrokerDto, UpdateBrokerDto } from './dto/create-broker.dto';
+
+/** The signed-in caller, for the member filtering the broker-wide reads need. */
+export type BrokerViewer = { userId: string; role: string; roles?: string[] };
 
 /**
  * Broker / referral tracking — internal-only (brokers have no login). Brokers bring
@@ -12,8 +16,40 @@ import { CreateBrokerDto, UpdateBrokerDto } from './dto/create-broker.dto';
 export class BrokersService {
   constructor(
     private prisma: PrismaService,
+    private access: ProjectAccessService,
     private commissionInstallments: CommissionInstallmentService,
   ) {}
+
+  /**
+   * Member-project filter for the broker reads that span the whole portfolio.
+   *
+   * `undefined` means "no extra filter" — the viewer is a non-scoped role
+   * (leadership/finance/legal/viewer/super) and is meant to see everything. An array means
+   * a scoped field role, and `[]` correctly returns nothing.
+   *
+   * A broker row itself is portfolio-wide and stays unfiltered; what gets narrowed is the
+   * sales, leases and commissions attributed to them, which is where the money and the
+   * counterparty names are.
+   */
+  private async scopeIds(viewer?: BrokerViewer): Promise<string[] | undefined> {
+    return this.access.listProjectScope(viewer);
+  }
+
+  /** Sale/Lead both carry projectId directly. */
+  private projectFilter(ids: string[] | undefined) {
+    return ids ? { projectId: { in: ids } } : {};
+  }
+
+  /** A Lease hangs off a Unit *or* a Building, so it needs the two-way traversal. */
+  private leaseProjectFilter(ids: string[] | undefined) {
+    if (!ids) return {};
+    return {
+      OR: [
+        { building: { projectId: { in: ids } } },
+        { unit: { building: { projectId: { in: ids } } } },
+      ],
+    };
+  }
 
   findAll(includeInactive = false) {
     return this.prisma.broker.findMany({
@@ -23,16 +59,27 @@ export class BrokersService {
     });
   }
 
-  async findById(id: string) {
+  /**
+   * One broker, with the leads and sales attributed to them.
+   *
+   * The broker record itself is portfolio-wide, but the embedded leads and sales are not —
+   * they carry buyer names and sale prices, so they are narrowed to the viewer's member
+   * projects exactly as the drilldowns below are.
+   */
+  async findById(id: string, viewer?: BrokerViewer) {
+    const ids = await this.scopeIds(viewer);
+    const scope = this.projectFilter(ids);
     const broker = await this.prisma.broker.findFirst({
       where: { id, deletedAt: null },
       include: {
         leads: {
+          where: scope,
           select: { id: true, name: true, status: true, projectId: true, createdAt: true },
           orderBy: { createdAt: 'desc' },
           take: 50,
         },
         sales: {
+          where: scope,
           select: { id: true, buyer: true, salePrice: true, status: true, brokerCommissionAmt: true, closingDate: true },
           orderBy: { updatedAt: 'desc' },
           take: 50,
@@ -120,7 +167,18 @@ export class BrokersService {
    * Per-broker performance: leads brought, closed sales, closed value, commission earned,
    * and lead→close conversion. Powers the broker report screen.
    */
-  async report() {
+  /**
+   * Broker performance across the portfolio.
+   *
+   * Every aggregate below is narrowed to the viewer's member projects when they hold a
+   * project-scoped role. Without that a SALES user assigned to one project saw
+   * portfolio-wide closed value and commission totals for every broker.
+   */
+  async report(viewer?: BrokerViewer) {
+    const ids = await this.scopeIds(viewer);
+    const saleScope = this.projectFilter(ids);
+    const leaseScope = this.leaseProjectFilter(ids);
+
     // Four grouped queries — aggregate per broker, then join in memory.
     const [
       brokers, leadGroups, saleGroups, paidGroups, pipelineGroups,
@@ -129,12 +187,12 @@ export class BrokersService {
       this.prisma.broker.findMany({ where: { deletedAt: null }, orderBy: { name: 'asc' } }),
       this.prisma.lead.groupBy({
         by: ['brokerId'],
-        where: { brokerId: { not: null } },
+        where: { brokerId: { not: null }, ...saleScope },
         _count: true,
       }),
       this.prisma.sale.groupBy({
         by: ['brokerId'],
-        where: { brokerId: { not: null }, status: 'CLOSED', deletedAt: null },
+        where: { brokerId: { not: null }, status: 'CLOSED', deletedAt: null, ...saleScope },
         _count: true,
         _sum: { salePrice: true, brokerCommissionAmt: true },
       }),
@@ -146,7 +204,7 @@ export class BrokersService {
         where: {
           saleId: { not: null },
           paidAt: { not: null },
-          sale: { status: 'CLOSED', deletedAt: null },
+          sale: { status: 'CLOSED', deletedAt: null, ...saleScope },
         },
         _sum: { amount: true },
       }),
@@ -157,6 +215,7 @@ export class BrokersService {
           brokerId: { not: null },
           status: { in: ['UNDER_CONTRACT', 'LOI_SIGNED'] },
           deletedAt: null,
+          ...saleScope,
         },
         _sum: { salePrice: true },
       }),
@@ -179,7 +238,12 @@ export class BrokersService {
       // keeps EXPIRED/TERMINATED ones where the money was genuinely earned.
       this.prisma.lease.groupBy({
         by: ['brokerId'],
-        where: { brokerId: { not: null }, brokerCommissionAmt: { not: null }, deletedAt: null },
+        where: {
+          brokerId: { not: null },
+          brokerCommissionAmt: { not: null },
+          deletedAt: null,
+          ...leaseScope,
+        },
         _count: true,
         _sum: { brokerCommissionAmt: true, monthlyRent: true },
       }),
@@ -189,7 +253,7 @@ export class BrokersService {
         where: {
           leaseId: { not: null },
           paidAt: { not: null },
-          lease: { deletedAt: null },
+          lease: { deletedAt: null, ...leaseScope },
         },
         _sum: { amount: true },
       }),
@@ -260,12 +324,15 @@ export class BrokersService {
    * Per-broker sale drilldown — up to 100 sales attributed to the given broker,
    * with unit/building context. Used by the broker detail view.
    */
-  async getSalesByBroker(brokerId: string) {
+  async getSalesByBroker(brokerId: string, viewer?: BrokerViewer) {
     const broker = await this.prisma.broker.findFirst({ where: { id: brokerId, deletedAt: null } });
     if (!broker) throw new NotFoundException('Broker not found');
 
+    // Buyer name, sale price and closing date for every deal this broker touched — scoped,
+    // because a project-scoped role must not read them for projects they are not on.
+    const ids = await this.scopeIds(viewer);
     return this.prisma.sale.findMany({
-      where: { brokerId, deletedAt: null },
+      where: { brokerId, deletedAt: null, ...this.projectFilter(ids) },
       select: {
         id: true,
         buyer: true,
@@ -329,12 +396,15 @@ export class BrokersService {
    * Per-broker LEASE drilldown — the leasing counterpart to getSalesByBroker.
    * Same shape and same cap, so the broker detail view can render the two side by side.
    */
-  async getLeasesByBroker(brokerId: string) {
+  async getLeasesByBroker(brokerId: string, viewer?: BrokerViewer) {
     const broker = await this.prisma.broker.findFirst({ where: { id: brokerId, deletedAt: null } });
     if (!broker) throw new NotFoundException('Broker not found');
 
+    // Same reasoning as getSalesByBroker: tenant names and monthly rents, scoped to the
+    // viewer's own projects.
+    const ids = await this.scopeIds(viewer);
     return this.prisma.lease.findMany({
-      where: { brokerId, deletedAt: null },
+      where: { brokerId, deletedAt: null, ...this.leaseProjectFilter(ids) },
       select: {
         id: true,
         tenantName: true,

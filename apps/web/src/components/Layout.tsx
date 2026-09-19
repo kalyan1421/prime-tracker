@@ -29,7 +29,7 @@ const BASE_NAV_ITEMS = [
   { label: 'Interior', icon: FiGrid, path: '/interior', permission: 'interior:view' },
   { label: 'Cash Flow', icon: FiTrendingUp, path: '/cashflow', permission: 'financial:view' },
   { label: 'Receivables', icon: FiTrendingDown, path: '/receivables', permission: 'financial:view' },
-  { label: 'Tasks', icon: FiCheckSquare, path: '/tasks' },
+  { label: 'Tasks', icon: FiCheckSquare, path: '/tasks', permission: 'task:view' },
   { label: 'Leads', icon: FiTarget, path: '/leads', permission: 'lead:view' },
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
   { label: 'Investors', icon: FiBriefcase, path: '/investors', permission: 'investor:view' },

@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus, HttpCode, Res } from '@nestjs/common';
+import { Controller, Get, HttpStatus, HttpCode, Logger, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
@@ -16,6 +16,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 @SkipThrottle()
 @Controller('health')
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
+
   constructor(private prisma: PrismaService) {}
 
   @Get()
@@ -42,10 +44,22 @@ export class HealthController {
       await this.prisma.$queryRaw`SELECT 1`;
       checks.database = { ok: true, latencyMs: Date.now() - dbStart };
     } catch (err) {
+      // The real message goes to the LOGS, never the response body.
+      //
+      // This endpoint is unauthenticated (and @SkipThrottle'd), and Prisma's connection
+      // errors name the host, port and database — "Can't reach database server at
+      // prime-tracker-db.<id>.<region>.rds.amazonaws.com:5432". Returning that handed an
+      // anonymous caller the infrastructure layout at exactly the moment it is most useful
+      // to them, and contradicted this controller's own "don't leak deployment internals".
+      //
+      // Monitors key on the status code, which is still 503 below, so nothing that consumes
+      // this endpoint loses information — and whoever is debugging the outage has the real
+      // error in CloudWatch.
+      this.logger.error(`Readiness DB check failed: ${(err as Error).message}`);
       checks.database = {
         ok: false,
         latencyMs: Date.now() - dbStart,
-        error: (err as Error).message,
+        error: 'unreachable',
       };
     }
 

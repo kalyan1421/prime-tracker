@@ -30,13 +30,24 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   }
 
   async validate(payload: JwtPayload) {
-    if (!payload.email) {
-      throw new UnauthorizedException('Token missing email claim');
+    if (!payload.sub) {
+      throw new UnauthorizedException('Token missing subject claim');
     }
 
-    // Lookup app user by email — roles and permissions live in our User table.
+    // Lookup by `sub` (the immutable User.id), NOT by email.
+    //
+    // This used to resolve `where: { email: payload.email }`, which made the account a
+    // token maps to whatever row currently owns that address rather than the user the token
+    // was issued to. Email is mutable — PUT /users/:id exposes it via UpdateUserDto — so a
+    // rename-and-rehire (change A's address, create a new user with A's old one) silently
+    // re-pointed A's outstanding 15-minute token at the new account and its permissions,
+    // and the reverse case 401'd live sessions for no visible reason.
+    //
+    // Every token this app issues carries `sub` (AuthService.generateTokens), and the row is
+    // re-read on every request either way, so there is nothing to migrate: an in-flight
+    // token keeps working, it just resolves by id now.
     const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
+      where: { id: payload.sub },
     });
 
     if (!user || !user.isActive) {
