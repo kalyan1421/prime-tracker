@@ -20,6 +20,7 @@ import {
   useBuildings, useCreateUnit, useCustomOptions, useApplyConstructionTemplate,
 } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
+import { wideSelectProps } from './ui';
 
 export function NewUnitModal({ projects, onClose }: {
   projects: any[]; onClose: () => void;
@@ -92,6 +93,7 @@ export function NewUnitModal({ projects, onClose }: {
             </Select>
             <Select
               size="sm" label="Building" isDisabled={!projectId || buildings.length === 0}
+              {...wideSelectProps}
               selectedKeys={buildingId ? new Set([buildingId]) : new Set()}
               onSelectionChange={(k) => setBuildingId((Array.from(k)[0] as string) ?? '')}
             >

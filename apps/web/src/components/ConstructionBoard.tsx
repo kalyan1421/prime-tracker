@@ -35,6 +35,7 @@ import {
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { errMsg, fmtDate } from '../utils/fmt';
 import { LoadingState, ErrorState, EmptyState, chipColor } from './ui';
+import { wideSelectProps } from './ui';
 
 const KIND = 'CONSTRUCTION';
 
@@ -185,6 +186,7 @@ export function ConstructionBoard({ projectId, canEdit }: { projectId: string; c
         <Select
           size="sm"
           label="Building"
+          {...wideSelectProps}
           className="max-w-[200px]"
           selectedKeys={buildingFilter ? [buildingFilter] : []}
           onSelectionChange={(k) => setBuildingFilter(String(Array.from(k)[0] ?? ''))}

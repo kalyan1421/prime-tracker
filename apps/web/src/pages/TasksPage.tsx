@@ -17,7 +17,7 @@ import {
     useProjects, useBuildings, useUnits, useUsers, useAssignableUsers, useCustomOptions,
 } from '../hooks/useApi';
 import { usePagination } from '../hooks/usePagination';
-import { Pagination } from '../components/ui';
+import { Pagination, wideSelectProps } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { errMsg } from '../utils/fmt';
 
@@ -923,6 +923,7 @@ function CreateTaskModal({
                         </Select>
                         <Select
                             label="Building (optional)"
+                            {...wideSelectProps}
                             selectedKeys={form.buildingId ? [form.buildingId] : []}
                             onSelectionChange={(keys) => {
                                 const v = Array.from(keys)[0] as string ?? '';

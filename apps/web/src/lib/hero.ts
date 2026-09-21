@@ -12,6 +12,7 @@ import { heroui } from "@heroui/react";
  *   ------------------------------------------------------------------------------
  *   warning-700          #93631 6       4.20:1     amber-800 #92400e   5.72:1
  *   danger-600           (pink)         4.08:1     rose-800  #9f1239   5.40:1
+ *   danger-500           #f31260        4.14:1     rose-600  #e11d48   4.70:1
  *   success-700          (light green)  4.48:1     emerald-800 #065f46 6.26:1
  *   default-500          zinc-500       4.40:1     zinc-600  #52525b   passes
  *   foreground-500       zinc-500       4.40:1     zinc-600  #52525b   passes
@@ -37,7 +38,11 @@ export default heroui({
         primary: { DEFAULT: "#155dfc", 500: "#155dfc" },
         success: { 700: "#065f46" },
         warning: { 700: "#92400e" },
-        danger: { 600: "#9f1239", 700: "#881337" },
+        // DEFAULT *and* -500, exactly like `primary` above: variant="light"/"bordered"
+        // colour their TEXT from the DEFAULT shade, so overriding -500 alone changed
+        // nothing and "Cancel"/"Reject" kept rendering #f31260 on white at 4.14:1.
+        // White-on-danger solids go from 4.14:1 to 4.70:1, so both directions pass.
+        danger: { DEFAULT: "#e11d48", 500: "#e11d48", 600: "#9f1239", 700: "#881337" },
         focus: "#155dfc",
       },
     },

@@ -161,7 +161,7 @@ import { EMPTY_LEASE, validateLeaseForm, buildLeasePayload, LeaseFormFields, lea
 import { FormError } from '../components/FormError';
 import {
   StatCard, StatusBadge, PhaseProgress, LoadingState, ErrorState, EmptyState,
-  PermissionGate, STATUS_COLORS, Pagination,
+  PermissionGate, STATUS_COLORS, Pagination, wideSelectProps,
 } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 
@@ -1956,6 +1956,7 @@ function FinancialsTab({ projectId }: { projectId: string }) {
         <Select
           size="sm"
           label="Building"
+          {...wideSelectProps}
           className="max-w-[220px]"
           selectedKeys={[filterBuildingId || '__ALL__']}
           onSelectionChange={(keys) => {
@@ -3475,6 +3476,7 @@ function UnitsTab({ projectId, role = '' }: { projectId: string; role?: string }
               <Select
                 size="sm"
                 label="Building"
+                {...wideSelectProps}
                 isRequired
                 isDisabled={!!editId}
                 description={editId ? "Building can't be changed after creation" : undefined}
@@ -4655,6 +4657,7 @@ function SaleFormFields({
         <Select
           size="sm"
           label="Building"
+          {...wideSelectProps}
           isRequired
           isDisabled={lockAsset}
           description={

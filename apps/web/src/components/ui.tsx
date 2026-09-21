@@ -205,3 +205,21 @@ const HERO_COLORS: HeroColor[] = ['default', 'primary', 'secondary', 'success', 
 export function chipColor(color?: string | null): HeroColor {
   return (HERO_COLORS as string[]).includes(color ?? '') ? (color as HeroColor) : 'default';
 }
+
+/**
+ * Props for any `<Select>` whose options are long names — buildings above all.
+ *
+ * HeroUI sizes the dropdown to the TRIGGER and puts `truncate` on every option label, so
+ * "B-ALPHA — Fully Populated" renders as "B-ALPHA — Fully Popula…" and the part that tells
+ * you which building it is gets cut. `w-auto` lets the popover grow to its content, and the
+ * min-width stops it collapsing when the list is short.
+ *
+ * Spread it rather than restating the classes per call site: this was already fixed once on
+ * the two import pages, and every other building picker in the app kept the bug because the
+ * fix was copied by hand instead of shared.
+ *
+ *   <Select size="sm" label="Building" {...wideSelectProps} >
+ */
+export const wideSelectProps = {
+  popoverProps: { classNames: { content: 'min-w-[300px] w-auto' } },
+} as const;
