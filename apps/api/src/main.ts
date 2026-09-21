@@ -35,6 +35,10 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     // Buffered until useLogger() below, so boot-time messages are not lost.
     bufferLogs: true,
+    // Keeps the untouched request bytes on req.rawBody. Webhook signatures (Calendly) are
+    // HMACs over the exact payload, and re-serialising the parsed body does not reproduce
+    // key order or whitespace — every delivery would then look forged.
+    rawBody: true,
   });
 
   const config = app.get(ConfigService);
