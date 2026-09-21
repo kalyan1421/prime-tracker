@@ -16,8 +16,19 @@ const mockPrisma: any = {
   },
 };
 
+/**
+ * Member filtering is exercised in its own describe block below; the default here is an
+ * unscoped viewer (listProjectScope → undefined), which is what every pre-existing
+ * assertion in this file assumes.
+ */
+const mockAccess: any = { listProjectScope: jest.fn().mockResolvedValue(undefined) };
+
 function makeService() {
-  return new BrokersService(mockPrisma as any, new CommissionInstallmentService(mockPrisma as any));
+  return new BrokersService(
+    mockPrisma as any,
+    mockAccess as any,
+    new CommissionInstallmentService(mockPrisma as any),
+  );
 }
 
 describe('BrokersService', () => {
@@ -25,6 +36,7 @@ describe('BrokersService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockAccess.listProjectScope.mockResolvedValue(undefined);
     service = makeService();
   });
 
@@ -228,6 +240,76 @@ describe('BrokersService', () => {
         where: { saleId: 's1', paidAt: null },
         data: { paidAt: expect.any(Date) },
       });
+    });
+  });
+  /**
+   * Cross-project scoping.
+   *
+   * BrokersController had no ProjectAccessGuard and this service did no member filtering, so
+   * a SALES/MARKETING user (both project-scoped roles holding broker:view) assigned to a
+   * single project could read buyer names, sale prices and tenant rents for the entire
+   * portfolio through these reads. The guard covers the routes that carry a saleId/leaseId;
+   * these broker-wide reads carry none, so the filter has to be here.
+   */
+  describe('project scoping', () => {
+    const scoped = { userId: 'u1', role: 'SALES', roles: ['SALES'] };
+
+    beforeEach(() => {
+      mockAccess.listProjectScope.mockResolvedValue(['p1', 'p2']);
+    });
+
+    it('narrows a broker sales drilldown to the viewer\'s member projects', async () => {
+      mockPrisma.broker.findFirst.mockResolvedValue({ id: 'b1', name: 'Jane' });
+      mockPrisma.sale.findMany = jest.fn().mockResolvedValue([]);
+      await service.getSalesByBroker('b1', scoped);
+      expect(mockPrisma.sale.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { brokerId: 'b1', deletedAt: null, projectId: { in: ['p1', 'p2'] } },
+        }),
+      );
+    });
+
+    it('narrows a broker leases drilldown through both unit and building', async () => {
+      mockPrisma.broker.findFirst.mockResolvedValue({ id: 'b1', name: 'Jane' });
+      mockPrisma.lease.findMany.mockResolvedValue([]);
+      await service.getLeasesByBroker('b1', scoped);
+      expect(mockPrisma.lease.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            brokerId: 'b1',
+            deletedAt: null,
+            OR: [
+              { building: { projectId: { in: ['p1', 'p2'] } } },
+              { unit: { building: { projectId: { in: ['p1', 'p2'] } } } },
+            ],
+          },
+        }),
+      );
+    });
+
+    it('narrows the report aggregates', async () => {
+      mockPrisma.broker.findMany.mockResolvedValue([]);
+      mockPrisma.lead.groupBy.mockResolvedValue([]);
+      mockPrisma.sale.groupBy.mockResolvedValue([]);
+      mockPrisma.lease.groupBy.mockResolvedValue([]);
+      mockPrisma.commissionInstallment.groupBy.mockResolvedValue([]);
+      await service.report(scoped);
+      for (const call of mockPrisma.sale.groupBy.mock.calls) {
+        expect(call[0].where).toMatchObject({ projectId: { in: ['p1', 'p2'] } });
+      }
+      expect(mockPrisma.lead.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ projectId: { in: ['p1', 'p2'] } }) }),
+      );
+    });
+
+    it('applies no filter for an unscoped role', async () => {
+      mockAccess.listProjectScope.mockResolvedValue(undefined);
+      mockPrisma.broker.findFirst.mockResolvedValue({ id: 'b1', name: 'Jane' });
+      mockPrisma.sale.findMany = jest.fn().mockResolvedValue([]);
+      await service.getSalesByBroker('b1', { userId: 'u2', role: 'FOUNDER', roles: ['FOUNDER'] });
+      expect(mockPrisma.sale.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { brokerId: 'b1', deletedAt: null } }),
+      );
     });
   });
 });

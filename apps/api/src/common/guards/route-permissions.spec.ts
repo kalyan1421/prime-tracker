@@ -57,6 +57,16 @@ const AUTH_ROUTES = [
  */
 const OAUTH_CALLBACK_ROUTES = ['QuickbooksController.callback'];
 
+/**
+ * Server-to-server webhooks. The provider posts with no bearer token, so RBAC has nothing
+ * to check — authentication is the HMAC signature over the raw body, verified before the
+ * payload is read (see calendly-signature.ts and its spec).
+ *
+ * Listed EXPLICITLY rather than exempted by a pattern: a route ends up here only because
+ * somebody decided it should be public, which is the whole point of this file.
+ */
+const WEBHOOK_ROUTES = ['CalendlyController.webhook'];
+
 const SELF_SCOPED_ROUTES = [
   'UsersController.updateSelf',
   'NotificationsController.findForUser',
@@ -65,7 +75,9 @@ const SELF_SCOPED_ROUTES = [
   'NotificationsController.setPreference',
 ];
 
-const PERMISSION_FREE = new Set([...AUTH_ROUTES, ...OAUTH_CALLBACK_ROUTES, ...SELF_SCOPED_ROUTES]);
+const PERMISSION_FREE = new Set([
+  ...AUTH_ROUTES, ...OAUTH_CALLBACK_ROUTES, ...SELF_SCOPED_ROUTES, ...WEBHOOK_ROUTES,
+]);
 
 function controllerFiles(dir: string): string[] {
   const out: string[] = [];
@@ -119,7 +131,10 @@ describe('every controller is guarded', () => {
     const guarded = classGuards.length > 0 || routeGuards.length > 0;
 
     // The four truly public routes are the only ones allowed to have neither.
-    const PUBLIC = ['AuthController.login', 'AuthController.refresh', 'QuickbooksController.callback'];
+    const PUBLIC = [
+      'AuthController.login', 'AuthController.refresh',
+      'QuickbooksController.callback', ...WEBHOOK_ROUTES,
+    ];
     if (PUBLIC.includes(key)) return;
 
     expect(guarded).toBe(true);
@@ -169,7 +184,9 @@ describe('the permission-free allowlist stays honest', () => {
   it('has not grown without someone noticing', () => {
     // Every entry is a route anyone signed in can reach. The number going up should be
     // a decision, not a side effect.
-    expect(PERMISSION_FREE.size).toBe(17);
+    // 2026-09-22: +1 for CalendlyController.webhook — a signed server-to-server webhook,
+    // authenticated by HMAC rather than RBAC. See WEBHOOK_ROUTES above.
+    expect(PERMISSION_FREE.size).toBe(18);
   });
 });
 
@@ -181,7 +198,15 @@ describe('the routes added this cycle carry the permission they are meant to', (
     ['LeasesController', 'endTenancy', ['lease:edit']],
     ['LeasesController', 'assignTenant', ['lease:edit']],
     ['LeasesController', 'assignments', ['lease:view']],
-    ['TasksController', 'getUpdates', ['project:view']],
+    // task:view, not project:view — TasksController's reads used to accept the baseline
+    // permission every role holds, which let VIEWER and LEGAL (deliberately denied
+    // task:view, and correctly filtered out of Tasks events on the Activity Log) read every
+    // task in the portfolio.
+    ['TasksController', 'getUpdates', ['task:view']],
+    ['TasksController', 'findAll', ['task:view']],
+    ['TasksController', 'findOne', ['task:view']],
+    ['TasksController', 'getComments', ['task:view']],
+    ['TasksController', 'downloadAttachment', ['task:view']],
     ['TasksController', 'addUpdate', ['task:edit']],
     ['TasksController', 'addUpdatePhoto', ['task:edit']],
     ['TasksController', 'deleteUpdate', ['task:edit']],

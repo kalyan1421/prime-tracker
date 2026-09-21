@@ -136,6 +136,13 @@ describe('design system: HeroUI theme', () => {
     ['success.700', '#065f46', 'chips measured 4.48:1 at HeroUI\'s lighter -700'],
     ['warning.700', '#92400e', 'chips measured 4.20:1'],
     ['danger.600', '#9f1239', 'chips measured 4.08:1'],
+    ['danger.DEFAULT', '#e11d48',
+      'variant="light"/"bordered" read the DEFAULT shade, not -500 — pinning -500 alone '
+      + 'left "Cancel"/"Reject" at #f31260 / 4.14:1. Pin both, as `primary` does'],
+    ['danger.500', '#e11d48',
+      'variant="light"/"bordered" colour their TEXT with -500, not -600 — a light danger '
+      + 'button ("Cancel", "Reject") rendered #f31260 on white at 4.14:1. The -600/-700 '
+      + 'pins above do not cover that path'],
   ])('pins %s to %s', (_token, hex, why) => {
     expect(theme.includes(hex), `${_token} → ${hex}. ${why}.`).toBe(true);
   });

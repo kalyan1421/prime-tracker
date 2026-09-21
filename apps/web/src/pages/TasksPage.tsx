@@ -13,13 +13,12 @@ import {
 import {
     useTasks, useTask, useCreateTask, useUpdateTask, useDeleteTask,
     useTaskComments, useCreateTaskComment, useDeleteTaskComment,
-    useUploadTaskAttachment, useDeleteTaskAttachment,
+    useUploadTaskAttachment, useDeleteTaskAttachment, useDownloadTaskAttachment,
     useProjects, useBuildings, useUnits, useUsers, useAssignableUsers, useCustomOptions,
 } from '../hooks/useApi';
 import { usePagination } from '../hooks/usePagination';
-import { Pagination } from '../components/ui';
+import { Pagination, wideSelectProps } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
-import { apiAssetUrl } from '../lib/api';
 import { errMsg } from '../utils/fmt';
 
 function statusColor(status: string) {
@@ -380,6 +379,7 @@ function TaskSidePanel({
     const deleteTask = useDeleteTask();
     const uploadAttachment = useUploadTaskAttachment();
     const deleteAttachment = useDeleteTaskAttachment();
+    const downloadAttachment = useDownloadTaskAttachment();
 
     const [commentText, setCommentText] = useState('');
     const [isEditing, setIsEditing] = useState(false);
@@ -678,14 +678,24 @@ function TaskSidePanel({
                                     {att.fileSize && (
                                         <span className="text-xs text-gray-500">{(att.fileSize / 1024).toFixed(0)} KB</span>
                                     )}
-                                    <a
-                                        href={apiAssetUrl(att.fileUrl)}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="text-blue-600 hover:text-blue-700"
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            try {
+                                                await downloadAttachment.mutateAsync({
+                                                    attachmentId: att.id,
+                                                    fileName: att.fileName,
+                                                });
+                                            } catch (e) {
+                                                addToast({ title: errMsg(e, 'Failed to download attachment'), color: 'danger' });
+                                            }
+                                        }}
+                                        disabled={downloadAttachment.isPending}
+                                        aria-label={`Download ${att.fileName}`}
+                                        className="text-blue-600 hover:text-blue-700 disabled:opacity-50"
                                     >
                                         <FiDownload />
-                                    </a>
+                                    </button>
                                     {(att.uploadedById === user?.id || ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER'].includes(user?.role ?? '')) && (
                                         <button
                                             onClick={() => deleteAttachment.mutate({ taskId, attachmentId: att.id })}
@@ -913,6 +923,7 @@ function CreateTaskModal({
                         </Select>
                         <Select
                             label="Building (optional)"
+                            {...wideSelectProps}
                             selectedKeys={form.buildingId ? [form.buildingId] : []}
                             onSelectionChange={(keys) => {
                                 const v = Array.from(keys)[0] as string ?? '';

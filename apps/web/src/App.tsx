@@ -16,6 +16,7 @@ import CampaignsPage from './pages/CampaignsPage';
 import VacancyReportPage from './pages/VacancyReportPage';
 import BuildingDetailPage from './pages/BuildingDetailPage';
 import SettingsPage from './pages/SettingsPage';
+import VisitAvailabilityPage from './pages/VisitAvailabilityPage';
 import ProfilePage from './pages/ProfilePage';
 import FounderDashboardPage from './pages/FounderDashboardPage';
 import ConstructionDashboardPage from './pages/ConstructionDashboardPage';
@@ -37,6 +38,7 @@ import BrokersPage from './pages/BrokersPage';
 import ReceivablesPage from './pages/ReceivablesPage';
 import RentHistoryImportPage from './pages/RentHistoryImportPage';
 import SaleHistoryImportPage from './pages/SaleHistoryImportPage';
+import NotFoundPage from './pages/NotFoundPage';
 
 /**
  * `permission` accepts an array for pages that are a hub over several independently
@@ -56,7 +58,10 @@ function ProtectedRoute({ children, permission }: { children: React.ReactNode; p
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (permission) {
     const needed = Array.isArray(permission) ? permission : [permission];
-    if (!hasAnyPermission(...needed)) return <Navigate to="/" replace />;
+    // Say so, rather than bouncing to "/". A silent redirect to the dashboard was
+    // indistinguishable from a typo, an archived record, or the click simply not
+    // registering — and it discarded the URL, so there was nothing left to ask about.
+    if (!hasAnyPermission(...needed)) return <NotFoundPage reason="forbidden" />;
   }
   return <ErrorBoundary section="page">{children}</ErrorBoundary>;
 }
@@ -103,7 +108,7 @@ export default function App() {
         <Route path="leads/dashboard" element={<Navigate to="/leads" replace />} />
         <Route path="campaigns" element={<ProtectedRoute permission="campaign:view"><CampaignsPage /></ProtectedRoute>} />
         <Route path="reports/vacancy" element={<ProtectedRoute permission="sales:view"><VacancyReportPage /></ProtectedRoute>} />
-        <Route path="tasks" element={<TasksPage />} />
+        <Route path="tasks" element={<ProtectedRoute permission="task:view"><TasksPage /></ProtectedRoute>} />
         <Route path="updates" element={<ProtectedRoute permission="updateBoard:view"><UpdatesPage /></ProtectedRoute>} />
         <Route path="site-tracker" element={<ProtectedRoute permission="siteTracker:view"><SiteTrackerPage /></ProtectedRoute>} />
         <Route path="inventory" element={<InventoryPage />} />
@@ -114,6 +119,10 @@ export default function App() {
         <Route path="receivables" element={<ProtectedRoute permission="financial:view"><ReceivablesPage /></ProtectedRoute>} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings/notifications" element={<SettingsPage />} />
+        <Route
+          path="settings/availability"
+          element={<ProtectedRoute permission="siteVisit:view"><VisitAvailabilityPage /></ProtectedRoute>}
+        />
         <Route path="dashboard/founder" element={<ProtectedRoute permission="unit:view"><FounderDashboardPage /></ProtectedRoute>} />
         <Route path="dashboard/construction" element={<ProtectedRoute permission="unit:view"><ConstructionDashboardPage /></ProtectedRoute>} />
         <Route path="dashboard/sales" element={<ProtectedRoute permission="unit:view"><SalesDashboardPage /></ProtectedRoute>} />
@@ -150,8 +159,13 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        {/* Unknown paths render a 404 instead of silently redirecting to "/".
+            Last child of the layout route, so a signed-in user keeps the sidebar and can
+            navigate onwards, and an unauthenticated one still hits this route's
+            ProtectedRoute and lands on /login. `/login` and `/auth/callback` are more
+            specific than this splat, so React Router still prefers them. */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

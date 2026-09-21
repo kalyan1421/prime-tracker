@@ -110,6 +110,14 @@ model User {
   updateBoardAssignments            UpdateBoardAssignment[]         @relation("UpdateBoardAssignmentUser")
   updateBoardAttachments            UpdateBoardAttachment[]         @relation("UpdateBoardAttachmentUploader")
   updateBoardComments               UpdateBoardComment[]            @relation("UpdateBoardCommentAuthor")
+  // Site-visit scheduling. Host is separate from requester/decider: in v1 only
+  // Founder/Admin hosts, but Sales requests and (per the client) an Executive may decide,
+  // so the three are genuinely different people and cannot share one relation.
+  visitAvailability                 VisitAvailability[]             @relation("VisitHost")
+  hostedSiteVisits                  SiteVisit[]                     @relation("SiteVisitHost")
+  requestedSiteVisits               SiteVisit[]                     @relation("SiteVisitRequester")
+  decidedSiteVisits                 SiteVisit[]                     @relation("SiteVisitDecider")
+  leadComments                      LeadComment[]                   @relation("LeadCommentAuthor")
 
   @@map("users")
 }
@@ -222,6 +230,7 @@ model Project {
   qbMappings       QBProjectMapping[]
   comments         ProjectComment[]
   leads            Lead[]
+  siteVisits       SiteVisit[]
   drawRequests     DrawRequest[]
   cashFlowEntries  CashFlowEntry[]
   contracts        Contract[]
@@ -309,6 +318,7 @@ model Building {
   sales                          Sale[]
   leases                         Lease[]
   leads                          Lead[]
+  siteVisits                     SiteVisit[]
   loans                          Loan[]
   budgetLines                    BudgetLine[]
   commitments                    Commitment[]
@@ -418,6 +428,7 @@ model Unit {
   dailyLogs          DailyLog[]
   clients            Client[]
   leads              Lead[]
+  siteVisits         SiteVisit[]
   interiorProjects   InteriorProject[]
   interestedLeads    LeadUnitInterest[]
   constructionStages UnitConstructionStage[]
@@ -1900,12 +1911,24 @@ model Lead {
   // Broker attribution — which broker brought this lead (internal-only).
   brokerId          String?
   broker            Broker?    @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  // The day we next owe this lead a touch. DATE, not DateTime: a follow-up is a day in
+  // the rep's calendar, and storing an instant makes it drift across timezones for no
+  // benefit. Overdue is computed (followUpDate < today), never stored, so it cannot go stale.
+  followUpDate      DateTime?  @db.Date
+  // The ENGAGEMENT SIGNAL that produced this lead — Favorited / Downloaded OM / Viewed
+  // listing / Phone / Email lead. Deliberately NOT `source`: source is the portal the lead
+  // came from (LOOPNET, CREXI), `via` is what they actually did there, and the two vary
+  // independently. Free-text key backed by CustomOption (category="lead_via") so the list
+  // stays admin-editable, same pattern as lead_status. Single-value in v1 (client, 2026-09-21).
+  via               String?
   createdBy         String
   createdByUser     User       @relation("LeadCreator", fields: [createdBy], references: [id])
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
   activities    LeadActivity[]
+  comments      LeadComment[]
+  siteVisits    SiteVisit[]
   documents     Document[]
   // Multi-unit interest: a lead can express interest in several units (and a unit can have
   // a waitlist of interested leads) — in addition to the single primary unit link above.
@@ -1918,6 +1941,8 @@ model Lead {
   @@index([buildingId])
   @@index([campaignId])
   @@index([brokerId])
+  // Drives the "follow-ups due" queue and the calendar view's date-range scan.
+  @@index([followUpDate])
   @@map("leads")
 }
 
@@ -1944,8 +1969,20 @@ model LeadActivity {
   createdBy     String
   createdByUser User             @relation("ActivityCreator", fields: [createdBy], references: [id])
   createdAt     DateTime         @default(now())
+  /// WHEN IT HAPPENED, as distinct from createdAt = when it was typed in.
+  ///
+  /// Friday's catch-up logging three calls made across the week would otherwise record all
+  /// three as happening on Friday, and the per-lead calendar (client, 2026-09-21) is
+  /// precisely a back-dating UI — tap a past date, log the call that happened on it.
+  /// createdAt is left untouched so the audit trail still says when the row was written.
+  /// Backfilled to createdAt on migrate, and defaults to now() so every existing caller
+  /// keeps working unchanged.
+  occurredAt    DateTime         @default(now())
 
   @@index([leadId])
+  /// Drives the call count, the last-call lookup and the calendar's per-date roll-up,
+  /// all of which filter by type and order by occurredAt.
+  @@index([leadId, type, occurredAt])
   @@map("lead_activities")
 }
 
@@ -2141,6 +2178,28 @@ enum NotificationType {
   /// An Update Board post's due date is approaching or has passed. RECURRING — the daily
   /// cron re-raises it for as long as the post stays open and undone.
   UPDATE_BOARD_DUE_SOON
+  // ---- Site-visit scheduling (2026-09-21) ----
+  /// A rep booked one of the host's open slots and it is waiting on a decision.
+  /// Leadership-routed and ACTION-tier: a viewing nobody confirms is a promise the lead
+  /// never hears back on.
+  SITE_VISIT_REQUESTED
+  /// The decision came back. Addressed at the rep who asked — a request that is silently
+  /// approved is the same as no answer, because they still cannot tell the lead.
+  SITE_VISIT_CONFIRMED
+  SITE_VISIT_REJECTED
+  /// The visit moved. Reaches host AND requester: either can be the one who did not move it.
+  SITE_VISIT_RESCHEDULED
+  /// Day-before reminder. FYI-tier — it is awareness, and emailing every visit the night
+  /// before is how people learn to filter the sender.
+  SITE_VISIT_TOMORROW
+  /// A confirmed visit whose grace period elapsed with no outcome recorded. ACTION,
+  /// because the next step is always either "log what happened" or "rebook it".
+  SITE_VISIT_MISSED
+  /// Someone was @mentioned in a LEAD discussion thread. Distinct from COMMENT_MENTION
+  /// (Task/Unit/Project comments) and UPDATE_BOARD_COMMENT_MENTION for the same reason
+  /// those two are distinct from each other: muting one surface's mentions must not mute
+  /// the others. All three reuse the SAME resolveMentions() parser.
+  LEAD_COMMENT_MENTION
 }
 
 model Notification {
@@ -2994,6 +3053,15 @@ model OrgSettings {
   drawFundingExpectedDays      Int          @default(14) // default expected funding window
   // Sale priced below the unit's asking price by more than this % needs Founder/Co-Founder approval.
   discountApprovalThresholdPct Decimal      @default(5) @db.Decimal(5, 2)
+  // ---- Site-visit scheduling (client answers, 2026-09-21) ----
+  // Kept here rather than as constants because the client asked for the notice period to
+  // be changeable by an admin without a deploy. The rest live beside it so the whole
+  // scheduling policy is readable in one place.
+  siteVisitMinNoticeHours      Int          @default(6)    // earliest bookable slot, from now
+  siteVisitSlotMinutes         Int          @default(60)   // default slot granularity
+  siteVisitDayStartMin         Int          @default(540)  // 09:00 local
+  siteVisitDayEndMin           Int          @default(1080) // 18:00 local
+  siteVisitMissedGraceHours    Int          @default(2)    // past endsAt before it counts as missed
   createdAt                    DateTime     @default(now())
   updatedAt                    DateTime     @updatedAt
 
@@ -3398,4 +3466,156 @@ model CommissionInstallment {
   @@index([saleId])
   @@index([brokerId, paidAt])
   @@map("commission_installments")
+}
+
+
+// ============================================================================
+// Site-visit scheduling (2026-09-21).
+// See docs/client-discovery/LEADS_BOARD_AND_SITE_VISIT_SPEC.md.
+//
+// The Founder/Admin publishes availability; Sales/Marketing books an open slot; the
+// booking sits PENDING until a leadership user confirms or rejects it. Availability is
+// GLOBAL (not per project) and the Founder is the only host in v1 — but hostId exists
+// from day one so opening it to more hosts later is a permission change, not a migration.
+// ============================================================================
+
+model VisitAvailability {
+  id            String    @id @default(cuid())
+  hostId        String
+  host          User      @relation("VisitHost", fields: [hostId], references: [id], onDelete: Cascade)
+  /// OPEN = bookable window. BLOCKED = a carve-out that beats any overlapping OPEN rule,
+  /// which is how a travel day removes slots without deleting the weekly pattern.
+  kind          String    @default("OPEN")
+  /// Recurring WEEKLY rule: 0=Sun..6=Sat. Exactly one of (dayOfWeek, dayOfMonth, date)
+  /// is set — enforced in the service, since a DB CHECK across three nullable columns is
+  /// harder to evolve than the one place that writes them.
+  dayOfWeek     Int?
+  /// Recurring MONTHLY rule: 1..31. A month without that day simply produces no slots,
+  /// which is the honest behaviour — silently sliding "the 31st" to the 28th would put
+  /// the host somewhere they never agreed to be.
+  dayOfMonth    Int?
+  /// One-off calendar date — used for both ad-hoc openings and blackout days.
+  date          DateTime? @db.Date
+  /// Optional END of a date RANGE, inclusive. Set alongside `date` to cover a run of days
+  /// in ONE rule — "blocked all of next week", a holiday shutdown, a site closure. Without
+  /// it, blocking a week meant seven separate rows to create and seven to remove.
+  endDate       DateTime? @db.Date
+  /// Minutes from LOCAL midnight in `timezone`. Deliberately NOT a DateTime: a recurring
+  /// "Tuesdays 10:00-16:00" has no absolute instant, and storing one makes the window
+  /// silently shift an hour at every DST boundary. Concrete bookings (SiteVisit) DO store
+  /// absolute UTC — that split is the whole point.
+  startMin      Int
+  endMin        Int
+  /// Slot granularity this window is cut into. Falls back to OrgSettings when unset.
+  slotMinutes   Int       @default(60)
+  timezone      String    @default("America/Chicago")
+  effectiveFrom DateTime? @db.Date
+  effectiveTo   DateTime? @db.Date
+  note          String?
+  createdBy     String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([hostId, dayOfWeek])
+  @@index([hostId, dayOfMonth])
+  @@index([hostId, date])
+  @@map("visit_availability")
+}
+
+model SiteVisit {
+  id                String    @id @default(cuid())
+  leadId            String
+  lead              Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  /// Denormalised so the dashboard card and project-access filtering never need a join
+  /// through Lead. Set from the lead at creation and never edited.
+  projectId         String
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// What they are coming to see. AT MOST ONE of (unitId, buildingId) — the same
+  /// polymorphic rule the service layer already enforces on Lead/Sale/Lease. One property
+  /// per visit in v1 (client, 2026-09-21); multi-unit tours would need a join table.
+  unitId            String?
+  unit              Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  buildingId        String?
+  building          Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+
+  hostId            String
+  host              User      @relation("SiteVisitHost", fields: [hostId], references: [id])
+
+  /// Absolute instants. Local wall-clock is derived from `timezone` for display.
+  startsAt          DateTime
+  endsAt            DateTime
+  timezone          String    @default("America/Chicago")
+
+  /// REQUESTED | CONFIRMED | REJECTED | CANCELLED | RESCHEDULED | COMPLETED | NO_SHOW
+  status            String    @default("REQUESTED")
+
+  /// Where the booking came from: INTERNAL (the tracker's own picker) or CALENDLY.
+  /// An externally-booked visit arrives ALREADY CONFIRMED — Calendly checked availability
+  /// and told the lead it was happening, so routing it through the Founder's confirm gate
+  /// would be asking permission for something already promised.
+  source            String    @default("INTERNAL")
+  /// The provider's own id for this booking (Calendly's invitee URI). UNIQUE, which is
+  /// what makes webhook delivery idempotent: providers retry, and retries must not create
+  /// a second visit.
+  externalId        String?   @unique
+  /// Deep link back to the booking in the provider, for anyone who needs the source of truth.
+  externalUrl       String?
+
+  requestedById     String
+  requestedBy       User      @relation("SiteVisitRequester", fields: [requestedById], references: [id])
+  requestedAt       DateTime  @default(now())
+  requestNote       String?
+
+  decidedById       String?
+  decidedBy         User?     @relation("SiteVisitDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt         DateTime?
+  decisionNote      String?
+
+  /// Reschedule chain. The old row goes terminal at RESCHEDULED and the NEW row points
+  /// back at it, so history is appended rather than restated — the same rule the rent
+  /// corrections and budget revisions follow.
+  rescheduledFromId String?    @unique
+  rescheduledFrom   SiteVisit? @relation("VisitReschedule", fields: [rescheduledFromId], references: [id], onDelete: SetNull)
+  rescheduledTo     SiteVisit? @relation("VisitReschedule")
+  rescheduleReason  String?
+
+  /// Outcome once it has happened. completedAt doubles as "an outcome was recorded",
+  /// which is what the missed-visit sweep looks for.
+  outcomeNote       String?
+  completedAt       DateTime?
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([hostId, startsAt])
+  @@index([status, startsAt])
+  @@index([leadId])
+  @@index([projectId, startsAt])
+  @@index([source, startsAt])
+  @@map("site_visits")
+}
+
+
+// Discussion ABOUT a lead, as opposed to LeadActivity which is a structured record of what
+// was DONE to it (a call, an email, a status change).
+//
+// Deliberately a separate table rather than another LeadActivity type: merging the two was
+// tried on this project and reversed, because a chat message and an audited contact event
+// want different shapes, different permissions and different notification behaviour. The
+// activity log is evidence; this is conversation.
+model LeadComment {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation("LeadCommentAuthor", fields: [authorId], references: [id])
+  content   String
+  /// Set once the body is edited, so the UI can mark it rather than silently showing a
+  /// changed message as the original.
+  editedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId, createdAt])
+  @@map("lead_comments")
 }

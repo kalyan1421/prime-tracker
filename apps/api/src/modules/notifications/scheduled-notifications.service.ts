@@ -100,7 +100,125 @@ export class ScheduledNotificationsService {
       this.checkExpiringDocuments(),
       this.checkUpdateBoardDueSoon(),
       this.checkStaleSiteUpdates(),
+      this.checkSiteVisitsTomorrow(),
+      this.checkMissedSiteVisits(),
     ]);
+  }
+
+  /** "Tue 24 Sep, 10:00 AM" in the visit's OWN timezone, not the server's. */
+  private visitWhen(v: { startsAt: Date; timezone: string | null }) {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: v.timezone || 'America/Chicago',
+      weekday: 'short', day: 'numeric', month: 'short',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(v.startsAt);
+  }
+
+  private visitProperty(v: { unit?: { unitNumber: string } | null; building?: { name: string } | null }) {
+    if (v.unit) return `Unit ${v.unit.unitNumber}`;
+    if (v.building) return v.building.name;
+    return null;
+  }
+
+  /**
+   * Confirmed visits happening tomorrow.
+   *
+   * The window is the next calendar day in the BUSINESS timezone, not "24h from now":
+   * the cron fires at 08:00 CT, so "tomorrow" means tomorrow's working day to everyone
+   * reading it, and a 09:00 visit should not be announced two mornings running.
+   *
+   * Recipients are the host and the requester — the two people who have to be somewhere
+   * or tell the lead. This is not routed by role or project: a viewing is an appointment
+   * between named people.
+   */
+  private async checkSiteVisitsTomorrow() {
+    const now = new Date();
+    const start = new Date(now.getTime() + 86_400_000);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start.getTime() + 86_400_000);
+
+    const visits = await this.prisma.siteVisit.findMany({
+      where: {
+        status: 'CONFIRMED',
+        startsAt: { gte: start, lt: end },
+        project: { deletedAt: null },
+      },
+      include: {
+        lead: { select: { name: true, phone: true } },
+        unit: { select: { unitNumber: true } },
+        building: { select: { name: true } },
+      },
+    });
+
+    let raised = 0;
+    for (const v of visits) {
+      try {
+        await this.notifications.notifySiteVisitTomorrow({
+          visitId: v.id,
+          leadId: v.leadId,
+          userIds: [v.hostId, v.requestedById],
+          leadName: v.lead?.name ?? 'Unnamed lead',
+          propertyLabel: this.visitProperty(v),
+          whenLabel: this.visitWhen(v),
+          leadPhone: v.lead?.phone ?? null,
+        });
+        raised++;
+      } catch (err) {
+        // One bad visit must not stop the rest — same rule as every other sweep here.
+        this.logger.warn(`Site visit reminder failed for ${v.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Site visits tomorrow: ${raised} reminder(s)`);
+    return raised;
+  }
+
+  /**
+   * Confirmed visits that have passed with no outcome recorded.
+   *
+   * The grace period is OrgSettings.siteVisitMissedGraceHours (client: 2h), read rather
+   * than hardcoded so the same knob that governs scheduling governs the chasing.
+   *
+   * `completedAt: null` is the test for "no outcome", which is why recordOutcome sets it
+   * for NO_SHOW as well as COMPLETED — a visit the lead skipped is still resolved, and
+   * must stop being chased.
+   */
+  private async checkMissedSiteVisits() {
+    const settings = await this.prisma.orgSettings.findFirst();
+    const graceHours = settings?.siteVisitMissedGraceHours ?? 2;
+    const cutoff = new Date(Date.now() - graceHours * 3_600_000);
+
+    const visits = await this.prisma.siteVisit.findMany({
+      where: {
+        status: 'CONFIRMED',
+        completedAt: null,
+        endsAt: { lt: cutoff },
+        project: { deletedAt: null },
+      },
+      include: {
+        lead: { select: { name: true } },
+        unit: { select: { unitNumber: true } },
+        building: { select: { name: true } },
+      },
+    });
+
+    let raised = 0;
+    for (const v of visits) {
+      try {
+        await this.notifications.notifySiteVisitMissed({
+          visitId: v.id,
+          leadId: v.leadId,
+          userIds: [v.hostId, v.requestedById],
+          leadName: v.lead?.name ?? 'Unnamed lead',
+          propertyLabel: this.visitProperty(v),
+          whenLabel: this.visitWhen(v),
+        });
+        raised++;
+      } catch (err) {
+        this.logger.warn(`Missed-visit alert failed for ${v.id}: ${err}`);
+      }
+    }
+    this.logger.log(`Missed site visits: ${raised} awaiting an outcome`);
+    return raised;
   }
 
   /**

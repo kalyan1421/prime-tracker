@@ -100,6 +100,13 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
   },
   task: async (p, id) =>
     (await p.task.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  // GET .../attachments/:attachmentId/download addresses a file by attachment id alone,
+  // with no taskId in the path, so without this the guard's isMember loop would run over
+  // zero ids — i.e. no membership check — and a scoped role could download any project's
+  // attachment. Same class of gap as unitConstructionStagePhoto / dailyLogPhoto below.
+  taskAttachment: async (p, id) =>
+    (await p.taskAttachment.findUnique({ where: { id }, select: { task: { select: { projectId: true } } } }))
+      ?.task?.projectId,
   dailyLog: async (p, id) =>
     (await p.dailyLog.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   interior: async (p, id) => {
@@ -167,6 +174,22 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
       where: { id },
       select: { dailyLog: { select: { projectId: true } } },
     }))?.dailyLog?.projectId,
+  // BrokersController addresses installments by their OWN id
+  // (PATCH/DELETE /brokers/commission-installments/:id), with no sale or lease in the path,
+  // so without this the guard resolves nothing and a scoped role could mark any project's
+  // commission paid. Polymorphic the same way the row is: exactly one of sale/lease is set.
+  commissionInstallment: async (p, id) => {
+    const inst = await p.commissionInstallment.findUnique({
+      where: { id },
+      select: { saleId: true, leaseId: true },
+    });
+    if (!inst) return undefined;
+    if (inst.saleId) {
+      return (await p.sale.findUnique({ where: { id: inst.saleId }, select: { projectId: true } }))
+        ?.projectId;
+    }
+    return inst.leaseId ? leaseProjectId(p, inst.leaseId) : undefined;
+  },
   document: async (p, id) => {
     const d = await p.document.findUnique({
       where: { id },
@@ -243,6 +266,20 @@ const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
   // other entries in this map.
   DailyLogsController: {
     photoId: 'dailyLogPhoto',
+  },
+  // ":attachmentId" is a TaskAttachment here and an UpdateBoardAttachment on
+  // UpdateBoardController (whose posts are org-wide, not project-scoped), so this is
+  // scoped rather than global.
+  TasksController: {
+    attachmentId: 'taskAttachment',
+  },
+  // ":installmentId" only exists on the broker commission routes. Note that BrokersController
+  // is deliberately ABSENT from CONTROLLER_ID_ENTITY below: its bare ":id" is a Broker, which
+  // is a portfolio-wide record with no project of its own, so resolving it would be wrong.
+  // The installment routes previously used ":id" for that reason and have been renamed to
+  // ":installmentId" so they can be resolved here without that ambiguity.
+  BrokersController: {
+    installmentId: 'commissionInstallment',
   },
   // ":invoiceId" is a LeaseRentInvoice on LeasesController and an InteriorInvoice here —
   // the collision this map exists for. ":snagId" is scoped for the same reason: it is

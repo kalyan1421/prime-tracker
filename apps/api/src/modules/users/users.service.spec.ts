@@ -1,8 +1,14 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UsersService, GUARDED_USER_RELATIONS } from './users.service';
 
 const mockPrisma: any = {
-  user: { update: jest.fn(), findUnique: jest.fn(), delete: jest.fn() },
+  user: { update: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), delete: jest.fn(), create: jest.fn() },
+  refreshToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+  // Interactive transaction: hand the callback the same mock, so assertions on
+  // mockPrisma.user.update keep working whether the call is inside a transaction or not.
+  $transaction: jest.fn((arg: any) =>
+    typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg),
+  ),
 };
 const mockAudit: any = { log: jest.fn() };
 
@@ -251,5 +257,102 @@ describe('UsersService.toggleActive', () => {
     expect(mockAudit.log).toHaveBeenCalledWith(
       expect.objectContaining({ entityId: 'u2', newValues: { isActive: false } }),
     );
+  });
+});
+
+/**
+ * POST /users used to be the one path that could grant SUPER_ADMIN without being one.
+ * updateRole()/updateRoles()/setPassword() all refused it; create() did not, so a FOUNDER
+ * (who holds user:manage) could mint a super admin with a known password and log in as it.
+ * It also logged nothing, unlike every other mutation in this service.
+ */
+describe('UsersService.create — role ceiling and audit', () => {
+  let service: UsersService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+    service = makeService();
+    mockPrisma.user.findUnique.mockResolvedValue(null); // email not taken
+    mockPrisma.user.create.mockImplementation((a: any) => Promise.resolve({ id: 'new1', ...a.data }));
+  });
+
+  function actorIs(role: string, roles: string[] = [role]) {
+    mockPrisma.user.findUniqueOrThrow.mockResolvedValue({ id: 'actor', role, roles });
+  }
+
+  it('refuses SUPER_ADMIN from a non-super-admin actor', async () => {
+    actorIs('FOUNDER');
+    await expect(
+      service.create({ email: 'a@b.com', name: 'A', roles: ['SUPER_ADMIN'] as any }, 'actor'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses SUPER_ADMIN passed as the singular `role` too', async () => {
+    actorIs('FOUNDER');
+    await expect(
+      service.create({ email: 'a@b.com', name: 'A', role: 'SUPER_ADMIN' as any }, 'actor'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('allows SUPER_ADMIN from a super admin actor', async () => {
+    actorIs('SUPER_ADMIN');
+    await expect(
+      service.create({ email: 'a@b.com', name: 'A', roles: ['SUPER_ADMIN'] as any }, 'actor'),
+    ).resolves.toMatchObject({ role: 'SUPER_ADMIN' });
+  });
+
+  it('honours SUPER_ADMIN held as a secondary role', async () => {
+    actorIs('FOUNDER', ['FOUNDER', 'SUPER_ADMIN']);
+    await expect(
+      service.create({ email: 'a@b.com', name: 'A', roles: ['SUPER_ADMIN'] as any }, 'actor'),
+    ).resolves.toBeTruthy();
+  });
+
+  it('refuses the CLIENT role, which grants nothing and cannot reach the app', async () => {
+    actorIs('SUPER_ADMIN');
+    await expect(
+      service.create({ email: 'a@b.com', name: 'A', roles: ['CLIENT'] as any }, 'actor'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('audits the creation with the roles granted', async () => {
+    actorIs('FOUNDER');
+    await service.create({ email: 'a@b.com', name: 'A', roles: ['SALES'] as any, password: 'longenough' }, 'actor');
+    expect(mockAudit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'actor',
+        action: 'CREATE',
+        entity: 'User',
+        newValues: expect.objectContaining({ role: 'SALES', roles: ['SALES'], hasPassword: true }),
+      }),
+    );
+  });
+});
+
+describe('UsersService.toggleActive — session revocation', () => {
+  let service: UsersService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 2 });
+    mockPrisma.user.update.mockResolvedValue({ id: 'u2', isActive: false });
+    service = makeService();
+  });
+
+  it('revokes outstanding refresh tokens when deactivating', async () => {
+    await service.toggleActive('u2', false, 'admin');
+    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u2', revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('does not touch tokens when re-activating', async () => {
+    mockPrisma.user.update.mockResolvedValue({ id: 'u2', isActive: true });
+    await service.toggleActive('u2', true, 'admin');
+    expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
   });
 });

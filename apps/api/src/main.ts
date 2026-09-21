@@ -17,8 +17,35 @@ async function bootstrap() {
   const uploadsDir = path.join(process.cwd(), 'uploads');
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+  // The app is created FIRST so that ConfigService is the single source of truth for
+  // "are we in production?".
+  //
+  // This block used to read `process.env.NODE_ENV` directly, and nothing populated it:
+  // deploy.sh writes NODE_ENV into apps/api/.env and then starts the process with
+  // `pm2 start dist/main.js`, which does not source that file. ConfigModule reads it, but
+  // only once NestFactory.create() has run — which was AFTER these decisions. So on the
+  // live box `process.env.NODE_ENV` was undefined while `config.get('NODE_ENV')` returned
+  // 'production', and the two reads of the same variable disagreed: the DEMO_MODE guard
+  // below could not fire, JsonLogger was never installed, and listen() bound 0.0.0.0
+  // instead of 127.0.0.1. The Swagger and dev-user guards further down used config.get()
+  // and behaved correctly, which is what made the split so easy to miss.
+  //
+  // Nothing is served until app.listen() at the bottom, so every check here still runs
+  // before the first request and the DEMO_MODE guard still fails closed.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    // Buffered until useLogger() below, so boot-time messages are not lost.
+    bufferLogs: true,
+    // Keeps the untouched request bytes on req.rawBody. Webhook signatures (Calendly) are
+    // HMACs over the exact payload, and re-serialising the parsed body does not reproduce
+    // key order or whitespace — every delivery would then look forged.
+    rawBody: true,
+  });
+
+  const config = app.get(ConfigService);
+  const isProd = config.get('NODE_ENV') === 'production';
+
   // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev.
-  const isProd = process.env.NODE_ENV === 'production';
+  app.useLogger(isProd ? new JsonLogger() : ['error', 'warn', 'log', 'debug']);
 
   // ---- Refuse to run an auth bypass in production ----
   //
@@ -32,7 +59,10 @@ async function bootstrap() {
   // open, and the whole point is that this one has to fail closed. If the AWS box
   // ever boots with DEMO_MODE=true it will not serve traffic, and the reason will be
   // the first thing in the logs.
-  if (isProd && process.env.DEMO_MODE === 'true') {
+  //
+  // Read through ConfigService for the same reason as NODE_ENV above: the variable may
+  // arrive from the .env file rather than the process environment.
+  if (isProd && config.get('DEMO_MODE') === 'true') {
     // eslint-disable-next-line no-console
     console.error(
       '\n=========================================================================\n' +
@@ -45,12 +75,8 @@ async function bootstrap() {
     );
     process.exit(1);
   }
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: isProd ? new JsonLogger() : ['error', 'warn', 'log', 'debug'],
-  });
 
-  const config = app.get(ConfigService);
-  const port = Number(process.env.PORT ?? config.get('API_PORT', 3001));
+  const port = Number(config.get('PORT') ?? config.get('API_PORT', 3001));
   const frontendUrl = config.get('FRONTEND_URL', 'http://localhost:5173');
 
   // Behind nginx (single reverse proxy), trust the first hop so req.ip resolves to the
@@ -72,8 +98,20 @@ async function bootstrap() {
   // WebSocket adapter (Socket.IO)
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  // Static files for uploaded documents
-  app.useStaticAssets(path.join(process.cwd(), 'uploads'), { prefix: '/uploads' });
+  // NO static mount for `uploads/`.
+  //
+  // There used to be an `app.useStaticAssets(uploads, { prefix: '/uploads' })` here. Static
+  // assets are not affected by setGlobalPrefix below and carry no guard — the only global
+  // guard is ThrottlerGuard — so every task attachment was downloadable by anyone holding
+  // the URL, with no token: contracts, lien waivers, site documents. It was also never
+  // routed in front of the app (nginx proxies only /api/ and /socket.io/; Vite's dev proxy
+  // only /api), so /uploads/... fell through to the SPA's index.html and the Download
+  // button saved an HTML page. Both problems had the same cause and the same fix:
+  // GET /api/tasks/attachments/:attachmentId/download streams these files behind
+  // JwtAuthGuard + PermissionsGuard + ProjectAccessGuard.
+  //
+  // Anything new that needs to serve a file must go through a guarded controller route
+  // (or S3 + a signed URL, as every other upload in the app already does).
 
   // Global prefix
   app.setGlobalPrefix('api');
@@ -93,7 +131,7 @@ async function bootstrap() {
   );
 
   // Swagger (dev only)
-  if (config.get('NODE_ENV') !== 'production') {
+  if (!isProd) {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('Prime Tracker API')
       .setDescription('Internal Real Estate Development Dashboard')
@@ -105,7 +143,7 @@ async function bootstrap() {
   }
 
   // Ensure dev user exists so JWT bypass FK constraint works
-  if (config.get('NODE_ENV') !== 'production') {
+  if (!isProd) {
     const prisma = app.get(PrismaService);
     await prisma.user.upsert({
       where: { id: 'dev-user-1' },

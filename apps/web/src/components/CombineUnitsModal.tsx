@@ -5,6 +5,7 @@ import {
 import { useCombineUnits } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
 import { FormError } from './FormError';
+import { wideSelectProps } from './ui';
 
 /**
  * Combine 2+ adjacent units in one building into a single legal unit.
@@ -75,6 +76,7 @@ export function CombineUnitsModal({
           <FormError message={combineErr} />
           <Select
             size="sm" label="Building"
+            {...wideSelectProps}
             selectedKeys={buildingId ? [buildingId] : []}
             onSelectionChange={(k) => { setBuildingId((Array.from(k)[0] as string) || ''); setSelected({}); setCombineErr(null); }}
           >

@@ -11,6 +11,7 @@ import {
 import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
 import { FormError } from './FormError';
+import { wideSelectProps } from './ui';
 
 const photoUrl = (photo: { url?: string; storagePath: string }) => photo.url || '';
 
@@ -200,6 +201,7 @@ export function DailyLogFeed({
                 <Select
                   size="sm"
                   label="Building (optional)"
+                  {...wideSelectProps}
                   selectedKeys={form.buildingId ? new Set([form.buildingId]) : new Set()}
                   onSelectionChange={(keys) => {
                     const val = Array.from(keys)[0] as string ?? '';

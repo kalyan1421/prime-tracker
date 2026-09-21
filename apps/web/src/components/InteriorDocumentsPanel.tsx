@@ -14,6 +14,7 @@ import {
   FiImage, FiAlertCircle, FiCheckCircle, FiFilter,
 } from 'react-icons/fi';
 import { useInteriorDocuments, useUploadDocument, useDeleteDocument } from '../hooks/useApi';
+import { useAuthStore } from '../store/authStore';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { apiAssetUrl } from '../lib/api';
 
@@ -81,6 +82,10 @@ export function InteriorDocumentsPanel({
   const { data, isLoading } = useInteriorDocuments(interiorProjectId);
   const upload  = useUploadDocument();
   const del     = useDeleteDocument();
+  // The Delete control was rendered unconditionally, so it already 403'd for any role
+  // without the permission the endpoint enforces. DELETE /documents/:id now requires
+  // 'document:delete', so gate on that.
+  const canDelete = useAuthStore((st) => st.hasPermission)('document:delete');
 
   const fileInputRef    = useRef<HTMLInputElement>(null);
   const pendingCatRef   = useRef<InteriorDocCategory>('GENERAL');
@@ -275,15 +280,17 @@ export function InteriorDocumentsPanel({
                         Download
                       </Button>
                     </a>
-                    <Tooltip content="Delete">
-                      <Button
-                        size="sm" variant="light" color="danger" isIconOnly className="h-6 w-6 min-w-6"
-                        onPress={() => handleDelete(doc.id)}
-                        aria-label="Delete document"
-                      >
-                        <FiTrash2 size={11} />
-                      </Button>
-                    </Tooltip>
+                    {canDelete && (
+                      <Tooltip content="Delete">
+                        <Button
+                          size="sm" variant="light" color="danger" isIconOnly className="h-6 w-6 min-w-6"
+                          onPress={() => handleDelete(doc.id)}
+                          aria-label="Delete document"
+                        >
+                          <FiTrash2 size={11} />
+                        </Button>
+                      </Tooltip>
+                    )}
                   </div>
                 </div>
               </div>

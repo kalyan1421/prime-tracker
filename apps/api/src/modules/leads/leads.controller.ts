@@ -2,7 +2,9 @@ import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UseI
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { LeadsService } from './leads.service';
-import { CreateLeadDto, UpdateLeadDto } from './dto/lead.dto';
+import {
+  AddLeadActivityDto, CreateLeadDto, LeadCommentDto, UpdateLeadDto,
+} from './dto/lead.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -42,6 +44,9 @@ export class LeadsController {
     @Query('buildingId') buildingId?: string,
     @Query('campaignId') campaignId?: string,
     @Query('brokerId') brokerId?: string,
+    @Query('source') source?: string,
+    @Query('via') via?: string,
+    @Query('followUpBefore') followUpBefore?: string,
     @Query('search') search?: string,
     @CurrentUser('sub') userId?: string,
     @CurrentUser('role') role?: string,
@@ -50,7 +55,7 @@ export class LeadsController {
     return this.service.findAll({
       projectId, status, assignedTo,
       unassigned: unassigned === 'true' || unassigned === '1',
-      unitId, buildingId, campaignId, brokerId, search,
+      unitId, buildingId, campaignId, brokerId, source, via, followUpBefore, search,
       viewer: userId && role ? { userId, role, roles } : undefined,
     });
   }
@@ -114,10 +119,61 @@ export class LeadsController {
   @ApiOperation({ summary: 'Add an activity to a lead' })
   addActivity(
     @Param('id') leadId: string,
-    @Body() body: { type: LeadActivityType; note: string },
+    @Body() body: AddLeadActivityDto,
     @CurrentUser('sub') userId: string,
   ) {
-    return this.service.addActivity(leadId, userId, body.type, body.note);
+    return this.service.addActivity(leadId, userId, body.type, body.note, body.occurredAt);
+  }
+
+  // ---- Discussion thread ----
+  //
+  // Gated on lead:view / lead:edit rather than a new permission: discussing a lead is the
+  // same work as working it, unlike approving a site visit which is a leadership act.
+
+  @Get(':id/comments')
+  @RequirePermissions('lead:view')
+  @ApiOperation({ summary: 'Discussion thread for a lead (oldest first)' })
+  getComments(@Param('id') id: string) {
+    return this.service.getComments(id);
+  }
+
+  @Post(':id/comments')
+  @RequirePermissions('lead:edit')
+  @ApiOperation({ summary: 'Post to the thread. @mentions in the body notify those users.' })
+  addComment(
+    @Param('id') id: string,
+    @Body() body: LeadCommentDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.addComment(id, userId, body.content);
+  }
+
+  @Put('comments/:commentId')
+  @RequirePermissions('lead:edit')
+  @ApiOperation({ summary: 'Edit your own comment' })
+  updateComment(
+    @Param('commentId') commentId: string,
+    @Body() body: LeadCommentDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.updateComment(commentId, userId, body.content);
+  }
+
+  @Delete('comments/:commentId')
+  @RequirePermissions('lead:edit')
+  @ApiOperation({ summary: 'Delete your own comment' })
+  deleteComment(
+    @Param('commentId') commentId: string,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.deleteComment(commentId, userId);
+  }
+
+  @Get(':id/calls')
+  @RequirePermissions('lead:view')
+  @ApiOperation({ summary: 'Call count, last call with its note, and a per-date activity roll-up' })
+  getCalls(@Param('id') id: string) {
+    return this.service.getCalls(id);
   }
 
   // ---- Multi-unit interest / waitlist ----

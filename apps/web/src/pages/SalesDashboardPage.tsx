@@ -8,6 +8,7 @@ import { FiTarget } from 'react-icons/fi';
 import { useSalesDashboard } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
+import { SiteVisitAttentionCard } from '../components/SiteVisitAttentionCard';
 import { useAuthStore } from '../store/authStore';
 
 const STATUS_ORDER = ['PROSPECT', 'LOI_SIGNED', 'UNDER_CONTRACT', 'CLOSED'];
@@ -51,6 +52,8 @@ export default function SalesDashboardPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-6">Sales Dashboard</h1>
+
+      <div className="mb-6"><SiteVisitAttentionCard /></div>
 
       {/* Zone A — Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">

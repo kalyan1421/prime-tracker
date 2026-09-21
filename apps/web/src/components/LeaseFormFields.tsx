@@ -8,6 +8,7 @@
 import React from 'react';
 import { Input, Select, SelectItem, Switch } from '@heroui/react';
 import { useBrokers } from '../hooks/useApi';
+import { wideSelectProps } from './ui';
 
 export const EMPTY_LEASE = {
   // A lease is polymorphic: it hangs off ONE unit or off a whole building (the schema's
@@ -339,6 +340,7 @@ export function LeaseFormFields({
         <Select
           size="sm"
           label="Building"
+          {...wideSelectProps}
           isRequired
           isDisabled={lockAsset}
           description={

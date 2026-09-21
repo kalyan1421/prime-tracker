@@ -74,8 +74,22 @@ export const NOTIFICATION_TIERS = {
   // Update Board — a standing condition (due date approaching/passed) on an open item,
   // same reasoning as PAYMENT_DUE_7/PAYMENT_OVERDUE.
   UPDATE_BOARD_DUE_SOON: 'ACTION',
+  // Site visits. Every one of these names a specific next step for a specific person:
+  // decide the request, tell the lead, or rebook. The only FYI in the set is the
+  // day-before reminder, below.
+  SITE_VISIT_REQUESTED: 'ACTION',
+  SITE_VISIT_CONFIRMED: 'ACTION',
+  SITE_VISIT_REJECTED: 'ACTION',
+  SITE_VISIT_RESCHEDULED: 'ACTION',
+  SITE_VISIT_MISSED: 'ACTION',
+  // Addressed at one named person, same reasoning as COMMENT_MENTION and TASK_ASSIGNED.
+  LEAD_COMMENT_MENTION: 'ACTION',
 
   // ---- FYI: awareness only ----
+  // The day-before nudge is awareness, not a task — the visit is already agreed. Emailing
+  // every confirmed visit the night before is the noise that teaches people to filter
+  // this sender, which would cost them the confirm/reject alerts above.
+  SITE_VISIT_TOMORROW: 'FYI',
   // FYI, deliberately. It is a standing condition on potentially dozens of units at once,
   // and emailing a daily list of quiet units is exactly the noise that trains people to
   // filter this sender — which would cost them the ACTION alerts too. In-app, where the
@@ -211,6 +225,18 @@ export const RECURRING_TYPES = {
   // RECURRING: silence persists every morning until somebody posts. dedupeKey ->
   // `unit:<id>:stale`, so one quiet unit is one pending alert however long it stays quiet.
   SITE_UPDATE_STALE: true,
+  // Discrete: each of these happens once, at the moment somebody acts.
+  SITE_VISIT_REQUESTED: false,
+  SITE_VISIT_CONFIRMED: false,
+  SITE_VISIT_REJECTED: false,
+  SITE_VISIT_RESCHEDULED: false,
+  SITE_VISIT_TOMORROW: false,
+  // RECURRING: a visit with no recorded outcome stays unresolved every morning until
+  // somebody logs what happened or rebooks it. dedupeKey -> `site-visit:<id>:missed`,
+  // so one forgotten visit is one pending alert however long it is left.
+  SITE_VISIT_MISSED: true,
+  // Discrete: a mention happens once, when somebody types it.
+  LEAD_COMMENT_MENTION: false,
 } as const satisfies Record<string, boolean>;
 
 /** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
@@ -766,6 +792,141 @@ export class NotificationsService {
    * Founder looks, and a Founder who happens not to be on that project is still the right
    * person to look.
    */
+  // ---- Site visits ----
+
+  /**
+   * A rep booked an open slot. Leadership-routed: the whole point of the gate is that
+   * somebody with authority looks before a viewing is promised to a client.
+   */
+  async notifySiteVisitRequested(params: {
+    visitId: string;
+    projectId: string | null;
+    leadName: string;
+    propertyLabel: string | null;
+    whenLabel: string;
+    requestedByName: string | null;
+    note?: string | null;
+    link?: string | null;
+  }) {
+    await this.sendToRoles({
+      roles: [...LEADERSHIP_ROLES],
+      projectId: null,
+      type: NotificationType.SITE_VISIT_REQUESTED,
+      title: `Site visit requested — ${params.leadName}`,
+      body:
+        `${params.requestedByName ?? 'Someone'} booked ${params.whenLabel}`
+        + `${params.propertyLabel ? ` at ${params.propertyLabel}` : ''} for ${params.leadName}.`
+        + `${params.note ? ` Note: “${params.note}”.` : ''}`
+        + ' The slot is held until you confirm or reject it.',
+      link: params.link ?? undefined,
+    });
+  }
+
+  /**
+   * The decision. Addressed at the rep who asked, not broadcast — they are the one who
+   * still has to tell the lead, and a silently-approved request is the same as no answer.
+   */
+  async notifySiteVisitDecided(params: {
+    requestedById: string;
+    confirmed: boolean;
+    leadName: string;
+    propertyLabel: string | null;
+    whenLabel: string;
+    decidedByName: string | null;
+    decisionNote?: string | null;
+    link?: string | null;
+  }) {
+    await this.send({
+      userIds: [params.requestedById],
+      type: params.confirmed
+        ? NotificationType.SITE_VISIT_CONFIRMED
+        : NotificationType.SITE_VISIT_REJECTED,
+      title: params.confirmed
+        ? `Site visit confirmed — ${params.leadName}`
+        : `Site visit rejected — ${params.leadName}`,
+      body:
+        `${params.decidedByName ?? 'Leadership'} ${params.confirmed ? 'confirmed' : 'rejected'} `
+        + `${params.whenLabel}${params.propertyLabel ? ` at ${params.propertyLabel}` : ''} `
+        + `for ${params.leadName}.`
+        + `${params.decisionNote ? ` Reason: “${params.decisionNote}”.` : ''}`
+        + (params.confirmed ? '' : ' The slot is back in the pool — rebook when you can.'),
+      link: params.link ?? undefined,
+    });
+  }
+
+  /** The visit moved. Reaches host AND requester — either could be the one who did not move it. */
+  async notifySiteVisitRescheduled(params: {
+    userIds: string[];
+    leadName: string;
+    fromLabel: string;
+    toLabel: string;
+    movedByName: string | null;
+    reason?: string | null;
+    link?: string | null;
+  }) {
+    await this.send({
+      userIds: params.userIds,
+      type: NotificationType.SITE_VISIT_RESCHEDULED,
+      title: `Site visit moved — ${params.leadName}`,
+      body:
+        `${params.movedByName ?? 'Someone'} moved the visit for ${params.leadName} from `
+        + `${params.fromLabel} to ${params.toLabel}.`
+        + `${params.reason ? ` Reason: “${params.reason}”.` : ''}`
+        + ' It needs confirming again.',
+      link: params.link ?? undefined,
+    });
+  }
+
+  /** Day-before nudge for a confirmed visit. FYI-tier — the visit is already agreed. */
+  async notifySiteVisitTomorrow(params: {
+    visitId: string;
+    leadId: string;
+    userIds: string[];
+    leadName: string;
+    propertyLabel: string | null;
+    whenLabel: string;
+    leadPhone?: string | null;
+  }) {
+    await this.send({
+      userIds: params.userIds,
+      type: NotificationType.SITE_VISIT_TOMORROW,
+      title: `Site visit tomorrow — ${params.leadName}`,
+      body:
+        `${params.whenLabel}${params.propertyLabel ? ` at ${params.propertyLabel}` : ''} `
+        + `with ${params.leadName}.`
+        + `${params.leadPhone ? ` Contact: ${params.leadPhone}.` : ''}`,
+      link: `/leads?lead=${params.leadId}&visit=${params.visitId}`,
+    });
+  }
+
+  /**
+   * A confirmed visit whose grace period elapsed with no outcome recorded.
+   *
+   * RECURRING, so it carries a dedupeKey: the visit stays unresolved every morning until
+   * somebody logs what happened or rebooks it, and one forgotten visit must be one
+   * pending alert however long it is left — not a new row per day.
+   */
+  async notifySiteVisitMissed(params: {
+    visitId: string;
+    leadId: string;
+    userIds: string[];
+    leadName: string;
+    propertyLabel: string | null;
+    whenLabel: string;
+  }) {
+    await this.send({
+      userIds: params.userIds,
+      type: NotificationType.SITE_VISIT_MISSED,
+      title: `Site visit needs an outcome — ${params.leadName}`,
+      body:
+        `${params.whenLabel}${params.propertyLabel ? ` at ${params.propertyLabel}` : ''} `
+        + `with ${params.leadName} has passed with nothing recorded. `
+        + 'Log what happened, or rebook it.',
+      link: `/leads?lead=${params.leadId}&visit=${params.visitId}`,
+      dedupeKey: `site-visit:${params.visitId}:missed`,
+    });
+  }
+
   async notifyHistoryDeletionRequested(params: {
     requestId: string;
     projectId: string | null;
@@ -977,6 +1138,37 @@ export class NotificationsService {
       type: NotificationType.COMMENT_MENTION,
       title: `${params.authorName} mentioned you`,
       body: `In ${params.where}: "${excerpt}"`,
+      link: params.link,
+    });
+  }
+
+  /**
+   * @mention inside a lead's discussion thread.
+   *
+   * Deliberately a near-twin of notifyCommentMention rather than a parameter on it: the
+   * TYPE differs, and the type is what users mute. Sharing one method would have meant one
+   * preference governing three unrelated surfaces.
+   */
+  async notifyLeadCommentMention(params: {
+    mentionedUserIds: string[];
+    authorId: string;
+    authorName: string;
+    leadName: string;
+    content: string;
+    link?: string;
+  }) {
+    // Mentioning yourself is not a notification.
+    const recipients = params.mentionedUserIds.filter((id) => id !== params.authorId);
+    if (recipients.length === 0) return;
+
+    const excerpt =
+      params.content.length > 140 ? `${params.content.slice(0, 140)}…` : params.content;
+
+    await this.send({
+      userIds: recipients,
+      type: NotificationType.LEAD_COMMENT_MENTION,
+      title: `${params.authorName} mentioned you`,
+      body: `On the lead ${params.leadName}: "${excerpt}"`,
       link: params.link,
     });
   }

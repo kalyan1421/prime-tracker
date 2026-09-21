@@ -1,7 +1,7 @@
 import {
-  IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min,
+  IsDateString, IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min,
 } from 'class-validator';
-import { LeadSource } from '@prisma/client';
+import { LeadActivityType, LeadSource } from '@prisma/client';
 
 /**
  * Lead bodies. These routes previously used inline `@Body() body: { … }` types.
@@ -69,6 +69,17 @@ export class CreateLeadDto {
 
   @IsOptional() @IsString() @MaxLength(200)
   utmContent?: string;
+
+  // Board-parity fields (2026-09-21). NOTE: main.ts runs the ValidationPipe with
+  // `forbidNonWhitelisted: true`, so a field the form posts but the DTO omits is a 400,
+  // not a silent strip — these must exist on BOTH Create and Update or the form breaks.
+  @IsOptional() @IsDateString()
+  followUpDate?: string;
+
+  // CustomOption "lead_via" value. Free text on purpose (the catalogue is admin-editable),
+  // so it is length-capped rather than enum-checked.
+  @IsOptional() @IsString() @MaxLength(60)
+  via?: string;
 }
 
 export class UpdateLeadDto {
@@ -109,4 +120,41 @@ export class UpdateLeadDto {
   /** Re-attribute an existing lead, or send null to detach it from its campaign. */
   @IsOptional() @IsString()
   campaignId?: string | null;
+
+  // Nullable on update so a follow-up date or engagement signal can be CLEARED, not only
+  // changed — same reason unitId/buildingId/assignedTo are nullable above.
+  @IsOptional() @IsDateString()
+  followUpDate?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  via?: string | null;
+}
+
+
+/**
+ * Activity bodies. This route previously used an inline `@Body() body: { … }` type, which
+ * TypeScript erases at runtime — the ValidationPipe only whitelists against a DTO CLASS,
+ * so nothing here was validated at all and `occurredAt` would have reached Prisma purely
+ * by accident. Declared properly instead.
+ */
+export class AddLeadActivityDto {
+  @IsEnum(LeadActivityType)
+  type!: LeadActivityType;
+
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  note!: string;
+
+  /**
+   * When it HAPPENED. Omit for "just now" — the common case of logging a call as you make
+   * it. Supplied when back-dating from the per-lead calendar.
+   */
+  @IsOptional() @IsDateString()
+  occurredAt?: string;
+}
+
+
+/** Lead discussion thread. Plain text — @mentions are resolved from the body server-side. */
+export class LeadCommentDto {
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  content!: string;
 }

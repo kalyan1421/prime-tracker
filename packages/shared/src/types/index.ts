@@ -224,6 +224,15 @@ export const PERMISSIONS = {
   LEAD_DELETE: 'lead:delete',
   LEAD_CONVERT: 'lead:convert',
 
+  // Site visits (2026-09-21). Deliberately NOT folded into lead:edit — approving a
+  // viewing is a leadership act, while editing a lead is day-to-day sales work, and
+  // reusing lead:edit would hand every rep the confirm button. Same reasoning that
+  // produced the separate siteTracker:* set.
+  SITE_VISIT_VIEW: 'siteVisit:view',
+  SITE_VISIT_REQUEST: 'siteVisit:request',
+  SITE_VISIT_APPROVE: 'siteVisit:approve',
+  AVAILABILITY_MANAGE: 'availability:manage',
+
   // Campaigns (Sprint 2 — marketing-spend attribution)
   CAMPAIGN_VIEW: 'campaign:view',
   CAMPAIGN_CREATE: 'campaign:create',
@@ -305,6 +314,20 @@ export const PERMISSIONS = {
   // Documents
   DOCUMENT_VIEW: 'document:view',
   DOCUMENT_UPLOAD: 'document:upload',
+  /**
+   * Remove a document from the vault (a SOFT delete — `deletedAt` is stamped, the stored
+   * object survives, and the row can be restored).
+   *
+   * This existed but was granted to no role and enforced nowhere: DELETE /documents/:id
+   * required document:upload, so the right to ADD a file was the right to remove anyone
+   * else's. That is the wrong shape for a vault holding DEED, NOC and POSSESSION_CERTIFICATE
+   * records — the codebase already splits add from destroy everywhere else
+   * (PROJECT_HARD_DELETE, BUILDING_HARD_DELETE, UNIT_HISTORY_DELETE).
+   *
+   * The grant below is a conservative DEFAULT, not a client decision: the roles that curate
+   * a document set (Finance, Accounting, PM, Legal) hold it; the roles that mainly contribute
+   * to one (Construction, Sales, Marketing, AR/AP) upload and ask. Prime can widen it.
+   */
   DOCUMENT_DELETE: 'document:delete',
 
   // Comments
@@ -354,6 +377,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
   [UserRole.SUPER_ADMIN]: Object.values(PERMISSIONS),
   [UserRole.FOUNDER]: FOUNDER_PERMISSIONS,
   [UserRole.EXECUTIVE]: [
+    // Client 2026-09-21: Executive approves site visits alongside Founder/Super Admin.
+    // availability:manage is withheld — it is the host's own calendar to publish.
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.SITE_VISIT_APPROVE,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -397,6 +425,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.FINANCE]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.AVAILABILITY_MANAGE,
     PERMISSIONS.RENT_COLLECT,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
@@ -425,6 +456,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.PAYMENT_APPROVE,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.INVESTOR_VIEW,
     PERMISSIONS.INVESTOR_MANAGE,
     PERMISSIONS.COMMENT_VIEW,
@@ -444,6 +476,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.ACCOUNTING]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.AVAILABILITY_MANAGE,
     // rent:collect is worthless without lease:view — the invoice list and
     // summary endpoints it works against both require the read permission.
     PERMISSIONS.LEASE_VIEW,
@@ -466,6 +501,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_VIEW,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.QB_MANAGE,
@@ -478,6 +514,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.AR_AP]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.AVAILABILITY_MANAGE,
     // rent:collect is worthless without lease:view — the invoice list and
     // summary endpoints it works against both require the read permission.
     PERMISSIONS.LEASE_VIEW,
@@ -509,6 +548,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.PROJECT_MANAGER]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.AVAILABILITY_MANAGE,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -536,6 +578,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_EDIT,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.REPORT_PORTFOLIO,
@@ -557,6 +600,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.CONSTRUCTION]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.AVAILABILITY_MANAGE,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -585,6 +631,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.SALES]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    // Publishing YOUR OWN hours, so any role can host a viewing (client, 2026-09-22).
+    // The service still blocks editing somebody else's calendar unless you are leadership.
+    PERMISSIONS.AVAILABILITY_MANAGE,
+    PERMISSIONS.SITE_VISIT_REQUEST,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -617,6 +668,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.MARKETING]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    // Publishing YOUR OWN hours, so any role can host a viewing (client, 2026-09-22).
+    // The service still blocks editing somebody else's calendar unless you are leadership.
+    PERMISSIONS.AVAILABILITY_MANAGE,
+    PERMISSIONS.SITE_VISIT_REQUEST,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_EDIT,
     PERMISSIONS.PROJECT_VIEW,
@@ -650,6 +706,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.UPDATE_BOARD_CREATE,
   ],
   [UserRole.LEGAL]: [
+    PERMISSIONS.SITE_VISIT_VIEW,
+    PERMISSIONS.SITE_VISIT_REQUEST,
+    PERMISSIONS.AVAILABILITY_MANAGE,
     PERMISSIONS.PROJECT_VIEW,
     PERMISSIONS.BUILDING_VIEW,
     PERMISSIONS.UNIT_VIEW,
@@ -662,6 +721,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     PERMISSIONS.CONTRACT_VIEW,
     PERMISSIONS.DOCUMENT_VIEW,
     PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.DOCUMENT_DELETE,
     PERMISSIONS.COMMENT_VIEW,
     PERMISSIONS.COMMENT_EDIT,
     PERMISSIONS.UPDATE_BOARD_VIEW,
@@ -804,6 +864,7 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'investors', label: 'Investors', permissions: ['investor:view', 'investor:manage'] },
   { key: 'comments', label: 'Comments', permissions: ['comment:view', 'comment:edit'] },
   { key: 'reports', label: 'Reports', permissions: ['report:portfolio', 'report:sales', 'report:revenue', 'report:debt'] },
+  { key: 'siteVisits', label: 'Site Visits', permissions: ['siteVisit:view', 'siteVisit:request', 'siteVisit:approve', 'availability:manage'] },
   { key: 'admin', label: 'Administration', permissions: ['user:manage', 'role:manage', 'audit:view', 'quickbooks:manage', 'system:config', 'org:manage'] },
 ];
 

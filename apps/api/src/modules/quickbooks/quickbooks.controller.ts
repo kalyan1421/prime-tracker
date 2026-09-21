@@ -24,14 +24,22 @@ export class QuickbooksController {
     res.redirect(authUrl);
   }
 
+  /**
+   * Necessarily public: Intuit redirects the user's browser here with no bearer token.
+   * `state` is what stands in for authentication — a single-use random value issued by
+   * GET /quickbooks/connect, which requires quickbooks:manage. handleCallback() rejects a
+   * missing, expired, replayed or unrecognised one before it talks to Intuit or writes
+   * anything, so this route can no longer be driven by an anonymous caller.
+   */
   @Get('callback')
   @SetMetadata('isPublic', true)
   async callback(
     @Query('code') code: string,
     @Query('realmId') realmId: string,
+    @Query('state') state: string,
     @Res() res: Response,
   ) {
-    await this.service.handleCallback(code, realmId);
+    await this.service.handleCallback(code, realmId, state);
     const frontendUrl = this.config.get('FRONTEND_URL', 'http://localhost:5173');
     res.redirect(`${frontendUrl}/admin/integrations?qb=connected`);
   }

@@ -19,6 +19,21 @@ import { CurrentUser } from '../../common/decorators/index';
 import { ConfigService } from '@nestjs/config';
 import { GoogleAuthGuard } from './google-auth.guard';
 
+/**
+ * Rate limits on this controller use the throttler name `medium`, NOT `default`.
+ *
+ * ThrottlerModule.forRoot (app.module.ts) registers three NAMED throttlers — short, medium,
+ * long — and no unnamed one. ThrottlerGuard resolves a per-route override by reading the
+ * metadata key `THROTTLER_LIMIT_<name>` for each configured throttler, so `@Throttle({
+ * default: ... })` set a key (`..._default`) that nothing ever looks up: every limit below
+ * was silently discarded and the global ceiling applied instead. That meant 100 requests a
+ * minute against /auth/login and, worse, against /auth/mfa/verify — 100 guesses a minute at
+ * a 6-digit TOTP code, with no account lockout anywhere.
+ *
+ * `medium` is the per-minute tier, so overriding it is what tightens a per-minute limit.
+ * The short (10/sec) and long (1000/15min) tiers still apply on top; all three must pass,
+ * so the tightest wins. throttle-names.spec.ts fails if a `default` key reappears.
+ */
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -29,7 +44,7 @@ export class AuthController {
 
   @Post('login')
   @SetMetadata('isPublic', true)
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Throttle({ medium: { limit: 20, ttl: 60000 } })
   @HttpCode(200)
   @ApiOperation({ summary: 'Login with email and password' })
   async login(@Body() body: { email: string; password: string }) {
@@ -74,7 +89,7 @@ export class AuthController {
 
   @Post('refresh')
   @SetMetadata('isPublic', true)
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @Throttle({ medium: { limit: 30, ttl: 60000 } })
   @HttpCode(200)
   @ApiOperation({ summary: 'Refresh access token' })
   async refresh(@Body() body: { refreshToken: string }) {
@@ -119,7 +134,7 @@ export class AuthController {
   @Post('mfa/disable')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ medium: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Disable MFA by verifying a current TOTP code' })
   async disableMfa(
     @CurrentUser('sub') userId: string,
@@ -132,7 +147,7 @@ export class AuthController {
   @Post('mfa/verify')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ medium: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Verify TOTP for step-up auth' })
   async verifyMfa(
     @CurrentUser('sub') userId: string,
@@ -144,7 +159,7 @@ export class AuthController {
   @Post('change-password')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ medium: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Change your own password (requires the current one)' })
   async changePassword(
     @CurrentUser('sub') userId: string,

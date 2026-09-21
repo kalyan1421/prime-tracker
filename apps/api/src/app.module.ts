@@ -28,6 +28,8 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { LeadsModule } from './modules/leads/leads.module';
+import { SiteVisitsModule } from './modules/site-visits/site-visits.module';
+import { CalendlyModule } from './modules/calendly/calendly.module';
 import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { CashFlowModule } from './modules/cashflow/cashflow.module';
@@ -84,6 +86,8 @@ import { HistoricalDeletionsModule } from './modules/historical-deletions/histor
     CommentsModule,
     NotificationsModule,
     LeadsModule,
+    SiteVisitsModule,
+    CalendlyModule,
     CampaignsModule,
     DashboardModule,
     CashFlowModule,

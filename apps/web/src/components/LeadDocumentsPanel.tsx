@@ -35,12 +35,13 @@ const LEAD_DOC_CATEGORIES = [
 
 export function LeadDocumentsPanel({ leadId }: { leadId: string }) {
   const { hasPermission } = useAuthStore();
-  // Both from `document:upload`, because that is what the server actually gates DELETE
-  // /documents/:id on — there is no `document:delete` permission. Asking for one would
-  // hide the button from everybody, which is the same class of bug as a query that never
-  // runs: a control that can never appear.
+  // `document:delete` is now a real, granted permission and DELETE /documents/:id enforces
+  // it, so the two are gated separately. The note that used to be here — that asking for
+  // document:delete would hide the button from everybody — was true at the time: the
+  // permission was defined but granted to no role. It is now held by Finance, Accounting,
+  // PM and Legal (plus the Founder/Super Admin blanket grants).
   const canUpload = hasPermission('document:upload');
-  const canDelete = canUpload;
+  const canDelete = hasPermission('document:delete');
 
   const { data, isLoading } = useDocuments({ leadId });
   const docs: any[] = Array.isArray(data) ? data : [];

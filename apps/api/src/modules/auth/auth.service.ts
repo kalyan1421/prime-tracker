@@ -283,6 +283,24 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
+    // Deactivated accounts cannot refresh.
+    //
+    // This route is public (it must be — the access token is expired by definition), and it
+    // used to validate only the token ROW. Every REST route re-checks isActive in
+    // jwt.strategy, so a deactivated user could not read data with the result — but
+    // notifications.gateway.ts only calls jwtService.verify(), so they could hold a
+    // WebSocket open and keep receiving live notifications for the refresh token's full
+    // 7-day life by refreshing. Deactivation is the primary offboarding control; it has to
+    // end the session, not just the next request. toggleActive() now revokes outstanding
+    // tokens too, so this is the second line rather than the only one.
+    if (!stored.user.isActive) {
+      await this.prisma.refreshToken.updateMany({
+        where: { userId: stored.user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      throw new UnauthorizedException('Account is deactivated');
+    }
+
     // Rotate: revoke old token
     await this.prisma.refreshToken.update({
       where: { id: stored.id },

@@ -1,4 +1,5 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
@@ -24,6 +25,27 @@ export class QuickbooksService {
   private readonly redirectUri: string;
   /** Feature flag — QB code is unverified against live credentials, so it stays off by default. */
   private readonly enabled: boolean;
+
+  /**
+   * CSRF states issued by getAuthUrl() and not yet consumed, with their expiry.
+   *
+   * The callback is necessarily unauthenticated — Intuit redirects the browser to it with
+   * no bearer token — so `state` is the ONLY thing tying an inbound callback to a connect
+   * request that someone with quickbooks:manage actually started. It used to be
+   * `'prime-tracker-' + Date.now()`: not random, never stored, and never checked. That left
+   * the callback open to anyone on the internet, who could authorize Prime's QB app against
+   * their OWN Intuit company and POST the resulting code here; the server would exchange
+   * it and upsert an active QBConnection, and getConnection() (findFirst on isActive) could
+   * then hand every sync that attacker-controlled realm.
+   *
+   * In-memory on purpose: this is short-lived, single-use data for a flow that completes in
+   * seconds, and the app runs as one pm2 process. A restart mid-flow invalidates the state
+   * and the admin clicks Connect again, which is the correct failure. If the API is ever
+   * scaled to more than one instance this must move to the database or Redis, or callbacks
+   * will land on an instance that never issued the state.
+   */
+  private readonly pendingStates = new Map<string, number>();
+  private static readonly STATE_TTL_MS = 10 * 60 * 1000;
 
   constructor(
     private prisma: PrismaService,
@@ -59,18 +81,57 @@ export class QuickbooksService {
 
   getAuthUrl(): string {
     this.assertEnabled();
+    const state = randomBytes(32).toString('hex');
+    this.pruneExpiredStates();
+    this.pendingStates.set(state, Date.now() + QuickbooksService.STATE_TTL_MS);
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
       response_type: 'code',
       scope: 'com.intuit.quickbooks.accounting',
-      state: 'prime-tracker-' + Date.now(),
+      state,
     });
     return `https://appcenter.intuit.com/connect/oauth2?${params}`;
   }
 
-  async handleCallback(code: string, realmId: string): Promise<void> {
+  private pruneExpiredStates(): void {
+    const now = Date.now();
+    for (const [state, expiresAt] of this.pendingStates) {
+      if (expiresAt <= now) this.pendingStates.delete(state);
+    }
+  }
+
+  /**
+   * Single-use check: a valid state is consumed whether or not the rest of the callback
+   * succeeds, so a leaked one cannot be replayed. Compared with timingSafeEqual over the
+   * set rather than a Map hit, so the check does not leak which prefixes exist.
+   */
+  private consumeState(state: string | undefined): void {
+    this.pruneExpiredStates();
+    const candidate = Buffer.from(state ?? '', 'utf8');
+    let matched: string | undefined;
+    for (const known of this.pendingStates.keys()) {
+      const knownBuf = Buffer.from(known, 'utf8');
+      if (knownBuf.length === candidate.length && timingSafeEqual(knownBuf, candidate)) {
+        matched = known;
+        break;
+      }
+    }
+    if (!matched) {
+      this.logger.warn('QB callback rejected: missing, expired or unrecognised state');
+      throw new ForbiddenException('Invalid or expired QuickBooks authorization state');
+    }
+    this.pendingStates.delete(matched);
+  }
+
+  async handleCallback(code: string, realmId: string, state?: string): Promise<void> {
     this.assertEnabled();
+    // Before anything else, and before any outbound call: an unauthenticated caller must
+    // not be able to make this endpoint talk to Intuit or write to the database.
+    this.consumeState(state);
+    if (!code || !realmId) {
+      throw new BadRequestException('QuickBooks callback is missing code or realmId');
+    }
     const tokenUrl = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
     const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
 
@@ -310,8 +371,19 @@ export class QuickbooksService {
 
   // ---- Connection Management ----
 
+  /**
+   * The connection every sync runs against.
+   *
+   * Ordered, not just `findFirst`: with no orderBy the row returned is whatever Postgres
+   * happens to hand back, so if more than one active connection ever exists the app would
+   * sync from an arbitrary one. Newest-first makes "the most recently connected company
+   * wins" an explicit rule rather than an accident of physical row order.
+   */
   async getConnection() {
-    return this.prisma.qBConnection.findFirst({ where: { isActive: true } });
+    return this.prisma.qBConnection.findFirst({
+      where: { isActive: true },
+      orderBy: { updatedAt: 'desc' },
+    });
   }
 
   async getSyncLogs(limit = 20) {
