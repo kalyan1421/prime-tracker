@@ -16,6 +16,8 @@ const mockPrisma = {
   lease: { findMany: jest.fn() },
   document: { findMany: jest.fn() },
   unit: { findMany: jest.fn() },
+  siteVisit: { findMany: jest.fn() },
+  orgSettings: { findFirst: jest.fn() },
 };
 const mockNotifications = {
   notifyPaymentOverdue: jest.fn(),
@@ -27,6 +29,8 @@ const mockNotifications = {
   notifyDocumentExpiring: jest.fn(),
   notifyDocumentExpired: jest.fn(),
   notifySiteUpdateStale: jest.fn(),
+  notifySiteVisitTomorrow: jest.fn(),
+  notifySiteVisitMissed: jest.fn(),
 };
 // runDailyChecks generates the rent ledger before reading it; the per-check tests
 // below call the checks directly, so a no-op stub is enough.
@@ -622,7 +626,10 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     // 2026-08-26: +4 for the Update Board (UPDATE_BOARD_POSTED/_COMMENT_MENTION/
     // _ASSIGNED/_DUE_SOON) — 36 -> 40.
     // 2026-09-02: +1 for SITE_UPDATE_STALE — 40 -> 41.
-    expect(Object.values(NotificationType)).toHaveLength(41);
+    // 2026-09-21: +6 for site-visit scheduling (REQUESTED/CONFIRMED/REJECTED/RESCHEDULED/
+    // TOMORROW/MISSED) — 41 -> 47.
+    // 2026-09-21: +1 for LEAD_COMMENT_MENTION (lead discussion thread) — 47 -> 48.
+    expect(Object.values(NotificationType)).toHaveLength(48);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {
@@ -1360,5 +1367,119 @@ describe('ScheduledNotificationsService.checkStaleSiteUpdates', () => {
       .mockRejectedValueOnce(new Error('smtp down'))
       .mockResolvedValueOnce(undefined);
     await expect((svc() as any).checkStaleSiteUpdates()).resolves.toBe(1);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Site-visit sweeps.
+//
+// The two halves of "a confirmed visit that nobody is thinking about": the nudge the day
+// before, and the chase once it has passed with nothing recorded.
+// ---------------------------------------------------------------------------
+describe('ScheduledNotificationsService — site visits', () => {
+  let service: any;
+
+  const visit = (over: Record<string, any> = {}) => ({
+    id: 'v1', hostId: 'h1', requestedById: 'r1',
+    startsAt: new Date('2026-10-01T15:00:00Z'), endsAt: new Date('2026-10-01T16:00:00Z'),
+    timezone: 'America/Chicago', completedAt: null,
+    lead: { name: 'Rahul', phone: '+1 555 0100' },
+    unit: { unitNumber: '101' }, building: null,
+    ...over,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new ScheduledNotificationsService(
+      mockPrisma as any, mockNotifications as any, mockRentInvoices as any, mockEncryption as any);
+    mockPrisma.siteVisit.findMany.mockResolvedValue([]);
+    mockPrisma.orgSettings.findFirst.mockResolvedValue(null);
+  });
+
+  describe('checkSiteVisitsTomorrow', () => {
+    it('asks only for CONFIRMED visits inside a one-day window', async () => {
+      await service.checkSiteVisitsTomorrow();
+      const { where } = mockPrisma.siteVisit.findMany.mock.calls[0][0];
+      expect(where.status).toBe('CONFIRMED');
+      expect(where.startsAt.gte).toBeInstanceOf(Date);
+      expect(where.startsAt.lt.getTime() - where.startsAt.gte.getTime()).toBe(86_400_000);
+    });
+
+    it('excludes archived projects', async () => {
+      await service.checkSiteVisitsTomorrow();
+      const { where } = mockPrisma.siteVisit.findMany.mock.calls[0][0];
+      expect(where.project).toEqual({ deletedAt: null });
+    });
+
+    it('reminds the host and the requester, not a role', async () => {
+      mockPrisma.siteVisit.findMany.mockResolvedValue([visit()]);
+      await service.checkSiteVisitsTomorrow();
+      expect(mockNotifications.notifySiteVisitTomorrow).toHaveBeenCalledWith(
+        expect.objectContaining({ userIds: ['h1', 'r1'], leadName: 'Rahul' }));
+    });
+
+    it('carries the lead phone so the reminder is actionable', async () => {
+      mockPrisma.siteVisit.findMany.mockResolvedValue([visit()]);
+      await service.checkSiteVisitsTomorrow();
+      expect(mockNotifications.notifySiteVisitTomorrow.mock.calls[0][0].leadPhone).toBe('+1 555 0100');
+    });
+
+    it('formats the time in the visit timezone, not the host machine', async () => {
+      mockPrisma.siteVisit.findMany.mockResolvedValue([visit()]);
+      await service.checkSiteVisitsTomorrow();
+      // 15:00 UTC on 1 Oct is 10:00 CDT. Asserting the rendered string keeps this
+      // independent of wherever the tests happen to run.
+      expect(mockNotifications.notifySiteVisitTomorrow.mock.calls[0][0].whenLabel).toContain('10:00 AM');
+    });
+
+    it('one failure does not stop the rest', async () => {
+      mockPrisma.siteVisit.findMany.mockResolvedValue([visit({ id: 'v1' }), visit({ id: 'v2' })]);
+      mockNotifications.notifySiteVisitTomorrow.mockRejectedValueOnce(new Error('smtp down'));
+      await expect(service.checkSiteVisitsTomorrow()).resolves.toBe(1);
+    });
+  });
+
+  describe('checkMissedSiteVisits', () => {
+    it('uses the configured grace period rather than a constant', async () => {
+      mockPrisma.orgSettings.findFirst.mockResolvedValue({ siteVisitMissedGraceHours: 5 });
+      const before = Date.now();
+      await service.checkMissedSiteVisits();
+      const { where } = mockPrisma.siteVisit.findMany.mock.calls[0][0];
+      const graceMs = before - where.endsAt.lt.getTime();
+      expect(graceMs).toBeGreaterThanOrEqual(5 * 3_600_000 - 1000);
+      expect(graceMs).toBeLessThan(6 * 3_600_000);
+    });
+
+    it('falls back to 2h when no settings row exists', async () => {
+      const before = Date.now();
+      await service.checkMissedSiteVisits();
+      const { where } = mockPrisma.siteVisit.findMany.mock.calls[0][0];
+      const graceMs = before - where.endsAt.lt.getTime();
+      expect(graceMs).toBeGreaterThanOrEqual(2 * 3_600_000 - 1000);
+      expect(graceMs).toBeLessThan(3 * 3_600_000);
+    });
+
+    it('only chases visits with NO outcome recorded', async () => {
+      await service.checkMissedSiteVisits();
+      const { where } = mockPrisma.siteVisit.findMany.mock.calls[0][0];
+      // completedAt is set for NO_SHOW as well as COMPLETED, so a visit the lead skipped
+      // is resolved and stops being chased.
+      expect(where.completedAt).toBeNull();
+      expect(where.status).toBe('CONFIRMED');
+    });
+
+    it('raises one alert per visit, deduped by the visit id', async () => {
+      mockPrisma.siteVisit.findMany.mockResolvedValue([visit()]);
+      await service.checkMissedSiteVisits();
+      expect(mockNotifications.notifySiteVisitMissed).toHaveBeenCalledWith(
+        expect.objectContaining({ visitId: 'v1', userIds: ['h1', 'r1'] }));
+    });
+
+    it('one failure does not stop the rest', async () => {
+      mockPrisma.siteVisit.findMany.mockResolvedValue([visit({ id: 'v1' }), visit({ id: 'v2' })]);
+      mockNotifications.notifySiteVisitMissed.mockRejectedValueOnce(new Error('boom'));
+      await expect(service.checkMissedSiteVisits()).resolves.toBe(1);
+    });
   });
 });
