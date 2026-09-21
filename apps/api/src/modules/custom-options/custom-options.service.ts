@@ -60,6 +60,19 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
     { value: 'LOST',          label: 'Lost',          color: 'danger'    },
     { value: 'DEAD',          label: 'Dead',          color: 'default'   },
   ],
+  // The ENGAGEMENT SIGNAL that produced a lead, mirroring the "VIA" column on the
+  // client's monday board. Distinct from lead_source: source is the PORTAL the lead came
+  // from (LOOPNET, CREXI), via is what they DID there. A lead can be LOOPNET + FAVORITED
+  // or LOOPNET + DOWNLOAD_OM, so collapsing the two would lose real signal.
+  lead_via: [
+    { value: 'PHONE',        label: 'Phone',          color: 'primary'   },
+    { value: 'EMAIL_LEAD',   label: 'Email Lead',     color: 'secondary' },
+    { value: 'FAVORITED',    label: 'Favorited',      color: 'danger'    },
+    { value: 'DOWNLOAD_OM',  label: 'Downloaded OM',  color: 'warning'   },
+    { value: 'VIEW_LISTING', label: 'Viewed Listing', color: 'success'   },
+    { value: 'WALK_IN',      label: 'Walk In',        color: 'default'   },
+    { value: 'OTHER',        label: 'Other',          color: 'default'   },
+  ],
   milestone_status: [
     { value: 'NOT_STARTED', label: 'Not Started', color: 'default'  },
     { value: 'IN_PROGRESS', label: 'In Progress', color: 'primary'  },

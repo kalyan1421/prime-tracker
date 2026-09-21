@@ -16,6 +16,7 @@ import CampaignsPage from './pages/CampaignsPage';
 import VacancyReportPage from './pages/VacancyReportPage';
 import BuildingDetailPage from './pages/BuildingDetailPage';
 import SettingsPage from './pages/SettingsPage';
+import VisitAvailabilityPage from './pages/VisitAvailabilityPage';
 import ProfilePage from './pages/ProfilePage';
 import FounderDashboardPage from './pages/FounderDashboardPage';
 import ConstructionDashboardPage from './pages/ConstructionDashboardPage';
@@ -118,6 +119,10 @@ export default function App() {
         <Route path="receivables" element={<ProtectedRoute permission="financial:view"><ReceivablesPage /></ProtectedRoute>} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="settings/notifications" element={<SettingsPage />} />
+        <Route
+          path="settings/availability"
+          element={<ProtectedRoute permission="siteVisit:view"><VisitAvailabilityPage /></ProtectedRoute>}
+        />
         <Route path="dashboard/founder" element={<ProtectedRoute permission="unit:view"><FounderDashboardPage /></ProtectedRoute>} />
         <Route path="dashboard/construction" element={<ProtectedRoute permission="unit:view"><ConstructionDashboardPage /></ProtectedRoute>} />
         <Route path="dashboard/sales" element={<ProtectedRoute permission="unit:view"><SalesDashboardPage /></ProtectedRoute>} />

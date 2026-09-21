@@ -8,6 +8,7 @@ import { FiAlertTriangle, FiTrendingUp, FiMessageSquare } from 'react-icons/fi';
 import { useFounderDashboard, useRecentComments, useExceptions } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
+import { SiteVisitAttentionCard } from '../components/SiteVisitAttentionCard';
 import { useAuthStore } from '../store/authStore';
 import { CommentChip, type CommentType } from '../components/CommentChip';
 import { ExceptionFeed } from '../components/ExceptionFeed';
@@ -74,6 +75,9 @@ export default function FounderDashboardPage() {
   return (
     <div>
       <h1 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Founder Dashboard</h1>
+
+      {/* Renders nothing when the queue is empty — see SiteVisitAttentionCard. */}
+      <div className="mb-4 sm:mb-6"><SiteVisitAttentionCard /></div>
 
       {/* Zone A — Portfolio Health Bar */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">

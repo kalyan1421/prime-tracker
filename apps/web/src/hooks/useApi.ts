@@ -1529,7 +1529,14 @@ export function useLeadDashboard(params?: { projectId?: string }) {
 }
 
 export function useLeads(
-  params?: { projectId?: string; status?: string; source?: string; unitId?: string; assignedTo?: string; unassigned?: boolean; search?: string; brokerId?: string },
+  // campaignId was missing here while the API supported it end-to-end, so the campaign
+  // filter was unreachable from the UI for purely type-level reasons. `source` was the
+  // mirror image: present here, silently ignored by the service. Both are real now.
+  params?: {
+    projectId?: string; status?: string; source?: string; unitId?: string;
+    assignedTo?: string; unassigned?: boolean; search?: string; brokerId?: string;
+    campaignId?: string; via?: string; followUpBefore?: string;
+  },
   // The lead:view check that used to live here is now `can`, below. The parameter
   // remains for callers that suppress the fetch for their own reasons.
   enabled = true,
@@ -1594,7 +1601,21 @@ export function useAddLeadActivity() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['lead-activities', vars.leadId] });
       qc.invalidateQueries({ queryKey: ['lead', vars.leadId] });
+      // The list carries callCount / lastCall per row, and the calendar reads the
+      // per-date roll-up — both go stale the moment an activity is logged.
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      qc.invalidateQueries({ queryKey: ['lead-calls', vars.leadId] });
     },
+  });
+}
+
+/** Call count, last call with its note, and the per-date roll-up the calendar dots. */
+export function useLeadCalls(leadId?: string) {
+  const can = useCan('lead:view');
+  return useQuery({
+    queryKey: ['lead-calls', leadId],
+    queryFn: () => api.get(`/leads/${leadId}/calls`).then((r) => r.data),
+    enabled: can && !!leadId,
   });
 }
 
@@ -3976,5 +3997,209 @@ export function useActivityActors() {
     queryKey: ['activity-actors'],
     queryFn: () => api.get('/audit/activity/actors').then((r) => r.data),
     enabled: can,
+  });
+}
+
+// ---- Site Visits ----------------------------------------------------------
+// Scheduling: the host publishes availability, a rep books an open slot, leadership
+// confirms. See docs/client-discovery/LEADS_BOARD_AND_SITE_VISIT_SPEC.md.
+
+/** The dashboard queue. Shape depends on the viewer: approvers get `pending`, reps get `mine`. */
+export function useSiteVisitAttention() {
+  const can = useCan('siteVisit:view');
+  return useQuery({
+    queryKey: ['site-visits', 'attention'],
+    queryFn: () => api.get('/site-visits/attention').then((r) => r.data),
+    enabled: can,
+    // The card is a queue somebody else fills, so it goes stale on its own — same 30s
+    // cadence the notification bell already polls at.
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSiteVisits(params?: {
+  status?: string; hostId?: string; leadId?: string; requestedById?: string; from?: string; to?: string;
+}) {
+  const can = useCan('siteVisit:view');
+  return useQuery({
+    queryKey: ['site-visits', params],
+    queryFn: () => api.get('/site-visits', { params }).then((r) => r.data),
+    enabled: can,
+  });
+}
+
+/** Bookable slots. Disabled until a host and range are chosen — there is nothing to ask for otherwise. */
+export function useVisitSlots(params: { hostId?: string; from?: string; to?: string }) {
+  const can = useCan('siteVisit:view');
+  return useQuery({
+    queryKey: ['visit-slots', params],
+    queryFn: () => api.get('/visit-availability/slots', { params }).then((r) => r.data),
+    enabled: can && !!params.hostId && !!params.from && !!params.to,
+  });
+}
+
+export function useVisitPolicy() {
+  const can = useCan('siteVisit:view');
+  return useQuery({
+    queryKey: ['visit-policy'],
+    queryFn: () => api.get('/visit-availability/policy').then((r) => r.data),
+    enabled: can,
+  });
+}
+
+export function useVisitAvailability(hostId?: string) {
+  const can = useCan('siteVisit:view');
+  return useQuery({
+    queryKey: ['visit-availability', hostId],
+    queryFn: () => api.get('/visit-availability', { params: hostId ? { hostId } : undefined }).then((r) => r.data),
+    enabled: can,
+  });
+}
+
+/**
+ * Booking, deciding and moving all invalidate BOTH site-visits and visit-slots: a slot
+ * that was just taken must disappear from every open picker, and one just freed by a
+ * rejection must come back. Leaving slots cached is how a picker starts offering times
+ * that 409 the moment anyone clicks them.
+ */
+const invalidateVisits = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['site-visits'] });
+  qc.invalidateQueries({ queryKey: ['visit-slots'] });
+  qc.invalidateQueries({ queryKey: ['leads'] });
+};
+
+export function useRequestSiteVisit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/site-visits', data).then((r) => r.data),
+    onSuccess: () => invalidateVisits(qc),
+  });
+}
+
+export function useDecideSiteVisit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, confirmed, decisionNote }: { id: string; confirmed: boolean; decisionNote?: string }) =>
+      api.post(`/site-visits/${id}/decide`, { confirmed, decisionNote }).then((r) => r.data),
+    onSuccess: () => invalidateVisits(qc),
+  });
+}
+
+export function useRescheduleSiteVisit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; startsAt: string; endsAt?: string; reason?: string }) =>
+      api.post(`/site-visits/${id}/reschedule`, body).then((r) => r.data),
+    onSuccess: () => invalidateVisits(qc),
+  });
+}
+
+export function useCancelSiteVisit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      api.post(`/site-visits/${id}/cancel`, { reason }).then((r) => r.data),
+    onSuccess: () => invalidateVisits(qc),
+  });
+}
+
+export function useRecordVisitOutcome() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, result, note }: { id: string; result: string; note?: string }) =>
+      api.post(`/site-visits/${id}/outcome`, { result, note }).then((r) => r.data),
+    onSuccess: () => invalidateVisits(qc),
+  });
+}
+
+export function useCreateAvailability() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.post('/visit-availability', data).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['visit-availability'] }); qc.invalidateQueries({ queryKey: ['visit-slots'] }); },
+  });
+}
+
+export function useUpdateAvailability() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put(`/visit-availability/${id}`, data).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['visit-availability'] }); qc.invalidateQueries({ queryKey: ['visit-slots'] }); },
+  });
+}
+
+export function useDeleteAvailability() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/visit-availability/${id}`).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['visit-availability'] }); qc.invalidateQueries({ queryKey: ['visit-slots'] }); },
+  });
+}
+
+// ---- Lead discussion thread -----------------------------------------------
+// Conversation ABOUT a lead, kept separate from the activity log that records what was
+// DONE to it. @mentions are resolved server-side from the plain-text body.
+
+export function useLeadComments(leadId?: string) {
+  const can = useCan('lead:view');
+  return useQuery({
+    queryKey: ['lead-comments', leadId],
+    queryFn: () => api.get(`/leads/${leadId}/comments`).then((r) => r.data),
+    enabled: can && !!leadId,
+  });
+}
+
+export function useAddLeadComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leadId, content }: { leadId: string; content: string }) =>
+      api.post(`/leads/${leadId}/comments`, { content }).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['lead-comments', vars.leadId] }),
+  });
+}
+
+export function useUpdateLeadComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ commentId, content }: { commentId: string; content: string; leadId: string }) =>
+      api.put(`/leads/comments/${commentId}`, { content }).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['lead-comments', vars.leadId] }),
+  });
+}
+
+export function useDeleteLeadComment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ commentId }: { commentId: string; leadId: string }) =>
+      api.delete(`/leads/comments/${commentId}`).then((r) => r.data),
+    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['lead-comments', vars.leadId] }),
+  });
+}
+
+/** One visit by id. Used to resolve a legacy `/leads?visit=<id>` deep link to its lead. */
+export function useSiteVisit(id?: string) {
+  const can = useCan('siteVisit:view');
+  return useQuery({
+    queryKey: ['site-visit', id],
+    queryFn: () => api.get(`/site-visits/${id}`).then((r) => r.data),
+    enabled: can && !!id,
+  });
+}
+
+/**
+ * Publish several availability rules in one request — a full week, every day, a month.
+ * Deliberately ONE call: the throttler truncates parallel per-item write loops, so seven
+ * separate posts can silently land as four.
+ */
+export function useCreateAvailabilityBulk() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rules: Record<string, unknown>[]) =>
+      api.post('/visit-availability/bulk', { rules }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['visit-availability'] });
+      qc.invalidateQueries({ queryKey: ['visit-slots'] });
+    },
   });
 }

@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDashboard, useLeads } from '../hooks/useApi';
 import { fmt, fmtDate } from '../utils/fmt';
 import { StatCard, StatusBadge, LoadingState, ErrorState } from '../components/ui';
+import { SiteVisitAttentionCard } from '../components/SiteVisitAttentionCard';
 import { useAuthStore } from '../store/authStore';
 
 const PHASE_COLORS: Record<string, string> = {
@@ -162,6 +163,8 @@ export default function DashboardPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-6">Portfolio Dashboard</h1>
+
+      <div className="mb-6"><SiteVisitAttentionCard /></div>
 
       {/* FOUNDER: Two-column layout */}
       {isFounder && (

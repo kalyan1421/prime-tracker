@@ -8,7 +8,7 @@ import {
   FiHome, FiFolder, FiSettings, FiLogOut, FiChevronDown, FiShield, FiUser,
   FiMenu, FiPieChart, FiBell, FiUsers, FiCheck, FiTarget, FiBriefcase,
   FiCheckSquare, FiPackage, FiX, FiBarChart2, FiGrid, FiTrendingUp, FiTrendingDown,
-  FiRss, FiTool, FiDollarSign, FiMessageSquare, FiFileText, FiColumns,
+  FiRss, FiTool, FiDollarSign, FiMessageSquare, FiFileText, FiColumns, FiCalendar,
 } from 'react-icons/fi';
 import type { IconType } from 'react-icons';
 import { useEffect, useState } from 'react';
@@ -31,6 +31,7 @@ const BASE_NAV_ITEMS = [
   { label: 'Receivables', icon: FiTrendingDown, path: '/receivables', permission: 'financial:view' },
   { label: 'Tasks', icon: FiCheckSquare, path: '/tasks', permission: 'task:view' },
   { label: 'Leads', icon: FiTarget, path: '/leads', permission: 'lead:view' },
+  { label: 'Site Visits', icon: FiCalendar, path: '/settings/availability', permission: 'siteVisit:view' },
   { label: 'Ads & Campaigns', icon: FiBarChart2, path: '/campaigns', permission: 'campaign:view' },
   { label: 'Investors', icon: FiBriefcase, path: '/investors', permission: 'investor:view' },
   { label: 'Brokers', icon: FiUsers, path: '/brokers', permission: 'broker:view' },
