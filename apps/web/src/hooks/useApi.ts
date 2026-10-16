@@ -2734,6 +2734,10 @@ export function useUntrackUnit() {
       api.delete(`/units/${unitId}/site-tracker`).then((r) => r.data as {
         stagesDeleted: number; photosDeleted: number; updatesUnpinned: number;
         assigneesCleared: number; blockerCleared: boolean;
+        /** Other units released from this row's job (it led one). */
+        unitsReleased?: number;
+        /** The unit was a member of a job and has simply left it. */
+        leftJob?: boolean;
       }),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['site-tracker'] });
@@ -2799,6 +2803,69 @@ export function useSetUnitAssignees() {
     mutationFn: ({ unitId, userIds }: { unitId: string; userIds: string[] }) =>
       api.put(`/units/${unitId}/assignees`, { userIds }).then((r) => r.data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['site-tracker'] }); },
+  });
+}
+
+/**
+ * Which other units this unit's tracker row covers — one job across several units
+ * ("Units 805, 807, 809"). Full replacement; [] makes it a single-unit row again.
+ */
+export function useSetSiteGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, unitIds }: { unitId: string; unitIds: string[] }) =>
+      api.put(`/units/${unitId}/site-group`, { unitIds }).then((r) => r.data as {
+        leadId: string; label: string; units: { id: string; unitNumber: string }[];
+      }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['site-tracker'] });
+      qc.invalidateQueries({ queryKey: ['unit', vars.unitId] });
+    },
+  });
+}
+
+/** Follow (or stop following) a unit's site notifications without being an owner. */
+export function useWatchUnit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, watch }: { unitId: string; watch: boolean }) =>
+      (watch ? api.post(`/units/${unitId}/watch`) : api.delete(`/units/${unitId}/watch`)).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['site-tracker'] }); },
+  });
+}
+
+export interface SiteTrackerImportResult {
+  applied: boolean;
+  groups: { name: string; projectId: string | null; candidates: { id: string; name: string }[] }[];
+  rows: {
+    group: string; row: number; label: string;
+    status: 'ready' | 'imported' | 'skipped' | 'unmatched' | 'error';
+    projectId: string | null; building: string | null;
+    units: { id: string; unitNumber: string }[];
+    stages: number; blocker: 'YES' | 'NO' | null; priority: string | null;
+    owners: string[]; messages: string[];
+  }[];
+  warnings: string[];
+  totals: Record<'ready' | 'imported' | 'skipped' | 'unmatched' | 'error', number>;
+}
+
+/** Preview (apply=false) or apply the monday Site Tracker export. Founder / Super Admin. */
+export function useSiteTrackerImport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, apply, projectMap }: { file: File; apply: boolean; projectMap: Record<string, string> }) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('apply', apply ? 'true' : 'false');
+      form.append('projectMap', JSON.stringify(projectMap));
+      return api.post('/site-tracker/import', form).then((r) => r.data as SiteTrackerImportResult);
+    },
+    onSuccess: (data) => {
+      if (data.applied) {
+        qc.invalidateQueries({ queryKey: ['site-tracker'] });
+        qc.invalidateQueries({ queryKey: ['construction-rollup'] });
+      }
+    },
   });
 }
 

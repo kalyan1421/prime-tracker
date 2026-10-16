@@ -36,6 +36,10 @@ const TYPE_LABELS: Record<string, { label: string; description: string; group: s
   UPDATE_BOARD_COMMENT_MENTION:{ label: 'Mentioned on an Update',  description: 'When you are @mentioned in an Update Board chat reply', group: 'Update Board' },
   UPDATE_BOARD_ASSIGNED:       { label: 'Tagged on an Update',     description: 'When you are tagged on an Update Board post', group: 'Update Board' },
   UPDATE_BOARD_DUE_SOON:       { label: 'Update Due Soon',         description: 'When an Update Board post you are tagged on is due within 3 days or overdue', group: 'Update Board' },
+  SITE_UPDATE_POSTED:    { label: 'Site Update Posted',         description: 'When someone posts or replies on a unit you own or watch (PMs and Founders get every unit on their projects)', group: 'Site Tracker' },
+  SITE_UNIT_ASSIGNED:    { label: 'Made a Unit Owner',          description: 'When someone adds you as an owner of a unit on the Site Tracker', group: 'Site Tracker' },
+  SITE_BLOCKER_FLAGGED:  { label: 'Unit Flagged Blocked',       description: 'When a unit you own or watch is flagged blocked', group: 'Site Tracker' },
+  SITE_UPDATE_STALE:     { label: 'No Site Update for a Week',  description: 'When a tracked unit has had no site update for 7 days', group: 'Site Tracker' },
 };
 
 /**
@@ -61,6 +65,10 @@ export const TYPE_TIER: Record<string, 'ACTION' | 'FYI'> = {
   UPDATE_BOARD_COMMENT_MENTION: 'ACTION',
   UPDATE_BOARD_ASSIGNED: 'ACTION',
   UPDATE_BOARD_DUE_SOON: 'ACTION',
+  SITE_UNIT_ASSIGNED: 'ACTION',
+  SITE_BLOCKER_FLAGGED: 'ACTION',
+  SITE_UPDATE_POSTED: 'FYI',
+  SITE_UPDATE_STALE: 'FYI',
   DRAW_REQUEST_APPROVED: 'FYI',
   DRAW_REQUEST_FUNDED: 'FYI',
   COMMENT_FINANCIAL: 'FYI',

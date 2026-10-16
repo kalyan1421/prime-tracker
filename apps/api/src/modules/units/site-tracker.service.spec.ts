@@ -2,7 +2,8 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { UnitsService } from './units.service';
 
 const mockPrisma: any = {
-  unit: { findUnique: jest.fn(), update: jest.fn() },
+  unit: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn(), updateMany: jest.fn(() => ({ count: 0 })) },
+  unitWatcher: { upsert: jest.fn(), deleteMany: jest.fn() },
   user: { findMany: jest.fn() },
   customOption: { findFirst: jest.fn() },
   unitAssignee: { deleteMany: jest.fn(), createMany: jest.fn(), findMany: jest.fn(), count: jest.fn() },
@@ -240,6 +241,8 @@ describe('UnitsService.untrackFromSiteTracker', () => {
       updatesUnpinned: 4,
       assigneesCleared: 2,
       blockerCleared: true,
+      // No members: this unit led no multi-unit job.
+      unitsReleased: 0,
     });
   });
 

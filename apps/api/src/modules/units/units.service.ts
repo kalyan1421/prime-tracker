@@ -1,7 +1,9 @@
 import {
   Injectable, NotFoundException, BadRequestException,
-  ConflictException, ForbiddenException,
+  ConflictException, ForbiddenException, Logger, Optional,
 } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
+import { loadSiteUnitContext, compareUnitNumbers, siteUnitLabel } from '../site-tracker/site-unit-context';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
@@ -42,12 +44,15 @@ function plural(n: number, noun: string) {
 
 @Injectable()
 export class UnitsService {
+  private readonly logger = new Logger(UnitsService.name);
+
   constructor(
     private prisma: PrismaService,
     private access: ProjectAccessService,
     private encryption: EncryptionService,
     private statusEvents: UnitStatusEventService,
     private customOptions: CustomOptionsService,
+    @Optional() private notifications?: NotificationsService,
   ) {}
 
   // ---- Reads ----
@@ -147,6 +152,10 @@ export class UnitsService {
           select: { user: { select: { id: true, name: true, email: true } } },
           orderBy: { assignedAt: 'asc' },
         },
+        // One job across several units (Site Tracker). The unit page of a MEMBER points to
+        // its lead instead of showing an empty checklist; a lead lists what it covers.
+        trackedWith: { select: { id: true, unitNumber: true } },
+        trackedUnits: { where: { deletedAt: null }, select: { id: true, unitNumber: true } },
         // Blast radius for the delete dialog — every live record that goes dark with the
         // unit. `loans` was missing, so a unit carrying debt looked free to archive.
         _count: { select: { comments: true, sales: { where: { deletedAt: null } }, leases: { where: { deletedAt: null } }, loans: { where: { deletedAt: null } } } },
@@ -551,7 +560,15 @@ export class UnitsService {
     // `onDelete: Cascade`), permanently erasing financial history. `force` only
     // bypasses the "has history" guard above now; it no longer changes *how* the
     // delete happens.
-    return this.prisma.unit.update({ where: { id }, data: { deletedAt: new Date() } });
+    // A unit that LEADS a multi-unit job on the Site Tracker takes the job's row with it;
+    // its members would otherwise stay pointed at an archived unit and vanish from the
+    // board (a member is drawn only inside its lead's row). Release them instead. The FK's
+    // SetNull only fires on a hard delete, which this is not.
+    const [, archived] = await this.prisma.$transaction([
+      this.prisma.unit.updateMany({ where: { trackedWithId: id }, data: { trackedWithId: null } }),
+      this.prisma.unit.update({ where: { id }, data: { deletedAt: new Date(), trackedWithId: null } }),
+    ]);
+    return archived;
   }
 
   // ---- Cross-Project Inventory ----
@@ -699,9 +716,10 @@ export class UnitsService {
   ) {
     const unit = await this.prisma.unit.findUnique({
       where: { id },
-      select: { id: true, deletedAt: true, blockerStatus: true, blockerReason: true },
+      select: { id: true, deletedAt: true, blockerStatus: true, blockerReason: true, trackedWithId: true },
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+    await this.assertNotGroupMember(unit);
 
     const data: Record<string, unknown> = {};
 
@@ -743,17 +761,57 @@ export class UnitsService {
     if (Object.keys(data).length === 0) return this.findById(id);
 
     await this.prisma.unit.update({ where: { id }, data: data as any });
+
+    // Only on the flip TO blocked. Editing the reason of a unit that is already blocked,
+    // or re-saving the dialog, must not re-alert everybody.
+    if (data.blockerStatus === 'YES' && unit.blockerStatus !== 'YES') {
+      void this.notifyBlocker(id, String(nextReason ?? ''), userId)
+        .catch((e) => this.logger.warn(`Blocker notification failed: ${e}`));
+    }
     return this.findById(id);
+  }
+
+  private async notifyBlocker(unitId: string, reason: string, actorId?: string) {
+    if (!this.notifications) return;
+    const ctx = await loadSiteUnitContext(this.prisma, unitId);
+    if (!ctx) return;
+    const actor = actorId
+      ? await this.prisma.user.findUnique({ where: { id: actorId }, select: { name: true } })
+      : null;
+    await this.notifications.notifySiteBlockerFlagged({
+      unitId: ctx.unitId, unitLabel: ctx.label, projectId: ctx.projectId, projectName: ctx.projectName,
+      reason, actorId: actorId ?? null, actorName: actor?.name ?? null,
+    });
+  }
+
+  /**
+   * A member of a multi-unit job has no tracker fields of its own — they live on the lead,
+   * and the member is drawn inside the lead's row. Writing a blocker, priority or owners
+   * onto the member would store data no screen shows. Say where to make the change instead.
+   */
+  private async assertNotGroupMember(unit: { trackedWithId: string | null }) {
+    if (!unit.trackedWithId) return;
+    const lead = await this.prisma.unit.findUnique({
+      where: { id: unit.trackedWithId }, select: { unitNumber: true },
+    });
+    throw new ConflictException(
+      `This unit is tracked as part of Unit ${lead?.unitNumber ?? 'another unit'}'s job — make the change on that row.`,
+    );
   }
 
   /** Full replacement of the unit's site owners. Multi-assign; send [] to clear. */
   async setAssignees(id: string, userIds: string[], actingUserId?: string) {
     const unit = await this.prisma.unit.findUnique({
-      where: { id }, select: { id: true, deletedAt: true },
+      where: { id }, select: { id: true, deletedAt: true, trackedWithId: true },
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+    await this.assertNotGroupMember(unit);
 
     const wanted = [...new Set(userIds.filter(Boolean))];
+    const before = new Set(
+      (await this.prisma.unitAssignee.findMany({ where: { unitId: id }, select: { userId: true } }))
+        .map((a) => a.userId),
+    );
     if (wanted.length > 0) {
       const found = await this.prisma.user.findMany({
         where: { id: { in: wanted }, isActive: true },
@@ -779,11 +837,131 @@ export class UnitsService {
         : []),
     ]);
 
+    // Only the people ADDED by this call. The PUT replaces the whole set, so without the
+    // diff every tick of the owner picker would re-notify everybody already on the unit.
+    const added = wanted.filter((u) => !before.has(u));
+    if (added.length > 0) {
+      void this.notifyAssigned(id, added, actingUserId)
+        .catch((e) => this.logger.warn(`Assignment notification failed: ${e}`));
+    }
+
     return this.prisma.unitAssignee.findMany({
       where: { unitId: id },
       include: { user: { select: { id: true, name: true, email: true } } },
       orderBy: { assignedAt: 'asc' },
     });
+  }
+
+  private async notifyAssigned(unitId: string, userIds: string[], actorId?: string) {
+    if (!this.notifications) return;
+    const ctx = await loadSiteUnitContext(this.prisma, unitId);
+    if (!ctx) return;
+    const actor = actorId
+      ? await this.prisma.user.findUnique({ where: { id: actorId }, select: { name: true } })
+      : null;
+    await this.notifications.notifySiteUnitAssigned({
+      unitId: ctx.unitId, unitLabel: ctx.label, projectId: ctx.projectId, projectName: ctx.projectName,
+      userIds, actorId: actorId ?? null, actorName: actor?.name ?? null,
+    });
+  }
+
+  // ---- Site Tracker: watching ----
+
+  /** Follow a unit's site notifications without being one of its owners. Idempotent. */
+  async watch(id: string, userId: string) {
+    const unit = await this.prisma.unit.findUnique({ where: { id }, select: { deletedAt: true, trackedWithId: true } });
+    if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+    // Watching a member means watching its job — the notifications come from the lead.
+    const unitId = unit.trackedWithId ?? id;
+    await this.prisma.unitWatcher.upsert({
+      where: { unitId_userId: { unitId, userId } },
+      create: { unitId, userId },
+      update: {},
+    });
+    return { unitId, watching: true };
+  }
+
+  async unwatch(id: string, userId: string) {
+    const unit = await this.prisma.unit.findUnique({ where: { id }, select: { trackedWithId: true } });
+    const unitId = unit?.trackedWithId ?? id;
+    await this.prisma.unitWatcher.deleteMany({ where: { unitId, userId } });
+    return { unitId, watching: false };
+  }
+
+  // ---- Site Tracker: one job across several units ----
+
+  /**
+   * Set which other units this unit's tracker row covers ("Units 805, 807, 809 …").
+   * Full replacement — send [] to make it a single-unit row again.
+   *
+   * The refusals are the point. A member must be in the SAME building (one job, one site),
+   * must not lead a job of its own, must not already belong to a different one, and must
+   * not carry tracker data of its own — its checklist, blocker, priority or owners would
+   * vanish from every screen the moment it became a member, because a member is drawn
+   * only inside its lead's row. Each refusal names the unit, so the fix is obvious.
+   */
+  async setSiteGroup(leadId: string, unitIds: string[]) {
+    const lead = await this.prisma.unit.findUnique({
+      where: { id: leadId },
+      select: {
+        id: true, unitNumber: true, buildingId: true, deletedAt: true, trackedWithId: true,
+        trackedUnits: { select: { id: true } },
+      },
+    });
+    if (!lead || lead.deletedAt) throw new NotFoundException('Unit not found');
+    if (lead.trackedWithId) await this.assertNotGroupMember(lead);
+
+    const wanted = [...new Set(unitIds.filter((u) => u && u !== leadId))];
+    const candidates = wanted.length
+      ? await this.prisma.unit.findMany({
+          where: { id: { in: wanted } },
+          select: {
+            id: true, unitNumber: true, buildingId: true, deletedAt: true, trackedWithId: true,
+            blockerStatus: true, sitePriority: true,
+            _count: { select: { constructionStages: true, siteAssignees: true, trackedUnits: true } },
+          },
+        })
+      : [];
+
+    const problems: string[] = [];
+    for (const id of wanted) {
+      const u = candidates.find((c) => c.id === id);
+      if (!u || u.deletedAt) { problems.push(`a unit that no longer exists (${id})`); continue; }
+      const name = `Unit ${u.unitNumber}`;
+      if (u.buildingId !== lead.buildingId) problems.push(`${name} is in a different building`);
+      else if (u.trackedWithId && u.trackedWithId !== leadId) problems.push(`${name} is already part of another job`);
+      else if (u._count.trackedUnits > 0) problems.push(`${name} leads a job of its own`);
+      else if (
+        !u.trackedWithId
+        && (u._count.constructionStages > 0 || u._count.siteAssignees > 0 || u.blockerStatus !== null || u.sitePriority !== null)
+      ) {
+        problems.push(`${name} is on the tracker in its own right — take it off first, or make it the lead`);
+      }
+    }
+    if (problems.length) {
+      throw new ConflictException(`Can't group these units: ${problems.join('; ')}.`);
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.unit.updateMany({
+        where: { trackedWithId: leadId, id: { notIn: wanted } },
+        data: { trackedWithId: null },
+      }),
+      ...(wanted.length
+        ? [this.prisma.unit.updateMany({ where: { id: { in: wanted } }, data: { trackedWithId: leadId } })]
+        : []),
+    ]);
+
+    const members = await this.prisma.unit.findMany({
+      where: { trackedWithId: leadId, deletedAt: null },
+      select: { id: true, unitNumber: true },
+    });
+    members.sort((a, b) => compareUnitNumbers(a.unitNumber, b.unitNumber));
+    return {
+      leadId,
+      label: siteUnitLabel(lead.unitNumber, members.map((m) => m.unitNumber)),
+      units: members,
+    };
   }
 
   /**
@@ -806,9 +984,19 @@ export class UnitsService {
   async untrackFromSiteTracker(id: string) {
     const unit = await this.prisma.unit.findUnique({
       where: { id },
-      select: { id: true, deletedAt: true },
+      select: { id: true, deletedAt: true, trackedWithId: true },
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+
+    // A member carries nothing of its own — taking it off the tracker means taking it out
+    // of its job, and nothing else.
+    if (unit.trackedWithId) {
+      await this.prisma.unit.update({ where: { id }, data: { trackedWithId: null } });
+      return {
+        stagesDeleted: 0, photosDeleted: 0, updatesUnpinned: 0, assigneesCleared: 0,
+        blockerCleared: false, unitsReleased: 0, leftJob: true,
+      };
+    }
 
     // Counts and clears run inside ONE interactive transaction, not a read pass followed by
     // a separate write array — the array form let another request (a stage added, an
@@ -842,6 +1030,10 @@ export class UnitsService {
 
       await tx.unitConstructionStage.deleteMany({ where: { unitId: id } });
       await tx.unitAssignee.deleteMany({ where: { unitId: id } });
+      // The sixth signal: a lead's members. Left pointing here they would be invisible —
+      // drawn only inside a row that no longer exists — and un-trackable, because every
+      // write to a member is refused. Released, they are ordinary units again.
+      const released = await tx.unit.updateMany({ where: { trackedWithId: id }, data: { trackedWithId: null } });
       await tx.unit.update({
         where: { id },
         data: {
@@ -866,6 +1058,7 @@ export class UnitsService {
         updatesUnpinned,
         assigneesCleared,
         blockerCleared: before?.blockerStatus !== null,
+        unitsReleased: released.count,
       };
     });
   }

@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable, NotFoundException, BadRequestException, Logger, Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { loadSiteUnitContext } from '../site-tracker/site-unit-context';
+import { assertMayDelete, type DeleteActor } from '../site-tracker/site-delete-rule';
 import { CreateDailyLogDto, UpdateDailyLogDto, AddDailyLogPhotoDto } from './dto/create-daily-log.dto';
 
 /**
@@ -19,9 +24,12 @@ export type DailyLogSource = (typeof DAILY_LOG_SOURCES)[number];
 
 @Injectable()
 export class DailyLogsService {
+  private readonly logger = new Logger(DailyLogsService.name);
+
   constructor(
     private prisma: PrismaService,
     private storage: StorageService,
+    @Optional() private notifications?: NotificationsService,
   ) {}
 
   private async signPhotos(photos: Array<{ storagePath: string }>) {
@@ -126,7 +134,32 @@ export class DailyLogsService {
         source,
       },
     });
+    // After the write, and never awaited into the response: a mail server being slow must
+    // not make posting from site feel slow, and a failed notification must not fail a post
+    // that has already been saved.
+    if (log.unitId) {
+      void this.notifyPosted(log, thread?.id ?? null)
+        .catch((e) => this.logger.warn(`Site update notification failed: ${e}`));
+    }
     return log;
+  }
+
+  private async notifyPosted(
+    log: { unitId: string | null; authorId: string; notes: string },
+    parentId: string | null,
+  ) {
+    if (!this.notifications || !log.unitId) return;
+    const ctx = await loadSiteUnitContext(this.prisma, log.unitId);
+    if (!ctx) return;
+    const parentAuthorId = parentId
+      ? (await this.prisma.dailyLog.findUnique({ where: { id: parentId }, select: { authorId: true } }))?.authorId ?? null
+      : null;
+    const actor = await this.prisma.user.findUnique({ where: { id: log.authorId }, select: { name: true } });
+    await this.notifications.notifySiteUpdatePosted({
+      unitId: ctx.unitId, unitLabel: ctx.label, projectId: ctx.projectId, projectName: ctx.projectName,
+      actorId: log.authorId, actorName: actor?.name ?? null, notes: log.notes,
+      parentAuthorId,
+    });
   }
 
   /**
@@ -202,8 +235,9 @@ export class DailyLogsService {
     });
   }
 
-  async remove(id: string) {
-    await this.findById(id);
+  async remove(id: string, actor?: DeleteActor) {
+    const log = await this.findById(id);
+    assertMayDelete(actor, log.authorId, 'update');
     return this.prisma.dailyLog.delete({ where: { id } });
   }
 
@@ -221,7 +255,14 @@ export class DailyLogsService {
     });
   }
 
-  removePhoto(photoId: string) {
+  /** A photo belongs to whoever wrote the update it is attached to. */
+  async removePhoto(photoId: string, actor?: DeleteActor) {
+    const photo = await this.prisma.dailyLogPhoto.findUnique({
+      where: { id: photoId },
+      select: { id: true, dailyLog: { select: { authorId: true } } },
+    });
+    if (!photo) throw new NotFoundException('Photo not found');
+    assertMayDelete(actor, photo.dailyLog.authorId, 'photo');
     return this.prisma.dailyLogPhoto.delete({ where: { id: photoId } });
   }
 }

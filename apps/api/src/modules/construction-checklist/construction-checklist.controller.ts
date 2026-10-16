@@ -147,23 +147,33 @@ export class ConstructionChecklistController {
 
   @Delete('photos/:photoId')
   @RequirePermissions('checklist:edit')
-  @ApiOperation({ summary: 'Remove a stage photo' })
-  removeStagePhoto(@Param('photoId') photoId: string) {
-    return this.service.removeStagePhoto(photoId);
+  @ApiOperation({ summary: 'Remove a stage photo (uploader, or siteTracker:manage)' })
+  removeStagePhoto(
+    @Param('photoId') photoId: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('permissions') permissions: string[],
+  ) {
+    return this.service.removeStagePhoto(photoId, { userId, permissions: permissions ?? [] });
   }
 
   @Delete('stage/:stageId')
   @RequirePermissions('checklist:edit')
-  @ApiOperation({ summary: 'Remove a stage from a unit\'s checklist' })
-  deleteStage(@Param('stageId') stageId: string) {
-    return this.service.deleteStage(stageId);
+  @ApiOperation({ summary: 'Remove a stage from a unit\'s checklist (its creator, or siteTracker:manage)' })
+  deleteStage(
+    @Param('stageId') stageId: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('permissions') permissions: string[],
+  ) {
+    return this.service.deleteStage(stageId, { userId, permissions: permissions ?? [] });
   }
 
   // One request, not a loop of the route above — same reason the bulk add exists: the
   // throttle truncates a forty-stage teardown sent as forty calls, leaving half of a
   // checklist that was meant to be gone.
+  // A whole checklist at once is the client's "lock": Founder / Super Admin only
+  // (siteTracker:manage), on top of checklist:edit.
   @Delete('unit/:unitId/stages')
-  @RequirePermissions('checklist:edit')
+  @RequirePermissions('checklist:edit', 'siteTracker:manage')
   @ApiOperation({
     summary: "Clear a unit's whole checklist",
     description:

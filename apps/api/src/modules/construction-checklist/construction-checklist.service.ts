@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { StorageService } from '../../common/storage/storage.service';
 
 const OWNER_SELECT = { select: { id: true, name: true, email: true } } as const;
+
+import { assertMayDelete, type DeleteActor } from '../site-tracker/site-delete-rule';
 
 @Injectable()
 export class ConstructionChecklistService {
@@ -89,9 +91,26 @@ export class ConstructionChecklistService {
     });
   }
 
-  async removeStagePhoto(photoId: string) {
+  /**
+   * A unit that is part of another unit's job (Unit.trackedWithId) has no checklist of its
+   * own — the job's checklist lives on the lead, and the member is drawn inside the lead's
+   * row. Stages added here would be stored and shown nowhere.
+   */
+  private async assertNotJobMember(unitId: string) {
+    const u = await this.prisma.unit.findUnique({
+      where: { id: unitId }, select: { trackedWith: { select: { unitNumber: true } } },
+    });
+    if (u?.trackedWith) {
+      throw new ConflictException(
+        `This unit is tracked as part of Unit ${u.trackedWith.unitNumber}'s job — its checklist lives on that row.`,
+      );
+    }
+  }
+
+  async removeStagePhoto(photoId: string, actor?: DeleteActor) {
     const photo = await this.prisma.unitConstructionStagePhoto.findUnique({ where: { id: photoId } });
     if (!photo) throw new NotFoundException('Photo not found');
+    assertMayDelete(actor, photo.uploadedById, 'photo');
     return this.prisma.unitConstructionStagePhoto.delete({ where: { id: photoId } });
   }
 
@@ -135,6 +154,7 @@ export class ConstructionChecklistService {
       select: { id: true, buildingId: true, deletedAt: true },
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+    await this.assertNotJobMember(unitId);
 
     const existing = await this.prisma.unitConstructionStage.count({ where: { unitId } });
     if (existing > 0) {
@@ -253,6 +273,7 @@ export class ConstructionChecklistService {
       select: { id: true, deletedAt: true },
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+    await this.assertNotJobMember(unitId);
 
     const cleaned = labels.map((l) => (l ?? '').trim()).filter(Boolean);
     if (cleaned.length === 0) throw new BadRequestException('Pick at least one stage to add.');
@@ -366,6 +387,7 @@ export class ConstructionChecklistService {
   ) {
     const unit = await this.prisma.unit.findUnique({ where: { id: unitId } });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
+    await this.assertNotJobMember(unitId);
 
     const label = input.label?.trim();
     if (!label) throw new BadRequestException('Give the stage a name.');
@@ -399,6 +421,7 @@ export class ConstructionChecklistService {
   async updateStage(
     stageId: string,
     data: {
+      label?: string;
       status?: string;
       ownerId?: string | null;
       inspectionStatus?: string | null;
@@ -411,9 +434,27 @@ export class ConstructionChecklistService {
     const stage = await this.prisma.unitConstructionStage.findUnique({ where: { id: stageId } });
     if (!stage) throw new NotFoundException('Checklist stage not found');
 
+    // A rename re-resolves the catalogue link: renaming "Framng" to "Framing" should make it
+    // the catalogue's Framing, and renaming it to something new makes it a one-off. Two
+    // stages with one name on a unit is refused, same rule as adding one.
+    let rename: { label: string; stageValue: string | null } | null = null;
+    if (data.label !== undefined) {
+      const label = data.label.trim();
+      if (!label) throw new BadRequestException('A stage needs a name.');
+      if (label !== stage.label) {
+        const clash = await this.prisma.unitConstructionStage.findFirst({
+          where: { unitId: stage.unitId, id: { not: stageId }, label: { equals: label, mode: 'insensitive' } },
+          select: { id: true },
+        });
+        if (clash) throw new ConflictException(`This unit already has a stage called "${label}".`);
+        rename = { label, stageValue: (await this.resolveStageValues([label])).get(label) ?? null };
+      }
+    }
+
     return this.prisma.unitConstructionStage.update({
       where: { id: stageId },
       data: {
+        ...(rename ?? {}),
         ...(data.status !== undefined ? { status: data.status } : {}),
         ...(data.ownerId !== undefined ? { ownerId: data.ownerId } : {}),
         ...(data.inspectionStatus !== undefined ? { inspectionStatus: data.inspectionStatus } : {}),
@@ -432,9 +473,11 @@ export class ConstructionChecklistService {
     });
   }
 
-  async deleteStage(stageId: string) {
+  /** You may remove a stage you added; anybody else's needs siteTracker:manage. */
+  async deleteStage(stageId: string, actor?: DeleteActor) {
     const stage = await this.prisma.unitConstructionStage.findUnique({ where: { id: stageId } });
     if (!stage) throw new NotFoundException('Checklist stage not found');
+    assertMayDelete(actor, stage.createdById, 'stage');
     return this.prisma.unitConstructionStage.delete({ where: { id: stageId } });
   }
 

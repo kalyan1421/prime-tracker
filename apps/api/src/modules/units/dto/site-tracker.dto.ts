@@ -28,3 +28,13 @@ export class SetUnitAssigneesDto {
   @IsArray() @ArrayMaxSize(10) @IsString({ each: true })
   userIds!: string[];
 }
+
+export class SetSiteGroupDto {
+  /**
+   * The OTHER units this row covers — the lead is the unit in the URL. Full replacement;
+   * [] makes it a single-unit row again. Thirty is far past any real fit-out (the largest
+   * on the monday board covers six).
+   */
+  @IsArray() @ArrayMaxSize(30) @IsString({ each: true })
+  unitIds!: string[];
+}

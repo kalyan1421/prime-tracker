@@ -68,10 +68,16 @@ export class DailyLogsController {
     return this.service.update(id, body);
   }
 
+  // dailylog:edit gets you to the door; the service then lets you delete only your own
+  // update unless you also hold siteTracker:manage (Founder / Super Admin).
   @Delete(':id')
   @RequirePermissions('dailylog:edit')
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('permissions') permissions: string[],
+  ) {
+    return this.service.remove(id, { userId, permissions: permissions ?? [] });
   }
 
   @Post(':id/photos')
@@ -83,7 +89,11 @@ export class DailyLogsController {
 
   @Delete('photos/:photoId')
   @RequirePermissions('dailylog:edit')
-  removePhoto(@Param('photoId') photoId: string) {
-    return this.service.removePhoto(photoId);
+  removePhoto(
+    @Param('photoId') photoId: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('permissions') permissions: string[],
+  ) {
+    return this.service.removePhoto(photoId, { userId, permissions: permissions ?? [] });
   }
 }

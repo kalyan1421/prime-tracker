@@ -84,6 +84,10 @@ export const NOTIFICATION_TIERS = {
   SITE_VISIT_MISSED: 'ACTION',
   // Addressed at one named person, same reasoning as COMMENT_MENTION and TASK_ASSIGNED.
   LEAD_COMMENT_MENTION: 'ACTION',
+  // Site Tracker. Being made an owner of a unit is TASK_ASSIGNED for the site team. A
+  // blocker is something somebody has to clear — the reason the flag exists at all.
+  SITE_UNIT_ASSIGNED: 'ACTION',
+  SITE_BLOCKER_FLAGGED: 'ACTION',
 
   // ---- FYI: awareness only ----
   // The day-before nudge is awareness, not a task — the visit is already agreed. Emailing
@@ -95,6 +99,11 @@ export const NOTIFICATION_TIERS = {
   // filter this sender — which would cost them the ACTION alerts too. In-app, where the
   // board already lives, unless someone opts in.
   SITE_UPDATE_STALE: 'FYI',
+  // FYI, deliberately. Every post on every tracked unit reaches the owners, the PMs AND
+  // every Founder (client, 2026-10-16). In-app that is a feed; by email it is dozens of
+  // messages a day per Founder, which is the "filter the sender" failure above. Anyone who
+  // wants them by mail turns email on for this one type.
+  SITE_UPDATE_POSTED: 'FYI',
   LEASE_EXPIRING_30: 'FYI',
   COMMENT_FINANCIAL: 'FYI',
   COMMENT_SALES: 'FYI',
@@ -237,6 +246,11 @@ export const RECURRING_TYPES = {
   SITE_VISIT_MISSED: true,
   // Discrete: a mention happens once, when somebody types it.
   LEAD_COMMENT_MENTION: false,
+  // Discrete: a post, an assignment and a flag each happen once, when somebody acts.
+  // Two posts on one unit are two things to read, never a duplicate.
+  SITE_UPDATE_POSTED: false,
+  SITE_UNIT_ASSIGNED: false,
+  SITE_BLOCKER_FLAGGED: false,
 } as const satisfies Record<string, boolean>;
 
 /** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
@@ -714,6 +728,97 @@ export class NotificationsService {
         ? `The last site update${unit.projectName ? ` in ${unit.projectName}` : ''} was ${unit.days} days ago.`
         : `It has been on the tracker ${unit.days} days${unit.projectName ? ` in ${unit.projectName}` : ''} with no site update at all.`,
       link: `/site-tracker?projectId=${unit.projectId}`,
+    });
+  }
+
+  /**
+   * Who hears about something happening on a tracked unit (client, 2026-10-16):
+   *
+   *   the unit's owners ∪ its watchers ∪ the project's PMs ∪ every Founder ∪ `extra`
+   *   minus whoever did it.
+   *
+   * Deliberately NOT resolveRecipients(): that adds SUPER_ADMIN and EXECUTIVE as portfolio
+   * owners, and the ask was owners, PMs and Founders. "Project PM" is a PROJECT_MANAGER who
+   * is a member of this project — with resolveRecipients' own fallback: a project nobody
+   * has staffed yet reaches every PM rather than nobody. The actor is dropped last so a
+   * Founder posting does not notify themselves.
+   */
+  async siteRecipients(p: { unitId: string; projectId: string; actorId?: string | null; extra?: string[] }) {
+    const ids = new Set<string>(p.extra ?? []);
+    const pmWhere = { isActive: true, OR: [{ role: 'PROJECT_MANAGER' }, { roles: { has: 'PROJECT_MANAGER' } }] } as any;
+
+    const [owners, watchers, members, founders] = await Promise.all([
+      this.prisma.unitAssignee.findMany({ where: { unitId: p.unitId, user: { isActive: true } }, select: { userId: true } }),
+      this.prisma.unitWatcher.findMany({ where: { unitId: p.unitId, user: { isActive: true } }, select: { userId: true } }),
+      this.prisma.projectMember.findMany({ where: { projectId: p.projectId }, select: { userId: true } }),
+      this.prisma.user.findMany({
+        where: { isActive: true, OR: [{ role: 'FOUNDER' }, { roles: { has: 'FOUNDER' } }] } as any,
+        select: { id: true },
+      }),
+    ]);
+    for (const o of owners) ids.add(o.userId);
+    for (const w of watchers) ids.add(w.userId);
+    for (const f of founders) ids.add(f.id);
+
+    const pms = await this.prisma.user.findMany({
+      where: members.length > 0 ? { ...pmWhere, id: { in: members.map((m) => m.userId) } } : pmWhere,
+      select: { id: true },
+    });
+    for (const u of pms) ids.add(u.id);
+
+    if (p.actorId) ids.delete(p.actorId);
+    return [...ids];
+  }
+
+  /** "Victor posted on Unit 103" — or "replied", when it is an answer to an earlier post. */
+  async notifySiteUpdatePosted(p: {
+    unitId: string; unitLabel: string; projectId: string; projectName?: string | null;
+    actorId: string; actorName?: string | null; notes: string;
+    /** Set for a reply: the original poster hears about the answer even if not an owner. */
+    parentAuthorId?: string | null;
+  }) {
+    const userIds = await this.siteRecipients({
+      unitId: p.unitId, projectId: p.projectId, actorId: p.actorId,
+      extra: p.parentAuthorId ? [p.parentAuthorId] : [],
+    });
+    const who = p.actorName ?? 'Someone';
+    const text = p.notes.replace(/\s+/g, ' ').trim();
+    await this.send({
+      userIds,
+      type: NotificationType.SITE_UPDATE_POSTED,
+      title: `${who} ${p.parentAuthorId ? 'replied on' : 'posted on'} ${p.unitLabel}`,
+      body: `${text.length > 160 ? `${text.slice(0, 160)}…` : text}${p.projectName ? ` — ${p.projectName}` : ''}`,
+      link: `/projects/${p.projectId}/units/${p.unitId}`,
+    });
+  }
+
+  /** Only the people just added — re-saving an unchanged owner list notifies nobody. */
+  async notifySiteUnitAssigned(p: {
+    unitId: string; unitLabel: string; projectId: string; projectName?: string | null;
+    userIds: string[]; actorId?: string | null; actorName?: string | null;
+  }) {
+    const userIds = p.userIds.filter((id) => id !== p.actorId);
+    if (userIds.length === 0) return;
+    await this.send({
+      userIds,
+      type: NotificationType.SITE_UNIT_ASSIGNED,
+      title: `${p.actorName ?? 'Someone'} made you an owner of ${p.unitLabel}`,
+      body: `You will get its site updates from now on${p.projectName ? ` — ${p.projectName}` : ''}.`,
+      link: `/projects/${p.projectId}/units/${p.unitId}`,
+    });
+  }
+
+  async notifySiteBlockerFlagged(p: {
+    unitId: string; unitLabel: string; projectId: string; projectName?: string | null;
+    reason: string; actorId?: string | null; actorName?: string | null;
+  }) {
+    const userIds = await this.siteRecipients({ unitId: p.unitId, projectId: p.projectId, actorId: p.actorId });
+    await this.send({
+      userIds,
+      type: NotificationType.SITE_BLOCKER_FLAGGED,
+      title: `${p.unitLabel} ${p.unitLabel.startsWith('Units ') ? 'are' : 'is'} blocked`,
+      body: `${p.actorName ?? 'Someone'} flagged it: "${p.reason}"${p.projectName ? ` — ${p.projectName}` : ''}`,
+      link: `/site-tracker?projectId=${p.projectId}`,
     });
   }
 

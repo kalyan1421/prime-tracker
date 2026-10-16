@@ -13,7 +13,7 @@ import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateUnitDto } from './dto/create-unit.dto';
 import { UpdateUnitDto } from './dto/update-unit.dto';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
-import { UpdateSiteTrackerDto, SetUnitAssigneesDto } from './dto/site-tracker.dto';
+import { UpdateSiteTrackerDto, SetUnitAssigneesDto, SetSiteGroupDto } from './dto/site-tracker.dto';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('Units')
@@ -165,11 +165,35 @@ export class UnitsController {
     return this.service.setAssignees(id, body.userIds, userId);
   }
 
-  // Both permissions, not one: this clears the board fields (siteTracker:edit) AND deletes
-  // the unit's checklist (checklist:edit). Construction and PM hold both; nobody reaches it
-  // who could not already do each half separately.
+  @Put(':id/site-group')
+  @RequirePermissions('siteTracker:edit')
+  @ApiOperation({
+    summary: 'Set the other units this unit\'s tracker row covers (one job across several units)',
+    description: 'Full replacement; [] makes it a single-unit row. Same building only. The lead keeps every '
+      + 'tracker field; members are drawn inside its row.',
+  })
+  setSiteGroup(@Param('id') id: string, @Body() body: SetSiteGroupDto) {
+    return this.service.setSiteGroup(id, body.unitIds);
+  }
+
+  @Post(':id/watch')
+  @RequirePermissions('siteTracker:view')
+  @ApiOperation({ summary: 'Get this unit\'s site notifications without being an owner' })
+  watch(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.service.watch(id, userId);
+  }
+
+  @Delete(':id/watch')
+  @RequirePermissions('siteTracker:view')
+  @ApiOperation({ summary: 'Stop watching a unit' })
+  unwatch(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.service.unwatch(id, userId);
+  }
+
+  // The client's "lock" (2026-10-16): taking a unit off the board deletes its checklist,
+  // and that is Founder / Super Admin only. siteTracker:manage is held by nobody else.
   @Delete(':id/site-tracker')
-  @RequirePermissions('siteTracker:edit', 'checklist:edit')
+  @RequirePermissions('siteTracker:manage')
   @ApiOperation({
     summary: 'Take a unit off the site tracker',
     description:

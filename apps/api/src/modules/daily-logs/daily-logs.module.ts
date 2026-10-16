@@ -3,8 +3,10 @@ import { DailyLogsService } from './daily-logs.service';
 import { DailyLogsController } from './daily-logs.controller';
 import { AuditService } from '../../common/utils/audit.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
+  imports: [NotificationsModule],
   controllers: [DailyLogsController],
   providers: [DailyLogsService, AuditService, StorageService],
   exports: [DailyLogsService],

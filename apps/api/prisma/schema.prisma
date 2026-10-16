@@ -97,6 +97,7 @@ model User {
   checklistTemplatesCreated         ChecklistTemplate[]             @relation("ChecklistTemplateCreator")
   unitAssignments                   UnitAssignee[]                  @relation("UnitAssigneeUser")
   unitAssignmentsMade               UnitAssignee[]                  @relation("UnitAssigneeAssigner")
+  unitWatches                       UnitWatcher[]                   @relation("UnitWatcherUser")
   constructionStagesCreated         UnitConstructionStage[]         @relation("UnitConstructionStageCreator")
   // Unit occupancy log
   unitStatusEvents                  UnitStatusEvent[]               @relation("UnitStatusEventRecorder")
@@ -382,18 +383,18 @@ model Unit {
   // nowhere to put them here. Three-state on purpose: 'YES' | 'NO' | null. The board
   // itself has 23 NO, 1 YES and 1 genuinely-empty row, and "nobody has assessed this yet"
   // is not the same claim as "not blocked" — a boolean would erase that distinction.
-  blockerStatus String?
+  blockerStatus   String?
   // The board has no such field, which makes its own YES flag unactionable: you can see
   // that something is stuck and not why. Required by the service whenever status is YES.
-  blockerReason String?
+  blockerReason   String?
   // Stamped on the flip TO 'YES', cleared on the flip away — the same maintained-in-
   // service pattern as `availableSince` above. Gives blocker AGE, which the board cannot
   // show at all; "blocked" matters much less than "blocked for eleven days".
-  blockerSince  DateTime?
+  blockerSince    DateTime?
   // CustomOption category "site_priority". Deliberately LOW/MEDIUM/HIGH only: the board's
   // PRIORITY column also carries a "DONE" value, which mixes priority with completion and
   // is why its own group battery reports the wrong number. Completion is the checklist %.
-  sitePriority  String?
+  sitePriority    String?
   // ── Checklist template provenance (Phase 2) ───────────────────────────────
   // Which template this unit's checklist was built from, stamped once at apply time.
   // This is the field the source board lacks, and the direct cause of the five divergent
@@ -404,6 +405,18 @@ model Unit {
   templateVersion Int?
 
   siteAssignees UnitAssignee[]
+  siteWatchers  UnitWatcher[]
+
+  // ── Site Tracker: one job across several units ────────────────────────────
+  // The monday board tracks "Units 805, 807, 809, 811, 813, 815" as ONE row — one fit-out,
+  // one checklist, one feed. Here the row stays a Unit: the first unit is the LEAD and
+  // carries every tracker field (stages, blocker, priority, owners, updates); the others
+  // point at it and are drawn inside its row instead of as rows of their own. Nothing is
+  // copied, so there is no second checklist to drift. Same building only (service-enforced).
+  // SetNull, so archiving the lead releases its members rather than orphaning them.
+  trackedWithId String?
+  trackedWith   Unit?   @relation("UnitTrackedWith", fields: [trackedWithId], references: [id], onDelete: SetNull)
+  trackedUnits  Unit[]  @relation("UnitTrackedWith")
 
   // Unit combine: when adjacent units merge into one legal unit, the source units are
   // soft-deleted and point here at the surviving combined unit (retains their child history).
@@ -453,6 +466,7 @@ model Unit {
   // index also serves the "how many are blocked right now" rail count.
   @@index([blockerStatus, deletedAt])
   @@index([templateId])
+  @@index([trackedWithId])
   @@map("units")
 }
 
@@ -495,6 +509,21 @@ model UnitAssignee {
   @@id([unitId, userId])
   @@index([userId])
   @@map("unit_assignees")
+}
+
+/// Someone who is not an owner but wants every site notification for this unit — a
+/// manager keeping an eye on a fit-out without being the person doing it. Owners, the
+/// project's PMs and Founders are notified anyway; this is the opt-in for everyone else.
+model UnitWatcher {
+  unitId    String
+  userId    String
+  unit      Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  user      User     @relation("UnitWatcherUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([unitId, userId])
+  @@index([userId])
+  @@map("unit_watchers")
 }
 
 model UnitStatusEvent {
@@ -2200,6 +2229,13 @@ enum NotificationType {
   /// those two are distinct from each other: muting one surface's mentions must not mute
   /// the others. All three reuse the SAME resolveMentions() parser.
   LEAD_COMMENT_MENTION
+  /// Site Tracker — somebody posted (or replied to) a site update on a unit. Goes to the
+  /// unit's owners and watchers, the project's PMs and the Founders; never to the poster.
+  SITE_UPDATE_POSTED
+  /// Site Tracker — you were added as an owner of a unit. Only the newly added people.
+  SITE_UNIT_ASSIGNED
+  /// Site Tracker — a unit was flagged Blocked. Same recipients as SITE_UPDATE_POSTED.
+  SITE_BLOCKER_FLAGGED
 }
 
 model Notification {
@@ -3057,11 +3093,11 @@ model OrgSettings {
   // Kept here rather than as constants because the client asked for the notice period to
   // be changeable by an admin without a deploy. The rest live beside it so the whole
   // scheduling policy is readable in one place.
-  siteVisitMinNoticeHours      Int          @default(6)    // earliest bookable slot, from now
-  siteVisitSlotMinutes         Int          @default(60)   // default slot granularity
-  siteVisitDayStartMin         Int          @default(540)  // 09:00 local
+  siteVisitMinNoticeHours      Int          @default(6) // earliest bookable slot, from now
+  siteVisitSlotMinutes         Int          @default(60) // default slot granularity
+  siteVisitDayStartMin         Int          @default(540) // 09:00 local
   siteVisitDayEndMin           Int          @default(1080) // 18:00 local
-  siteVisitMissedGraceHours    Int          @default(2)    // past endsAt before it counts as missed
+  siteVisitMissedGraceHours    Int          @default(2) // past endsAt before it counts as missed
   createdAt                    DateTime     @default(now())
   updatedAt                    DateTime     @updatedAt
 
@@ -3468,7 +3504,6 @@ model CommissionInstallment {
   @@map("commission_installments")
 }
 
-
 // ============================================================================
 // Site-visit scheduling (2026-09-21).
 // See docs/client-discovery/LEADS_BOARD_AND_SITE_VISIT_SPEC.md.
@@ -3523,53 +3558,53 @@ model VisitAvailability {
 }
 
 model SiteVisit {
-  id                String    @id @default(cuid())
-  leadId            String
-  lead              Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id         String    @id @default(cuid())
+  leadId     String
+  lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   /// Denormalised so the dashboard card and project-access filtering never need a join
   /// through Lead. Set from the lead at creation and never edited.
-  projectId         String
-  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   /// What they are coming to see. AT MOST ONE of (unitId, buildingId) — the same
   /// polymorphic rule the service layer already enforces on Lead/Sale/Lease. One property
   /// per visit in v1 (client, 2026-09-21); multi-unit tours would need a join table.
-  unitId            String?
-  unit              Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
-  buildingId        String?
-  building          Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
+  unitId     String?
+  unit       Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  buildingId String?
+  building   Building? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
 
-  hostId            String
-  host              User      @relation("SiteVisitHost", fields: [hostId], references: [id])
+  hostId String
+  host   User   @relation("SiteVisitHost", fields: [hostId], references: [id])
 
   /// Absolute instants. Local wall-clock is derived from `timezone` for display.
-  startsAt          DateTime
-  endsAt            DateTime
-  timezone          String    @default("America/Chicago")
+  startsAt DateTime
+  endsAt   DateTime
+  timezone String   @default("America/Chicago")
 
   /// REQUESTED | CONFIRMED | REJECTED | CANCELLED | RESCHEDULED | COMPLETED | NO_SHOW
-  status            String    @default("REQUESTED")
+  status String @default("REQUESTED")
 
   /// Where the booking came from: INTERNAL (the tracker's own picker) or CALENDLY.
   /// An externally-booked visit arrives ALREADY CONFIRMED — Calendly checked availability
   /// and told the lead it was happening, so routing it through the Founder's confirm gate
   /// would be asking permission for something already promised.
-  source            String    @default("INTERNAL")
+  source      String  @default("INTERNAL")
   /// The provider's own id for this booking (Calendly's invitee URI). UNIQUE, which is
   /// what makes webhook delivery idempotent: providers retry, and retries must not create
   /// a second visit.
-  externalId        String?   @unique
+  externalId  String? @unique
   /// Deep link back to the booking in the provider, for anyone who needs the source of truth.
-  externalUrl       String?
+  externalUrl String?
 
-  requestedById     String
-  requestedBy       User      @relation("SiteVisitRequester", fields: [requestedById], references: [id])
-  requestedAt       DateTime  @default(now())
-  requestNote       String?
+  requestedById String
+  requestedBy   User     @relation("SiteVisitRequester", fields: [requestedById], references: [id])
+  requestedAt   DateTime @default(now())
+  requestNote   String?
 
-  decidedById       String?
-  decidedBy         User?     @relation("SiteVisitDecider", fields: [decidedById], references: [id], onDelete: SetNull)
-  decidedAt         DateTime?
-  decisionNote      String?
+  decidedById  String?
+  decidedBy    User?     @relation("SiteVisitDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
+  decisionNote String?
 
   /// Reschedule chain. The old row goes terminal at RESCHEDULED and the NEW row points
   /// back at it, so history is appended rather than restated — the same rule the rent
@@ -3581,11 +3616,11 @@ model SiteVisit {
 
   /// Outcome once it has happened. completedAt doubles as "an outcome was recorded",
   /// which is what the missed-visit sweep looks for.
-  outcomeNote       String?
-  completedAt       DateTime?
+  outcomeNote String?
+  completedAt DateTime?
 
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([hostId, startsAt])
   @@index([status, startsAt])
@@ -3595,7 +3630,6 @@ model SiteVisit {
   @@map("site_visits")
 }
 
-
 // Discussion ABOUT a lead, as opposed to LeadActivity which is a structured record of what
 // was DONE to it (a call, an email, a status change).
 //
@@ -3604,17 +3638,17 @@ model SiteVisit {
 // want different shapes, different permissions and different notification behaviour. The
 // activity log is evidence; this is conversation.
 model LeadComment {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   leadId    String
-  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   authorId  String
-  author    User     @relation("LeadCommentAuthor", fields: [authorId], references: [id])
+  author    User      @relation("LeadCommentAuthor", fields: [authorId], references: [id])
   content   String
   /// Set once the body is edited, so the UI can mark it rather than silently showing a
   /// changed message as the original.
   editedAt  DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([leadId, createdAt])
   @@map("lead_comments")

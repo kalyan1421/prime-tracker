@@ -287,7 +287,7 @@ describe('UnitsService.delete', () => {
     expect(mockPrisma.unit.delete).toBeUndefined(); // never even wired up — hard delete must not exist on this path
     expect(mockPrisma.unit.update).toHaveBeenCalledWith({
       where: { id: 'unit-1' },
-      data: { deletedAt: expect.any(Date) },
+      data: { deletedAt: expect.any(Date), trackedWithId: null },
     });
   });
 
@@ -329,7 +329,7 @@ describe('UnitsService.delete', () => {
     const result = await service.delete('unit-1', 'FOUNDER' as any, true);
     expect(mockPrisma.unit.update).toHaveBeenCalledWith({
       where: { id: 'unit-1' },
-      data: { deletedAt: expect.any(Date) },
+      data: { deletedAt: expect.any(Date), trackedWithId: null },
     });
     expect(result.deletedAt).toBeInstanceOf(Date);
   });

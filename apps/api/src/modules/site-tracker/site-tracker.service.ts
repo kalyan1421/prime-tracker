@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
+import { compareUnitNumbers, siteUnitLabel } from './site-unit-context';
 
 const DAY_MS = 86_400_000;
 
@@ -100,17 +101,25 @@ export class SiteTrackerService {
     // ONE definition, used in both directions. The negation is spelled out rather than
     // wrapped in Prisma's NOT so each half stays readable: "no stages AND no blocker call
     // AND no priority AND nobody assigned".
+    //
+    // A unit that is part of ANOTHER unit's job (trackedWithId) is never a row of its own in
+    // any mode — it is drawn inside its lead's row, and it is not "untracked" either, so
+    // Track-a-unit must not offer it. Leading a job is itself a signal: a row that covers
+    // 805–815 is on the board even before anything else is recorded.
+    where.trackedWithId = null;
     if (filters.untrackedOnly) {
       where.constructionStages = { none: {} };
       where.blockerStatus = null;
       where.sitePriority = null;
       where.siteAssignees = { none: {} };
+      where.trackedUnits = { none: { deletedAt: null } };
     } else if (!filters.includeUntracked) {
       where.OR = [
         { constructionStages: { some: {} } },
         { blockerStatus: { not: null } },
         { sitePriority: { not: null } },
         { siteAssignees: { some: {} } },
+        { trackedUnits: { some: { deletedAt: null } } },
       ];
     }
 
@@ -147,6 +156,14 @@ export class SiteTrackerService {
           select: { user: { select: { id: true, name: true, email: true } } },
           orderBy: { assignedAt: 'asc' },
         },
+        // The other units this row covers, when it is one job across several units.
+        trackedUnits: {
+          where: { deletedAt: null },
+          select: { id: true, unitNumber: true, status: true },
+        },
+        // Who has asked for this unit's notifications. Small per unit, so the viewer's own
+        // "am I watching" is worked out in memory rather than with a second query.
+        siteWatchers: { select: { userId: true } },
         constructionStages: {
           select: {
             id: true, label: true, status: true, sortOrder: true,
@@ -228,9 +245,31 @@ export class SiteTrackerService {
         null as Date | null,
       ) ?? u.createdAt ?? null;
 
+      const members = [...(u.trackedUnits ?? [])].sort(
+        (a: any, b: any) => compareUnitNumbers(a.unitNumber, b.unitNumber),
+      );
+
+      // The row's overall start -> finish, from its stages' own dates. monday's parent
+      // Timeline column was a separate field nobody filled (0 of 25 rows); deriving it means
+      // it can never disagree with the checklist underneath it.
+      const starts = stages.map((st: any) => st.startsOn).filter(Boolean).map((d: any) => new Date(d).getTime());
+      const ends = stages.map((st: any) => st.endsOn ?? st.startsOn).filter(Boolean).map((d: any) => new Date(d).getTime());
+      const timeline = starts.length || ends.length
+        ? {
+            start: starts.length ? new Date(Math.min(...starts)).toISOString() : null,
+            end: ends.length ? new Date(Math.max(...ends)).toISOString() : null,
+          }
+        : null;
+
       return {
         id: u.id,
         unitNumber: u.unitNumber,
+        // "Unit 103", or "Units 805, 807, 809" for one job across several units.
+        label: siteUnitLabel(u.unitNumber, members.map((m: any) => m.unitNumber)),
+        groupUnits: members,
+        watching: (u.siteWatchers ?? []).some((w: any) => w.userId === viewer.userId),
+        watcherCount: (u.siteWatchers ?? []).length,
+        timeline,
         status: u.status,
         unitType: u.unitType,
         sqft: u.sqft,
@@ -310,6 +349,8 @@ export class SiteTrackerService {
       rows = rows.filter((r) => [
         r.unitNumber, r.tenantName, r.building.name, r.project.name,
         r.blockerReason, ...r.stages.map((s: any) => s.label),
+        // "807" finds the "Units 805, 807, 809" row.
+        ...r.groupUnits.map((g: any) => g.unitNumber),
       ].some((v) => v && String(v).toLowerCase().includes(q)));
     }
 
@@ -338,8 +379,10 @@ export class SiteTrackerService {
           ? rows.filter((r) => (r.staleDays ?? 0) >= STALE_DAYS).length
           : null,
         awaitingInspection: rows.reduce(
+          // WAITING (ready, not yet booked) is the most literal "awaiting inspection" of all.
           (n, r) => n + r.stages.filter((s: any) =>
-            s.inspectionStatus === 'SCHEDULED' || s.inspectionStatus === 'IN_PROGRESS').length,
+            s.inspectionStatus === 'WAITING' || s.inspectionStatus === 'SCHEDULED'
+            || s.inspectionStatus === 'IN_PROGRESS').length,
           0,
         ),
         noChecklist: rows.filter((r) => r.totalStages === 0).length,
