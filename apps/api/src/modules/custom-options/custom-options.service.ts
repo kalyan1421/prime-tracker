@@ -148,6 +148,9 @@ const SYSTEM_DEFAULTS: Record<string, { value: string; label: string; color?: st
   // defaults that make a failed inspection look less urgent than one merely underway.
   construction_inspection_status: [
     { value: 'NOT_INSPECTED',       label: 'Not Inspected',       color: 'default'   },
+    // "Waiting" — ready for the inspector but not yet booked. Victor uses it on the monday
+    // board's framing rows (meeting 2026-10-13); it sat between Not Inspected and Scheduled.
+    { value: 'WAITING',             label: 'Waiting',              color: 'warning'   },
     { value: 'SCHEDULED',           label: 'Scheduled',            color: 'primary'   },
     { value: 'IN_PROGRESS',         label: 'In Progress',          color: 'secondary' },
     { value: 'PASSED',              label: 'Passed',               color: 'success'   },

@@ -15,31 +15,34 @@
  *
  * The two AI columns from Phase 4 are not built yet. This page ships without them.
  */
-import { useEffect, useMemo, useState, memo } from 'react';
+import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  Button, Input, Select, SelectItem, Chip, Tooltip, CircularProgress,
-  Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, addToast,
+  Button, Input, Select, SelectItem, Chip, Tooltip, addToast,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure,
 } from '@heroui/react';
 import {
-  FiAlertTriangle, FiChevronDown, FiChevronRight, FiSearch, FiUsers, FiX, FiMessageSquare,
-  FiPlus, FiEdit2, FiHome,
+  FiChevronDown, FiChevronRight, FiSearch, FiUsers, FiX, FiMessageSquare,
+  FiPlus, FiEdit2, FiHome, FiBell, FiUploadCloud, FiUserPlus, FiList,
 } from 'react-icons/fi';
 import {
   useSiteTracker, useUpdateSiteTracker, useSetUnitAssignees,
   useProjects, useBuildings, useCustomOptions, useAssignableUsers,
-  useStageCatalogue, useAddUnitConstructionStages,
+  useStageCatalogue, useAddUnitConstructionStages, useSetSiteGroup,
 } from '../hooks/useApi';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { usePagination } from '../hooks/usePagination';
 import { useDebounced } from '../hooks/useDebounced';
-import { LoadingState, ErrorState, EmptyState, PermissionGate, chipColor, type HeroColor } from '../components/ui';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { LoadingState, ErrorState, EmptyState, PermissionGate, chipColor } from '../components/ui';
 import { DailyLogFeed } from '../components/DailyLogFeed';
 import { EditUnitModal } from '../components/EditUnitModal';
 import { SiteTrackerDetailsModal } from '../components/SiteTrackerDetailsModal';
 import { SiteTrackerRowActions } from '../components/SiteTrackerRowActions';
 import { UnitConstructionChecklist } from '../components/UnitConstructionChecklist';
+import { PeoplePicker } from '../components/PeoplePicker';
+import { MondayImportModal } from '../components/MondayImportModal';
+import { StatusCell, TimelinePill, Cell, fillFor, groupColor, type CellOption } from '../components/BoardCells';
 import { useAuthStore } from '../store/authStore';
 import { errMsg, fmtDateShort } from '../utils/fmt';
 
@@ -47,6 +50,13 @@ interface Assignee { id: string; name: string | null; email: string }
 interface Stage { id: string; label: string; status: string; sortOrder: number; inspectionStatus: string | null }
 interface Row {
   id: string; unitNumber: string; status: string;
+  /** "Unit 103", or "Units 805, 807, 809" when the row is one job across several units. */
+  label: string;
+  /** The other units the row covers (the lead is the row itself). */
+  groupUnits: { id: string; unitNumber: string; status: string }[];
+  watching: boolean; watcherCount: number;
+  /** Earliest stage start -> latest stage end. Null when no stage carries a date. */
+  timeline: { start: string | null; end: string | null } | null;
   project: { id: string; name: string };
   building: { id: string; name: string };
   blockerStatus: string | null; blockerReason: string | null; blockerDays: number | null;
@@ -90,17 +100,6 @@ function stripStepPrefix(label: string) {
   return label.replace(/^\s*\d+\s*[-.]\s*/, '');
 }
 
-function pctColor(pct: number): HeroColor {
-  if (pct >= 90) return 'success';
-  if (pct >= 40) return 'primary';
-  return 'warning';
-}
-
-function optLabel(opts: { value: string; label: string }[], value?: string | null) {
-  if (!value) return null;
-  return opts.find((o) => o.value === value)?.label ?? value;
-}
-
 export default function SiteTrackerPage() {
   const { hasPermission } = useAuthStore();
   const canEdit = hasPermission('siteTracker:edit');
@@ -110,6 +109,12 @@ export default function SiteTrackerPage() {
   // Editing a stage is gated on checklist:edit, not siteTracker:edit — the same permission
   // that governs it on the unit page, so the two screens agree on who may touch a checklist.
   const canEditChecklist = hasPermission('checklist:edit');
+  // Founder / Super Admin: the delete key, and the monday import.
+  const canManage = hasPermission('siteTracker:manage');
+  const importer = useDisclosure();
+  // Tailwind's md breakpoint. One layout is MOUNTED, not merely shown, so an expanded row
+  // does not build its checklist twice.
+  const isPhone = useMediaQuery('(max-width: 767px)');
 
   // Project Details links here with ?projectId= so "open in Site Tracker" lands already
   // filtered rather than on all fourteen units.
@@ -158,6 +163,9 @@ export default function SiteTrackerPage() {
   // rather than inventory. It replaced a "New unit" button that made a second copy of a
   // unit people already had.
   const trackUnit = useDisclosure();
+  // "+ Track a unit" at the foot of a property block opens with that property chosen.
+  const [trackProjectId, setTrackProjectId] = useState('');
+  const openTrack = (pid = '') => { setTrackProjectId(pid); trackUnit.onOpen(); };
   const [editUnit, setEditUnit] = useState<Row | null>(null);
   /**
    * The row pencil opens THIS — the unit's site-tracker fields (blocker, priority,
@@ -189,41 +197,60 @@ export default function SiteTrackerPage() {
     page, setPage, totalPages, paged: pagedRows, total: totalRows,
   } = usePagination(rows, PAGE_SIZE, [debouncedSearch, projectId, buildingId, blockerStatus, sitePriority]);
 
+  // One block per PROPERTY, the way the client's monday board groups its rows (meeting
+  // 2026-10-13). The building is shown on each row instead of being a level of its own —
+  // a fit-out row like "Units 805, 807, 809" already says which building it is in.
   const groups = useMemo(() => {
-    const map = new Map<string, { key: string; project: Row['project']; building: Row['building']; units: Row[] }>();
+    const map = new Map<string, { key: string; project: Row['project']; units: Row[] }>();
     for (const r of pagedRows) {
-      const key = `${r.project.id}:${r.building.id}`;
-      const g = map.get(key);
+      const g = map.get(r.project.id);
       if (g) g.units.push(r);
-      else map.set(key, { key, project: r.project, building: r.building, units: [r] });
+      else map.set(r.project.id, { key: r.project.id, project: r.project, units: [r] });
     }
     return Array.from(map.values()).map((g) => {
       const tracked = g.units.filter((u) => u.pctComplete !== null);
+      const count = (pred: (u: Row) => boolean) => g.units.filter(pred).length;
       return {
         ...g,
-        blockedCount: g.units.filter((u) => u.blockerStatus === 'YES').length,
+        blockedCount: count((u) => u.blockerStatus === 'YES'),
         avgPct: tracked.length
           ? Math.round(tracked.reduce((s, u) => s + (u.pctComplete ?? 0), 0) / tracked.length)
           : null,
-        // The segmented battery from the source board's group footers, moved into the
-        // header where it is visible without scrolling to the end of a section.
-        battery: g.units.reduce(
-          (acc, u) => {
-            for (const s of u.stages) {
-              if (s.status === 'DONE') acc.done += 1;
-              else if (s.status === 'BLOCKED') acc.blocked += 1;
-              else if (s.status === 'NOT_STARTED') acc.idle += 1;
-              else acc.wip += 1;
-            }
-            return acc;
-          },
-          { done: 0, wip: 0, blocked: 0, idle: 0 },
-        ),
+        // monday's group footer: a colour battery per status column.
+        blockerBattery: [
+          { value: 'YES', n: count((u) => u.blockerStatus === 'YES') },
+          { value: 'NO', n: count((u) => u.blockerStatus === 'NO') },
+          { value: '', n: count((u) => !u.blockerStatus) },
+        ],
+        priorityBattery: [
+          { value: 'HIGH', n: count((u) => u.sitePriority === 'HIGH') },
+          { value: 'MEDIUM', n: count((u) => u.sitePriority === 'MEDIUM') },
+          { value: 'LOW', n: count((u) => u.sitePriority === 'LOW') },
+          { value: '', n: count((u) => !u.sitePriority) },
+        ],
       };
     });
   }, [pagedRows]);
 
   const filtersActive = !!(search || projectId || buildingId || blockerStatus || sitePriority);
+
+  // Shared by both layouts — on a phone it used to live inside the table, which is not mounted there.
+  const pager = totalPages > 1 ? (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 px-3 py-2.5">
+      <span className="text-xs text-gray-500 tabular-nums">
+        {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalRows)} of {totalRows} units
+      </span>
+      <div className="flex items-center gap-1">
+        <Button size="sm" variant="flat" isDisabled={page === 1} onPress={() => setPage(page - 1)}>
+          Previous
+        </Button>
+        <span className="px-2 text-xs tabular-nums text-gray-500">Page {page} / {totalPages}</span>
+        <Button size="sm" variant="flat" isDisabled={page === totalPages} onPress={() => setPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+    </div>
+  ) : null;
 
   if (isLoading) return <LoadingState message="Loading the site tracker…" />;
   if (error) return <ErrorState message={errMsg(error, 'Could not load the site tracker')} />;
@@ -244,8 +271,13 @@ export default function SiteTrackerPage() {
             button people pressed when they meant "track this one". Units are created in
             Project Details, where the rest of the unit's details are set. */}
         <div className="flex items-center gap-2">
+          {canManage && (
+            <Button size="sm" variant="flat" startContent={<FiUploadCloud />} onPress={importer.onOpen}>
+              Import from monday
+            </Button>
+          )}
           <PermissionGate permission="checklist:edit">
-            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={trackUnit.onOpen}>
+            <Button size="sm" color="primary" startContent={<FiPlus />} onPress={() => openTrack()}>
               Track a unit
             </Button>
           </PermissionGate>
@@ -329,55 +361,52 @@ export default function SiteTrackerPage() {
             : 'A unit joins the board once site work is recorded on it — a checklist, a blocker, a priority or an owner. Use “Track a unit” to bring one on.'}
         />
       ) : (
-        <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
-          <table className="w-full min-w-[1420px] border-collapse">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <Th className="w-[200px]">Unit</Th>
-                <Th className="w-[150px]">Blocker</Th>
-                <Th className="w-[110px]">Priority</Th>
-                <Th className="w-[300px]">Latest update</Th>
-                <Th className="w-[120px]">Owners</Th>
-                <Th className="w-[130px]">Progress</Th>
-                <Th>Current stage</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((g) => {
-                // A section with a blocked unit is forced open — the one thing worth
-                // seeing at a glance should never be hidden behind a click.
-                const defaultOpen = g.blockedCount > 0 || g.units.length <= 8;
-                const open = isExpanded(g.key, defaultOpen);
-                return (
-                  <GroupSection
-                    key={g.key} group={g} open={open} onToggle={() => toggle(g.key, open)}
-                    expanded={expanded} onToggleRow={toggleRow} onOpenFeed={openFeed}
-                    onEditUnit={setTrackerUnit}
-                    canEdit={canEdit} canEditUnit={canEditUnit} canEditChecklist={canEditChecklist}
-                    priorityOpts={priorityOpts}
-                    stageStatusOpts={stageStatusOpts}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-gray-100 px-3 py-2.5">
-              <span className="text-xs text-gray-500 tabular-nums">
-                {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalRows)} of {totalRows} units
-              </span>
-              <div className="flex items-center gap-1">
-                <Button size="sm" variant="flat" isDisabled={page === 1} onPress={() => setPage(page - 1)}>
-                  Previous
-                </Button>
-                <span className="px-2 text-xs tabular-nums text-gray-500">Page {page} / {totalPages}</span>
-                <Button size="sm" variant="flat" isDisabled={page === totalPages} onPress={() => setPage(page + 1)}>
-                  Next
-                </Button>
+        <>
+        {/* Phones get a card per unit (meeting 2026-10-13: the board is updated on site,
+            one-handed). The table needs ~1500px and only scrolled sideways on a phone. */}
+        {isPhone ? (
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <section key={g.key} className="space-y-2">
+              <div className="flex flex-wrap items-baseline gap-2 px-1">
+                <h2 className={`text-sm font-bold uppercase tracking-wide ${groupColor(g.project.id).text}`}>{g.project.name}</h2>
+                <span className="text-[11px] text-gray-500">{g.units.length} unit{g.units.length === 1 ? '' : 's'}</span>
+                {g.blockedCount > 0 && (
+                  <Chip size="sm" color="danger" variant="flat" className="text-[11px]">{g.blockedCount} blocked</Chip>
+                )}
               </div>
-            </div>
-          )}
+              {g.units.map((u) => (
+                <UnitCard
+                  key={u.id} row={u} canEdit={canEdit} canEditChecklist={canEditChecklist}
+                  isOpen={expanded.has(u.id)} onToggle={() => toggleRow(u.id)}
+                  onOpenFeed={openFeed} onEditUnit={setTrackerUnit} priorityOpts={priorityOpts}
+                />
+              ))}
+            </section>
+          ))}
+          {pager}
         </div>
+        ) : (
+        <div className="space-y-6">
+          {groups.map((g) => {
+            // A block with a blocked unit is forced open — the one thing worth seeing at a
+            // glance should never be hidden behind a click.
+            const defaultOpen = g.blockedCount > 0 || g.units.length <= 12;
+            const open = isExpanded(g.key, defaultOpen);
+            return (
+              <PropertyBlock
+                key={g.key} group={g} open={open} onToggle={() => toggle(g.key, open)}
+                expanded={expanded} onToggleRow={toggleRow} onOpenFeed={openFeed}
+                onEditUnit={setTrackerUnit} onTrackUnit={() => openTrack(g.project.id)}
+                canEdit={canEdit} canEditUnit={canEditUnit} canEditChecklist={canEditChecklist}
+                priorityOpts={priorityOpts} stageStatusOpts={stageStatusOpts} canManage={canManage}
+              />
+            );
+          })}
+          {pager}
+        </div>
+        )}
+        </>
       )}
 
       {trackerUnit && (
@@ -394,7 +423,11 @@ export default function SiteTrackerPage() {
       )}
 
       {trackUnit.isOpen && (
-        <TrackExistingUnitModal projects={projects} onClose={trackUnit.onClose} />
+        <TrackExistingUnitModal projects={projects} initialProjectId={trackProjectId} onClose={trackUnit.onClose} />
+      )}
+
+      {importer.isOpen && (
+        <MondayImportModal projects={projects} onClose={importer.onClose} />
       )}
 
       {/* Unit feed, opened from the update count. Rendered once at page level rather than
@@ -469,14 +502,6 @@ function LatestUpdateCell({ row, onOpenFeed }: { row: Row; onOpenFeed: (r: Row) 
   );
 }
 
-function Th({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <th className={`text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500 px-3 py-2 ${className}`}>
-      {children}
-    </th>
-  );
-}
-
 function SummaryRail({ summary, filtered }: { summary: any; filtered: boolean }) {
   const tiles = [
     {
@@ -504,7 +529,7 @@ function SummaryRail({ summary, filtered }: { summary: any; filtered: boolean })
     }]),
     // Counts STAGES, not units — three can be three steps on one unit. Said plainly,
     // because it sits fifth in a row of unit counts and read as three units.
-    { label: 'Awaiting inspection', value: summary.awaitingInspection, foot: 'stages scheduled or in progress', tone: 'border-l-blue-500' },
+    { label: 'Awaiting inspection', value: summary.awaitingInspection, foot: 'stages waiting, scheduled or in progress', tone: 'border-l-blue-500' },
   ];
   return (
     <div className="flex flex-col gap-1.5">
@@ -527,218 +552,250 @@ function SummaryRail({ summary, filtered }: { summary: any; filtered: boolean })
   );
 }
 
-const GroupSection = memo(function GroupSection({
-  group, open, onToggle, expanded, onToggleRow, onOpenFeed, onEditUnit, canEdit, canEditUnit, canEditChecklist,
-  priorityOpts, stageStatusOpts,
-}: any) {
-  const b = group.battery;
-  const totalSteps = Math.max(b.done + b.wip + b.blocked + b.idle, 1);
-  const seg = (n: number, cls: string, title: string) =>
-    n > 0 ? <span className={cls} style={{ width: `${(n / totalSteps) * 100}%` }} title={title} /> : null;
+const BLOCKER_OPTIONS: CellOption[] = [
+  { value: 'YES', label: 'Blocked', color: 'danger' },
+  { value: 'NO', label: 'Not blocked', color: 'success' },
+];
 
+function BoardTh({ children, className = '' }: { children?: React.ReactNode; className?: string }) {
   return (
-    <>
-      <tr className="bg-gray-100/70 border-y border-gray-200">
-        <td colSpan={7} className="px-3 py-1.5">
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button" onClick={onToggle}
-              className="flex items-center gap-1.5 text-xs font-semibold text-gray-900 hover:text-blue-600"
-              aria-expanded={open}
-            >
-              {open ? <FiChevronDown className="text-gray-500" /> : <FiChevronRight className="text-gray-500" />}
-              {group.building.name}
-            </button>
-            {/* The only way back to the project from here used to be opening a unit first.
-                Project Detail already links forward to this page filtered by project
-                (?projectId=); this closes the loop the other direction. */}
-            <Link
-              to={`/projects/${group.project.id}/construction`}
-              onClick={(e) => e.stopPropagation()}
-              className="text-[11px] text-gray-500 hover:text-blue-600 hover:underline"
-            >
-              {group.project.name}
-            </Link>
-            <span className="text-[11px] text-gray-500">
-              {group.units.length} unit{group.units.length === 1 ? '' : 's'}
-            </span>
-            <span
-              className="flex h-1.5 w-28 overflow-hidden rounded-full bg-gray-200"
-              role="img"
-              aria-label={`${b.done} steps done, ${b.wip} in progress, ${b.blocked} held, ${b.idle} not started`}
-            >
-              {seg(b.done, 'bg-emerald-500', `${b.done} done`)}
-              {seg(b.wip, 'bg-amber-500', `${b.wip} working`)}
-              {seg(b.blocked, 'bg-red-500', `${b.blocked} held`)}
-              {seg(b.idle, 'bg-gray-300', `${b.idle} not started`)}
-            </span>
-            {group.avgPct !== null && (
-              <span className="text-[11px] tabular-nums text-gray-600">{group.avgPct}% avg</span>
-            )}
-            {group.blockedCount > 0 && (
-              <Chip size="sm" color="danger" variant="flat" className="text-[11px]">
-                {group.blockedCount} blocked
-              </Chip>
-            )}
-          </div>
-        </td>
-      </tr>
-      {open && group.units.map((u: Row) => (
-        <UnitRow
-          key={u.id} row={u} isOpen={expanded.has(u.id)} onToggle={() => onToggleRow(u.id)}
-          onOpenFeed={onOpenFeed} onEditUnit={onEditUnit}
-          canEdit={canEdit} canEditUnit={canEditUnit} canEditChecklist={canEditChecklist}
-          priorityOpts={priorityOpts}
-          stageStatusOpts={stageStatusOpts}
+    <th className={`border-b border-r border-gray-200 bg-white px-2 py-2 text-center text-[11px] font-medium text-gray-600 ${className}`}>
+      {children}
+    </th>
+  );
+}
+
+/** monday's group-footer battery: one coloured segment per value, sized by count. */
+function Battery({ parts, options }: { parts: { value: string; n: number }[]; options: CellOption[] }) {
+  const total = parts.reduce((t, p) => t + p.n, 0) || 1;
+  return (
+    <div className="flex h-5 w-full overflow-hidden rounded-sm" role="img"
+      aria-label={parts.filter((p) => p.n).map((p) => `${p.n} ${options.find((o) => o.value === p.value)?.label ?? 'not set'}`).join(', ')}>
+      {parts.filter((p) => p.n > 0).map((p) => (
+        <span
+          key={p.value || 'none'}
+          title={`${options.find((o) => o.value === p.value)?.label ?? 'Not set'}: ${p.n}`}
+          className={fillFor(options.find((o) => o.value === p.value) ?? null).split(' ')[0]}
+          style={{ width: `${(p.n / total) * 100}%` }}
         />
       ))}
-    </>
+    </div>
+  );
+}
+
+/**
+ * One property, as a block — the client's monday board, one group per property (meeting
+ * 2026-10-13): a coloured title, a coloured stripe down the left, its own header row,
+ * colour-filled status cells, "+ Track a unit" at the foot, and the status battery under
+ * the Blocker and Priority columns.
+ */
+const PropertyBlock = memo(function PropertyBlock({
+  group, open, onToggle, expanded, onToggleRow, onOpenFeed, onEditUnit, onTrackUnit,
+  canEdit, canEditUnit, canEditChecklist, priorityOpts, stageStatusOpts, canManage,
+}: any) {
+  const color = groupColor(group.project.id);
+  return (
+    <section>
+      <div className="mb-1.5 flex flex-wrap items-center gap-3">
+        <button
+          type="button" onClick={onToggle} aria-expanded={open}
+          className={`flex items-center gap-1.5 text-sm font-bold uppercase tracking-wide ${color.text} hover:opacity-80`}
+        >
+          {open ? <FiChevronDown /> : <FiChevronRight />}
+          {group.project.name}
+        </button>
+        <Link to={`/projects/${group.project.id}/construction`} className="text-[11px] text-gray-500 hover:text-blue-600 hover:underline">
+          Open property
+        </Link>
+        <span className="text-[11px] text-gray-500">
+          {group.units.length} unit{group.units.length === 1 ? '' : 's'}
+          {group.avgPct !== null && <> · <span className="tabular-nums">{group.avgPct}%</span> avg complete</>}
+        </span>
+        {group.blockedCount > 0 && (
+          <Chip size="sm" color="danger" variant="flat" className="text-[11px]">{group.blockedCount} blocked</Chip>
+        )}
+      </div>
+      {open && (
+        <div className="flex overflow-hidden rounded-md border border-gray-200 bg-white">
+          <div className={`w-1.5 shrink-0 ${color.stripe}`} aria-hidden />
+          <div className="min-w-0 flex-1 overflow-x-auto">
+            <table className="w-full min-w-[1220px] border-collapse">
+              <thead>
+                <tr>
+                  <BoardTh className="w-[240px] text-left">Unit</BoardTh>
+                  <BoardTh className="w-[120px]">Blocker</BoardTh>
+                  <BoardTh className="w-[100px]">Priority</BoardTh>
+                  <BoardTh className="min-w-[240px] text-left">Latest update</BoardTh>
+                  <BoardTh className="w-[100px]">Owners</BoardTh>
+                  <BoardTh className="w-[140px]">Progress</BoardTh>
+                  <BoardTh className="w-[170px]">Current stage</BoardTh>
+                  <BoardTh className="w-[140px]">Timeline</BoardTh>
+                </tr>
+              </thead>
+              <tbody>
+                {group.units.map((u: Row) => (
+                  <UnitRow
+                    key={u.id} row={u} isOpen={expanded.has(u.id)} onToggle={() => onToggleRow(u.id)}
+                    onOpenFeed={onOpenFeed} onEditUnit={onEditUnit}
+                    canEdit={canEdit} canEditUnit={canEditUnit} canEditChecklist={canEditChecklist}
+                    priorityOpts={priorityOpts} stageStatusOpts={stageStatusOpts} canManage={canManage}
+                  />
+                ))}
+                {canEditChecklist && (
+                  <tr>
+                    <td colSpan={8} className="border-b border-gray-200 px-3 py-1.5">
+                      <button type="button" onClick={onTrackUnit}
+                        className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-blue-600">
+                        <FiPlus size={12} /> Track a unit in {group.project.name}
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                <tr>
+                  <td className="border-r border-gray-200" />
+                  <td className="border-r border-gray-200 px-2 py-2"><Battery parts={group.blockerBattery} options={BLOCKER_OPTIONS} /></td>
+                  <td className="border-r border-gray-200 px-2 py-2"><Battery parts={group.priorityBattery} options={priorityOpts} /></td>
+                  <td colSpan={5} />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </section>
   );
 });
 
-function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEditUnit, canEditChecklist, priorityOpts, stageStatusOpts }: any) {
+function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEditUnit, canEditChecklist, priorityOpts, stageStatusOpts, canManage }: any) {
   const u = row as Row;
   const update = useUpdateSiteTracker();
-  const [blockerOpen, setBlockerOpen] = useState(false);
-
   const save = (data: Record<string, unknown>) =>
     update.mutate({ unitId: u.id, data }, {
       onError: (e) => addToast({ title: errMsg(e, 'Could not save'), color: 'danger' }),
     });
+  const current = u.currentStage ? stageStatusOpts.find((o: any) => o.value === u.currentStage!.status) : null;
 
   return (
     <>
-      <tr className="border-b border-gray-100 hover:bg-gray-50 align-top">
-        <td className="px-3 py-2">
+      <tr className="group/row hover:bg-gray-50">
+        <Cell className="py-1.5">
           <div className="flex items-start gap-1.5">
             <button
               type="button" onClick={onToggle} aria-expanded={isOpen}
               aria-label={isOpen ? 'Hide checklist' : 'Show checklist'}
-              className="mt-0.5 rounded border border-gray-200 p-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+              className="mt-0.5 rounded p-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
             >
-              {isOpen ? <FiChevronDown size={12} /> : <FiChevronRight size={12} />}
+              {isOpen ? <FiChevronDown size={13} /> : <FiChevronRight size={13} />}
             </button>
-            <div className="min-w-0">
-              <Link
-                to={`/projects/${u.project.id}/units/${u.id}`}
-                className="text-xs font-semibold text-gray-900 hover:text-blue-600 hover:underline"
-              >
-                Unit {u.unitNumber}
-              </Link>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-gray-500">{u.status.replace(/_/g, ' ').toLowerCase()}</span>
-                {/* Opens the SITE details — blocker, priority, owners — which
-                    is what this board is about. It used to open the unit form (number,
-                    type, size, price); that is the asset rather than the work, and is now
-                    a secondary button inside the dialog, still behind unit:editBuild.
-                    Shown to whoever can edit either one. */}
-                {(canEdit || canEditUnit) && (
-                  <Tooltip size="sm" content="Edit site details — blocker, priority, owners">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1">
+                <Link
+                  to={`/projects/${u.project.id}/units/${u.id}`}
+                  className="truncate text-xs font-semibold text-gray-900 hover:text-blue-600 hover:underline"
+                  title={u.groupUnits.length ? 'One job across these units — its checklist and updates live on this row' : undefined}
+                >
+                  {u.label}
+                </Link>
+                {u.totalStages > 0 && (
+                  <span className="shrink-0 rounded bg-gray-100 px-1 text-[11px] tabular-nums text-gray-600" title="Subitems">
+                    {u.totalStages}
+                  </span>
+                )}
+                {u.watching && (
+                  <span className="shrink-0 text-blue-600" title="You are watching this unit" aria-label="Watching"><FiBell size={11} /></span>
+                )}
+                <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-60 group-hover/row:opacity-100">
+                  {(canEdit || canEditUnit) && (
                     <button
-                      type="button" aria-label={`Edit site details for unit ${u.unitNumber}`}
+                      type="button" aria-label={`Edit site details for ${u.label}`} title="Site details — blocker, priority, owners, units in this job"
                       onClick={() => onEditUnit(u)}
                       className="rounded p-0.5 text-gray-500 hover:bg-gray-100 hover:text-blue-600"
                     >
                       <FiEdit2 size={11} />
                     </button>
-                  </Tooltip>
-                )}
-                {/* The board's only destructive actions, kept off the row itself and behind
-                    a confirmation that counts what goes — see SiteTrackerRowActions. */}
-                <SiteTrackerRowActions
-                  row={{
-                    id: u.id, unitNumber: u.unitNumber,
-                    totalStages: u.totalStages, doneStages: u.doneStages,
-                    updateCount: u.updateCount,
-                    assigneeCount: u.assignees.length,
-                    blockerStatus: u.blockerStatus,
-                    sitePriority: u.sitePriority,
-                  }}
-                  canEditChecklist={canEditChecklist}
-                  canEditTracker={canEdit}
-                />
+                  )}
+                  <SiteTrackerRowActions
+                    row={{
+                      id: u.id, unitNumber: u.unitNumber,
+                      totalStages: u.totalStages, doneStages: u.doneStages,
+                      updateCount: u.updateCount, assigneeCount: u.assignees.length,
+                      blockerStatus: u.blockerStatus, sitePriority: u.sitePriority,
+                      label: u.label, groupCount: u.groupUnits.length, watching: u.watching,
+                    }}
+                    canEditChecklist={canEditChecklist}
+                    canManage={canManage}
+                  />
+                </span>
               </div>
-              {/* Who is in there. The API has fetched and permission-gated this all along
-                  — `undefined` means "you may not see tenancies", `null` means "there is
-                  none" — and nothing rendered it, so the search placeholder promised a
-                  tenant you could match but never read. Shown here rather than as an
-                  eighth column: the table already scrolls sideways on a phone.
-                  `undefined` gets its own line — same "Hidden" language as LatestUpdateCell
-                  — so a viewer without lease:view can tell "withheld" from "genuinely no
-                  tenant" (which stays silent, same as before, so a tenant-less unit isn't
-                  cluttered with a line that has nothing to say). */}
-              {u.tenantName ? (
-                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-gray-500">
-                  <FiHome size={10} className="shrink-0" />
-                  <span className="truncate" title={u.tenantName}>{u.tenantName}</span>
-                </div>
-              ) : u.tenantName === undefined && (
-                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-gray-500 italic">
-                  <FiHome size={10} className="shrink-0" />
-                  Tenant hidden
-                </div>
+              <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-gray-500">
+                <span>{u.building.name}</span>
+                {u.tenantName ? (
+                  <span className="inline-flex items-center gap-1 truncate" title={u.tenantName}><FiHome size={10} />{u.tenantName}</span>
+                ) : u.tenantName === undefined && (
+                  <span className="italic">Tenant hidden</span>
+                )}
+              </div>
+              {u.blockerStatus === 'YES' && u.blockerReason && (
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-red-700" title={u.blockerReason}>{u.blockerReason}</p>
               )}
             </div>
           </div>
-        </td>
+        </Cell>
 
-        <td className="px-3 py-2">
-          <BlockerCell
-            row={u} canEdit={canEdit} isOpen={blockerOpen}
-            setOpen={setBlockerOpen} onSave={save} pending={update.isPending}
+        <Cell pad={false}>
+          <BlockerCell row={u} canEdit={canEdit} onSave={save} />
+        </Cell>
+
+        <Cell pad={false}>
+          <StatusCell
+            value={u.sitePriority} options={priorityOpts} canEdit={canEdit} allowClear label="Priority"
+            onChange={(v) => save({ sitePriority: v })}
           />
-        </td>
+        </Cell>
 
-        <td className="px-3 py-2">
-          <InlineOption
-            value={u.sitePriority} options={priorityOpts} canEdit={canEdit} pending={update.isPending}
-            placeholder="Set priority" onChange={(v: string | null) => save({ sitePriority: v })}
-          />
-        </td>
+        <Cell className="py-1.5"><LatestUpdateCell row={u} onOpenFeed={onOpenFeed} /></Cell>
 
-        <td className="px-3 py-2"><LatestUpdateCell row={u} onOpenFeed={onOpenFeed} /></td>
+        <Cell className="text-center"><div className="flex justify-center"><AssigneeCell row={u} canEdit={canEdit} /></div></Cell>
 
-        <td className="px-3 py-2"><AssigneeCell row={u} canEdit={canEdit} /></td>
-
-        <td className="px-3 py-2">
+        <Cell>
           {u.pctComplete === null ? (
-            <span className="text-[11px] text-gray-500">No checklist</span>
+            <span className="block text-center text-[11px] text-gray-500">No checklist</span>
           ) : (
             <div className="flex items-center gap-2">
-              <CircularProgress
-                size="sm" value={u.pctComplete} color={pctColor(u.pctComplete)}
-                aria-label={`${u.pctComplete}% complete`} showValueLabel={false}
-              />
-              <div>
-                <div className="text-xs font-semibold tabular-nums text-gray-900">{u.pctComplete}%</div>
-                <div className="text-[11px] tabular-nums text-gray-500">{u.doneStages}/{u.totalStages}</div>
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-200">
+                <div className={`h-full ${u.pctComplete >= 100 ? 'bg-emerald-600' : 'bg-blue-600'}`} style={{ width: `${u.pctComplete}%` }} />
               </div>
+              <span className="w-[60px] text-right text-[11px] tabular-nums text-gray-700">
+                {u.pctComplete}% · {u.doneStages}/{u.totalStages}
+              </span>
             </div>
           )}
-        </td>
+        </Cell>
 
-        <td className="px-3 py-2">
+        <Cell pad={false}>
           {u.currentStage ? (
-            <>
-              <div className="text-xs text-gray-700">{stripStepPrefix(u.currentStage.label)}</div>
-              <Chip
-                size="sm" variant="flat" className="mt-1 text-[11px]"
-                color={chipColor(stageStatusOpts.find((o: any) => o.value === u.currentStage!.status)?.color)}
-              >
-                {optLabel(stageStatusOpts, u.currentStage.status) ?? u.currentStage.status}
-              </Chip>
-            </>
+            <div className="flex h-full flex-col justify-center gap-0.5 px-2 py-1">
+              <span className="truncate text-xs text-gray-800">{stripStepPrefix(u.currentStage.label)}</span>
+              <span className={`inline-flex w-fit rounded px-1.5 py-0.5 text-[11px] font-medium ${fillFor(current)}`}>
+                {current?.label ?? u.currentStage.status}
+              </span>
+            </div>
           ) : u.totalStages > 0 ? (
-            <Chip size="sm" color="success" variant="flat" className="text-[11px]">Complete</Chip>
+            <span className={`flex h-9 items-center justify-center text-xs font-medium ${fillFor({ value: 'DONE', label: 'Complete' })}`}>Complete</span>
           ) : (
-            <span className="text-[11px] text-gray-500">—</span>
+            <span className="block text-center text-[11px] text-gray-500">—</span>
           )}
-        </td>
+        </Cell>
+
+        <Cell className="text-center">
+          {/* Derived from the stages' own dates, so it is set on the subitems below. */}
+          <TimelinePill start={u.timeline?.start} end={u.timeline?.end} canEdit={false} onSave={() => {}} />
+        </Cell>
       </tr>
 
       {isOpen && (
-        <tr className="border-b border-gray-200 bg-gray-50">
-          <td colSpan={7} className="px-4 py-3">
+        <tr>
+          <td colSpan={8} className="border-b border-gray-200 bg-gray-50/60 py-3 pl-8 pr-3">
             <ChecklistPanel row={u} canEdit={canEditChecklist} />
           </td>
         </tr>
@@ -747,101 +804,63 @@ function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEd
   );
 }
 
-function BlockerCell({ row, canEdit, isOpen, setOpen, onSave, pending }: any) {
-  const u = row as Row;
+/**
+ * The blocker, monday-style: a colour-filled cell (red Blocked / green Not blocked / grey
+ * not assessed). Choosing Blocked asks for the reason in place — a blocker nobody explained
+ * is one somebody has to chase — and the age rides on the cell.
+ */
+function BlockerCell({ row, canEdit, onSave }: { row: Row; canEdit: boolean; onSave: (d: Record<string, unknown>) => void }) {
+  const [asking, setAsking] = useState(false);
   const [reason, setReason] = useState('');
-
-  if (isOpen) {
+  if (asking) {
     return (
-      <div className="space-y-1.5">
-        <Input
-          size="sm" autoFocus value={reason} onValueChange={setReason}
-          placeholder="What is holding it up?" aria-label="Blocker reason"
+      <div className="flex flex-col gap-1 p-1">
+        <input
+          autoFocus value={reason} onChange={(e) => setReason(e.target.value)} aria-label="What is blocking it?"
+          placeholder="What is blocking it?"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && reason.trim()) { onSave({ blockerStatus: 'YES', blockerReason: reason.trim() }); setAsking(false); setReason(''); }
+            if (e.key === 'Escape') { setAsking(false); setReason(''); }
+          }}
+          className="h-7 w-full rounded border border-red-300 px-1.5 text-xs text-gray-900 outline-none focus:border-red-600"
         />
         <div className="flex gap-1">
-          <Button
-            size="sm" color="danger" isDisabled={!reason.trim() || pending}
-            onPress={() => { onSave({ blockerStatus: 'YES', blockerReason: reason.trim() }); setOpen(false); setReason(''); }}
-          >
-            Flag
-          </Button>
-          <Button size="sm" variant="light" onPress={() => { setOpen(false); setReason(''); }}>Cancel</Button>
+          <button type="button" disabled={!reason.trim()}
+            onClick={() => { onSave({ blockerStatus: 'YES', blockerReason: reason.trim() }); setAsking(false); setReason(''); }}
+            className="flex-1 rounded bg-red-600 py-0.5 text-[11px] font-medium text-white disabled:opacity-40">Flag</button>
+          <button type="button" onClick={() => { setAsking(false); setReason(''); }}
+            className="flex-1 rounded border border-gray-300 py-0.5 text-[11px] text-gray-700">Cancel</button>
         </div>
       </div>
     );
   }
-
-  if (u.blockerStatus === 'YES') {
-    return (
-      <div>
-        {/* Age lives on the CHIP, not in the reason below it: the reason is clamped to two
-            lines, so a day count appended to it is the first thing to get clipped — and
-            "blocked for 11 days" is the half of this cell that actually drives action. */}
-        <Chip
-          size="sm" color="danger" variant="flat" startContent={<FiAlertTriangle size={11} />}
-          className={`text-[11px] ${canEdit && !pending ? 'cursor-pointer' : ''}`}
-          onClick={canEdit && !pending ? () => onSave({ blockerStatus: 'NO' }) : undefined}
-        >
-          Blocked{u.blockerDays !== null && <> · <span className="tabular-nums">{u.blockerDays}d</span></>}
-        </Chip>
-        <div className="text-[11px] text-gray-600 mt-1 line-clamp-2" title={u.blockerReason ?? undefined}>
-          {u.blockerReason}
-        </div>
-      </div>
-    );
-  }
-
-  const label = u.blockerStatus === 'NO' ? 'Not blocked' : 'Not assessed';
+  const options = BLOCKER_OPTIONS.map((o) => (
+    o.value === 'YES' && row.blockerStatus === 'YES' && row.blockerDays !== null
+      ? { ...o, label: `Blocked · ${row.blockerDays}d` }
+      : o
+  ));
   return (
-    <Chip
-      size="sm" variant="flat" color={u.blockerStatus === 'NO' ? 'success' : 'default'}
-      className={`text-[11px] ${canEdit && !pending ? 'cursor-pointer' : ''}`}
-      onClick={canEdit && !pending ? () => setOpen(true) : undefined}
-    >
-      {label}
-    </Chip>
-  );
-}
-
-/** A chip that becomes a picker on click — the grid's inline-edit primitive. */
-function InlineOption({ value, options, canEdit, placeholder, onChange, pending }: any) {
-  const current = options.find((o: any) => o.value === value);
-  if (!canEdit) {
-    return current
-      ? <Chip size="sm" variant="flat" color={chipColor(current.color)} className="text-[11px]">{current.label}</Chip>
-      : <span className="text-[11px] text-gray-500">—</span>;
-  }
-  return (
-    <Dropdown isDisabled={pending}>
-      <DropdownTrigger>
-        {current ? (
-          <Chip size="sm" variant="flat" color={chipColor(current.color)} className={`text-[11px] ${pending ? '' : 'cursor-pointer'}`}>
-            {current.label}
-          </Chip>
-        ) : (
-          <button type="button" disabled={pending} className="text-[11px] text-gray-500 hover:text-blue-600 underline decoration-dotted disabled:opacity-50">
-            {placeholder}
-          </button>
-        )}
-      </DropdownTrigger>
-      <DropdownMenu
-        aria-label={placeholder}
-        onAction={(key) => onChange(key === '__clear' ? null : String(key))}
-      >
-        {[
-          ...options.map((o: any) => (
-            <DropdownItem key={o.value} textValue={o.label}>{o.label}</DropdownItem>
-          )),
-          <DropdownItem key="__clear" textValue="Clear" className="text-gray-500">Clear</DropdownItem>,
-        ]}
-      </DropdownMenu>
-    </Dropdown>
+    <StatusCell
+      value={row.blockerStatus} options={options} canEdit={canEdit} allowClear label="Blocker"
+      emptyText="Not assessed"
+      onChange={(v) => {
+        if (v === 'YES') { setAsking(true); return; }
+        onSave({ blockerStatus: v });
+      }}
+    />
   );
 }
 
 function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
-  const { data: users = [] } = useAssignableUsers();
   const setAssignees = useSetUnitAssignees();
+  // Local while picking, saved once the ticking stops: the API takes the WHOLE set per
+  // call, and overlapping full-set PUTs can resolve out of order and drop a pick. One save
+  // ~half a second after the last tap, with the latest set, closes that window without
+  // freezing the picker between taps.
+  const [draft, setDraft] = useState<string[] | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const selected = draft ?? row.assignees.map((a) => a.id);
 
   const stack = (
     <div className="flex">
@@ -862,41 +881,123 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
 
   if (!canEdit) return stack;
 
-  // Multi-assign, one PUT with the whole set — never a write per person. A per-item loop
-  // here would hit the API's 10-req/sec throttle and silently drop assignees.
-  // Each checkbox toggle fires the full-set PUT (see the comment above) — with no guard,
-  // ticking two boxes quickly sends two overlapping requests whose responses can resolve
-  // out of order, letting the first click's set win over the second. Disabling the trigger
-  // while one is in flight closes that window the same way BlockerCell/InlineOption do.
   return (
-    <Dropdown closeOnSelect={false} isDisabled={setAssignees.isPending}>
-      <DropdownTrigger>
-        <button
-          type="button" disabled={setAssignees.isPending}
-          className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-gray-100 disabled:opacity-50"
-          aria-label="Change owners"
-        >
-          {stack}
-          <FiUsers className="text-gray-400" size={12} />
-        </button>
-      </DropdownTrigger>
-      <DropdownMenu
-        aria-label="Site owners"
-        selectionMode="multiple"
-        selectedKeys={new Set(row.assignees.map((a) => a.id))}
-        onSelectionChange={(keys) => {
-          if (setAssignees.isPending) return;
-          const userIds = Array.from(keys as Set<string>);
-          setAssignees.mutate({ unitId: row.id, userIds }, {
+    <PeoplePicker
+      mode="multi" label={`Owners of ${row.label}`} selected={selected}
+      footnote="Owners, the project's PMs and Founders are notified of every update."
+      onChange={(ids) => {
+        setDraft(ids);
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => {
+          setAssignees.mutate({ unitId: row.id, userIds: ids }, {
+            onSettled: () => setDraft(null),
             onError: (e) => addToast({ title: errMsg(e, 'Could not update owners'), color: 'danger' }),
           });
-        }}
+        }, 500);
+      }}
+    >
+      <button
+        type="button"
+        className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-gray-100"
+        aria-label={`Change owners of ${row.label}`}
       >
-        {users.map((usr: any) => (
-          <DropdownItem key={usr.id} textValue={usr.name ?? usr.email}>{usr.name ?? usr.email}</DropdownItem>
-        ))}
-      </DropdownMenu>
-    </Dropdown>
+        {stack}
+        <FiUsers className="text-gray-500" size={12} />
+      </button>
+    </PeoplePicker>
+  );
+}
+
+/**
+ * The phone layout of a row. Same data and the same controls that matter on site —
+ * post an update, assign yourself, see the blocker — at a size a thumb can hit.
+ */
+function UnitCard({ row, canEdit, canEditChecklist, isOpen, onToggle, onOpenFeed, onEditUnit, priorityOpts }: {
+  row: Row; canEdit: boolean; canEditChecklist: boolean; isOpen: boolean; onToggle: () => void;
+  onOpenFeed: (r: Row) => void; onEditUnit: (r: Row) => void; priorityOpts: any[];
+}) {
+  const me = useAuthStore((st) => st.user?.id);
+  const setAssignees = useSetUnitAssignees();
+  const priority = priorityOpts.find((o: any) => o.value === row.sitePriority);
+  const mine = !!me && row.assignees.some((a) => a.id === me);
+  return (
+    <article className="rounded-lg border border-gray-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Link to={`/projects/${row.project.id}/units/${row.id}`} className="text-sm font-semibold text-gray-900">
+            {row.label}
+          </Link>
+          {row.tenantName && <p className="truncate text-[11px] text-gray-500">{row.tenantName}</p>}
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+          {row.blockerStatus === 'YES' && (
+            <Chip size="sm" color="danger" variant="flat" className="text-[11px]">
+              Blocked{row.blockerDays !== null ? ` · ${row.blockerDays}d` : ''}
+            </Chip>
+          )}
+          {priority && (
+            <Chip size="sm" variant="flat" color={chipColor(priority.color)} className="text-[11px]">{priority.label}</Chip>
+          )}
+        </div>
+      </div>
+      {row.blockerStatus === 'YES' && row.blockerReason && (
+        <p className="mt-1 text-xs text-red-700">{row.blockerReason}</p>
+      )}
+      <button type="button" onClick={() => onOpenFeed(row)} className="mt-2 block w-full text-left">
+        {row.latestUpdate ? (
+          <>
+            <p className="line-clamp-3 text-xs text-gray-700">{row.latestUpdate.notes}</p>
+            <p className="mt-0.5 text-[11px] text-gray-500">
+              {row.latestUpdate.authorName} · {fmtDateShort(row.latestUpdate.logDate)} · {row.updateCount} update{row.updateCount === 1 ? '' : 's'}
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-gray-500">No updates yet</p>
+        )}
+      </button>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-600">
+        <span>{row.pctComplete === null ? 'No checklist' : `${row.pctComplete}% · ${row.doneStages}/${row.totalStages} steps`}</span>
+        {row.currentStage && <span className="text-gray-700">{stripStepPrefix(row.currentStage.label)}</span>}
+        <TimelinePill start={row.timeline?.start} end={row.timeline?.end} canEdit={false} onSave={() => {}} />
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <AssigneeCell row={row} canEdit={canEdit} />
+        {row.watching && <span className="inline-flex items-center gap-1 text-[11px] text-blue-600"><FiBell size={11} /> Watching</span>}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button size="sm" color="primary" startContent={<FiMessageSquare />} onPress={() => onOpenFeed(row)}>
+          Post update
+        </Button>
+        {canEdit && !mine && me ? (
+          <Button
+            size="sm" variant="flat" startContent={<FiUserPlus />} isLoading={setAssignees.isPending}
+            onPress={() => setAssignees.mutate(
+              { unitId: row.id, userIds: [...row.assignees.map((a) => a.id), me] },
+              {
+                onSuccess: () => addToast({ title: `You own ${row.label} now`, color: 'success' }),
+                onError: (e) => addToast({ title: errMsg(e, 'Could not assign you'), color: 'danger' }),
+              },
+            )}
+          >
+            Assign me
+          </Button>
+        ) : canEdit ? (
+          <Button size="sm" variant="flat" startContent={<FiEdit2 />} onPress={() => onEditUnit(row)}>
+            Site details
+          </Button>
+        ) : <span />}
+        {row.totalStages > 0 || canEditChecklist ? (
+          <Button size="sm" variant="light" className="col-span-2" startContent={<FiList />} onPress={onToggle}>
+            {isOpen ? 'Hide checklist' : 'Checklist'}
+          </Button>
+        ) : null}
+      </div>
+      {isOpen && (
+        <div className="-mx-3 mt-2 overflow-x-auto border-t border-gray-100 px-3 pt-2">
+          <ChecklistPanel row={row} canEdit={canEditChecklist} />
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -918,9 +1019,14 @@ function AssigneeCell({ row, canEdit }: { row: Row; canEdit: boolean }) {
  * do its job on precisely the projects that most needed it: no stages recorded yet, nothing
  * to seed from, and a suggestion to go and type them into the unit by hand instead.
  */
-function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClose: () => void }) {
-  const [projectId, setProjectId] = useState('');
+function TrackExistingUnitModal({ projects, onClose, initialProjectId = '' }: {
+  projects: any[]; onClose: () => void; initialProjectId?: string;
+}) {
+  const [projectId, setProjectId] = useState(initialProjectId);
   const [unitId, setUnitId] = useState('');
+  // The rest of a multi-unit job ("Units 805–815"), tracked as ONE row led by `unitId`.
+  const [alsoIds, setAlsoIds] = useState<string[]>([]);
+  const setGroup = useSetSiteGroup();
   const [picked, setPicked] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -940,6 +1046,7 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
   );
   const untracked: Row[] = useMemo(() => data?.rows ?? [], [data]);
   const unit = untracked.find((r) => r.id === unitId) ?? null;
+  const sameBuilding = unit ? untracked.filter((r) => r.building.id === unit.building.id && r.id !== unit.id) : [];
 
   // The org-wide stage catalogue, not a list derived from what this project happens to
   // have recorded. Deriving it is why this modal used to dead-end on exactly the units it
@@ -966,8 +1073,13 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
     try {
       const labels = template.filter((t: any) => picked.includes(t.label)).map((t: any) => t.label);
       const res = await addStages.mutateAsync({ unitId: unit.id, labels });
+      let name = `Unit ${unit.unitNumber}`;
+      if (alsoIds.length) {
+        const g = await setGroup.mutateAsync({ unitId: unit.id, unitIds: alsoIds });
+        name = g.label;
+      }
       addToast({
-        title: `${unit.unitNumber} is on the tracker with ${res.added} stage${res.added === 1 ? '' : 's'}`,
+        title: `${name} ${alsoIds.length ? 'are' : 'is'} on the tracker with ${res.added} stage${res.added === 1 ? '' : 's'}`,
         color: 'success',
       });
       onClose();
@@ -1003,7 +1115,7 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
           <Select
             size="sm" label="Unit" aria-label="Pick a unit to track"
             selectedKeys={unitId ? [unitId] : []}
-            onChange={(e) => setUnitId(e.target.value)}
+            onChange={(e) => { setUnitId(e.target.value); setAlsoIds([]); }}
             isDisabled={!projectId || isLoading || untracked.length === 0}
             description={
               !projectId
@@ -1021,6 +1133,20 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
               </SelectItem>
             ))}
           </Select>
+
+          {unit && sameBuilding.length > 0 && (
+            <Select
+              size="sm" label="Other units in this job (optional)" selectionMode="multiple"
+              aria-label="Other units in this job"
+              description={`One fit-out across several units in ${unit.building.name} is one row with one checklist — like "Units 805–815" on monday.`}
+              selectedKeys={new Set(alsoIds)}
+              onSelectionChange={(k) => setAlsoIds(Array.from(k as Set<string>))}
+            >
+              {sameBuilding.map((r) => (
+                <SelectItem key={r.id} textValue={`Unit ${r.unitNumber}`}>Unit {r.unitNumber}</SelectItem>
+              ))}
+            </Select>
+          )}
 
           {/* Only reachable if the catalogue itself has been emptied in Admin — it ships
               seeded, so this is a misconfiguration, not the normal first-run state it used
@@ -1076,7 +1202,7 @@ function TrackExistingUnitModal({ projects, onClose }: { projects: any[]; onClos
           <Button
             size="sm" color="primary" onPress={submit}
             isDisabled={!unit || picked.length === 0}
-            isLoading={addStages.isPending}
+            isLoading={addStages.isPending || setGroup.isPending}
           >
             {/* The count only means something once there is a unit to put them on. The
                 whole catalogue is preselected from the start, so without this the button

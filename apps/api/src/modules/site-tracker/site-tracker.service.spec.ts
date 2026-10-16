@@ -286,6 +286,8 @@ describe('SiteTrackerService.grid — what counts as "on the tracker"', () => {
       { blockerStatus: { not: null } },
       { sitePriority: { not: null } },
       { siteAssignees: { some: {} } },
+      // Leading a multi-unit job is itself a reason to be on the board.
+      { trackedUnits: { some: { deletedAt: null } } },
     ]);
   });
 

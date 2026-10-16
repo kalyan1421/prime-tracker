@@ -25,7 +25,7 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, addToast,
 } from '@heroui/react';
 import { FiMoreHorizontal } from 'react-icons/fi';
-import { useClearUnitChecklist, useUntrackUnit } from '../hooks/useApi';
+import { useClearUnitChecklist, useUntrackUnit, useWatchUnit } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
 
 export interface SiteTrackerRowSummary {
@@ -37,25 +37,35 @@ export interface SiteTrackerRowSummary {
   assigneeCount: number;
   blockerStatus: string | null;
   sitePriority: string | null;
+  /** "Unit 103" or "Units 805, 807, 809". */
+  label?: string;
+  /** Other units this row covers — released, not deleted, when the row is removed. */
+  groupCount?: number;
+  watching?: boolean;
 }
 
 type Action = 'clear' | 'untrack';
 
 export function SiteTrackerRowActions({
-  row, canEditChecklist, canEditTracker,
+  row, canEditChecklist, canManage,
 }: {
   row: SiteTrackerRowSummary;
   canEditChecklist: boolean;
-  /** siteTracker:edit. Untracking needs both, because it does both jobs. */
-  canEditTracker: boolean;
+  /**
+   * siteTracker:manage — Founder / Super Admin. The client's "lock" (2026-10-16): clearing a
+   * whole checklist and taking a unit off the board are theirs alone. Until then every PM and
+   * every CONSTRUCTION user could do both.
+   */
+  canManage: boolean;
 }) {
   const [confirm, setConfirm] = useState<Action | null>(null);
   const clear = useClearUnitChecklist();
   const untrack = useUntrackUnit();
+  const watch = useWatchUnit();
 
-  const canClear = canEditChecklist;
-  const canUntrack = canEditChecklist && canEditTracker;
-  if (!canClear && !canUntrack) return null;
+  const canClear = canEditChecklist && canManage;
+  const canUntrack = canManage;
+  const name = row.label ?? `Unit ${row.unitNumber}`;
 
   const hasStages = row.totalStages > 0;
 
@@ -73,10 +83,11 @@ export function SiteTrackerRowActions({
       } else {
         const res = await untrack.mutateAsync({ unitId: row.id });
         addToast({
-          title: `Unit ${row.unitNumber} is off the tracker`,
-          description: res.stagesDeleted > 0
-            ? `${res.stagesDeleted} stage${res.stagesDeleted === 1 ? '' : 's'} removed. The unit is still in inventory.`
-            : 'The unit is still in inventory.',
+          title: `${name} ${row.groupCount ? 'are' : 'is'} off the tracker`,
+          description: [
+            res.stagesDeleted > 0 ? `${res.stagesDeleted} stage${res.stagesDeleted === 1 ? '' : 's'} removed.` : '',
+            'The unit is still in inventory.',
+          ].filter(Boolean).join(' '),
           color: 'success',
         });
       }
@@ -106,9 +117,35 @@ export function SiteTrackerRowActions({
         <DropdownMenu
           aria-label={`Actions for unit ${row.unitNumber}`}
           disabledKeys={hasStages ? [] : ['clear']}
-          onAction={(key) => setConfirm(key as Action)}
+          onAction={(key) => {
+            if (key === 'watch') {
+              watch.mutate({ unitId: row.id, watch: !row.watching }, {
+                onSuccess: () => addToast({
+                  title: row.watching ? `Stopped watching ${name}` : `Watching ${name}`,
+                  description: row.watching ? undefined : 'You will be notified of its updates and blockers.',
+                  color: 'success',
+                }),
+                onError: (e) => addToast({ title: errMsg(e, 'Could not change watching'), color: 'danger' }),
+              });
+              return;
+            }
+            setConfirm(key as Action);
+          }}
         >
           {[
+            // Not destructive and not gated on editing: anyone who can see the board may
+            // follow a unit. Owners, the project's PMs and Founders are notified anyway.
+            (
+              <DropdownItem
+                key="watch"
+                textValue={row.watching ? 'Stop watching' : 'Watch'}
+                description={row.watching
+                  ? 'Stop getting this unit\'s notifications'
+                  : 'Get its updates and blockers without being an owner'}
+              >
+                {row.watching ? 'Stop watching' : 'Watch'}
+              </DropdownItem>
+            ),
             ...(canClear ? [(
               <DropdownItem
                 key="clear"
@@ -174,7 +211,7 @@ export function SiteTrackerRowActions({
             </>
           ) : (
             <>
-              <ModalHeader className="text-sm">Remove unit {row.unitNumber} from the tracker?</ModalHeader>
+              <ModalHeader className="text-sm">Remove {name} from the tracker?</ModalHeader>
               <ModalBody className="gap-3 text-sm text-gray-700">
                 <WhatGoes
                   lines={[
@@ -194,6 +231,9 @@ export function SiteTrackerRowActions({
                 <WhatStays
                   lines={[
                     'The unit itself — its number, size, status, lease and sale are untouched, and it stays in inventory',
+                    ...(row.groupCount
+                      ? [`The other ${row.groupCount} unit${row.groupCount === 1 ? '' : 's'} in this job — they become ordinary units again`]
+                      : []),
                     row.updateCount
                       ? `Its ${row.updateCount} site update${row.updateCount === 1 ? '' : 's'}, readable from the unit page`
                       : 'Any site updates, readable from the unit page',

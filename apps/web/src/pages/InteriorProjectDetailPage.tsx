@@ -1,25 +1,28 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  Card, CardBody, CardHeader, Button, Chip, Tabs, Tab, Tooltip, Progress,
+  Card, CardBody, Button, Chip, Tabs, Tab,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Select, SelectItem,
   useDisclosure, addToast,
 } from '@heroui/react';
 import {
-  FiArrowLeft, FiArrowRight, FiHome, FiCheckCircle, FiClock, FiDollarSign,
-  FiEdit2, FiTrash2, FiAlertTriangle, FiPlus, FiFlag, FiPauseCircle,
+  FiArrowLeft, FiArrowRight, FiHome, FiCheckCircle, FiClock,
+  FiEdit2, FiTrash2, FiAlertTriangle, FiFlag, FiPauseCircle,
 } from 'react-icons/fi';
 import {
   useInteriorProject, useAdvanceInteriorPhase, useApproveInterior, useUpdateInterior,
-  useDeleteInterior, useAddInteriorInvoice, useUpdateInteriorInvoice, useVoidInteriorInvoice,
-  useVendors,
+  useDeleteInterior, useInteriorCosting, useUnits,
 } from '../hooks/useApi';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { LoadingState, ErrorState } from '../components/ui';
 import { isShellComplete, anchorBuildingPhase } from '../constants/interior';
 import { SnagPanel } from '../components/SnagPanel';
-import { InteriorBOQPanel } from '../components/InteriorBOQPanel';
 import { InteriorDocumentsPanel } from '../components/InteriorDocumentsPanel';
+import { InteriorBudgetPanel, InteriorCostingSummary } from '../components/InteriorBudgetPanel';
+import { InteriorEstimatePanel } from '../components/InteriorEstimatePanel';
+import {
+  InteriorActivityPanel, InteriorBillsPanel, InteriorChangeOrdersPanel, InteriorPurchaseOrdersPanel,
+} from '../components/InteriorPurchasingPanels';
 import { DocumentGateBanner, INTERIOR_PHASE_DOCS } from '../components/DocumentGateChip';
 import { useAuthStore } from '../store/authStore';
 
@@ -58,6 +61,8 @@ const CONTRACT_TYPES = ['PER_SQFT', 'FIXED', 'COST_PLUS'] as const;
  */
 const derivesOwnValue = (contractType: string) => contractType === 'PER_SQFT';
 
+const PRIORITY_LABEL: Record<string, string> = { HIGH: 'High priority', MEDIUM: 'Medium priority', LOW: 'Low priority' };
+
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
   NOT_STARTED: 'default', IN_PROGRESS: 'primary', ON_HOLD: 'warning',
   COMPLETED: 'success', CANCELLED: 'danger',
@@ -73,6 +78,11 @@ export default function InteriorProjectDetailPage() {
   const canFinance = hasPermission('interior:finance');
 
   const { data: project, isLoading, error } = useInteriorProject(id);
+  const { data: costing } = useInteriorCosting(id);
+  const [tab, setTab] = useState<string | null>(null);
+  // "Bill" on a purchase order opens the Bills tab with that PO picked; the counter remounts
+  // the Bills panel so a second click on another PO applies too.
+  const [billFor, setBillFor] = useState<{ poId: string; n: number } | null>(null);
   const advance = useAdvanceInteriorPhase();
   const approve = useApproveInterior();
   const update = useUpdateInterior();
@@ -84,13 +94,6 @@ export default function InteriorProjectDetailPage() {
 
   const p: any = project;
   const documents: any[] = p?.documents ?? [];
-  const invoices: any[] = p?.invoices ?? [];
-
-  const fin = useMemo(() => {
-    const contract = p?.contractValue ? Number(p.contractValue) : 0;
-    const spend = invoices.reduce((s, inv) => s + Number(inv.amount), 0);
-    return { contract, spend, remaining: contract - spend, usedPct: contract > 0 ? Math.min(spend / contract, 1) : 0 };
-  }, [p?.contractValue, invoices]);
 
   if (isLoading) return <LoadingState message="Loading fit-out…" />;
   if (error || !p) return <ErrorState message="Interior project not found." />;
@@ -111,11 +114,22 @@ export default function InteriorProjectDetailPage() {
   // matching OPEN_SNAG_STATUSES on the server. Work started is not work finished.
   const openSnags: any[] = (p.snags ?? []).filter((sn: any) => sn.status !== 'RESOLVED');
 
+  const extraUnits: any[] = (p.extraUnits ?? []).map((x: any) => x.unit).filter(Boolean);
   const anchorLabel = p.unit
     ? `Unit ${p.unit.unitNumber}`
     : p.building
     ? p.building.name
     : '—';
+
+  // Money tabs only for interior:finance (the API returns no amounts to anyone else).
+  const c: any = costing;
+  const money = canFinance && !!c?.can?.seeMoney;
+  const pendingCo = (c?.changeOrders ?? []).filter((x: any) => x.status === 'PENDING').length;
+  const tabKeys = money
+    ? ['budget', 'estimate', 'change-orders', 'purchase-orders', 'bills', 'snags', 'documents', 'activity']
+    : ['purchase-orders', 'snags', 'documents'];
+  const selected = tab && tabKeys.includes(tab) ? tab : tabKeys[0];
+  const count = (n?: number) => (n ? ` (${n})` : '');
 
   const doAdvance = async () => {
     if (!next) return;
@@ -219,11 +233,17 @@ export default function InteriorProjectDetailPage() {
                     Project
                   </Link>
                 )}
+                {extraUnits.length > 0 && (
+                  <span>+ Unit{extraUnits.length === 1 ? '' : 's'} {extraUnits.map((u) => u.unitNumber).join(', ')}</span>
+                )}
+                {p.area != null && <span className="tabular-nums">{Number(p.area).toLocaleString()} SF</span>}
                 {p.pm?.name && <span>PM: {p.pm.name}</span>}
+                {p.lease?.tenantName && <span>Tenant: {p.lease.tenantName}</span>}
                 {p.sale?.buyer && <span>Buyer: {p.sale.buyer}</span>}
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap shrink-0">
+              {p.priority && <Chip size="sm" variant="flat" color="secondary">{PRIORITY_LABEL[p.priority] ?? p.priority}</Chip>}
               <Chip size="sm" variant="flat" color={STATUS_COLOR[p.status] ?? 'default'}>{p.status}</Chip>
               {canEdit && !isTerminal && (
                 <Button size="sm" variant="flat" startContent={<FiEdit2 className="w-3.5 h-3.5" />} onPress={editModal.onOpen}>
@@ -306,75 +326,72 @@ export default function InteriorProjectDetailPage() {
         </CardBody>
       </Card>
 
-      {/* ─── Financial + approvals strip ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* TI budget (isolated) */}
-        <Card shadow="none" className="border border-gray-200/80 rounded-xl lg:col-span-2">
-          <CardBody className="p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold flex items-center gap-1.5">
-                <FiDollarSign className="w-3.5 h-3.5" /> TI Budget
-              </span>
-              <Tooltip content="Interior spend is tracked separately and excluded from the main project budget.">
-                <span className="text-[11px] text-gray-500 border border-gray-200 rounded-full px-2 py-0.5 cursor-default">
-                  isolated from project budget
-                </span>
-              </Tooltip>
-            </div>
-            <div className="mt-2 grid grid-cols-3 gap-4">
-              <Metric label="Contract" value={fmt(fin.contract)} />
-              <Metric label="Spent" value={fmt(fin.spend)} />
-              <Metric label={fin.remaining < 0 ? 'Over by' : 'Remaining'} value={fmt(Math.abs(fin.remaining))} tone={fin.remaining < 0 ? 'rose' : 'emerald'} />
-            </div>
-            <Progress
-              aria-label="TI budget used" value={Math.round(fin.usedPct * 100)} size="sm" className="mt-3"
-              color={fin.remaining < 0 ? 'danger' : fin.usedPct > 0.9 ? 'warning' : 'success'}
-            />
-            {p.contractType === 'PER_SQFT' && p.ratePerSqft && (
-              <p className="text-xs text-gray-500 mt-2">
-                {fmt(Number(p.ratePerSqft))}/sqft × {p.area ? Number(p.area).toLocaleString() : '—'} sqft
-              </p>
-            )}
-          </CardBody>
-        </Card>
+      {/* ─── Job costing summary (finance only) ─── */}
+      {money && <InteriorCostingSummary costing={c} canEdit={canEdit} />}
 
-        {/* Approvals + dates */}
-        <Card shadow="none" className="border border-gray-200/80 rounded-xl">
-          <CardBody className="p-5 space-y-3">
-            <span className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold">Approvals & dates</span>
-            <ApprovalRow
-              label="Client approval" at={p.clientApprovedAt}
-              canRecord={canApprove && phase === 'CLIENT_APPROVAL' && !p.clientApprovedAt}
-              onRecord={() => doApprove('client')} loading={approve.isPending}
-            />
-            <ApprovalRow
-              label="City approval" at={p.cityApprovedAt}
-              canRecord={canApprove && phase === 'CITY_APPROVAL' && !p.cityApprovedAt}
-              onRecord={() => doApprove('city')} loading={approve.isPending}
-            />
-            <div className="flex justify-between text-xs text-gray-500 pt-1 border-t border-gray-100">
-              <span>Target handover</span>
-              <span className="tabular-nums">{p.targetEnd ? fmtDate(p.targetEnd) : '—'}</span>
-            </div>
-          </CardBody>
-        </Card>
-      </div>
+      {/* ─── Approvals + dates ─── */}
+      <Card shadow="none" className="border border-gray-200/80 rounded-xl">
+        <CardBody className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-3">
+          <ApprovalRow
+            label="Client approval" at={p.clientApprovedAt}
+            canRecord={canApprove && phase === 'CLIENT_APPROVAL' && !p.clientApprovedAt}
+            onRecord={() => doApprove('client')} loading={approve.isPending}
+          />
+          <ApprovalRow
+            label="City approval" at={p.cityApprovedAt}
+            canRecord={canApprove && phase === 'CITY_APPROVAL' && !p.cityApprovedAt}
+            onRecord={() => doApprove('city')} loading={approve.isPending}
+          />
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="text-gray-600">Plans submitted</span>
+            <span className="tabular-nums text-xs text-gray-700">{p.plansSubmittedAt ? fmtDate(p.plansSubmittedAt) : '—'}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="text-gray-600">Target handover</span>
+            <span className="tabular-nums text-xs text-gray-700">{p.targetEnd ? fmtDate(p.targetEnd) : '—'}</span>
+          </div>
+        </CardBody>
+      </Card>
 
       {/* ─── Tabs ─── */}
       <Card shadow="none" className="border border-gray-200/80 rounded-xl">
         <CardBody className="p-4">
-          <Tabs aria-label="Interior detail" variant="underlined">
-            <Tab key="scope" title={`Scope / BOQ${p.scopeItems?.length ? ` (${p.scopeItems.length})` : ''}`}>
+          <Tabs
+            aria-label="Interior detail" variant="underlined" selectedKey={selected}
+            onSelectionChange={(k) => setTab(String(k))}
+          >
+            {money && (
+              <Tab key="budget" title="Budget">
+                <div className="pt-3"><InteriorBudgetPanel costing={c} /></div>
+              </Tab>
+            )}
+            {money && (
+              <Tab key="estimate" title={`Estimate${c.estimateStatus === 'LOCKED' ? ' · locked' : c.estimateStatus === 'SUBMITTED' ? ' · waiting' : ''}`}>
+                <div className="pt-3"><InteriorEstimatePanel costing={c} /></div>
+              </Tab>
+            )}
+            {money && (
+              <Tab key="change-orders" title={`Change orders${pendingCo ? ` (${pendingCo} waiting)` : count(c.changeOrders?.length)}`}>
+                <div className="pt-3"><InteriorChangeOrdersPanel costing={c} /></div>
+              </Tab>
+            )}
+            <Tab key="purchase-orders" title={`Purchase orders${count(c?.purchaseOrders?.length)}`}>
               <div className="pt-3">
-                <InteriorBOQPanel projectId={p.id} items={p.scopeItems ?? []} contractValue={fin.contract || undefined} />
+                {c ? (
+                  <InteriorPurchaseOrdersPanel
+                    costing={c}
+                    onAddBill={(poId) => { setBillFor((b) => ({ poId, n: (b?.n ?? 0) + 1 })); setTab('bills'); }}
+                  />
+                ) : <LoadingState message="Loading purchase orders…" />}
               </div>
             </Tab>
-
-            <Tab key="invoices" title={`Invoices${invoices.length ? ` (${invoices.length})` : ''}`}>
-              <div className="pt-3">
-                <InvoicesPanel projectId={p.id} invoices={invoices} spend={fin.spend} canFinance={canFinance} />
-              </div>
-            </Tab>
+            {money && (
+              <Tab key="bills" title={`Bills${count(c.bills?.length)}`}>
+                <div className="pt-3">
+                  <InteriorBillsPanel key={billFor?.n ?? 0} costing={c} presetPoId={billFor?.poId} />
+                </div>
+              </Tab>
+            )}
 
             <Tab key="snags" title={`Snags${p.snags?.length ? ` (${p.snags.filter((s: any) => s.status !== 'RESOLVED').length})` : ''}`}>
               <div className="pt-3">
@@ -390,6 +407,12 @@ export default function InteriorProjectDetailPage() {
                 <InteriorDocumentsPanel interiorProjectId={p.id} currentPhase={p.phase} />
               </div>
             </Tab>
+
+            {money && (
+              <Tab key="activity" title="Activity">
+                <div className="pt-3"><InteriorActivityPanel costing={c} /></div>
+              </Tab>
+            )}
           </Tabs>
         </CardBody>
       </Card>
@@ -466,7 +489,10 @@ export default function InteriorProjectDetailPage() {
 
       {/* Edit modal */}
       {editModal.isOpen && (
-        <EditInteriorModal project={p} onClose={editModal.onClose} update={update} />
+        <EditInteriorModal
+          project={p} onClose={editModal.onClose} update={update} canFinance={canFinance}
+          hasPurchaseOrders={(c?.purchaseOrders?.length ?? 0) > 0}
+        />
       )}
 
       {/* Delete confirm */}
@@ -501,17 +527,6 @@ export default function InteriorProjectDetailPage() {
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone?: 'rose' | 'emerald' }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold">{label}</div>
-      <div className={`mt-1 text-lg font-bold tabular-nums truncate ${tone === 'rose' ? 'text-rose-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-gray-900'}`}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
 function ApprovalRow({ label, at, canRecord, onRecord, loading }: {
   label: string; at?: string | null; canRecord: boolean; onRecord: () => void; loading: boolean;
 }) {
@@ -529,112 +544,10 @@ function ApprovalRow({ label, at, canRecord, onRecord, loading }: {
   );
 }
 
-function InvoicesPanel({ projectId, invoices, spend, canFinance }: {
-  projectId: string; invoices: any[]; spend: number; canFinance: boolean;
+function EditInteriorModal({ project, onClose, update, canFinance, hasPurchaseOrders }: {
+  project: any; onClose: () => void; update: ReturnType<typeof useUpdateInterior>;
+  canFinance: boolean; hasPurchaseOrders: boolean;
 }) {
-  const { data: vendors } = useVendors();
-  const addInvoice = useAddInteriorInvoice();
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ vendorId: '', amount: '', invoiceNo: '', invoiceDate: '' });
-  const vendorList: any[] = Array.isArray(vendors) ? vendors : [];
-
-  const submit = async () => {
-    if (!form.vendorId) return addToast({ title: 'Select a vendor', color: 'warning' });
-    if (!form.amount || Number(form.amount) <= 0) return addToast({ title: 'Enter a positive amount', color: 'warning' });
-    try {
-      await addInvoice.mutateAsync({
-        id: projectId,
-        data: {
-          vendorId: form.vendorId,
-          amount: Number(form.amount),
-          invoiceNo: form.invoiceNo.trim() || undefined,
-          invoiceDate: form.invoiceDate || undefined,
-        },
-      });
-      addToast({ title: 'Invoice logged', color: 'success' });
-      setForm({ vendorId: '', amount: '', invoiceNo: '', invoiceDate: '' });
-      setAdding(false);
-    } catch (e) {
-      addToast({ title: errMsg(e, 'Failed to log invoice'), color: 'danger' });
-    }
-  };
-
-  const STATUS_COLOR_INV: Record<string, 'default' | 'warning' | 'success'> = {
-    PENDING: 'warning', APPROVED: 'default', PAID: 'success',
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sub-contractor invoices</span>
-        {canFinance && (
-          <Button size="sm" variant="flat" color="primary" startContent={<FiPlus size={13} />} onPress={() => setAdding((v) => !v)}>
-            Log invoice
-          </Button>
-        )}
-      </div>
-
-      {adding && canFinance && (
-        <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2.5">
-          <div className="flex flex-col sm:flex-row gap-2">
-            <Select
-              size="sm" label="Vendor" selectedKeys={form.vendorId ? [form.vendorId] : []}
-              onChange={(e) => setForm((f) => ({ ...f, vendorId: e.target.value }))} className="flex-1"
-            >
-              {vendorList.map((v) => <SelectItem key={v.id}>{v.name}</SelectItem>)}
-            </Select>
-            <Input size="sm" type="number" label="Amount" value={form.amount}
-              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} className="sm:w-32" />
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <Input size="sm" label="Invoice no." value={form.invoiceNo}
-              onChange={(e) => setForm((f) => ({ ...f, invoiceNo: e.target.value }))} className="flex-1" />
-            <Input size="sm" type="date" label="Invoice date" value={form.invoiceDate}
-              onChange={(e) => setForm((f) => ({ ...f, invoiceDate: e.target.value }))} className="flex-1" />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="light" onPress={() => setAdding(false)}>Cancel</Button>
-            <Button size="sm" color="primary" isLoading={addInvoice.isPending} onPress={submit}>Log invoice</Button>
-          </div>
-        </div>
-      )}
-
-      {invoices.length === 0 ? (
-        <p className="text-sm text-gray-500 italic py-4 text-center">No sub-contractor invoices yet.</p>
-      ) : (
-        <div className="space-y-1.5">
-          {invoices.map((inv) => (
-            <div key={inv.id} className="flex items-center justify-between gap-3 text-sm border-b border-gray-50 py-1.5">
-              <div className="min-w-0">
-                <span className="text-gray-700 font-medium">{inv.vendor?.name ?? 'Vendor'}</span>
-                {inv.invoiceNo && <span className="text-gray-500 text-xs ml-2">#{inv.invoiceNo}</span>}
-                {inv.invoiceDate && <span className="text-gray-500 text-xs ml-2">{fmtDate(inv.invoiceDate)}</span>}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {inv.paidAt && <span className="text-[11px] text-gray-500">paid {fmtDate(inv.paidAt)}</span>}
-                <Chip size="sm" variant="flat" color={STATUS_COLOR_INV[inv.status] ?? 'default'} className="text-[11px]">{inv.status}</Chip>
-                <span className="tabular-nums font-semibold">{fmt(Number(inv.amount))}</span>
-                {canFinance && (
-                  <InvoiceActions
-                    projectId={projectId}
-                    invoice={inv}
-                    onChanged={() => undefined}
-                  />
-                )}
-              </div>
-            </div>
-          ))}
-          <div className="flex justify-between text-sm font-semibold pt-2">
-            <span className="text-gray-500">Total spend</span>
-            <span className="tabular-nums">{fmt(spend)}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EditInteriorModal({ project, onClose, update }: { project: any; onClose: () => void; update: ReturnType<typeof useUpdateInterior> }) {
   const [form, setForm] = useState({
     name: project.name ?? '',
     contractType: project.contractType ?? 'PER_SQFT',
@@ -642,15 +555,27 @@ function EditInteriorModal({ project, onClose, update }: { project: any; onClose
     area: project.area != null ? String(project.area) : '',
     contractValue: project.contractValue != null ? String(project.contractValue) : '',
     targetEnd: project.targetEnd ? String(project.targetEnd).slice(0, 10) : '',
+    priority: project.priority ?? '',
+    plansSubmittedAt: project.plansSubmittedAt ? String(project.plansSubmittedAt).slice(0, 10) : '',
+    tiAllowance: project.tiAllowance != null ? String(project.tiAllowance) : '',
+    poPrefix: project.poPrefix ?? '',
   });
+  const [extraIds, setExtraIds] = useState<string[]>(() => (project.extraUnits ?? []).map((x: any) => x.unit?.id).filter(Boolean));
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const derived = derivesOwnValue(form.contractType);
+  // "Units 805–815" as one fit-out: extra units come from the anchor unit's own building.
+  const anchorBuildingId = project.unit?.building?.id ?? project.unit?.buildingId;
+  const { data: buildingUnits } = useUnits(project.unit?.building?.projectId ?? '', anchorBuildingId);
+  const siblings: any[] = (Array.isArray(buildingUnits) ? buildingUnits : []).filter((u: any) => u.id !== project.unit?.id);
 
   const submit = async () => {
     if (!form.name.trim()) return addToast({ title: 'Name is required', color: 'warning' });
     if (!derived && form.contractValue && Number(form.contractValue) < 0) {
       return addToast({ title: 'Contract value cannot be negative', color: 'warning' });
+    }
+    if (form.tiAllowance && !(Number(form.tiAllowance) >= 0)) {
+      return addToast({ title: 'TI allowance must be zero or more', color: 'warning' });
     }
     try {
       await update.mutateAsync({
@@ -663,6 +588,12 @@ function EditInteriorModal({ project, onClose, update }: { project: any; onClose
           // Only for the types with no formula — see derivesOwnValue.
           contractValue: derived ? undefined : form.contractValue ? Number(form.contractValue) : undefined,
           targetEnd: form.targetEnd || undefined,
+          priority: form.priority || null,
+          plansSubmittedAt: form.plansSubmittedAt || null,
+          ...(project.unit ? { extraUnitIds: extraIds } : {}),
+          // Blank = use the lease's allowance.
+          ...(canFinance ? { tiAllowance: form.tiAllowance === '' ? null : Number(form.tiAllowance) } : {}),
+          ...(!hasPurchaseOrders ? { poPrefix: form.poPrefix.trim() || null } : {}),
         },
       });
       addToast({ title: 'Fit-out updated', color: 'success' });
@@ -705,6 +636,40 @@ function EditInteriorModal({ project, onClose, update }: { project: any; onClose
             />
           )}
           <Input type="date" label="Target handover" value={form.targetEnd} onChange={set('targetEnd')} />
+          <div className="flex gap-3">
+            <Select
+              label="Priority" selectedKeys={form.priority ? [form.priority] : []}
+              onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
+            >
+              {['HIGH', 'MEDIUM', 'LOW'].map((v) => <SelectItem key={v} textValue={v}>{v[0] + v.slice(1).toLowerCase()}</SelectItem>)}
+            </Select>
+            <Input type="date" label="Plans submitted" value={form.plansSubmittedAt} onChange={set('plansSubmittedAt')} />
+          </div>
+          {project.unit && siblings.length > 0 && (
+            <Select
+              label="Also covers units" selectionMode="multiple" selectedKeys={new Set(extraIds)}
+              description={`Same building as Unit ${project.unit.unitNumber} — e.g. Units 805–815 as one fit-out.`}
+              onSelectionChange={(keys) => setExtraIds(keys === 'all' ? siblings.map((u) => u.id) : [...keys].map(String))}
+            >
+              {siblings.map((u) => (
+                <SelectItem key={u.id} textValue={`Unit ${u.unitNumber}`}>
+                  Unit {u.unitNumber}{u.sqft ? ` · ${Number(u.sqft).toLocaleString()} SF` : ''}
+                </SelectItem>
+              ))}
+            </Select>
+          )}
+          {canFinance && (
+            <Input
+              type="number" label="TI allowance ($)" value={form.tiAllowance} onChange={set('tiAllowance')}
+              description={project.lease?.tiAllowance != null ? `Blank uses the lease's ${fmt(Number(project.lease.tiAllowance))}.` : 'What Prime contributes. Blank uses the lease, if any.'}
+            />
+          )}
+          {!hasPurchaseOrders && (
+            <Input
+              label="PO prefix" value={form.poPrefix} onChange={set('poPrefix')} maxLength={6}
+              description="Purchase orders are numbered PREFIX-0001. Blank = three letters from the name."
+            />
+          )}
         </ModalBody>
         <ModalFooter>
           <Button variant="light" onPress={onClose}>Cancel</Button>
@@ -712,94 +677,5 @@ function EditInteriorModal({ project, onClose, update }: { project: any; onClose
         </ModalFooter>
       </ModalContent>
     </Modal>
-  );
-}
-
-/**
- * PENDING -> APPROVED -> PAID, plus void (client, 2026-09-01).
- *
- * Until this existed the status column was a decoration: nothing could change it, so every
- * invoice ever logged read PENDING for the rest of its life. Void is destructive — it also
- * reverses the Actual that carries this invoice into the TI spend figures — so it confirms.
- */
-function InvoiceActions({ projectId, invoice, onChanged }: {
-  projectId: string; invoice: any; onChanged: () => void;
-}) {
-  const update = useUpdateInteriorInvoice();
-  const voidInv = useVoidInteriorInvoice();
-  const [confirmingVoid, setConfirmingVoid] = useState(false);
-
-  const move = async (status: string) => {
-    try {
-      await update.mutateAsync({ id: projectId, invoiceId: invoice.id, data: { status } });
-      addToast({ title: `Invoice ${status.toLowerCase()}`, color: 'success' });
-      onChanged();
-    } catch (e) {
-      addToast({ title: errMsg(e, 'Could not update the invoice'), color: 'danger' });
-    }
-  };
-
-  const doVoid = async () => {
-    try {
-      await voidInv.mutateAsync({ id: projectId, invoiceId: invoice.id });
-      addToast({ title: 'Invoice voided — recorded spend reversed', color: 'success' });
-      setConfirmingVoid(false);
-      onChanged();
-    } catch (e) {
-      addToast({ title: errMsg(e, 'Could not void the invoice'), color: 'danger' });
-    }
-  };
-
-  return (
-    <>
-      <div className="flex items-center gap-1">
-        {invoice.status === 'PENDING' && (
-          <Button size="sm" variant="flat" className="h-6 min-w-0 px-2 text-[11px]"
-            isLoading={update.isPending} onPress={() => move('APPROVED')}>
-            Approve
-          </Button>
-        )}
-        {invoice.status === 'APPROVED' && (
-          <>
-            <Button size="sm" variant="flat" color="success" className="h-6 min-w-0 px-2 text-[11px]"
-              isLoading={update.isPending} onPress={() => move('PAID')}>
-              Mark paid
-            </Button>
-            <Tooltip content="Undo approval">
-              <Button size="sm" isIconOnly variant="light" className="h-6 w-6 min-w-0"
-                aria-label="Undo approval" onPress={() => move('PENDING')}>
-                <FiArrowLeft className="w-3 h-3 text-gray-400" />
-              </Button>
-            </Tooltip>
-          </>
-        )}
-        <Tooltip content="Void invoice">
-          <Button size="sm" isIconOnly variant="light" color="danger" className="h-6 w-6 min-w-0"
-            aria-label="Void invoice" onPress={() => setConfirmingVoid(true)}>
-            <FiTrash2 className="w-3 h-3" />
-          </Button>
-        </Tooltip>
-      </div>
-
-      <Modal isOpen={confirmingVoid} onClose={() => setConfirmingVoid(false)} size="sm">
-        <ModalContent>
-          <ModalHeader>Void this invoice?</ModalHeader>
-          <ModalBody>
-            <p className="text-sm text-gray-600">
-              {invoice.vendor?.name ?? 'Vendor'}{invoice.invoiceNo ? ` · #${invoice.invoiceNo}` : ''} ·{' '}
-              <span className="font-semibold">{fmt(Number(invoice.amount))}</span>
-            </p>
-            <p className="text-sm text-gray-600">
-              This deletes the invoice <strong>and</strong> reverses the spend it recorded, so
-              the TI budget, cashflow and fit-out report all stop counting it.
-            </p>
-          </ModalBody>
-          <ModalFooter>
-            <Button size="sm" variant="light" onPress={() => setConfirmingVoid(false)}>Cancel</Button>
-            <Button size="sm" color="danger" isLoading={voidInv.isPending} onPress={doVoid}>Void invoice</Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
-    </>
   );
 }

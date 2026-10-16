@@ -33,6 +33,7 @@ import SiteTrackerPage from './pages/SiteTrackerPage';
 import InventoryPage from './pages/InventoryPage';
 import InteriorPortfolioPage from './pages/InteriorPortfolioPage';
 import InteriorProjectDetailPage from './pages/InteriorProjectDetailPage';
+import InteriorSettingsPage from './pages/InteriorSettingsPage';
 import CashflowPage from './pages/CashflowPage';
 import BrokersPage from './pages/BrokersPage';
 import ReceivablesPage from './pages/ReceivablesPage';
@@ -114,6 +115,7 @@ export default function App() {
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="interior" element={<ProtectedRoute permission="interior:view"><InteriorPortfolioPage /></ProtectedRoute>} />
         <Route path="cashflow" element={<ProtectedRoute permission="financial:view"><CashflowPage /></ProtectedRoute>} />
+        <Route path="interior/settings" element={<ProtectedRoute permission="interior:view"><InteriorSettingsPage /></ProtectedRoute>} />
         <Route path="interior/:id" element={<ProtectedRoute permission="interior:view"><InteriorProjectDetailPage /></ProtectedRoute>} />
         <Route path="brokers" element={<ProtectedRoute permission="broker:view"><BrokersPage /></ProtectedRoute>} />
         <Route path="receivables" element={<ProtectedRoute permission="financial:view"><ReceivablesPage /></ProtectedRoute>} />

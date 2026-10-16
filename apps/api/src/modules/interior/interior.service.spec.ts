@@ -13,6 +13,7 @@ const mockPrisma: any = {
   snagItem: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
   actual: { create: jest.fn() },
   interiorInvoice: { create: jest.fn(), findFirst: jest.fn() },
+  interiorActivity: { create: jest.fn() },
   $transaction: jest.fn((cb: any) => cb(mockPrisma)),
 };
 
@@ -22,8 +23,15 @@ const mockBus = { emit: jest.fn() };
 // the assertions about phase/gate behaviour independent of the signer.
 const mockStorage = { signedUrl: jest.fn().mockResolvedValue('https://signed.example/photo') };
 
+// Costing rules have their own spec; here they only need to exist.
+const mockCosting = {
+  checkBill: jest.fn().mockResolvedValue({ vendorId: 'v-from-po' }),
+  assertBillApprover: jest.fn().mockResolvedValue(undefined),
+  logActivity: jest.fn().mockResolvedValue(undefined),
+};
+
 function makeService() {
-  return new InteriorService(mockPrisma as any, mockBus as any, mockStorage as any);
+  return new InteriorService(mockPrisma as any, mockBus as any, mockStorage as any, mockCosting as any);
 }
 
 /** Convenience: stub findById's underlying findFirst with a project at a given phase. */
@@ -74,20 +82,6 @@ describe('InteriorService', () => {
       expect(mockBus.emit).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: 'interior.cancelled' }),
       );
-    });
-  });
-
-  describe('createPackageTemplate — validation', () => {
-    it('rejects a negative defaultRatePerSqft', async () => {
-      await expect(
-        service.createPackageTemplate({ name: 'Bad', defaultRatePerSqft: -5 }),
-      ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('rejects a negative item unitPrice', async () => {
-      await expect(
-        service.createPackageTemplate({ name: 'Bad', items: [{ description: 'x', unitPrice: -1 }] }),
-      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

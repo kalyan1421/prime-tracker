@@ -41,7 +41,6 @@ vi.mock('../hooks/useApi', () => ({
   }),
   useAdvanceInteriorPhase: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useApproveInterior: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useInteriorTemplates: () => ({ data: [] }),
   useUsers: () => ({ data: [] }),
   useAssignableUsers: () => ({ data: [{ id: 'u1', name: 'Demo PM' }] }),
 }) as any);

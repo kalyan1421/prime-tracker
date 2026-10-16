@@ -6,7 +6,7 @@
  * reason and passed it in good faith, and the hook dropped `force`/`forceReason` on the
  * floor before the POST. Mocking the hook — as a component test must — cannot see that.
  *
- * Same for the BOQ delete, which called a URL the API does not route. Every click returned
+ * Same for the old BOQ delete (now estimate lines), which called a URL the API does not route. Every click returned
  * a raw "Cannot DELETE /api/interior/…" 404 straight into a toast, and no component test
  * would have noticed, because the request shape was never the thing under test.
  */
@@ -34,7 +34,8 @@ vi.mock('../store/authStore', () => ({
 }));
 
 import {
-  useAdvanceInteriorPhase, useDeleteInteriorScope,
+  useAdvanceInteriorPhase, useSaveEstimateLine, useRemoveEstimateLine, useEstimateAction,
+  useDecideInteriorChangeOrder, useInteriorPurchaseOrderAction, useAddInteriorInvoice,
   useUpdateInteriorInvoice, useVoidInteriorInvoice, useResolveSnag,
 } from './useApi';
 
@@ -74,18 +75,62 @@ describe('useAdvanceInteriorPhase', () => {
   });
 });
 
-describe('useDeleteInteriorScope', () => {
+describe('estimate lines', () => {
   /**
-   * The route is nested under the interior project id so the access guard can resolve the
-   * owning project from it. A bare `/interior/scope/:id` matches no route at all.
+   * Nested under the fit-out id so the access guard can resolve the owning project — the
+   * old BOQ delete called a bare path the API did not route, and 404'd on every click.
    */
-  it('deletes through the project-scoped path the API actually exposes', async () => {
-    const call = await run(useDeleteInteriorScope, { projectId: 'ip1', scopeId: 'sc1' });
-    expect(call).toEqual({ method: 'DELETE', url: '/interior/ip1/scope/sc1' });
+  it('adds with POST and inline-edits one cell with PATCH, both project-scoped', async () => {
+    const add = await run(useSaveEstimateLine, { id: 'ip1', data: { description: 'Doors', unitPrice: 4200 } });
+    expect(add).toEqual({ method: 'POST', url: '/interior/ip1/estimate/lines', body: { description: 'Doors', unitPrice: 4200 } });
+
+    const edit = await run(useSaveEstimateLine, { id: 'ip1', lineId: 'l1', data: { paidBy: 'TENANT' } });
+    expect(edit).toEqual({ method: 'PATCH', url: '/interior/ip1/estimate/lines/l1', body: { paidBy: 'TENANT' } });
+  });
+
+  it('removes through the project-scoped path', async () => {
+    const call = await run(useRemoveEstimateLine, { id: 'ip1', lineId: 'l1' });
+    expect(call).toEqual({ method: 'DELETE', url: '/interior/ip1/estimate/lines/l1' });
+  });
+});
+
+describe('estimate lock', () => {
+  it('sends the unlock reason — the API refuses an unlock without one', async () => {
+    const call = await run(useEstimateAction, { id: 'ip1', action: 'unlock', reason: 'Tenant added a kitchen' });
+    expect(call).toEqual({ method: 'POST', url: '/interior/ip1/estimate/unlock', body: { reason: 'Tenant added a kitchen' } });
+  });
+
+  it('locks with an empty body', async () => {
+    const call = await run(useEstimateAction, { id: 'ip1', action: 'lock' });
+    expect(call).toEqual({ method: 'POST', url: '/interior/ip1/estimate/lock', body: {} });
+  });
+});
+
+describe('change orders and purchase orders', () => {
+  it('decides a change order with APPROVE or REJECT', async () => {
+    const call = await run(useDecideInteriorChangeOrder, { id: 'ip1', coId: 'co1', decision: 'APPROVE' });
+    expect(call).toEqual({ method: 'POST', url: '/interior/ip1/change-orders/co1/decide', body: { decision: 'APPROVE' } });
+  });
+
+  it('carries the complete flag when marking PO work done or reopening it', async () => {
+    const done = await run(useInteriorPurchaseOrderAction, { id: 'ip1', poId: 'po1', action: 'complete', complete: true });
+    expect(done).toEqual({ method: 'POST', url: '/interior/ip1/purchase-orders/po1/complete', body: { complete: true } });
+    const reopen = await run(useInteriorPurchaseOrderAction, { id: 'ip1', poId: 'po1', action: 'complete', complete: false });
+    expect(reopen.body).toEqual({ complete: false });
+  });
+
+  it('approves with an empty body', async () => {
+    const call = await run(useInteriorPurchaseOrderAction, { id: 'ip1', poId: 'po1', action: 'approve' });
+    expect(call).toEqual({ method: 'POST', url: '/interior/ip1/purchase-orders/po1/approve', body: {} });
   });
 });
 
 describe('interior invoice lifecycle', () => {
+  it('logs a bill against its purchase order — the supplier comes from the PO', async () => {
+    const call = await run(useAddInteriorInvoice, { id: 'ip1', data: { purchaseOrderId: 'po1', amount: 500 } });
+    expect(call).toEqual({ method: 'POST', url: '/interior/ip1/invoices', body: { purchaseOrderId: 'po1', amount: 500 } });
+  });
+
   it('patches the status on the project-scoped invoice route', async () => {
     const call = await run(useUpdateInteriorInvoice, {
       id: 'ip1', invoiceId: 'inv1', data: { status: 'PAID' },

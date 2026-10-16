@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { InteriorService } from './interior.service';
-import { InteriorController } from './interior.controller';
+import { InteriorController, InteriorCostingController } from './interior.controller';
+import { InteriorCostingService } from './interior-costing.service';
 import { AuditService } from '../../common/utils/audit.service';
 import { StorageService } from '../../common/storage/storage.service';
 
@@ -14,8 +15,8 @@ import { StorageService } from '../../common/storage/storage.service';
  * lives under the sales module, since it is a child of Sale.
  */
 @Module({
-  controllers: [InteriorController],
-  providers: [InteriorService, AuditService, StorageService],
-  exports: [InteriorService],
+  controllers: [InteriorController, InteriorCostingController],
+  providers: [InteriorService, InteriorCostingService, AuditService, StorageService],
+  exports: [InteriorService, InteriorCostingService],
 })
 export class InteriorModule {}

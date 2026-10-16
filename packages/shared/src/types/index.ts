@@ -302,6 +302,13 @@ export const PERMISSIONS = {
   // wrong hands. Mirrors the checklist:* holders instead.
   SITE_TRACKER_VIEW: 'siteTracker:view',
   SITE_TRACKER_EDIT: 'siteTracker:edit',
+  // The delete key (client, 2026-10-16: "delete — owner, founder, super admin"). Anyone may
+  // delete what they themselves created — their own site update, a photo they uploaded, a
+  // stage they added. Deleting anybody else's, taking a unit off the tracker, clearing a
+  // whole checklist and running the monday import need THIS. Held by SUPER_ADMIN (every
+  // permission) and FOUNDER (every permission but system:config) and deliberately granted to
+  // no other role, so "one person can unlock it" stays true as roles are edited.
+  SITE_TRACKER_MANAGE: 'siteTracker:manage',
 
   // Minting a new template VERSION is a different act from ticking a stage off: it changes
   // what every future unit of that work type gets. Kept separate so Construction can run
@@ -858,7 +865,7 @@ export const PERMISSION_CATEGORIES: { key: string; label: string; permissions: s
   { key: 'marketing', label: 'Marketing & Campaigns', permissions: ['campaign:view', 'campaign:create', 'campaign:edit', 'campaign:spend', 'campaign:delete'] },
   { key: 'milestones', label: 'Milestones', permissions: ['milestone:view', 'milestone:edit'] },
   { key: 'checklist', label: 'Construction Checklist', permissions: ['checklist:view', 'checklist:edit'] },
-  { key: 'site_tracker', label: 'Site Tracker', permissions: ['siteTracker:view', 'siteTracker:edit'] },
+  { key: 'site_tracker', label: 'Site Tracker', permissions: ['siteTracker:view', 'siteTracker:edit', 'siteTracker:manage'] },
   { key: 'vendors', label: 'Vendors & Contracts', permissions: ['vendor:view', 'vendor:edit', 'contract:view', 'contract:edit', 'payment:approve'] },
   { key: 'documents', label: 'Documents', permissions: ['document:view', 'document:upload', 'document:delete'] },
   { key: 'investors', label: 'Investors', permissions: ['investor:view', 'investor:manage'] },

@@ -1396,10 +1396,42 @@ export default function UnitDetailPage() {
       subtitle="Build stages — fixed template checklist"
       headerClassName="bg-teal-50/60"
     >
-      <UnitConstructionChecklist
-        unitId={unitId!} buildingId={u.building?.id}
-        projectId={u.building?.project?.id} canEdit={canEditChecklist}
-      />
+      {/* One job across several units (Site Tracker): a MEMBER has no checklist of its own
+          — the job's lives on the lead unit, and the API refuses stages added here. Point
+          there instead of showing an empty checklist with an "Add stage" that would fail. */}
+      {u.trackedWith ? (
+        <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-gray-700">
+          This unit is part of one job with{' '}
+          <Link
+            to={`/projects/${u.building?.project?.id}/units/${u.trackedWith.id}`}
+            className="font-medium text-blue-700 hover:underline"
+          >
+            Unit {u.trackedWith.unitNumber}
+          </Link>
+          . Its checklist, owners and site updates live on that unit.
+        </p>
+      ) : (
+        <>
+          {u.trackedUnits?.length > 0 && (
+            <p className="mb-3 text-xs text-gray-600">
+              One job with{' '}
+              {u.trackedUnits.map((m: any, i: number) => (
+                <span key={m.id}>
+                  {i > 0 && ', '}
+                  <Link to={`/projects/${u.building?.project?.id}/units/${m.id}`} className="text-blue-700 hover:underline">
+                    Unit {m.unitNumber}
+                  </Link>
+                </span>
+              ))}
+              {' '}— this checklist covers all of them.
+            </p>
+          )}
+          <UnitConstructionChecklist
+            unitId={unitId!} buildingId={u.building?.id}
+            projectId={u.building?.project?.id} canEdit={canEditChecklist}
+          />
+        </>
+      )}
     </Section>
   );
 

@@ -10,6 +10,7 @@ import {
 } from '../hooks/useApi';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
+import { useAuthStore } from '../store/authStore';
 import { FormError } from './FormError';
 import { wideSelectProps } from './ui';
 
@@ -283,6 +284,17 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
 }) {
   const del = useDeleteDailyLog();
   const create = useCreateDailyLog();
+  // Delete rule (client, 2026-10-16): your own update, or anyone's with siteTracker:manage
+  // (Founder / Super Admin). It used to be anyone with dailylog:edit, one click, no confirm.
+  const me = useAuthStore((s) => s.user?.id);
+  const canManage = useAuthStore((s) => s.hasPermission('siteTracker:manage'));
+  const authorId = log.author?.id ?? log.authorId;
+  const mayDelete = canManage || (!!authorId && authorId === me);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const removeLog = () => del.mutate(log.id, {
+    onSuccess: () => { setConfirmingDelete(false); addToast({ title: 'Update deleted', color: 'success' }); },
+    onError: (e) => addToast({ title: errMsg(e, 'Could not delete the update'), color: 'danger' }),
+  });
   // Editing an update, rather than deleting and re-posting it.
   //
   // PATCH /daily-logs/:id existed with a DTO covering notes, weather and crew, and no
@@ -333,12 +345,25 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
             >
               <FiEdit2 className="text-xs" />
             </Button>
-            <Button size="sm" variant="light" color="danger" isIconOnly className="h-6 w-6 min-w-6" aria-label="Delete this update" onPress={() => del.mutate(log.id)}>
-              <FiTrash2 className="text-xs" />
-            </Button>
+            {mayDelete && (
+              <Button size="sm" variant="light" color="danger" isIconOnly className="h-6 w-6 min-w-6" aria-label="Delete this update" onPress={() => setConfirmingDelete(true)}>
+                <FiTrash2 className="text-xs" />
+              </Button>
+            )}
           </div>
         </PermissionGate>
       </div>
+
+      {/* Inline, not a modal: it is one sentence and two buttons, on a phone, on site. */}
+      {confirmingDelete && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">
+          <span className="mr-auto">
+            Delete this update{photos.length ? ` and its ${photos.length} photo${photos.length === 1 ? '' : 's'}` : ''}? This can't be undone.
+          </span>
+          <Button size="sm" variant="light" onPress={() => setConfirmingDelete(false)} isDisabled={del.isPending}>Cancel</Button>
+          <Button size="sm" color="danger" onPress={removeLog} isLoading={del.isPending}>Delete</Button>
+        </div>
+      )}
 
       {editing ? (
         <div className="mt-2 space-y-2">
@@ -415,14 +440,17 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
               className="w-full h-full object-cover"
               onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
             />
-            <PermissionGate permission="dailylog:edit">
+            {mayDelete && (
               <button
-                type="button" aria-label="Remove photo" onClick={() => removePhoto.mutate(p.id)}
+                type="button" aria-label="Remove photo"
+                onClick={() => removePhoto.mutate(p.id, {
+                  onError: (e) => addToast({ title: errMsg(e, 'Could not remove the photo'), color: 'danger' }),
+                })}
                 className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 <FiTrash2 className="text-[11px] text-red-600" />
               </button>
-            </PermissionGate>
+            )}
           </div>
         ))}
         <PermissionGate permission="dailylog:edit">

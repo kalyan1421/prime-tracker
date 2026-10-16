@@ -39,6 +39,8 @@ vi.mock('../hooks/useApi', () => ({
   useDeleteConstructionStage: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCustomOptions: () => ({ data: [{ value: 'NOT_STARTED', label: 'Not Started' }] }),
   useUsers: () => ({ data: [] }),
+  // The checklist's owner list — was useUsers(), an admin-only route that left it empty for everyone else.
+  useAssignableUsers: () => ({ data: [] }),
   useAddStagePhoto: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useRemoveStagePhoto: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePresignedUpload: () => ({ mutateAsync: vi.fn(), isPending: false }),

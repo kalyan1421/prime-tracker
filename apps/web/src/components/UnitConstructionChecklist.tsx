@@ -16,18 +16,55 @@ import {
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter,
 } from '@heroui/react';
 import {
-  FiPlus, FiTrash2, FiZap, FiCamera, FiX, FiMessageSquare, FiChevronUp, FiChevronDown, FiEdit2,
+  FiPlus, FiTrash2, FiZap, FiCamera, FiX, FiMessageSquare, FiChevronUp, FiChevronDown, FiUser,
 } from 'react-icons/fi';
 import {
   useUnitConstructionStages, useConstructionTemplate, useApplyConstructionTemplate,
   useAddUnitConstructionStage, useAddUnitConstructionStages, useUpdateConstructionStage,
   useStageCatalogue,
   useReorderUnitConstructionStages, useDeleteConstructionStage,
-  useCustomOptions, useUsers, useAddStagePhoto, useRemoveStagePhoto, usePresignedUpload,
+  useCustomOptions, useAssignableUsers, useAddStagePhoto, useRemoveStagePhoto, usePresignedUpload,
   useCreateDailyLog, useDailyLogs,
 } from '../hooks/useApi';
 import { errMsg, fmtDate, fmtDateShort } from '../utils/fmt';
 import { LoadingState, EmptyState, chipColor } from './ui';
+import { PeoplePicker, personLabel } from './PeoplePicker';
+import { StatusCell, InlineText, InlineDate, TimelinePill, Cell } from './BoardCells';
+import { useAuthStore } from '../store/authStore';
+
+/**
+ * The delete rule (client, 2026-10-16): you may remove what you added; anybody else's needs
+ * siteTracker:manage (Founder / Super Admin). The API enforces it; this only hides the
+ * button nobody could use.
+ */
+function useMayDelete() {
+  const me = useAuthStore((s) => s.user?.id);
+  const manage = useAuthStore((s) => s.hasPermission('siteTracker:manage'));
+  return (createdBy?: string | null) => manage || (!!createdBy && createdBy === me);
+}
+
+/** Looks like a HeroUI sm Select, opens the searchable PeoplePicker. */
+function OwnerField({ ownerId, users, onChange, isDisabled }: {
+  ownerId: string | null | undefined; users: any[]; onChange: (id: string | null) => void; isDisabled?: boolean;
+}) {
+  const owner = users.find((u: any) => u.id === ownerId);
+  return (
+    <PeoplePicker
+      mode="single" label="Stage owner" isDisabled={isDisabled}
+      selected={ownerId ? [ownerId] : []} onChange={(ids) => onChange(ids[0] ?? null)}
+    >
+      <button
+        type="button" disabled={isDisabled} aria-label="Stage owner"
+        className="flex h-12 w-full flex-col justify-center rounded-small bg-default-100 px-3 text-left hover:bg-default-200 disabled:opacity-50"
+      >
+        <span className="text-[11px] text-gray-600">Owner</span>
+        <span className={`truncate text-sm ${owner ? 'text-gray-900' : 'text-gray-500'}`}>
+          {owner ? (owner.name ?? owner.email) : 'Unassigned — tap to assign'}
+        </span>
+      </button>
+    </PeoplePicker>
+  );
+}
 
 interface OptionLike { value: string; label: string; color?: string | null }
 
@@ -52,8 +89,12 @@ export function UnitConstructionChecklist({
   const templateQ = useConstructionTemplate(buildingId);
   const statusOptions = useOptionList('construction_stage_status');
   const inspectionOptions = useOptionList('construction_inspection_status');
-  const { data: usersData } = useUsers();
+  // Was useUsers() — an admin-only route (user:manage), so for every PM and every
+  // CONSTRUCTION user the owner list was EMPTY: "I can't find my name to assign myself"
+  // (meeting 2026-10-13). The assignable list is every active person, any role.
+  const { data: usersData } = useAssignableUsers();
   const users: any[] = Array.isArray(usersData) ? usersData : [];
+  const mayDelete = useMayDelete();
 
   const applyTemplate = useApplyConstructionTemplate();
   const addStage = useAddUnitConstructionStage();
@@ -170,55 +211,50 @@ export function UnitConstructionChecklist({
   const doneCount = stages.filter((s) => s.status === 'DONE').length;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex items-center justify-between text-xs text-gray-500">
         <span>{doneCount} of {stages.length} stages done</span>
         {canEdit && (
           <Button size="sm" variant="light" startContent={<FiPlus size={13} />} onPress={() => setAdding(true)}>
-            Add stage
+            Add stages from list
           </Button>
         )}
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-gray-100">
-        <table className="w-full text-xs min-w-[980px]">
+      {/* The subitem grid, monday-style (client, 2026-10-16): every value edits where it
+          sits — name, owner, status, inspection, dates, timeline, notes. Status-type cells
+          are colour-filled. Updates and photos still open the stage dialog, from the bubble. */}
+      <div className="overflow-x-auto rounded-md border border-gray-200 border-l-4 border-l-blue-500 bg-white">
+        <table className="w-full min-w-[1120px] border-collapse text-xs">
           <thead>
-            <tr className="bg-gray-50 text-gray-500 uppercase tracking-wide text-[11px]">
-              <th className="text-left px-3 py-2 font-medium w-8">#</th>
-              <th className="text-left px-3 py-2 font-medium">Subitem</th>
-              <th className="text-left px-3 py-2 font-medium">Owner</th>
-              <th className="text-left px-3 py-2 font-medium">Status</th>
-              <th className="text-left px-3 py-2 font-medium">Inspection Status</th>
-              <th className="text-left px-3 py-2 font-medium">Inspection Date</th>
-              {/* startsOn/endsOn have been in the schema and writable through the API since
-                  Phase 2, and invisible in the app until now. */}
-              <th className="text-left px-3 py-2 font-medium">Timeline</th>
-              {/* Notes and Updates were two adjacent columns doing the same job — saying
-                  something about this stage. One column, one popup, and the cell shows the
-                  most recent thing said rather than a count of things said. */}
-              <th className="text-left px-3 py-2 font-medium">Notes &amp; updates</th>
-              {/* Always present now: the actions cell holds the edit pencil, which a
-                  read-only viewer gets too (the dialog carries notes, updates, photos). */}
-              <th className="w-14" />
+            <tr className="text-[11px] font-medium text-gray-600">
+              <GridTh className="w-16">#</GridTh>
+              <GridTh className="min-w-[220px] text-left">Subitem</GridTh>
+              <GridTh className="w-20">Owner</GridTh>
+              <GridTh className="w-36">Status</GridTh>
+              <GridTh className="w-40">Inspection status</GridTh>
+              <GridTh className="w-32">Inspection date</GridTh>
+              <GridTh className="w-40">Timeline</GridTh>
+              <GridTh className="min-w-[200px] text-left">Notes</GridTh>
+              <GridTh className="w-20">Updates</GridTh>
+              <GridTh className="w-10" />
             </tr>
           </thead>
           <tbody>
             {stages.map((s, i) => (
-              <tr key={s.id} className="border-t border-gray-100">
-                <td className="px-3 py-2 tabular-nums text-gray-500">
+              <tr key={s.id} className="hover:bg-gray-50">
+                <Cell className="tabular-nums text-gray-500">
                   {canEdit ? (
                     // Arrows rather than drag-and-drop: this table scrolls sideways and is
                     // read on a phone at a site, where a drag competes with the scroll.
-                    // Before this the only way to move a stage was to delete and re-add it,
-                    // which threw away its status, dates and notes to change its position.
                     <div className="flex items-center gap-1">
-                      <span className="w-4">{i + 1}</span>
+                      <span className="w-5 text-right">{i + 1}</span>
                       <div className="flex flex-col">
                         <button
                           type="button" aria-label={`Move ${s.label} up`}
                           disabled={i === 0 || reorder.isPending}
                           onClick={() => move(i, -1)}
-                          className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:text-gray-500 leading-none"
+                          className="leading-none text-gray-500 hover:text-gray-800 disabled:opacity-30"
                         >
                           <FiChevronUp size={11} />
                         </button>
@@ -226,112 +262,83 @@ export function UnitConstructionChecklist({
                           type="button" aria-label={`Move ${s.label} down`}
                           disabled={i === stages.length - 1 || reorder.isPending}
                           onClick={() => move(i, 1)}
-                          className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:hover:text-gray-500 leading-none"
+                          className="leading-none text-gray-500 hover:text-gray-800 disabled:opacity-30"
                         >
                           <FiChevronDown size={11} />
                         </button>
                       </div>
                     </div>
-                  ) : i + 1}
-                </td>
-                <td className="px-3 py-2 font-medium text-gray-800">
-                  <button
-                    type="button"
-                    onClick={() => setDetailStageId(s.id)}
-                    className="text-left hover:text-blue-600 hover:underline decoration-dotted"
-                    title="Open this stage — owner, inspection, timeline, notes and photos"
-                  >
-                    {s.label}
-                  </button>
-                </td>
-                <td className="px-3 py-2 text-gray-700">
-                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!s.owner}>
-                    {s.owner?.name}
-                  </DetailCellButton>
-                </td>
-                <td className="px-3 py-2">
-                  {canEdit ? (
-                    <Select
-                      size="sm" aria-label="Status" className="min-w-[130px]"
-                      // The listbox popover otherwise matches the trigger's own width
-                      // (130px), so a status label longer than that truncated inside its
-                      // own dropdown menu — the one place there's no excuse for it, since
-                      // nothing else on the row constrains how wide it can open.
-                      popoverProps={{ className: 'min-w-fit' }}
-                      selectedKeys={s.status ? [s.status] : []}
-                      onSelectionChange={(keys) => {
-                        const v = Array.from(keys)[0] as string;
-                        if (v) patch(s.id, { status: v });
-                      }}
-                    >
-                      {statusOptions.map((o) => (
-                        <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
-                      ))}
-                    </Select>
-                  ) : (
-                    <Chip size="sm" variant="flat" color={chipColor(statusOptions.find((o) => o.value === s.status)?.color)}>
-                      {statusOptions.find((o) => o.value === s.status)?.label ?? s.status}
-                    </Chip>
-                  )}
-                </td>
-                <td className="px-3 py-2">
-                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!s.inspectionStatus}>
-                    {s.inspectionStatus && (
-                      <Chip size="sm" variant="flat" color={chipColor(inspectionOptions.find((o) => o.value === s.inspectionStatus)?.color)}>
-                        {inspectionOptions.find((o) => o.value === s.inspectionStatus)?.label ?? s.inspectionStatus}
-                      </Chip>
-                    )}
-                  </DetailCellButton>
-                </td>
-                <td className="px-3 py-2 text-gray-700">
-                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!s.inspectionDate}>
-                    {s.inspectionDate && fmtDateShort(s.inspectionDate)}
-                  </DetailCellButton>
-                </td>
-                <td className="px-3 py-2 text-gray-700">
-                  <DetailCellButton onOpen={() => setDetailStageId(s.id)} filled={!!(s.startsOn || s.endsOn)}>
-                    {(s.startsOn || s.endsOn) && (
-                      <span className="whitespace-nowrap rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">
-                        {s.startsOn ? fmtDateShort(s.startsOn) : '…'} – {s.endsOn ? fmtDateShort(s.endsOn) : '…'}
-                      </span>
-                    )}
-                  </DetailCellButton>
-                </td>
-                <td className="px-3 py-2">
-                  <StageDetailCell stage={s} onOpen={() => setDetailStageId(s.id)} />
-                </td>
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    {/* An explicit pencil, not only the clickable cells. The cells are the
-                        shortcut for someone who already knows; this is the affordance for
-                        someone who does not. Shown to read-only viewers too — the dialog
-                        holds the notes, updates and photos, which they may read. */}
-                    <Tooltip content={canEdit ? 'Edit this stage' : 'Open this stage'} size="sm">
+                  ) : <span className="block text-center">{i + 1}</span>}
+                </Cell>
+                <Cell>
+                  <InlineText
+                    value={s.label} nullable={false} canEdit={canEdit} label="Subitem name"
+                    textClassName="font-medium"
+                    onSave={(v) => { if (v) patch(s.id, { label: v }); }}
+                  />
+                </Cell>
+                <Cell className="text-center">
+                  <OwnerAvatar
+                    ownerId={s.ownerId} users={users} canEdit={canEdit}
+                    onChange={(id) => patch(s.id, { ownerId: id })}
+                  />
+                </Cell>
+                <Cell pad={false}>
+                  <StatusCell
+                    value={s.status} options={statusOptions} canEdit={canEdit} label="Status"
+                    onChange={(v) => { if (v) patch(s.id, { status: v }); }}
+                  />
+                </Cell>
+                <Cell pad={false}>
+                  <StatusCell
+                    value={s.inspectionStatus} options={inspectionOptions} canEdit={canEdit} allowClear
+                    label="Inspection status" onChange={(v) => patch(s.id, { inspectionStatus: v })}
+                  />
+                </Cell>
+                <Cell>
+                  <InlineDate
+                    value={s.inspectionDate} canEdit={canEdit} label="Inspection date"
+                    onSave={(v) => patch(s.id, { inspectionDate: v })}
+                  />
+                </Cell>
+                <Cell className="text-center">
+                  <TimelinePill
+                    start={s.startsOn} end={s.endsOn} canEdit={canEdit}
+                    onSave={(v) => patch(s.id, v)}
+                  />
+                </Cell>
+                <Cell>
+                  <InlineText
+                    value={s.notes} canEdit={canEdit} label="Notes" placeholder={canEdit ? 'Add a note' : '—'}
+                    onSave={(v) => patch(s.id, { notes: v })}
+                  />
+                </Cell>
+                <Cell className="text-center">
+                  <UpdatesBubble stage={s} onOpen={() => setDetailStageId(s.id)} />
+                </Cell>
+                <Cell className="text-center">
+                  {canEdit && mayDelete(s.createdById) && (
+                    <Tooltip content="Remove this subitem" size="sm">
                       <button
                         type="button"
-                        aria-label={`Edit stage ${s.label}`}
-                        onClick={() => setDetailStageId(s.id)}
-                        className="text-gray-500 hover:text-blue-600 transition-colors"
+                        aria-label={`Remove stage ${s.label}`}
+                        onClick={() => setConfirmDelete(s)}
+                        className="text-gray-300 transition-colors hover:text-red-700"
                       >
-                        <FiEdit2 size={13} />
+                        <FiTrash2 size={13} />
                       </button>
                     </Tooltip>
-                    {canEdit && (
-                      <Tooltip content="Remove this stage" size="sm">
-                        <button
-                          type="button"
-                          aria-label={`Remove stage ${s.label}`}
-                          onClick={() => setConfirmDelete(s)}
-                          className="text-gray-300 hover:text-red-700 transition-colors"
-                        >
-                          <FiTrash2 size={13} />
-                        </button>
-                      </Tooltip>
-                    )}
-                  </div>
-                </td>
+                  )}
+                </Cell>
               </tr>
             ))}
+            {canEdit && (
+              <tr>
+                <td colSpan={10} className="border-b border-gray-200 px-2 py-1">
+                  <AddSubitemRow unitId={unitId} existing={stages.map((st) => st.label)} />
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -414,68 +421,119 @@ export function UnitConstructionChecklist({
 }
 
 
-/**
- * Notes and updates for one stage, behind a single cell.
- *
- * These were two adjacent columns doing the same job — saying something about this stage —
- * and between them they put an "Add note" link and a message icon on all 18 rows. The cell
- * now shows the most recent thing SAID rather than a count of things said, and everything
- * else moves into a popup that only exists while someone is using it. Photos live in the
- * popup too: they are worth having and not worth a column of empty dashed squares.
- */
-function StageDetailCell({ stage, onOpen }: { stage: any; onOpen: () => void }) {
-  const updateCount = stage._count?.dailyLogs ?? 0;
-  const photoCount = (stage.photos ?? []).length;
-  // Prefer the note, which is the durable summary of the stage; fall back to a bare count.
-  const preview = stage.notes || (updateCount > 0 ? `${updateCount} update${updateCount === 1 ? '' : 's'}` : null);
 
+function GridTh({ children, className = '' }: { children?: React.ReactNode; className?: string }) {
   return (
-    <>
-      <button
-        type="button" onClick={onOpen}
-        className="flex w-full max-w-[260px] items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-gray-100"
-        aria-label="Open notes and updates for this stage"
-      >
-        {preview ? (
-          <span className="truncate text-gray-700" title={stage.notes || undefined}>{preview}</span>
-        ) : (
-          <span className="text-gray-500 underline decoration-dotted">Add note</span>
-        )}
-        {updateCount > 0 && (
-          <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-gray-500">
-            <FiMessageSquare size={11} /><span className="tabular-nums text-[11px]">{updateCount}</span>
-          </span>
-        )}
-        {photoCount > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-0.5 text-gray-500">
-            <FiCamera size={11} /><span className="tabular-nums text-[11px]">{photoCount}</span>
-          </span>
-        )}
+    <th className={`border-b border-r border-gray-200 bg-gray-50 px-2 py-2 text-center font-medium ${className}`}>
+      {children}
+    </th>
+  );
+}
+
+const initialsOf = (u: { name?: string | null; email?: string }) =>
+  (u.name ?? u.email ?? '?').split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('');
+
+/** monday's person cell: an avatar, or an empty person icon; click to search and assign. */
+function OwnerAvatar({ ownerId, users, canEdit, onChange }: {
+  ownerId: string | null | undefined; users: any[]; canEdit: boolean; onChange: (id: string | null) => void;
+}) {
+  const owner = users.find((u: any) => u.id === ownerId);
+  const face = owner ? (
+    <span
+      title={personLabel(owner)}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 text-[11px] font-semibold text-blue-700"
+    >
+      {initialsOf(owner)}
+    </span>
+  ) : (
+    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-dashed border-gray-300 text-gray-500">
+      <FiUser size={13} />
+    </span>
+  );
+  if (!canEdit) return face;
+  return (
+    <PeoplePicker
+      mode="single" label="Subitem owner" selected={ownerId ? [ownerId] : []}
+      onChange={(ids) => onChange(ids[0] ?? null)}
+    >
+      <button type="button" aria-label={`Owner: ${owner ? personLabel(owner) : 'unassigned'} — change`} className="rounded-full hover:ring-2 hover:ring-blue-200">
+        {face}
       </button>
-    </>
+    </PeoplePicker>
+  );
+}
+
+/** Updates and photos on a stage — the one thing that still opens the stage dialog. */
+function UpdatesBubble({ stage, onOpen }: { stage: any; onOpen: () => void }) {
+  const updates = stage._count?.dailyLogs ?? 0;
+  const photos = (stage.photos ?? []).length;
+  return (
+    <button
+      type="button" onClick={onOpen}
+      aria-label={`Updates and photos for ${stage.label}`}
+      className={`inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-gray-100 ${updates ? 'text-blue-600' : 'text-gray-500'}`}
+    >
+      <FiMessageSquare size={14} />
+      {updates > 0 && <span className="text-[11px] font-semibold tabular-nums">{updates}</span>}
+      {photos > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-gray-600">
+          <FiCamera size={11} /><span className="text-[11px] tabular-nums">{photos}</span>
+        </span>
+      )}
+    </button>
   );
 }
 
 /**
- * A read-only grid cell that is also the way in to the dialog where its value is set.
- *
- * Every one of these columns used to render a bare "—" with no affordance, so a row of
- * em-dashes read as "there is nothing to set here". The dash now carries the same dotted
- * underline the "Add note" cell does, which is the app's existing signal for "this opens
- * something".
+ * monday's "+ Add subitem" row at the foot of the list: type a name, Enter adds it and the
+ * box stays ready for the next. Names from the stage list are suggested, so the common
+ * steps stay linked to the catalogue; anything else is added as a one-off.
  */
-function DetailCellButton({ children, onOpen, filled }: {
-  children?: React.ReactNode; onOpen: () => void; filled: boolean;
-}) {
+function AddSubitemRow({ unitId, existing }: { unitId: string; existing: string[] }) {
+  const addStage = useAddUnitConstructionStage();
+  const catalogueQ = useStageCatalogue();
+  const [name, setName] = useState('');
+  const taken = new Set(existing.map((l) => l.trim().toLowerCase()));
+  const suggestions = (Array.isArray(catalogueQ.data) ? catalogueQ.data : [])
+    .map((c: any) => c.label as string)
+    .filter((l) => !taken.has(l.trim().toLowerCase()));
+  const listId = `subitem-suggestions-${unitId}`;
+
+  const submit = async () => {
+    const label = name.trim();
+    if (!label) return;
+    if (taken.has(label.toLowerCase())) {
+      addToast({ title: `This unit already has "${label}"`, color: 'warning' });
+      return;
+    }
+    try {
+      await addStage.mutateAsync({ unitId, label });
+      setName('');
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not add the subitem'), color: 'danger' });
+    }
+  };
+
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="rounded px-1 py-0.5 text-left hover:bg-gray-100"
-      title="Open this stage — owner, inspection, timeline, notes and photos"
-    >
-      {filled ? children : <span className="text-gray-500 underline decoration-dotted">—</span>}
-    </button>
+    <div className="flex items-center gap-2">
+      <FiPlus size={13} className="ml-1 text-gray-500" />
+      <input
+        value={name} onChange={(e) => setName(e.target.value)} list={listId}
+        disabled={addStage.isPending}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } }}
+        placeholder="Add subitem — type a name and press Enter"
+        aria-label="Add subitem"
+        className="h-8 w-full max-w-md rounded border border-transparent bg-transparent px-2 text-xs text-gray-900 outline-none placeholder:text-gray-500 hover:border-gray-300 focus:border-blue-500 focus:bg-white"
+      />
+      <datalist id={listId}>
+        {suggestions.map((l) => <option key={l} value={l} />)}
+      </datalist>
+      {name.trim() && (
+        <Button size="sm" color="primary" variant="flat" onPress={submit} isLoading={addStage.isPending}>
+          Add
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -483,6 +541,7 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
   const create = useCreateDailyLog();
   const addPhoto = useAddStagePhoto();
   const removePhoto = useRemoveStagePhoto();
+  const mayDelete = useMayDelete();
   const presigned = usePresignedUpload();
   const { data: logsData } = useDailyLogs(projectId, undefined, unitId);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -534,15 +593,10 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
                 <SelectItem key={o.value} textValue={o.label}>{o.label}</SelectItem>
               ))}
             </Select>
-            <Select
-              size="sm" label="Owner" isDisabled={!canEdit || pending}
-              selectedKeys={stage.ownerId ? new Set([stage.ownerId]) : new Set()}
-              onSelectionChange={(k) => onPatch({ ownerId: (Array.from(k)[0] as string) ?? null })}
-            >
-              {users.map((u: any) => (
-                <SelectItem key={u.id} textValue={u.name ?? u.email}>{u.name ?? u.email}</SelectItem>
-              ))}
-            </Select>
+            <OwnerField
+              ownerId={stage.ownerId} users={users} isDisabled={!canEdit || pending}
+              onChange={(id) => onPatch({ ownerId: id })}
+            />
             <Select
               size="sm" label="Inspection status" isDisabled={!canEdit || pending}
               selectedKeys={stage.inspectionStatus ? new Set([stage.inspectionStatus]) : new Set()}
@@ -587,7 +641,7 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
                     src={p.url} alt={p.caption || ''} className="h-full w-full object-cover"
                     onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
                   />
-                  {canEdit && (
+                  {canEdit && mayDelete((p as any).uploadedById) && (
                     <button
                       type="button" aria-label="Remove photo"
                       onClick={() => removePhoto.mutate({ photoId: p.id, unitId })}
@@ -939,14 +993,10 @@ function AddStageModal({
               stages is not a shortcut, it is seventeen wrong dates. */}
           {effectiveMode === 'custom' && (<>
           <div className="grid gap-2 sm:grid-cols-2">
-            <Select
-              size="sm" label="Owner" selectedKeys={form.ownerId ? new Set([form.ownerId]) : new Set()}
-              onSelectionChange={(k) => set('ownerId')((Array.from(k)[0] as string) ?? '')}
-            >
-              {users.map((u: any) => (
-                <SelectItem key={u.id} textValue={u.name ?? u.email}>{u.name ?? u.email}</SelectItem>
-              ))}
-            </Select>
+            <OwnerField
+              ownerId={form.ownerId || null} users={users}
+              onChange={(id) => set('ownerId')(id ?? '')}
+            />
             <Select
               size="sm" label="Status" selectedKeys={form.status ? new Set([form.status]) : new Set()}
               onSelectionChange={(k) => set('status')((Array.from(k)[0] as string) ?? 'NOT_STARTED')}

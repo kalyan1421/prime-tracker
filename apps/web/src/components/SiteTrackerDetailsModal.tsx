@@ -16,10 +16,12 @@ import {
   Button, Input, Select, SelectItem, Textarea, Chip,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, addToast,
 } from '@heroui/react';
-import { FiEdit2 } from 'react-icons/fi';
+import { FiEdit2, FiUsers } from 'react-icons/fi';
 import {
   useUpdateSiteTracker, useSetUnitAssignees, useAssignableUsers, useCustomOptions,
+  useSiteTracker, useSetSiteGroup,
 } from '../hooks/useApi';
+import { PeoplePicker, personLabel } from './PeoplePicker';
 import { useAuthStore } from '../store/authStore';
 import { errMsg } from '../utils/fmt';
 
@@ -50,6 +52,21 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
   const [owners, setOwners] = useState<string[]>((unit.assignees ?? []).map((a: any) => a.id));
   const [err, setErr] = useState<string | null>(null);
 
+  // One job across several units (meeting 2026-10-13: "Units 805–815" is one job on
+  // monday). Candidates are units in the SAME building that are not on the tracker in their
+  // own right — the API refuses anything else, and offering it would only produce an error.
+  const setGroup = useSetSiteGroup();
+  const initialGroup: string[] = (unit.groupUnits ?? []).map((g: any) => g.id);
+  const [groupIds, setGroupIds] = useState<string[]>(initialGroup);
+  const candidatesQ = useSiteTracker(
+    { buildingId: unit.building?.id, untrackedOnly: 'true' },
+    { enabled: canEdit && !!unit.building?.id },
+  );
+  const groupOptions: { id: string; unitNumber: string }[] = [
+    ...(unit.groupUnits ?? []),
+    ...((candidatesQ.data?.rows ?? []) as any[]).filter((r) => r.id !== unit.id),
+  ];
+
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const submit = async () => {
@@ -76,6 +93,9 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
       if (canAssign && owners.slice().sort().join(',') !== before) {
         await setAssignees.mutateAsync({ unitId: unit.id, userIds: owners });
       }
+      if (groupIds.slice().sort().join(',') !== initialGroup.slice().sort().join(',')) {
+        await setGroup.mutateAsync({ unitId: unit.id, unitIds: groupIds });
+      }
       addToast({ title: 'Tracker details saved', color: 'success' });
       onClose();
     } catch (e) {
@@ -83,13 +103,13 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
     }
   };
 
-  const pending = update.isPending || setAssignees.isPending;
+  const pending = update.isPending || setAssignees.isPending || setGroup.isPending;
 
   return (
     <Modal isOpen onOpenChange={onClose} size="lg" scrollBehavior="inside">
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
-          <span className="text-sm font-semibold">Unit {unit.unitNumber} — site details</span>
+          <span className="text-sm font-semibold">{unit.label ?? `Unit ${unit.unitNumber}`} — site details</span>
           <span className="text-[11px] font-normal text-gray-500">
             {unit.building?.name}{unit.project?.name ? ` · ${unit.project.name}` : ''}
           </span>
@@ -130,14 +150,37 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
             />
           )}
 
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs text-gray-700">Owners</span>
+            <PeoplePicker
+              mode="multi" label="Owners" selected={owners} onChange={setOwners}
+              isDisabled={!canEdit || !canAssign}
+              footnote="Owners, the project's PMs and Founders are notified of every update."
+            >
+              <button
+                type="button" disabled={!canEdit || !canAssign}
+                className="flex min-h-[40px] w-full items-center gap-2 rounded-small bg-default-100 px-3 text-left text-sm hover:bg-default-200 disabled:opacity-50"
+              >
+                <FiUsers className="shrink-0 text-gray-500" size={14} />
+                <span className={`truncate ${owners.length ? 'text-gray-900' : 'text-gray-500'}`}>
+                  {owners.length
+                    ? owners.map((id) => (users as any[]).find((u) => u.id === id)).filter(Boolean).map(personLabel).join(', ')
+                    : 'Unassigned — tap to assign'}
+                </span>
+              </button>
+            </PeoplePicker>
+          </div>
+
           <Select
-            size="sm" label="Owners" labelPlacement="outside" selectionMode="multiple"
-            placeholder="Unassigned" isDisabled={!canEdit || !canAssign}
-            selectedKeys={new Set(owners)}
-            onSelectionChange={(k) => setOwners(Array.from(k as Set<string>))}
+            size="sm" label="Other units in this job" labelPlacement="outside" selectionMode="multiple"
+            placeholder={groupOptions.length ? 'Just this unit' : 'No other untracked units in this building'}
+            isDisabled={!canEdit || groupOptions.length === 0}
+            description="One job across several units — e.g. Units 805–815. Same building; the checklist and updates stay on this row."
+            selectedKeys={new Set(groupIds)}
+            onSelectionChange={(k) => setGroupIds(Array.from(k as Set<string>))}
           >
-            {(users as any[]).map((usr) => (
-              <SelectItem key={usr.id} textValue={usr.name ?? usr.email}>{usr.name ?? usr.email}</SelectItem>
+            {groupOptions.map((g) => (
+              <SelectItem key={g.id} textValue={`Unit ${g.unitNumber}`}>Unit {g.unitNumber}</SelectItem>
             ))}
           </Select>
 

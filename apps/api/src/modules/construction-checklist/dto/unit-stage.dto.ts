@@ -34,6 +34,10 @@ export class AddUnitStageDto {
 
 /** Every field optional — a stage update usually touches one thing (a status pill, an owner). */
 export class UpdateUnitStageDto {
+  /** Renaming in place (client, 2026-10-16: "subitem name edits inline"). */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200)
+  label?: string;
+
   @IsOptional() @IsString() @MaxLength(100)
   status?: string;
 

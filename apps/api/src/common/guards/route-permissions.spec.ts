@@ -210,11 +210,15 @@ describe('the routes added this cycle carry the permission they are meant to', (
     ['TasksController', 'addUpdate', ['task:edit']],
     ['TasksController', 'addUpdatePhoto', ['task:edit']],
     ['TasksController', 'deleteUpdate', ['task:edit']],
-    // The Site Tracker's destructive pair. Untracking clears the board fields AND deletes
-    // the unit's checklist, so it must require both — one alone would let a holder of half
-    // the rights do the whole job.
-    ['UnitsController', 'untrackFromSiteTracker', ['siteTracker:edit', 'checklist:edit']],
-    ['ConstructionChecklistController', 'clearUnitStages', ['checklist:edit']],
+    // The Site Tracker's destructive pair — the client's "lock" (2026-10-16). Both delete a
+    // whole checklist, so both need siteTracker:manage, which only Founder and Super Admin
+    // hold. Before this, every PM and every CONSTRUCTION user could do either.
+    ['UnitsController', 'untrackFromSiteTracker', ['siteTracker:manage']],
+    ['ConstructionChecklistController', 'clearUnitStages', ['checklist:edit', 'siteTracker:manage']],
+    // Grouping is ordinary board editing; watching is personal, so viewing is enough.
+    ['UnitsController', 'setSiteGroup', ['siteTracker:edit']],
+    ['UnitsController', 'watch', ['siteTracker:view']],
+    ['UnitsController', 'unwatch', ['siteTracker:view']],
   ];
 
   it.each(expected)('%s.%s requires %s', (controllerName, handler, perms) => {

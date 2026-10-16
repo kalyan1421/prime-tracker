@@ -10,7 +10,7 @@ import {
 } from 'react-icons/fi';
 import {
   useInteriorProjects, useCreateInterior, useUpdateInterior,
-  useAdvanceInteriorPhase, useApproveInterior, useInteriorTemplates, useUsers, useAssignableUsers,
+  useAdvanceInteriorPhase, useApproveInterior, useUsers, useAssignableUsers,
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
@@ -80,9 +80,7 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
   const anchorLabel = unitNumber ? `Unit ${unitNumber}` : buildingName ?? 'this building';
   const isUnit = !!unitId;
   const { data, isLoading } = useInteriorProjects(unitId ? { unitId } : { buildingId });
-  const { data: templatesData } = useInteriorTemplates();
   const { data: usersData } = useAssignableUsers();
-  const templates: any[] = Array.isArray(templatesData) ? templatesData : [];
   const users: any[] = Array.isArray(usersData) ? usersData : [];
   const create = useCreateInterior();
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -102,7 +100,6 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
 
   const defaultForm = (): Record<string, string> => ({
     name: unitNumber ? `Unit ${unitNumber} fit-out` : buildingName ? `${buildingName} fit-out` : '',
-    packageTemplateId: '',
     contractType: 'PER_SQFT',
     ratePerSqft: '',
     area: unitSqft != null ? String(unitSqft) : '',
@@ -134,7 +131,6 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
         contractValue: derivesOwnValue(form.contractType)
           ? undefined
           : form.contractValue ? Number(form.contractValue) : undefined,
-        packageTemplateId: form.packageTemplateId || undefined,
         pmId: form.pmId || undefined,
         startDate: form.startDate || undefined,
         targetEnd: form.targetEnd || undefined,
@@ -178,7 +174,7 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
           </p>
         )}
         {projects.map((p) => (
-          <InteriorProjectCard key={p.id} project={p} templates={templates} users={users} />
+          <InteriorProjectCard key={p.id} project={p} users={users} />
         ))}
       </CardBody>
 
@@ -202,35 +198,6 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
               isInvalid={!!interiorErr && !form.name.trim()}
               errorMessage="Required"
             />
-
-            {/* Package template */}
-            {templates.length > 0 && (
-              <Select
-                label="Package (optional)"
-                placeholder="Custom — no package"
-                selectedKeys={form.packageTemplateId ? [form.packageTemplateId] : []}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  const tpl = templates.find((t) => t.id === id);
-                  setForm((f) => ({
-                    ...f,
-                    packageTemplateId: id,
-                    ratePerSqft: f.ratePerSqft || (tpl?.defaultRatePerSqft != null ? String(tpl.defaultRatePerSqft) : ''),
-                  }));
-                }}
-              >
-                {templates.map((t) => (
-                  <SelectItem key={t.id} textValue={t.name}>
-                    {t.name}{t.items?.length ? ` · ${t.items.length} items` : ''}
-                  </SelectItem>
-                ))}
-              </Select>
-            )}
-            {form.packageTemplateId && (
-              <p className="text-xs text-gray-500">
-                This package's BOQ lines will be copied into the new fit-out's scope.
-              </p>
-            )}
 
             {/* Contract */}
             <div className="grid grid-cols-3 gap-2">
@@ -288,7 +255,7 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
   );
 }
 
-function InteriorProjectCard({ project, templates, users }: { project: any; templates: any[]; users: any[] }) {
+function InteriorProjectCard({ project, users }: { project: any; users: any[] }) {
   const advance = useAdvanceInteriorPhase();
   const approve = useApproveInterior();
   const update = useUpdateInterior();
