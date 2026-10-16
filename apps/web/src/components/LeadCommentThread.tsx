@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Avatar, Button, Textarea, Tooltip, addToast } from '@heroui/react';
+import { Avatar, Button, Tooltip, addToast } from '@heroui/react';
 import { FiMessageSquare, FiSend, FiEdit2, FiTrash2, FiAtSign } from 'react-icons/fi';
 import {
   useLeadComments, useAddLeadComment, useUpdateLeadComment, useDeleteLeadComment,
@@ -7,6 +7,7 @@ import {
 } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { errMsg } from '../utils/fmt';
+import { MentionTextarea, type MentionTextareaHandle } from './MentionTextarea';
 
 /**
  * Discussion thread on a lead.
@@ -16,8 +17,9 @@ import { errMsg } from '../utils/fmt';
  * Merging the two was tried on this project and reversed.
  *
  * @mentions are plain text — the server resolves names against the live roster using the
- * same parser the Update Board and unit/project comments use. The picker here only makes
- * the name easy to type correctly; it is not a separate mention format.
+ * same parser the Update Board and unit/project comments use. Typing "@" opens a search
+ * list (MentionTextarea, shared with the unit/project comments) that narrows as you type;
+ * it only makes the name easy to enter correctly and is not a separate mention format.
  */
 
 function relativeTime(iso: string) {
@@ -65,15 +67,13 @@ export function LeadCommentThread({ leadId }: { leadId: string }) {
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
-  const [showPicker, setShowPicker] = useState(false);
-  const boxRef = useRef<HTMLTextAreaElement>(null);
+  const boxRef = useRef<MentionTextareaHandle>(null);
 
   const comments: any[] = (data as any[]) || [];
   const canPost = hasPermission('lead:edit');
-  const names = useMemo(
-    () => ((users as any[]) || []).map((u: any) => u.name).filter(Boolean),
-    [users],
-  );
+  const userList: any[] = (users as any[]) || [];
+  // Only for highlighting @names in rendered comments; the picker takes the full users.
+  const names = useMemo(() => userList.map((u: any) => u.name).filter(Boolean), [userList]);
 
   const post = async () => {
     if (!draft.trim()) return;
@@ -102,14 +102,6 @@ export function LeadCommentThread({ leadId }: { leadId: string }) {
     } catch (e) {
       addToast({ title: errMsg(e, 'Could not delete'), color: 'danger' });
     }
-  };
-
-  const insertMention = (name: string) => {
-    // Append rather than splice at the caret: a textarea that reorders what someone has
-    // already typed is worse than one that just adds to the end.
-    setDraft((d) => `${d}${d && !d.endsWith(' ') ? ' ' : ''}@${name} `);
-    setShowPicker(false);
-    boxRef.current?.focus();
   };
 
   return (
@@ -165,10 +157,14 @@ export function LeadCommentThread({ leadId }: { leadId: string }) {
 
                 {editingId === c.id ? (
                   <div className="mt-1">
-                    <Textarea
-                      size="sm" minRows={2} value={editDraft}
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      aria-label="Edit comment"
+                    <MentionTextarea
+                      minRows={2} maxRows={8}
+                      value={editDraft}
+                      onChange={setEditDraft}
+                      onSubmit={() => saveEdit(c.id)}
+                      submitOn="mod-enter"
+                      users={userList}
+                      ariaLabel="Edit comment"
                     />
                     <div className="flex gap-1 mt-1">
                       <Button size="sm" color="primary" className="h-6 min-w-0 px-2 text-[11px]"
@@ -193,26 +189,25 @@ export function LeadCommentThread({ leadId }: { leadId: string }) {
       </div>
 
       {canPost && (
-        <div className="relative">
-          <Textarea
+        <div>
+          <MentionTextarea
             ref={boxRef}
-            size="sm" minRows={2}
-            placeholder="Add to the discussion… use @ to notify someone"
+            minRows={2} maxRows={8}
+            placeholder="Add to the discussion… type @ to search for someone to notify"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            aria-label="New comment"
-            onKeyDown={(e) => {
-              // Cmd/Ctrl+Enter posts. Plain Enter must stay a newline — people write
-              // multi-line notes here and losing one mid-sentence is maddening.
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); post(); }
-            }}
+            onChange={setDraft}
+            // Cmd/Ctrl+Enter posts. Plain Enter must stay a newline — people write
+            // multi-line notes here and losing one mid-sentence is maddening.
+            onSubmit={post}
+            submitOn="mod-enter"
+            users={userList}
+            ariaLabel="New comment"
           />
           <div className="flex items-center gap-1 mt-1">
             <Button
               size="sm" variant="flat" className="h-7 min-w-0 px-2 text-[11px]"
               startContent={<FiAtSign className="w-3 h-3" />}
-              onPress={() => setShowPicker((v) => !v)}
-              aria-expanded={showPicker}
+              onPress={() => boxRef.current?.startMention()}
             >
               Mention
             </Button>
@@ -224,24 +219,6 @@ export function LeadCommentThread({ leadId }: { leadId: string }) {
               Post
             </Button>
           </div>
-
-          {showPicker && (
-            <div className="absolute bottom-full mb-1 left-0 z-20 w-56 max-h-48 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
-              {names.length === 0 && (
-                <p className="px-2 py-1.5 text-[11px] text-gray-500">No one to mention.</p>
-              )}
-              {names.map((n: string) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => insertMention(n)}
-                  className="w-full text-left px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>

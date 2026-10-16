@@ -1609,6 +1609,22 @@ export function useAddLeadActivity() {
   });
 }
 
+export function useUpdateLeadActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ leadId, activityId, data }: { leadId: string; activityId: string; data: Record<string, unknown> }) =>
+      api.put(`/leads/${leadId}/activities/${activityId}`, data).then((r) => r.data),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['lead-activities', vars.leadId] });
+      qc.invalidateQueries({ queryKey: ['lead', vars.leadId] });
+      // Changing a CALL to an EMAIL, or moving its date, shifts the call count, last call
+      // and the calendar dots just as logging one does.
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      qc.invalidateQueries({ queryKey: ['lead-calls', vars.leadId] });
+    },
+  });
+}
+
 /** Call count, last call with its note, and the per-date roll-up the calendar dots. */
 export function useLeadCalls(leadId?: string) {
   const can = useCan('lead:view');

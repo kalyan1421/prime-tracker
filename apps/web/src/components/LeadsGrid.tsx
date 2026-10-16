@@ -1,7 +1,8 @@
 import { Fragment } from 'react';
 import { Avatar, Chip, Tooltip } from '@heroui/react';
-import { FiChevronDown, FiChevronRight, FiPhoneCall } from 'react-icons/fi';
+import { FiArrowDown, FiArrowUp, FiChevronDown, FiChevronRight, FiPhoneCall } from 'react-icons/fi';
 import { fmtDate } from '../utils/fmt';
+import { followUpDays, type LeadSort, type LeadSortKey } from '../utils/leadSort';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 
 /**
@@ -21,22 +22,33 @@ export interface LeadsGridProps {
   viaLabels: Record<string, string>;
   selectedId?: string;
   onSelect: (lead: any) => void;
-}
-
-function followUpDays(lead: any): number | null {
-  if (!lead?.followUpDate) return null;
-  const p = String(lead.followUpDate).slice(0, 10).split('-').map(Number);
-  if (p.length !== 3 || p.some(Number.isNaN)) return null;
-  const due = Date.UTC(p[0], p[1] - 1, p[2]);
-  const n = new Date();
-  return Math.round((due - Date.UTC(n.getFullYear(), n.getMonth(), n.getDate())) / 86_400_000);
+  /** The page owns sorting (it sorts before paginating); the grid only shows and requests it. */
+  sort?: LeadSort;
+  onSort?: (key: LeadSortKey) => void;
 }
 
 const TH = 'px-2 py-1.5 text-left text-[11px] font-semibold text-gray-600 whitespace-nowrap';
+// Sortable headers put the padding on the button inside, so the whole cell is the hit area.
+const TH_SORTABLE = 'text-left text-[11px] font-semibold text-gray-600 whitespace-nowrap';
 const TD = 'px-2 py-1.5 text-xs text-gray-700 whitespace-nowrap';
 
+/** Column → sort field. VIA and Contact are deliberately absent: neither has a useful order. */
+const COLUMNS: { label: string; sortKey?: LeadSortKey; align?: 'right' }[] = [
+  { label: 'Name', sortKey: 'name' },
+  { label: 'Team', sortKey: 'team' },
+  { label: 'Source', sortKey: 'source' },
+  { label: 'VIA' },
+  { label: 'Added', sortKey: 'added' },
+  { label: 'Follow-up', sortKey: 'followUp' },
+  { label: 'Contact' },
+  { label: 'Status', sortKey: 'status' },
+  { label: 'Building / Unit', sortKey: 'unit' },
+  { label: 'Campaign', sortKey: 'campaign' },
+  { label: 'Calls', sortKey: 'calls', align: 'right' },
+];
+
 export function LeadsGrid({
-  leads, statusToken, statusLabels, sourceLabels, viaLabels, selectedId, onSelect,
+  leads, statusToken, statusLabels, sourceLabels, viaLabels, selectedId, onSelect, sort, onSort,
 }: LeadsGridProps) {
   // Group by project — the client's board is one board per project, and an ungrouped
   // 600-row sheet is the flat-list problem this codebase has already fixed once.
@@ -56,17 +68,34 @@ export function LeadsGrid({
       <table className="w-full border-collapse">
         <thead className="bg-gray-50 border-b border-gray-200">
           <tr>
-            <th className={TH}>Name</th>
-            <th className={TH}>Team</th>
-            <th className={TH}>Source</th>
-            <th className={TH}>VIA</th>
-            <th className={TH}>Added</th>
-            <th className={TH}>Follow-up</th>
-            <th className={TH}>Contact</th>
-            <th className={TH}>Status</th>
-            <th className={TH}>Building / Unit</th>
-            <th className={TH}>Campaign</th>
-            <th className={`${TH} text-right`}>Calls</th>
+            {COLUMNS.map((col) => {
+              const active = !!col.sortKey && sort?.key === col.sortKey;
+              const right = col.align === 'right' ? 'text-right' : '';
+              if (!col.sortKey || !onSort) {
+                return <th key={col.label} className={`${TH} ${right}`}>{col.label}</th>;
+              }
+              return (
+                <th
+                  key={col.label}
+                  className={`${TH_SORTABLE} ${right}`}
+                  aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSort(col.sortKey!)}
+                    className={`inline-flex items-center gap-1 px-2 py-1.5 w-full hover:text-gray-900 hover:bg-gray-100 ${
+                      col.align === 'right' ? 'justify-end' : ''
+                    } ${active ? 'text-gray-900' : ''}`}
+                    title={`Sort by ${col.label}`}
+                  >
+                    {col.label}
+                    {active && (sort!.dir === 'asc'
+                      ? <FiArrowUp className="w-3 h-3" aria-hidden="true" />
+                      : <FiArrowDown className="w-3 h-3" aria-hidden="true" />)}
+                  </button>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>

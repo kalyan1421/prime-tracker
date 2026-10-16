@@ -152,6 +152,18 @@ export class AddLeadActivityDto {
   occurredAt?: string;
 }
 
+/** Correcting a logged activity. Every field optional — send only what changed. */
+export class UpdateLeadActivityDto {
+  @IsOptional() @IsEnum(LeadActivityType)
+  type?: LeadActivityType;
+
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(2000)
+  note?: string;
+
+  @IsOptional() @IsDateString()
+  occurredAt?: string;
+}
+
 
 /** Lead discussion thread. Plain text — @mentions are resolved from the body server-side. */
 export class LeadCommentDto {

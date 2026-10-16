@@ -3,7 +3,7 @@ import { LeadsService } from './leads.service';
 
 const mockPrisma: any = {
   lead: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
-  leadActivity: { create: jest.fn(), findMany: jest.fn(), groupBy: jest.fn() },
+  leadActivity: { create: jest.fn(), findMany: jest.fn(), groupBy: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   leadComment: { create: jest.fn(), findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), delete: jest.fn() },
   user: { findMany: jest.fn() },
   unit: { findUnique: jest.fn() },
@@ -201,6 +201,65 @@ describe('LeadsService — activities and call history', () => {
     it('rejects an unparseable date rather than storing Invalid Date', async () => {
       await expect(service.addActivity('l1', 'u1', 'CALL' as any, 'x', 'last tuesday'))
         .rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('updateActivity', () => {
+    beforeEach(() => {
+      mockPrisma.leadActivity.findUnique.mockResolvedValue({ id: 'a1', leadId: 'l1', createdBy: 'u1' });
+      mockPrisma.leadActivity.update.mockResolvedValue({ id: 'a1' });
+    });
+
+    it('lets the author correct the type, note and date', async () => {
+      await service.updateActivity('l1', 'a1', 'u1', {
+        type: 'EMAIL' as any, note: '  sent brochure  ', occurredAt: '2026-09-15T12:00:00.000Z',
+      });
+      const { where, data } = mockPrisma.leadActivity.update.mock.calls[0][0];
+      expect(where).toEqual({ id: 'a1' });
+      expect(data).toEqual({
+        type: 'EMAIL', note: 'sent brochure', occurredAt: new Date('2026-09-15T12:00:00.000Z'),
+      });
+    });
+
+    it('only writes the fields that were sent', async () => {
+      await service.updateActivity('l1', 'a1', 'u1', { note: 'fixed typo' });
+      const { data } = mockPrisma.leadActivity.update.mock.calls[0][0];
+      expect(data).toEqual({ note: 'fixed typo' });
+    });
+
+    it('does not bump the lead — fixing a note is not contact, and must not hide a stale lead', async () => {
+      await service.updateActivity('l1', 'a1', 'u1', { note: 'fixed typo' });
+      expect(mockPrisma.lead.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses to edit someone else's activity", async () => {
+      await expect(service.updateActivity('l1', 'a1', 'someone-else', { note: 'x' }))
+        .rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.leadActivity.update).not.toHaveBeenCalled();
+    });
+
+    it('404s an activity that belongs to a different lead than the URL', async () => {
+      await expect(service.updateActivity('other-lead', 'a1', 'u1', { note: 'x' }))
+        .rejects.toBeInstanceOf(NotFoundException);
+      expect(mockPrisma.leadActivity.update).not.toHaveBeenCalled();
+    });
+
+    it('404s a missing activity', async () => {
+      mockPrisma.leadActivity.findUnique.mockResolvedValue(null);
+      await expect(service.updateActivity('l1', 'nope', 'u1', { note: 'x' }))
+        .rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects a whitespace-only note', async () => {
+      await expect(service.updateActivity('l1', 'a1', 'u1', { note: '   ' }))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('applies the same no-future-dates rule as logging', async () => {
+      const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+      await expect(service.updateActivity('l1', 'a1', 'u1', { occurredAt: tomorrow }))
+        .rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.leadActivity.update).not.toHaveBeenCalled();
     });
   });
 

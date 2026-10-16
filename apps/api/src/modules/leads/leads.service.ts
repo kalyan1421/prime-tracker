@@ -567,19 +567,7 @@ export class LeadsService {
   ) {
     await this.findById(leadId);
 
-    let when: Date | undefined;
-    if (occurredAt) {
-      when = new Date(occurredAt);
-      if (Number.isNaN(when.getTime())) {
-        throw new BadRequestException(`Invalid date "${occurredAt}"`);
-      }
-      // A call cannot have happened tomorrow. Allowing it would put entries in the future
-      // of the timeline and quietly corrupt "last contacted", which drives the stale-lead
-      // triage. Tomorrow's PLANNED contact is what followUpDate is for.
-      if (when.getTime() > Date.now() + 60_000) {
-        throw new BadRequestException('An activity cannot be logged in the future');
-      }
-    }
+    const when = occurredAt ? this.parseOccurredAt(occurredAt) : undefined;
 
     const activity = await this.prisma.leadActivity.create({
       data: { leadId, createdBy: userId, type, note, ...(when ? { occurredAt: when } : {}) },
@@ -587,6 +575,60 @@ export class LeadsService {
     });
     await this.prisma.lead.update({ where: { id: leadId }, data: { updatedAt: new Date() } });
     return activity;
+  }
+
+  /**
+   * Author-only, the same rule as the discussion thread: the timeline is a record of who
+   * did what, so one rep cannot rewrite another's logged call.
+   *
+   * Deliberately does NOT bump lead.updatedAt the way addActivity does. Fixing a typo in
+   * last month's note is not contact with the lead, and bumping it would hide a genuinely
+   * stale lead from the stale-lead triage.
+   */
+  async updateActivity(
+    leadId: string,
+    activityId: string,
+    userId: string,
+    data: { type?: LeadActivityType; note?: string; occurredAt?: string },
+  ) {
+    const existing = await this.prisma.leadActivity.findUnique({ where: { id: activityId } });
+    // Checked against the lead in the URL as well: access scoping is resolved from that
+    // lead, so an activity belonging to a different lead must not be editable through it.
+    if (!existing || existing.leadId !== leadId) {
+      throw new NotFoundException('Activity not found');
+    }
+    if (existing.createdBy !== userId) {
+      throw new ForbiddenException('You can only edit activities you logged');
+    }
+
+    const update: Prisma.LeadActivityUpdateInput = {};
+    if (data.type !== undefined) update.type = data.type;
+    if (data.note !== undefined) {
+      const note = data.note.trim();
+      if (!note) throw new BadRequestException('An activity note cannot be empty');
+      update.note = note;
+    }
+    if (data.occurredAt !== undefined) update.occurredAt = this.parseOccurredAt(data.occurredAt);
+
+    return this.prisma.leadActivity.update({
+      where: { id: activityId },
+      data: update,
+      include: { createdByUser: { select: { id: true, name: true, avatarUrl: true } } },
+    });
+  }
+
+  private parseOccurredAt(occurredAt: string): Date {
+    const when = new Date(occurredAt);
+    if (Number.isNaN(when.getTime())) {
+      throw new BadRequestException(`Invalid date "${occurredAt}"`);
+    }
+    // A call cannot have happened tomorrow. Allowing it would put entries in the future
+    // of the timeline and quietly corrupt "last contacted", which drives the stale-lead
+    // triage. Tomorrow's PLANNED contact is what followUpDate is for.
+    if (when.getTime() > Date.now() + 60_000) {
+      throw new BadRequestException('An activity cannot be logged in the future');
+    }
+    return when;
   }
 
   /**

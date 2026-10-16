@@ -12,7 +12,7 @@
  * comment body is displayed as-is everywhere, and a raw token in the thread would be
  * worse than the ambiguity it removes.
  */
-import { useState, useRef, useMemo, useLayoutEffect } from 'react';
+import { forwardRef, useImperativeHandle, useState, useRef, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Textarea, Avatar } from '@heroui/react';
 
@@ -32,6 +32,21 @@ interface Props {
   maxRows?: number;
   className?: string;
   size?: 'sm' | 'md' | 'lg';
+  /** Accessible name; a placeholder alone is not one. */
+  ariaLabel?: string;
+  /**
+   * What fires `onSubmit`. 'enter' (default): Enter, with Shift+Enter for a newline — right
+   * for a one-line comment bar. 'mod-enter': only Cmd/Ctrl+Enter, so plain Enter stays a
+   * newline — right for a multi-line discussion box where losing a note mid-sentence to a
+   * stray Enter is worse than one extra keystroke to post.
+   */
+  submitOn?: 'enter' | 'mod-enter';
+}
+
+/** For a "Mention" button that lives outside this component. */
+export interface MentionTextareaHandle {
+  /** Put an "@" at the caret, focus the box and open the list. */
+  startMention: () => void;
 }
 
 /** The partial word being typed after an "@", or null when the caret is not in one. */
@@ -47,14 +62,17 @@ function activeMentionQuery(text: string, caret: number): { query: string; start
   return { query, start: at };
 }
 
-export function MentionTextarea({
+export const MentionTextarea = forwardRef<MentionTextareaHandle, Props>(function MentionTextarea({
   value, onChange, onSubmit, users,
-  placeholder, minRows = 1, maxRows = 4, className, size = 'sm',
-}: Props) {
+  placeholder, minRows = 1, maxRows = 4, className, size = 'sm', ariaLabel, submitOn = 'enter',
+}, handle) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  // A textarea's selectionStart is only meaningful once the person has been in it. Until
+  // then startMention appends at the end instead of trusting a caret they never placed.
+  const everFocused = useRef(false);
 
   const mention = useMemo(() => activeMentionQuery(value, caret), [value, caret]);
 
@@ -114,6 +132,23 @@ export function MentionTextarea({
     setOpen(true);
   };
 
+  useImperativeHandle(handle, () => ({
+    startMention: () => {
+      const el = ref.current;
+      const at = everFocused.current ? (el?.selectionStart ?? value.length) : value.length;
+      // An "@" glued to the previous word ("hi@") would not start a mention.
+      const lead = at > 0 && !/\s/.test(value[at - 1]) ? ' ' : '';
+      onChange(`${value.slice(0, at)}${lead}@${value.slice(at)}`);
+      const caretAt = at + lead.length + 1;
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(caretAt, caretAt);
+        setCaret(caretAt);
+        setOpen(true);
+      });
+    },
+  }));
+
   return (
     <div className={`relative ${className ?? ''}`}>
       {showList && pos && createPortal(
@@ -149,6 +184,7 @@ export function MentionTextarea({
         minRows={minRows}
         maxRows={maxRows}
         placeholder={placeholder}
+        aria-label={ariaLabel}
         value={value}
         onChange={(e) => { onChange(e.target.value); syncCaret(e.target as unknown as HTMLTextAreaElement); }}
         // HeroUI types Textarea's click target as HTMLInputElement; the runtime element
@@ -161,6 +197,7 @@ export function MentionTextarea({
             setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0);
           }
         }}
+        onFocus={() => { everFocused.current = true; }}
         onBlur={() => setOpen(false)}
         onKeyDown={(e) => {
           if (showList) {
@@ -169,7 +206,8 @@ export function MentionTextarea({
             if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insert(matches[highlight]); return; }
             if (e.key === 'Escape') { e.preventDefault(); setOpen(false); return; }
           }
-          if (e.key === 'Enter' && !e.shiftKey && onSubmit) {
+          const wantsSubmit = submitOn === 'mod-enter' ? (e.metaKey || e.ctrlKey) : !e.shiftKey;
+          if (e.key === 'Enter' && wantsSubmit && onSubmit) {
             e.preventDefault();
             onSubmit();
           }
@@ -177,4 +215,4 @@ export function MentionTextarea({
       />
     </div>
   );
-}
+});

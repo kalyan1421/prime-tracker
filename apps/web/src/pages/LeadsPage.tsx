@@ -9,6 +9,7 @@ import {
   FiTarget, FiPlus, FiEdit2, FiTrash2, FiPhone, FiMail,
   FiMessageSquare, FiRefreshCw, FiSearch, FiClock, FiChevronRight,
   FiHome, FiBarChart2, FiUser, FiUsers, FiCalendar, FiPhoneCall, FiGrid, FiList, FiX,
+  FiArrowUp, FiArrowDown,
 } from 'react-icons/fi';
 import {
   useLeads, useLeadActivities, useProjectOptions, useUnits, useBuildings, useCampaigns, useUsers, useAssignableUsers,
@@ -22,30 +23,17 @@ import { LeadCallCalendar } from '../components/LeadCallCalendar';
 import { LeadsGrid } from '../components/LeadsGrid';
 import { LeadsCalendar } from '../components/LeadsCalendar';
 import { LeadCommentThread } from '../components/LeadCommentThread';
+import { EditLeadActivityModal } from '../components/EditLeadActivityModal';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { LoadingState, ErrorState, EmptyState, Pagination, wideSelectProps } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { LeadDocumentsPanel } from '../components/LeadDocumentsPanel';
 import { usePagination } from '../hooks/usePagination';
-
-/**
- * Days until a follow-up is due: negative = overdue, 0 = today, positive = upcoming.
- * null when no date is set.
- *
- * Compared as CALENDAR DAYS, not instants. followUpDate is a DATE column and arrives as
- * UTC midnight, so a naive `new Date(x) < new Date()` marks today's follow-up overdue for
- * every hour of the local day after midnight UTC — the same timezone trap that already
- * produced a time-of-day-dependent test failure elsewhere in this repo.
- */
-function followUpDays(lead: any): number | null {
-  if (!lead?.followUpDate) return null;
-  const d = String(lead.followUpDate).slice(0, 10).split('-').map(Number);
-  if (d.length !== 3 || d.some(Number.isNaN)) return null;
-  const due = Date.UTC(d[0], d[1] - 1, d[2]);
-  const now = new Date();
-  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((due - today) / 86_400_000);
-}
+import {
+  sortLeads, staleDays, followUpDays, matchFollowUp, defaultDirFor, isLeadSortKey,
+  LEAD_SORT_FIELDS, DEFAULT_LEAD_SORT, FOLLOW_UP_FILTERS,
+  type LeadSort, type LeadSortKey, type FollowUpFilter,
+} from '../utils/leadSort';
 
 // Sentinel for the "no campaign" chip. A real campaign id can never collide with it.
 const NO_CAMPAIGN = '__none__';
@@ -84,14 +72,6 @@ const STATUS_TOKEN: Record<string, { bg: string; text: string; dot: string; rail
   DEAD:          { bg: 'bg-gray-100',    text: 'text-gray-600',    dot: 'bg-gray-400',    rail: 'bg-gray-400' },
 };
 
-// "Stale" = no activity in 14+ days, and not in a terminal status (CONVERTED/LOST/DEAD).
-// The 14-day threshold is intentionally aggressive so reps notice deals going cold
-// — escalates to red at 30 days. Matches the dashboard's stale-leads list.
-function staleDays(lead: { updatedAt: string; status: string }): number | null {
-  if (['CONVERTED', 'LOST', 'DEAD'].includes(lead.status)) return null;
-  const days = Math.floor((Date.now() - new Date(lead.updatedAt).getTime()) / 86_400_000);
-  return days >= 14 ? days : null;
-}
 
 const SOURCE_LABELS: Record<string, string> = {
   WEBSITE: 'Website',
@@ -111,9 +91,12 @@ const SOURCE_LABELS: Record<string, string> = {
 function ActivityTimeline({ leadId }: { leadId: string }) {
   const { data: activities, isLoading } = useLeadActivities(leadId);
   const addActivity = useAddLeadActivity();
+  const { user, hasPermission } = useAuthStore();
+  const canEdit = hasPermission('lead:edit');
   const [type, setType] = useState('NOTE');
   const [note, setNote] = useState('');
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
 
   const handleAdd = async () => {
     if (!note.trim()) return;
@@ -190,19 +173,33 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
             <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center shrink-0">
               {ACTIVITY_ICONS[act.type] || <FiMessageSquare className="w-3.5 h-3.5" />}
             </div>
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 group">
               <div className="flex items-center gap-2">
                 <p className="text-xs font-medium text-gray-700">{act.type.replace('_', ' ')}</p>
-                <span className="text-[11px] text-gray-500">{fmtDate(act.createdAt)}</span>
+                {/* occurredAt, not createdAt: the list is ordered by when it happened, so a
+                    back-dated call must also SHOW the day it happened. */}
+                <span className="text-[11px] text-gray-500">{fmtDate(act.occurredAt ?? act.createdAt)}</span>
                 {act.createdByUser && (
                   <span className="text-[11px] text-gray-500">· {act.createdByUser.name}</span>
                 )}
+                {/* Author-only, mirroring the API — no button that can only ever 403. */}
+                {canEdit && act.createdBy === user?.id && (
+                  <Button
+                    isIconOnly size="sm" variant="light" aria-label="Edit activity"
+                    className="ml-auto h-6 w-6 min-w-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                    onPress={() => setEditing(act)}
+                  >
+                    <FiEdit2 className="w-3 h-3" />
+                  </Button>
+                )}
               </div>
-              <p className="text-xs text-gray-600 mt-0.5">{act.note}</p>
+              <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap break-words">{act.note}</p>
             </div>
           </div>
         ))}
       </div>
+
+      <EditLeadActivityModal activity={editing} leadId={leadId} onClose={() => setEditing(null)} />
     </div>
   );
 }
@@ -984,6 +981,29 @@ export default function LeadsPage() {
   const [brokerFilter, setBrokerFilter] = useState('');
   const [campaignFilter, setCampaignFilter] = useState('');
   const [viaFilter, setViaFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
+  const [projectFilter, setProjectFilter] = useState('');
+  const [followUpFilter, setFollowUpFilter] = useState<FollowUpFilter>('');
+  // Sort is a working preference like the view mode, so it persists the same way — and is
+  // validated on read, because whatever is in storage may predate a renamed key.
+  const [sort, setSort] = useState<LeadSort>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('leads-sort') || 'null');
+      if (raw && isLeadSortKey(raw.key) && (raw.dir === 'asc' || raw.dir === 'desc')) return raw;
+    } catch { /* private window or bad JSON — fall through */ }
+    return DEFAULT_LEAD_SORT;
+  });
+  const setSortPersisted = (next: LeadSort) => {
+    setSort(next);
+    try { localStorage.setItem('leads-sort', JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  // Picking a field starts it in the direction people mean (newest first, soonest
+  // follow-up first); picking the field that is already active flips it instead.
+  const sortBy = (key: LeadSortKey) => setSortPersisted(
+    sort.key === key
+      ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: defaultDirFor(key) },
+  );
   // Cards vs grid is a per-person working preference, not shared state, so it lives in
   // localStorage. Wrapped because storage throws in private windows and a broken read
   // must not take the page down with it.
@@ -1074,34 +1094,50 @@ export default function LeadsPage() {
     onFormClose();
   };
 
-  // Sorted most-stale-first — the header surfaces a stale count, so the list underneath
-  // should actually triage by it instead of rendering in raw API order. Non-stale/terminal
-  // leads (staleDays() === null) sort after every stale one, in their original relative order.
-  // The server-filtered set, before any of the three client-side narrowings. Every count
-  // shown to the user is derived from THIS array, so the numbers stay truthful whichever
-  // filter happens to be active.
-  const baseLeads = useMemo(() => {
-    const arr = (leads as any[]) || [];
-    return arr.slice().sort((a, b) => (staleDays(b) ?? -1) - (staleDays(a) ?? -1));
-  }, [leads]);
+  // The server-filtered set, before any of the client-side narrowings. Every count shown
+  // to the user is derived from THIS array, so the numbers stay truthful whichever filter
+  // happens to be active.
+  const baseLeads: any[] = useMemo(() => (leads as any[]) || [], [leads]);
 
-  // Each filter gets its own predicate so the counters below can leave ONE of them out.
-  const matchStatus = useCallback(
-    (l: any) => !statusFilter || l.status === statusFilter, [statusFilter]);
-  const matchCampaign = useCallback((l: any) => !campaignFilter
-    || (campaignFilter === NO_CAMPAIGN ? !l.campaignId : l.campaignId === campaignFilter), [campaignFilter]);
-  const matchVia = useCallback((l: any) => !viaFilter || l.via === viaFilter, [viaFilter]);
+  // Each client-side filter is one named predicate, so a facet counter can leave out
+  // exactly its own dimension (see below) without re-listing the others.
+  const predicates = useMemo(() => ({
+    status: (l: any) => !statusFilter || l.status === statusFilter,
+    campaign: (l: any) => !campaignFilter
+      || (campaignFilter === NO_CAMPAIGN ? !l.campaignId : l.campaignId === campaignFilter),
+    via: (l: any) => !viaFilter || l.via === viaFilter,
+    source: (l: any) => !sourceFilter || l.source === sourceFilter,
+    project: (l: any) => !projectFilter || l.projectId === projectFilter,
+    followUp: (l: any) => matchFollowUp(l, followUpFilter),
+  }), [statusFilter, campaignFilter, viaFilter, sourceFilter, projectFilter, followUpFilter]);
+  type FacetKey = keyof typeof predicates;
+  const filterExcept = useCallback((omit?: FacetKey) => baseLeads.filter((l: any) =>
+    (Object.keys(predicates) as FacetKey[]).every((k) => k === omit || predicates[k](l)),
+  ), [baseLeads, predicates]);
 
+  const statusOrder = useMemo(() => leadStatusOpts.map((o) => o.value), [leadStatusOpts]);
+  // Filter first, then sort — sorting only what survives. The default (most stale first)
+  // keeps the old behaviour: the header surfaces a stale count, so the list should triage
+  // by it rather than render in raw API order.
   const leadsArr = useMemo(
-    () => baseLeads.filter((l: any) => matchStatus(l) && matchCampaign(l) && matchVia(l)),
-    [baseLeads, matchStatus, matchCampaign, matchVia],
+    () => sortLeads(filterExcept(), sort, statusOrder),
+    [filterExcept, sort, statusOrder],
   );
 
   const { page, setPage, totalPages, paged: pagedLeads, total } = usePagination(
     leadsArr,
     PAGE_SIZE,
-    [debouncedSearch, statusFilter, assigneeFilter, brokerFilter, campaignFilter, viaFilter],
+    [debouncedSearch, statusFilter, assigneeFilter, brokerFilter, campaignFilter, viaFilter,
+      sourceFilter, projectFilter, followUpFilter, sort.key, sort.dir],
   );
+
+  const anyFilter = !!(debouncedSearch || statusFilter || assigneeFilter || brokerFilter
+    || campaignFilter || viaFilter || sourceFilter || projectFilter || followUpFilter);
+  const clearFilters = () => {
+    setStatusFilter(''); setAssigneeFilter(''); setBrokerFilter('');
+    setCampaignFilter(''); setViaFilter(''); setSourceFilter('');
+    setProjectFilter(''); setFollowUpFilter(''); handleSearch('');
+  };
 
   // FACET counts: each counter is computed over the set narrowed by every filter EXCEPT
   // its own. Counting over the fully-filtered set would drive every other option to zero;
@@ -1109,14 +1145,27 @@ export default function LeadsPage() {
   // that picking New yields nothing. Leaving out only its own dimension is the one reading
   // that answers the question the user is actually asking: "if I picked this instead, how
   // many would I get?"
-  const statusFacet = useMemo(
-    () => baseLeads.filter((l: any) => matchCampaign(l) && matchVia(l)),
-    [baseLeads, matchCampaign, matchVia],
-  );
-  const campaignFacet = useMemo(
-    () => baseLeads.filter((l: any) => matchStatus(l) && matchVia(l)),
-    [baseLeads, matchStatus, matchVia],
-  );
+  const statusFacet = useMemo(() => filterExcept('status'), [filterExcept]);
+  const campaignFacet = useMemo(() => filterExcept('campaign'), [filterExcept]);
+  const sourceFacet = useMemo(() => filterExcept('source'), [filterExcept]);
+  const followUpFacet = useMemo(() => filterExcept('followUp'), [filterExcept]);
+
+  const sourceCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const l of sourceFacet) counts[l.source] = (counts[l.source] ?? 0) + 1;
+    return counts;
+  }, [sourceFacet]);
+  const followUpCounts = useMemo(() => Object.fromEntries(
+    FOLLOW_UP_FILTERS.map((f) => [f.key, followUpFacet.filter((l: any) => matchFollowUp(l, f.key)).length]),
+  ), [followUpFacet]);
+  // Projects come from the leads themselves rather than another fetch: the only useful
+  // options are projects that actually HAVE leads in the current set, and with one project
+  // the filter is noise, so it hides itself.
+  const projectOpts = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of baseLeads) if (l.projectId) m.set(l.projectId, l.project?.name ?? 'Unnamed project');
+    return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [baseLeads]);
 
   const pipelineCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1256,7 +1305,93 @@ export default function LeadsPage() {
               ))}
             </Select>
           )}
-          <div className="ml-auto inline-flex rounded-lg border border-gray-200 overflow-hidden" role="group" aria-label="View mode">
+          <Select
+            size="sm"
+            aria-label="Filter by source"
+            {...wideSelectProps}
+            placeholder="All sources"
+            className="w-[160px]"
+            selectedKeys={sourceFilter ? new Set([sourceFilter]) : new Set()}
+            onSelectionChange={(keys) => setSourceFilter((Array.from(keys)[0] as string) || '')}
+          >
+            {LEAD_SOURCES.map((src) => {
+              const label = SOURCE_LABELS[src] || src;
+              return (
+                <SelectItem key={src} textValue={label}>
+                  <span className="flex items-center justify-between gap-3">
+                    {label}
+                    <span className="tabular-nums text-gray-500">{sourceCounts[src] ?? 0}</span>
+                  </span>
+                </SelectItem>
+              );
+            })}
+          </Select>
+          <Select
+            size="sm"
+            aria-label="Filter by follow-up"
+            {...wideSelectProps}
+            placeholder="Any follow-up"
+            className="w-[180px]"
+            selectedKeys={followUpFilter ? new Set([followUpFilter]) : new Set()}
+            onSelectionChange={(keys) => setFollowUpFilter(((Array.from(keys)[0] as string) || '') as FollowUpFilter)}
+            startContent={<FiClock className="text-gray-400 w-3.5 h-3.5" />}
+          >
+            {FOLLOW_UP_FILTERS.map((f) => (
+              <SelectItem key={f.key} textValue={f.label}>
+                <span className="flex items-center justify-between gap-3">
+                  {f.label}
+                  <span className="tabular-nums text-gray-500">{followUpCounts[f.key] ?? 0}</span>
+                </span>
+              </SelectItem>
+            ))}
+          </Select>
+          {(projectOpts.length > 1 || projectFilter) && (
+            <Select
+              size="sm"
+              aria-label="Filter by project"
+              placeholder="All projects"
+              className="w-[180px]"
+              selectedKeys={projectFilter ? new Set([projectFilter]) : new Set()}
+              onSelectionChange={(keys) => setProjectFilter((Array.from(keys)[0] as string) || '')}
+              startContent={<FiHome className="text-gray-400 w-3.5 h-3.5" />}
+            >
+              {projectOpts.map((p) => (
+                <SelectItem key={p.id} textValue={p.name}>{p.name}</SelectItem>
+              ))}
+            </Select>
+          )}
+          {/* Sort does nothing to a calendar (it is ordered by date by definition), so it
+              only shows for the two list views it actually changes. */}
+          {view !== 'calendar' && (
+            <div className="ml-auto flex items-center gap-1">
+              <Select
+                size="sm"
+                aria-label="Sort leads by"
+                className="w-[190px]"
+                disallowEmptySelection
+                selectedKeys={new Set([sort.key])}
+                onSelectionChange={(keys) => {
+                  const k = Array.from(keys)[0];
+                  if (isLeadSortKey(k) && k !== sort.key) setSortPersisted({ key: k, dir: defaultDirFor(k) });
+                }}
+                startContent={<span className="text-[11px] text-gray-500 shrink-0">Sort:</span>}
+              >
+                {LEAD_SORT_FIELDS.map((f) => (
+                  <SelectItem key={f.key} textValue={f.label}>{f.label}</SelectItem>
+                ))}
+              </Select>
+              <Tooltip content={sort.dir === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'}>
+                <Button
+                  isIconOnly size="sm" variant="flat"
+                  aria-label={sort.dir === 'asc' ? 'Sorted ascending, switch to descending' : 'Sorted descending, switch to ascending'}
+                  onPress={() => setSortPersisted({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' })}
+                >
+                  {sort.dir === 'asc' ? <FiArrowUp className="w-3.5 h-3.5" /> : <FiArrowDown className="w-3.5 h-3.5" />}
+                </Button>
+              </Tooltip>
+            </div>
+          )}
+          <div className={`${view === 'calendar' ? 'ml-auto ' : ''}inline-flex rounded-lg border border-gray-200 overflow-hidden`} role="group" aria-label="View mode">
             <button
               type="button"
               onClick={() => setViewPersisted('cards')}
@@ -1291,15 +1426,12 @@ export default function LeadsPage() {
               <FiCalendar className="w-3.5 h-3.5" /> Calendar
             </button>
           </div>
-          {(statusFilter || assigneeFilter || brokerFilter || campaignFilter || viaFilter) && (
+          {anyFilter && (
             <Button
               size="sm"
               variant="flat"
               startContent={<FiRefreshCw className="w-3 h-3" />}
-              onPress={() => {
-                setStatusFilter(''); setAssigneeFilter(''); setBrokerFilter('');
-                setCampaignFilter(''); setViaFilter('');
-              }}
+              onPress={clearFilters}
               aria-label="Clear filters"
             >
               Clear filters
@@ -1378,8 +1510,7 @@ export default function LeadsPage() {
             The message also distinguishes "nothing exists" from "your filters exclude
             everything", which are very different problems for the user. */}
         {!isLoading && leadsArr.length === 0 && (() => {
-          const filtered = !!(debouncedSearch || statusFilter || assigneeFilter
-            || brokerFilter || campaignFilter || viaFilter);
+          const filtered = anyFilter;
           return (
             <EmptyState
               title={filtered ? 'No leads match these filters' : 'No leads yet'}
@@ -1389,10 +1520,7 @@ export default function LeadsPage() {
               action={filtered ? (
                 <Button
                   size="sm" variant="flat" startContent={<FiRefreshCw className="w-3 h-3" />}
-                  onPress={() => {
-                    setStatusFilter(''); setAssigneeFilter(''); setBrokerFilter('');
-                    setCampaignFilter(''); setViaFilter(''); handleSearch('');
-                  }}
+                  onPress={clearFilters}
                 >
                   Clear filters
                 </Button>
@@ -1410,6 +1538,8 @@ export default function LeadsPage() {
         ) : view === 'grid' ? (
           <LeadsGrid
             leads={pagedLeads}
+            sort={sort}
+            onSort={sortBy}
             statusToken={STATUS_TOKEN}
             statusLabels={LEAD_STATUS_LABELS}
             sourceLabels={SOURCE_LABELS}
