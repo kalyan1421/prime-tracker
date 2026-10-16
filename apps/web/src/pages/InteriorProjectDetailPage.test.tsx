@@ -19,6 +19,7 @@ import InteriorProjectDetailPage from './InteriorProjectDetailPage';
 const advances: any[] = [];
 const state = {
   project: null as any,
+  costing: null as any,
   permissions: ['interior:view', 'interior:edit', 'interior:approve', 'interior:finance'],
 };
 
@@ -35,8 +36,17 @@ vi.mock('../hooks/useApi', () => ({
   useUpdateInteriorInvoice: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useVoidInteriorInvoice: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useVendors: () => ({ data: [] }),
-  useAddInteriorScope: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeleteInteriorScope: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUnits: () => ({ data: [] }),
+  useInteriorCosting: () => ({ data: state.costing }),
+  useInteriorCostCodes: () => ({ data: [] }),
+  useInteriorCostingSettings: () => ({ data: undefined }),
+  useSaveEstimateLine: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useRemoveEstimateLine: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useEstimateAction: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateInteriorChangeOrder: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDecideInteriorChangeOrder: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateInteriorPurchaseOrder: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useInteriorPurchaseOrderAction: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAddSnag: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useResolveSnag: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateSnag: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -80,9 +90,44 @@ const openHandover = async () => {
   await screen.findByRole('button', { name: /Confirm handover|Hand over with/ });
 };
 
+const ZERO = {
+  original: 0, originalPrime: 0, originalTenant: 0, coApproved: 0, coPending: 0, revised: 0, revisedPrime: 0,
+  revisedTenant: 0, pending: 0, committed: 0, actual: 0, paid: 0, projected: 0, toComplete: 0, overUnder: 0,
+};
+
+/** What GET /interior/:id/costing returns to a finance viewer. */
+function financeCosting(overrides: Record<string, any> = {}) {
+  return {
+    id: 'ip1', name: 'Unit 101 fit-out', area: 1000, units: [], poPrefix: 'FIT', priority: null,
+    estimateStatus: 'LOCKED', settings: { coLimit: 60000 },
+    can: { seeMoney: true, markWorkComplete: true },
+    estimate: { status: 'LOCKED', lines: [], total: 0 },
+    budget: {
+      rows: [{ ...ZERO, costCodeId: 'cc1', label: '07.05 - Plumbing Material', groupName: 'PLUMBING', groupCode: '07', sortOrder: 1, original: 1000, revised: 1000, revisedPrime: 600, revisedTenant: 400, projected: 1000, overUnder: 0 }],
+      totals: { ...ZERO, original: 1000, revised: 1000, revisedPrime: 600, revisedTenant: 400, projected: 1000 },
+    },
+    ti: { allowance: 500, allowanceSource: 'LEASE', primePays: 600, tenantPays: 400, overAllowance: 100 },
+    changeOrders: [],
+    purchaseOrders: [{ id: 'po1', number: 'FIT-0001', title: 'Doors', vendor: { name: 'Bluesky' }, status: 'APPROVED', lines: [], cost: 800, billed: 0, paid: 0 }],
+    bills: [], activity: [], leftByCode: {},
+    ...overrides,
+  };
+}
+
+/** What the same endpoint returns to CONSTRUCTION: the work on each PO, no amounts. */
+function workCosting() {
+  return {
+    id: 'ip1', name: 'Unit 101 fit-out', area: 1000, units: [], poPrefix: 'FIT', estimateStatus: 'LOCKED',
+    settings: { coLimit: 60000 }, can: { seeMoney: false, markWorkComplete: true },
+    purchaseOrders: [{ id: 'po1', number: 'FIT-0001', title: 'Doors', vendor: { name: 'Bluesky' }, status: 'APPROVED', workCompletedAt: null }],
+    activity: [],
+  };
+}
+
 beforeEach(() => {
   advances.length = 0;
   state.project = project();
+  state.costing = financeCosting();
   state.permissions = ['interior:view', 'interior:edit', 'interior:approve', 'interior:finance'];
 });
 
@@ -203,5 +248,37 @@ describe('anchor links', () => {
     renderPage();
     expect(screen.getByRole('link', { name: 'Tower B' }).getAttribute('href'))
       .toBe('/projects/p1/buildings/b9');
+  });
+});
+
+describe('job costing tabs', () => {
+  it('gives finance the BuilderTrend set — budget, estimate, change orders, POs, bills, activity', () => {
+    renderPage();
+    for (const name of [/^Budget/, /^Estimate/, /^Change orders/, /^Purchase orders/, /^Bills/, /^Activity/]) {
+      expect(screen.getByRole('tab', { name })).toBeTruthy();
+    }
+    // The budget is the first tab, so it is what opens.
+    expect(screen.getByText('Job costing budget')).toBeTruthy();
+  });
+
+  it('splits what Prime pays from what the tenant pays, against the TI allowance', () => {
+    renderPage();
+    expect(screen.getByText('Prime pays', { selector: 'div' })).toBeTruthy();
+    expect(screen.getByText('Tenant pays', { selector: 'div' })).toBeTruthy();
+    expect(screen.getByText('from the lease')).toBeTruthy();
+    expect(screen.getByText('$100 over')).toBeTruthy();
+  });
+
+  it('shows CONSTRUCTION the purchase orders as work only — no money tabs, no amounts', () => {
+    state.permissions = ['interior:view'];
+    state.costing = workCosting();
+    renderPage();
+    expect(screen.queryByRole('tab', { name: /^Budget/ })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /^Bills/ })).toBeNull();
+    expect(screen.getByRole('tab', { name: /^Purchase orders/ })).toBeTruthy();
+    expect(screen.getByText('FIT-0001')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Work complete/ })).toBeTruthy();
+    expect(screen.queryByText('Cost')).toBeNull();
+    expect(screen.queryByText(/\$/)).toBeNull();
   });
 });

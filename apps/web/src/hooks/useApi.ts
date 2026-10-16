@@ -3247,41 +3247,6 @@ export function useAdvanceInteriorPhase() {
   });
 }
 
-// ─────── Interior package templates ───────
-export function useInteriorTemplates() {
-  const can = useCan('interior:view');
-  return useQuery({
-    queryKey: ['interior', 'templates'],
-    queryFn: () => api.get('/interior/templates').then((r) => r.data),
-    enabled: can,
-  });
-}
-
-export function useCreateInteriorTemplate() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Record<string, any>) => api.post('/interior/templates', data).then((r) => r.data),
-    onSuccess: () => invalidateInterior(qc),
-  });
-}
-
-export function useUpdateInteriorTemplate() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
-      api.patch(`/interior/templates/${id}`, data).then((r) => r.data),
-    onSuccess: () => invalidateInterior(qc),
-  });
-}
-
-export function useDeleteInteriorTemplate() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.delete(`/interior/templates/${id}`).then((r) => r.data),
-    onSuccess: () => invalidateInterior(qc),
-  });
-}
-
 export function useApproveInterior() {
   const qc = useQueryClient();
   return useMutation({
@@ -3295,15 +3260,6 @@ export function useDeleteInterior() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete(`/interior/${id}`).then((r) => r.data),
-    onSuccess: () => invalidateInterior(qc),
-  });
-}
-
-export function useAddInteriorScope() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
-      api.post(`/interior/${id}/scope`, data).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
   });
 }
@@ -3377,11 +3333,121 @@ export function useUpdateSnag() {
   });
 }
 
-export function useDeleteInteriorScope() {
+// ─────── Interior job costing (client, 2026-10-17 — replaces BuilderTrend) ───────
+// One read (`/interior/:id/costing`) carries the estimate, budget, change orders, POs, bills,
+// activity and the caller's `can` flags; every write below invalidates the whole interior key,
+// so the budget re-computes on the server rather than being patched up in the browser.
+
+export function useInteriorCosting(id?: string) {
+  return useQuery({
+    queryKey: ['interior', 'costing', id],
+    queryFn: () => api.get(`/interior/${id}/costing`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useInteriorCostCodes(includeInactive = false) {
+  const can = useCan('interior:view');
+  return useQuery({
+    queryKey: ['interior', 'cost-codes', includeInactive],
+    queryFn: () => api.get('/interior-costing/cost-codes', { params: includeInactive ? { includeInactive: 'true' } : {} }).then((r) => r.data),
+    enabled: can,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useInteriorCostingSettings() {
+  const can = useCan('interior:view');
+  return useQuery({
+    queryKey: ['interior', 'costing-settings'],
+    queryFn: () => api.get('/interior-costing/settings').then((r) => r.data),
+    enabled: can,
+  });
+}
+
+/** Super Admin only (system:config): who may lock, unlock and approve, and the CO limit. */
+export function useUpdateInteriorCostingSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ projectId, scopeId }: { projectId: string; scopeId: string }) =>
-      api.delete(`/interior/${projectId}/scope/${scopeId}`).then((r) => r.data),
+    mutationFn: (data: Record<string, any>) => api.put('/interior-costing/settings', data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useSaveInteriorCostCode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id?: string; data: Record<string, any> }) =>
+      (id ? api.patch(`/interior-costing/cost-codes/${id}`, data) : api.post('/interior-costing/cost-codes', data)).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+/** Estimate lines: add (no lineId), inline-edit one cell (lineId + data), or remove. */
+export function useSaveEstimateLine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, lineId, data }: { id: string; lineId?: string; data: Record<string, any> }) =>
+      (lineId ? api.patch(`/interior/${id}/estimate/lines/${lineId}`, data) : api.post(`/interior/${id}/estimate/lines`, data)).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useRemoveEstimateLine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, lineId }: { id: string; lineId: string }) =>
+      api.delete(`/interior/${id}/estimate/lines/${lineId}`).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+/** submit · send-back · lock · unlock (unlock carries the reason the API demands). */
+export function useEstimateAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action, reason }: { id: string; action: 'submit' | 'send-back' | 'lock' | 'unlock'; reason?: string }) =>
+      api.post(`/interior/${id}/estimate/${action}`, action === 'unlock' ? { reason } : {}).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useCreateInteriorChangeOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.post(`/interior/${id}/change-orders`, data).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useDecideInteriorChangeOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, coId, decision }: { id: string; coId: string; decision: 'APPROVE' | 'REJECT' }) =>
+      api.post(`/interior/${id}/change-orders/${coId}/decide`, { decision }).then((r) => r.data),
+    onSuccess: () => invalidateInterior(qc),
+  });
+}
+
+export function useCreateInteriorPurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, any> }) =>
+      api.post(`/interior/${id}/purchase-orders`, data).then((r) => r.data),
+    onSuccess: () => {
+      invalidateInterior(qc);
+      qc.invalidateQueries({ queryKey: ['vendors'] }); // a typed supplier name may have created one
+    },
+  });
+}
+
+/** send (DRAFT -> PENDING) · approve · void · complete / reopen the work. */
+export function useInteriorPurchaseOrderAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, poId, action, complete }: { id: string; poId: string; action: 'send' | 'approve' | 'void' | 'complete'; complete?: boolean }) =>
+      api.post(`/interior/${id}/purchase-orders/${poId}/${action}`, action === 'complete' ? { complete } : {}).then((r) => r.data),
     onSuccess: () => invalidateInterior(qc),
   });
 }

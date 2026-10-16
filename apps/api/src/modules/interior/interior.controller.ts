@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors,
+  Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { InteriorContractType, InteriorPhase, InteriorStatus } from '@prisma/client';
@@ -8,7 +8,16 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { RequirePermissions, RequireAnyPermission, CurrentUser } from '../../common/decorators/index';
+import { InteriorCostingService, type CostingActor } from './interior-costing.service';
+import {
+  EstimateLineDto, UpdateEstimateLineDto, UnlockEstimateDto, CreateChangeOrderDto, DecideChangeOrderDto,
+  CreatePurchaseOrderDto, CompletePurchaseOrderDto, CostCodeDto, UpdateCostCodeDto, InteriorSettingsDto,
+} from './dto/costing.dto';
+
+/** The caller, as the costing rules see them: who, which roles, which permissions. */
+const actorOf = (userId: string, role: string, roles: string[] | undefined, permissions: string[] | undefined): CostingActor =>
+  ({ userId, role, roles: roles ?? [], permissions: permissions ?? [] });
 import { AddScopeItemDto, AddInteriorInvoiceDto, UpdateInteriorInvoiceDto } from './dto/scope-invoice.dto';
 import { CreateSnagDto, UpdateSnagDto, ResolveSnagDto } from './dto/snag.dto';
 
@@ -18,58 +27,20 @@ import { CreateSnagDto, UpdateSnagDto, ResolveSnagDto } from './dto/snag.dto';
 @UseInterceptors(AuditInterceptor)
 @Controller('interior')
 export class InteriorController {
-  constructor(private service: InteriorService) {}
+  constructor(
+    private service: InteriorService,
+    private costing: InteriorCostingService,
+  ) {}
 
   @Get('portfolio')
   @RequirePermissions('interior:view')
   @ApiOperation({ summary: 'Cross-project interior portfolio (phase, budget vs actual, days-to-handover)' })
-  portfolio(@CurrentUser('permissions') permissions?: string[]) {
-    return this.service.portfolio(permissions ?? []);
-  }
-
-  // ─────── Package templates (must precede ':id' routes) ───────
-
-  @Get('templates')
-  @RequirePermissions('interior:view')
-  @ApiOperation({ summary: 'List reusable fit-out package templates' })
-  listTemplates() {
-    return this.service.listPackageTemplates();
-  }
-
-  @Post('templates')
-  @RequirePermissions('interior:edit')
-  @ApiOperation({ summary: 'Create a package template (name + preset BOQ items)' })
-  createTemplate(
-    @Body() body: {
-      name: string;
-      description?: string;
-      defaultRatePerSqft?: number;
-      items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
-    },
-  ) {
-    return this.service.createPackageTemplate(body);
-  }
-
-  @Patch('templates/:tid')
-  @RequirePermissions('interior:edit')
-  @ApiOperation({ summary: 'Update package template name/description/rate' })
-  updateTemplate(
-    @Param('tid') tid: string,
-    @Body() body: {
-      name?: string;
-      description?: string;
-      defaultRatePerSqft?: number | null;
-      /** Supplying this REPLACES the template's line list; omit it to leave lines alone. */
-      items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
-    },
-  ) {
-    return this.service.updatePackageTemplate(tid, body);
-  }
-
-  @Delete('templates/:tid')
-  @RequirePermissions('interior:edit')
-  removeTemplate(@Param('tid') tid: string) {
-    return this.service.removePackageTemplate(tid);
+  async portfolio(@CurrentUser('permissions') permissions?: string[]) {
+    const rows = await this.service.portfolio(permissions ?? []);
+    // Job-costing totals for the board — money, so interior:finance only.
+    if (!(permissions ?? []).includes('interior:finance')) return rows.map((r: any) => ({ ...r, costing: null }));
+    const totals = await this.costing.portfolioTotals(rows.map((r: any) => r.id));
+    return rows.map((r: any) => ({ ...r, costing: totals.get(r.id) ?? null }));
   }
 
   @Get()
@@ -107,9 +78,13 @@ export class InteriorController {
       ratePerSqft?: number;
       area?: number;
       contractValue?: number;
-      packageTemplateId?: string;
       startDate?: string;
       targetEnd?: string;
+      extraUnitIds?: string[];
+      priority?: string | null;
+      plansSubmittedAt?: string | null;
+      tiAllowance?: number | null;
+      poPrefix?: string | null;
     },
   ) {
     return this.service.create(body);
@@ -129,6 +104,11 @@ export class InteriorController {
       contractValue?: number;
       startDate?: string;
       targetEnd?: string;
+      extraUnitIds?: string[];
+      priority?: string | null;
+      plansSubmittedAt?: string | null;
+      tiAllowance?: number | null;
+      poPrefix?: string | null;
     },
   ) {
     return this.service.update(id, body);
@@ -209,8 +189,9 @@ export class InteriorController {
   addInvoice(
     @Param('id') id: string,
     @Body() body: AddInteriorInvoiceDto,
+    @CurrentUser('sub') userId?: string,
   ) {
-    return this.service.addInvoice(id, body);
+    return this.service.addInvoice(id, body, userId);
   }
 
   @Patch(':id/invoices/:invoiceId')
@@ -225,8 +206,12 @@ export class InteriorController {
     @Param('id') _id: string,
     @Param('invoiceId') invoiceId: string,
     @Body() body: UpdateInteriorInvoiceDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[],
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.updateInvoice(invoiceId, body);
+    return this.service.updateInvoice(invoiceId, body, actorOf(userId, role, roles, permissions));
   }
 
   @Delete(':id/invoices/:invoiceId')
@@ -267,4 +252,197 @@ export class InteriorController {
   updateSnag(@Param('snagId') snagId: string, @Body() body: UpdateSnagDto) {
     return this.service.updateSnag(snagId, body);
   }
+
+  // ───────────── Costing (2026-10-17): estimate, budget, change orders, purchase orders ─────────────
+  // Route permissions are the floor; WHO may lock, approve or unlock is decided per step by
+  // OrgSettings (InteriorCostingService), which Super Admin edits.
+
+  @Get(':id/costing')
+  @RequirePermissions('interior:view')
+  @ApiOperation({ summary: 'Estimate, job-costing budget, change orders, POs, bills, activity — and what the caller may do' })
+  getCosting(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.costing(id, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/estimate/lines')
+  @RequirePermissions('interior:edit')
+  addEstimateLine(@Param('id') id: string, @Body() body: EstimateLineDto) {
+    return this.costing.addLine(id, body);
+  }
+
+  @Patch(':id/estimate/lines/:lineId')
+  @RequirePermissions('interior:edit')
+  updateEstimateLine(@Param('id') id: string, @Param('lineId') lineId: string, @Body() body: UpdateEstimateLineDto) {
+    return this.costing.updateLine(id, lineId, body);
+  }
+
+  @Delete(':id/estimate/lines/:lineId')
+  @RequirePermissions('interior:edit')
+  removeEstimateLine(@Param('id') id: string, @Param('lineId') lineId: string) {
+    return this.costing.removeLine(id, lineId);
+  }
+
+  @Post(':id/estimate/submit')
+  @RequirePermissions('interior:edit')
+  submitEstimate(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.submitEstimate(id, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/estimate/send-back')
+  @RequireAnyPermission('interior:edit', 'interior:finance')
+  sendBackEstimate(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.sendBackEstimate(id, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/estimate/lock')
+  @RequireAnyPermission('interior:edit', 'interior:finance')
+  @ApiOperation({ summary: 'Approve and lock the estimate — it becomes the original budget' })
+  lockEstimate(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.lockEstimate(id, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/estimate/unlock')
+  @RequireAnyPermission('interior:edit', 'interior:finance')
+  @ApiOperation({ summary: 'Unlock the estimate, with a reason that goes in the activity log' })
+  unlockEstimate(
+    @Param('id') id: string, @Body() body: UnlockEstimateDto,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.unlockEstimate(id, body.reason, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/change-orders')
+  @RequirePermissions('interior:edit')
+  createChangeOrder(
+    @Param('id') id: string, @Body() body: CreateChangeOrderDto,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.createChangeOrder(id, body, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/change-orders/:coId/decide')
+  @RequireAnyPermission('interior:edit', 'interior:finance')
+  decideChangeOrder(
+    @Param('id') id: string, @Param('coId') coId: string, @Body() body: DecideChangeOrderDto,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.decideChangeOrder(id, coId, body.decision, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/purchase-orders')
+  @RequirePermissions('interior:finance')
+  createPurchaseOrder(
+    @Param('id') id: string, @Body() body: CreatePurchaseOrderDto,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.createPurchaseOrder(id, body, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/purchase-orders/:poId/send')
+  @RequirePermissions('interior:finance')
+  sendPurchaseOrder(
+    @Param('id') id: string, @Param('poId') poId: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.sendPurchaseOrder(id, poId, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/purchase-orders/:poId/approve')
+  @RequirePermissions('interior:finance')
+  approvePurchaseOrder(
+    @Param('id') id: string, @Param('poId') poId: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.approvePurchaseOrder(id, poId, actorOf(userId, role, roles, permissions));
+  }
+
+  @Post(':id/purchase-orders/:poId/void')
+  @RequirePermissions('interior:finance')
+  voidPurchaseOrder(
+    @Param('id') id: string, @Param('poId') poId: string,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.voidPurchaseOrder(id, poId, actorOf(userId, role, roles, permissions));
+  }
+
+  // interior:view, not finance: the site team marks the WORK complete without seeing money.
+  @Post(':id/purchase-orders/:poId/complete')
+  @RequirePermissions('interior:view')
+  completePurchaseOrder(
+    @Param('id') id: string, @Param('poId') poId: string, @Body() body: CompletePurchaseOrderDto,
+    @CurrentUser('sub') userId: string, @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[], @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.costing.completePurchaseOrder(id, poId, body.complete, actorOf(userId, role, roles, permissions));
+  }
 }
+
+/**
+ * Org-wide interiors costing setup: the cost code list (BuilderTrend's) and the approval
+ * rules. A separate controller with its own prefix so these static paths can never be
+ * shadowed by InteriorController's `:id` routes.
+ */
+@ApiTags('Interior')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
+@UseInterceptors(AuditInterceptor)
+@Controller('interior-costing')
+export class InteriorCostingController {
+  constructor(private costing: InteriorCostingService) {}
+
+  @Get('settings')
+  @RequirePermissions('interior:view')
+  @ApiOperation({ summary: 'Who may lock, unlock and approve, and the change order limit' })
+  async getSettings(@CurrentUser('permissions') permissions?: string[]) {
+    return { ...(await this.costing.settings()), canEdit: (permissions ?? []).includes('system:config') };
+  }
+
+  // system:config is SUPER_ADMIN only — the client's "option that can be set by super admin".
+  @Put('settings')
+  @RequirePermissions('system:config')
+  updateSettings(@Body() body: InteriorSettingsDto) {
+    return this.costing.updateSettings(body);
+  }
+
+  @Get('cost-codes')
+  @RequirePermissions('interior:view')
+  listCostCodes(@Query('includeInactive') includeInactive?: string) {
+    return this.costing.listCostCodes(includeInactive === 'true');
+  }
+
+  @Post('cost-codes')
+  @RequirePermissions('interior:edit')
+  createCostCode(@Body() body: CostCodeDto) {
+    return this.costing.createCostCode(body);
+  }
+
+  @Patch('cost-codes/:codeId')
+  @RequirePermissions('interior:edit')
+  updateCostCode(@Param('codeId') codeId: string, @Body() body: UpdateCostCodeDto) {
+    return this.costing.updateCostCode(codeId, body);
+  }
+}
+

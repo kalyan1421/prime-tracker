@@ -1,15 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardBody, Chip, Button, Input, Select, SelectItem, useDisclosure } from '@heroui/react';
-import { FiHome, FiPackage, FiSearch, FiX } from 'react-icons/fi';
+import { Chip, Button, Input, Select, SelectItem } from '@heroui/react';
+import { FiChevronDown, FiChevronRight, FiHome, FiSearch, FiSettings, FiX } from 'react-icons/fi';
 import { useInteriorPortfolio } from '../hooks/useApi';
 import { fmt } from '../utils/fmt';
 import { StatCard, LoadingState, EmptyState, Pagination } from '../components/ui';
 import { INTERIOR_PHASES } from '../constants/interior';
-import { InteriorPackagesModal } from '../components/InteriorPackagesModal';
 import { useAuthStore } from '../store/authStore';
 import { usePagination } from '../hooks/usePagination';
 import { useDebounced } from '../hooks/useDebounced';
+import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
+import { groupColor } from '../components/BoardCells';
+import { money, StatusTag } from '../components/InteriorCostingParts';
 
 const PHASE_LABEL: Record<string, string> = {
   DESIGN: 'Design', CLIENT_APPROVAL: 'Client Approval', CITY_APPROVAL: 'City Approval',
@@ -27,11 +29,28 @@ const SORTS = [
   { key: 'target', label: 'Handover date' },
   { key: 'name', label: 'Name (A–Z)' },
   { key: 'phase', label: 'Phase' },
-  { key: 'contract', label: 'Contract value' },
+  { key: 'contract', label: 'Budget (largest first)' },
 ] as const;
 type SortKey = (typeof SORTS)[number]['key'];
 
 const PAGE_SIZE = 25;
+
+const PRIORITY_FILL: Record<string, string> = {
+  HIGH: 'bg-purple-600 text-white', MEDIUM: 'bg-teal-700 text-white', LOW: 'bg-blue-600 text-white',
+};
+
+/** The monday group a fit-out sits in: its property (the owning project). */
+const propertyOf = (r: any): string =>
+  r.unit?.building?.project?.name ?? r.building?.project?.name ?? 'No property';
+
+/** Revised budget once costed (the BuilderTrend figure), else the old contract value. */
+const budgetOf = (r: any) => (r.costing ? Number(r.costing.revised) || 0 : Number(r.contractValue ?? 0));
+
+const unitsOf = (r: any): string => {
+  const nums = [r.unit?.unitNumber, ...(r.extraUnits ?? []).map((x: any) => x.unit?.unitNumber)].filter(Boolean);
+  if (!nums.length) return r.building?.name ?? '—';
+  return `Unit${nums.length > 1 ? 's' : ''} ${nums.join(', ')}`;
+};
 
 function phaseColor(phase: string): 'default' | 'primary' | 'success' {
   if (phase === 'HANDOVER') return 'success';
@@ -43,7 +62,10 @@ function haystack(r: any): string {
   return [
     r.name,
     r.unit?.unitNumber ? `unit ${r.unit.unitNumber}` : '',
+    ...(r.extraUnits ?? []).map((x: any) => (x.unit?.unitNumber ? `unit ${x.unit.unitNumber}` : '')),
+    r.unit?.building?.name,
     r.building?.name,
+    propertyOf(r),
     r.pm?.name,
     PHASE_LABEL[r.phase] ?? r.phase,
   ].filter(Boolean).join(' ').toLowerCase();
@@ -51,7 +73,6 @@ function haystack(r: any): string {
 
 export default function InteriorPortfolioPage() {
   const navigate = useNavigate();
-  const packages = useDisclosure();
   const { hasPermission } = useAuthStore();
   // The API nulls contractValue/spend for a caller without interior:finance (the same
   // "Construction is fully blind to financials" design this app applies everywhere
@@ -94,7 +115,7 @@ export default function InteriorPortfolioPage() {
       target: byTarget,
       name: (a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')),
       phase: (a, b) => INTERIOR_PHASES.indexOf(a.phase) - INTERIOR_PHASES.indexOf(b.phase) || byTarget(a, b),
-      contract: (a, b) => (Number(b.contractValue ?? 0)) - (Number(a.contractValue ?? 0)),
+      contract: (a, b) => budgetOf(b) - budgetOf(a),
     };
     return out.slice().sort(cmp[sortKey]);
   }, [rows, debouncedSearch, statusFilter, phaseFilter, pmFilter, sortKey]);
@@ -112,12 +133,13 @@ export default function InteriorPortfolioPage() {
    */
   const summary = useMemo(() => {
     const active = filtered.filter((r) => r.status !== 'COMPLETED').length;
-    const contract = filtered.reduce((s, r) => s + (r.contractValue ?? 0), 0);
-    const spend = filtered.reduce((s, r) => s + (r.spend ?? 0), 0);
+    const budget = filtered.reduce((s, r) => s + budgetOf(r), 0);
+    const actual = filtered.reduce((s, r) => s + (r.costing ? Number(r.costing.actual) || 0 : Number(r.spend ?? 0)), 0);
+    const overBudget = filtered.filter((r) => r.costing && Number(r.costing.overUnder) < -0.5).length;
     const dueSoon = filtered.filter(
       (r) => r.daysToHandover != null && r.daysToHandover <= 30 && r.status !== 'COMPLETED',
     ).length;
-    return { active, contract, spend, dueSoon };
+    return { active, budget, actual, overBudget, dueSoon };
   }, [filtered]);
 
   const isFiltered =
@@ -125,6 +147,17 @@ export default function InteriorPortfolioPage() {
   const clearFilters = () => {
     setSearch(''); setStatusFilter('ALL'); setPhaseFilter('ALL'); setPmFilter('ALL');
   };
+
+  // monday-style blocks: the current page's fit-outs grouped under their property.
+  const groups = useMemo(() => {
+    const m = new Map<string, any[]>();
+    for (const r of paged) {
+      const k = propertyOf(r);
+      m.set(k, [...(m.get(k) ?? []), r]);
+    }
+    return [...m.entries()].map(([name, items]) => ({ name, items }));
+  }, [paged]);
+  const { isExpanded, toggle } = useCollapsibleGroups([debouncedSearch, statusFilter, phaseFilter, pmFilter]);
 
   if (isLoading) return <LoadingState message="Loading interior projects…" />;
 
@@ -135,16 +168,20 @@ export default function InteriorPortfolioPage() {
           <FiHome className="text-2xl text-amber-600" />
           <h1 className="text-2xl font-bold">Interior / Fit-Out Portfolio</h1>
         </div>
-        <Button size="sm" variant="flat" startContent={<FiPackage />} onPress={packages.onOpen}>
-          Manage packages
+        <Button size="sm" variant="flat" startContent={<FiSettings />} onPress={() => navigate('/interior/settings')}>
+          Cost codes & approvals
         </Button>
       </div>
-      <InteriorPackagesModal isOpen={packages.isOpen} onClose={packages.onClose} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label={isFiltered ? 'Active (filtered)' : 'Active fit-outs'} value={String(summary.active)} />
-        {canViewFinance && <StatCard label="Contract value" value={fmt(summary.contract)} />}
-        {canViewFinance && <StatCard label="Spend to date" value={fmt(summary.spend)} />}
+        {canViewFinance && <StatCard label="Revised budget" value={fmt(summary.budget)} />}
+        {canViewFinance && (
+          <StatCard
+            label={summary.overBudget ? `Actual cost · ${summary.overBudget} over budget` : 'Actual cost'}
+            value={fmt(summary.actual)}
+          />
+        )}
         <StatCard label="Handover ≤ 30d" value={String(summary.dueSoon)} />
       </div>
 
@@ -217,54 +254,109 @@ export default function InteriorPortfolioPage() {
           message="Cancelled fit-outs are never listed here. Clear the filters to see the full portfolio."
         />
       ) : (
-        <Card shadow="sm">
-          <CardBody className="overflow-x-auto p-0">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
-                <tr>
-                  <th className="text-left px-4 py-3">Project</th>
-                  <th className="text-left px-4 py-3">Location</th>
-                  <th className="text-left px-4 py-3">PM</th>
-                  <th className="text-left px-4 py-3">Phase</th>
-                  {canViewFinance && <th className="text-right px-4 py-3">Contract</th>}
-                  {canViewFinance && <th className="text-right px-4 py-3">Spend</th>}
-                  <th className="text-right px-4 py-3">Days to handover</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paged.map((r) => (
-                  <tr
-                    key={r.id}
-                    className="border-t border-gray-100 cursor-pointer hover:bg-gray-50"
-                    onClick={() => navigate(`/interior/${r.id}`)}
-                  >
-                    <td className="px-4 py-3 font-medium text-blue-600">{r.name}</td>
-                    <td className="px-4 py-3 text-gray-500">
-                      {r.unit?.unitNumber ? `Unit ${r.unit.unitNumber}` : r.building?.name ?? '—'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">{r.pm?.name ?? '—'}</td>
-                    <td className="px-4 py-3">
-                      <Chip size="sm" variant="flat" color={phaseColor(r.phase)}>
-                        {PHASE_LABEL[r.phase] ?? r.phase}
-                      </Chip>
-                    </td>
-                    {canViewFinance && <td className="px-4 py-3 text-right">{r.contractValue != null ? fmt(r.contractValue) : '—'}</td>}
-                    {canViewFinance && <td className="px-4 py-3 text-right">{fmt(r.spend ?? 0)}</td>}
-                    <td className="px-4 py-3 text-right">
-                      {/* A handed-over fit-out has no countdown left to run — showing one
-                          reads as an overdue job that is in fact finished. */}
-                      {r.status === 'COMPLETED' ? (
-                        <span className="text-gray-500">done</span>
-                      ) : r.daysToHandover == null ? '—' : (
-                        <span className={r.daysToHandover < 0 ? 'text-red-700' : r.daysToHandover <= 30 ? 'text-orange-700' : ''}>
-                          {r.daysToHandover < 0 ? `${Math.abs(r.daysToHandover)}d overdue` : `${r.daysToHandover}d`}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="space-y-5">
+          {groups.map((g) => {
+            const color = groupColor(g.name);
+            const open = isExpanded(g.name, true);
+            return (
+              <section key={g.name}>
+                <button
+                  type="button" aria-expanded={open} onClick={() => toggle(g.name, open)}
+                  className={`mb-1.5 inline-flex items-center gap-1.5 text-base font-semibold ${color.text}`}
+                >
+                  {open ? <FiChevronDown /> : <FiChevronRight />}
+                  {g.name}
+                  <span className="text-xs font-normal text-gray-500">{g.items.length} fit-out{g.items.length === 1 ? '' : 's'}</span>
+                </button>
+                {open && (
+                  <div className="flex overflow-hidden rounded-lg border border-gray-200 bg-white">
+                    <div className={`w-1.5 shrink-0 ${color.stripe}`} aria-hidden />
+                    <div className="min-w-0 flex-1 overflow-x-auto">
+                      <table className={`w-full border-collapse text-sm ${canViewFinance ? 'min-w-[1180px]' : 'min-w-[820px]'}`}>
+                        <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Fit-out</th>
+                            <th className="px-3 py-2 text-left">Units</th>
+                            <th className="px-3 py-2 text-left">PM</th>
+                            <th className="px-3 py-2 text-center">Priority</th>
+                            <th className="px-3 py-2 text-left">Phase</th>
+                            <th className="px-3 py-2 text-left">Estimate</th>
+                            {canViewFinance && <th className="px-3 py-2 text-right">Revised</th>}
+                            {canViewFinance && <th className="px-3 py-2 text-right">Committed</th>}
+                            {canViewFinance && <th className="px-3 py-2 text-right">Actual</th>}
+                            {canViewFinance && <th className="px-3 py-2 text-right">Over / under</th>}
+                            <th className="px-3 py-2 text-right">Handover</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g.items.map((r) => {
+                            const c = r.costing;
+                            const ou = c ? Number(c.overUnder) : 0;
+                            return (
+                              <tr
+                                key={r.id}
+                                className="cursor-pointer border-t border-gray-100 hover:bg-gray-50"
+                                onClick={() => navigate(`/interior/${r.id}`)}
+                              >
+                                <td className="px-3 py-2 font-medium text-blue-600">{r.name}</td>
+                                <td className="px-3 py-2 text-gray-700">{unitsOf(r)}</td>
+                                <td className="px-3 py-2 text-gray-700">{r.pm?.name ?? '—'}</td>
+                                <td className="p-0 text-center">
+                                  {r.priority
+                                    ? <span className={`block px-2 py-2 text-xs font-semibold ${PRIORITY_FILL[r.priority] ?? 'bg-gray-500 text-white'}`}>{r.priority[0] + r.priority.slice(1).toLowerCase()}</span>
+                                    : <span className="text-gray-500">—</span>}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <Chip size="sm" variant="flat" color={phaseColor(r.phase)}>
+                                    {PHASE_LABEL[r.phase] ?? r.phase}
+                                  </Chip>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <StatusTag status={r.estimateStatus ?? 'DRAFT'} labels={{ SUBMITTED: 'Waiting' }} />
+                                </td>
+                                {canViewFinance && <td className="px-3 py-2 text-right tabular-nums">{c ? money(c.revised) : r.contractValue != null ? fmt(r.contractValue) : '—'}</td>}
+                                {canViewFinance && <td className="px-3 py-2 text-right tabular-nums">{c ? money(c.committed) : '—'}</td>}
+                                {canViewFinance && <td className="px-3 py-2 text-right tabular-nums">{c ? money(c.actual) : fmt(r.spend ?? 0)}</td>}
+                                {canViewFinance && (
+                                  <td className={`px-3 py-2 text-right tabular-nums ${ou < -0.5 ? 'bg-red-50 font-semibold text-red-700' : ''}`}>
+                                    {c ? money(ou) : '—'}
+                                  </td>
+                                )}
+                                <td className="px-3 py-2 text-right">
+                                  {/* A handed-over fit-out has no countdown left to run — showing one
+                                      reads as an overdue job that is in fact finished. */}
+                                  {r.status === 'COMPLETED' ? (
+                                    <span className="text-gray-500">done</span>
+                                  ) : r.daysToHandover == null ? '—' : (
+                                    <span className={r.daysToHandover < 0 ? 'text-red-700' : r.daysToHandover <= 30 ? 'text-orange-700' : ''}>
+                                      {r.daysToHandover < 0 ? `${Math.abs(r.daysToHandover)}d overdue` : `${r.daysToHandover}d`}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        {canViewFinance && g.items.some((r) => r.costing) && (
+                          <tfoot>
+                            <tr className="border-t border-gray-200 bg-gray-50 text-xs font-semibold text-gray-900">
+                              <td className="px-3 py-2" colSpan={6}>{g.name} total</td>
+                              {(['revised', 'committed', 'actual', 'overUnder'] as const).map((k) => {
+                                const v = g.items.reduce((t, r) => t + (r.costing ? Number(r.costing[k]) || 0 : 0), 0);
+                                return <td key={k} className={`px-3 py-2 text-right tabular-nums ${k === 'overUnder' && v < -0.5 ? 'text-red-700' : ''}`}>{money(v)}</td>;
+                              })}
+                              <td />
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })}
+          <div className="rounded-lg border border-gray-200 bg-white">
             <Pagination
               page={page}
               totalPages={totalPages}
@@ -274,8 +366,8 @@ export default function InteriorPortfolioPage() {
               onPrev={() => setPage((p) => p - 1)}
               onNext={() => setPage((p) => p + 1)}
             />
-          </CardBody>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   );

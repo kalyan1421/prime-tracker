@@ -98,6 +98,13 @@ model User {
   unitAssignments                   UnitAssignee[]                  @relation("UnitAssigneeUser")
   unitAssignmentsMade               UnitAssignee[]                  @relation("UnitAssigneeAssigner")
   unitWatches                       UnitWatcher[]                   @relation("UnitWatcherUser")
+  interiorEstimatesSubmitted        InteriorProject[]               @relation("InteriorEstimateSubmitter")
+  interiorEstimatesLocked           InteriorProject[]               @relation("InteriorEstimateLocker")
+  interiorCosRequested              InteriorChangeOrder[]           @relation("InteriorCoRequester")
+  interiorCosDecided                InteriorChangeOrder[]           @relation("InteriorCoDecider")
+  interiorPosCreated                InteriorPurchaseOrder[]         @relation("InteriorPoCreator")
+  interiorPosApproved               InteriorPurchaseOrder[]         @relation("InteriorPoApprover")
+  interiorActivity                  InteriorActivity[]              @relation("InteriorActivityActor")
   constructionStagesCreated         UnitConstructionStage[]         @relation("UnitConstructionStageCreator")
   // Unit occupancy log
   unitStatusEvents                  UnitStatusEvent[]               @relation("UnitStatusEventRecorder")
@@ -427,30 +434,31 @@ model Unit {
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime? // soft-delete: preserves financial history
 
-  leases             Lease[]
-  sales              Sale[]
-  statusEvents       UnitStatusEvent[]
-  comments           UnitComment[]
-  loans              Loan[]
-  budgetLines        BudgetLine[]
-  commitments        Commitment[]
-  actuals            Actual[]
-  documents          Document[]
-  tasks              Task[]
-  taskUnits          TaskUnit[]
-  dailyLogs          DailyLog[]
-  clients            Client[]
-  leads              Lead[]
-  siteVisits         SiteVisit[]
-  interiorProjects   InteriorProject[]
-  interestedLeads    LeadUnitInterest[]
-  constructionStages UnitConstructionStage[]
+  leases               Lease[]
+  sales                Sale[]
+  statusEvents         UnitStatusEvent[]
+  comments             UnitComment[]
+  loans                Loan[]
+  budgetLines          BudgetLine[]
+  commitments          Commitment[]
+  actuals              Actual[]
+  documents            Document[]
+  tasks                Task[]
+  taskUnits            TaskUnit[]
+  dailyLogs            DailyLog[]
+  clients              Client[]
+  leads                Lead[]
+  siteVisits           SiteVisit[]
+  interiorProjects     InteriorProject[]
+  interiorProjectUnits InteriorProjectUnit[]
+  interestedLeads      LeadUnitInterest[]
+  constructionStages   UnitConstructionStage[]
   // S3 — unit swap mid-contract. Both sides, so a unit's page can show "a buyer moved
   // off this unit" and "this unit was taken over by an existing sale" alike.
-  saleTransfersOut   SaleUnitTransfer[]      @relation("SaleUnitTransferFrom")
-  saleTransfersIn    SaleUnitTransfer[]      @relation("SaleUnitTransferTo")
+  saleTransfersOut     SaleUnitTransfer[]      @relation("SaleUnitTransferFrom")
+  saleTransfersIn      SaleUnitTransfer[]      @relation("SaleUnitTransferTo")
   // Optional tag only — see UpdateBoardPost. Does not scope who can see the board.
-  updateBoardPosts   UpdateBoardPost[]
+  updateBoardPosts     UpdateBoardPost[]
 
   // Uniqueness of (buildingId, unitNumber) is enforced by a partial unique index
   // (WHERE "deletedAt" IS NULL) added in migration 20260703000000_units_partial_unique_active —
@@ -2322,15 +2330,16 @@ enum ChangeOrderStatus {
 }
 
 model Vendor {
-  id               String            @id @default(cuid())
-  name             String
-  contactName      String?
-  email            String?
-  phone            String?
-  trade            String?
-  contracts        Contract[]
-  interiorInvoices InteriorInvoice[]
-  createdAt        DateTime          @default(now())
+  id                     String                  @id @default(cuid())
+  name                   String
+  contactName            String?
+  email                  String?
+  phone                  String?
+  trade                  String?
+  contracts              Contract[]
+  interiorInvoices       InteriorInvoice[]
+  interiorPurchaseOrders InteriorPurchaseOrder[]
+  createdAt              DateTime                @default(now())
 
   @@map("vendors")
 }
@@ -3098,6 +3107,20 @@ model OrgSettings {
   siteVisitDayStartMin         Int          @default(540) // 09:00 local
   siteVisitDayEndMin           Int          @default(1080) // 18:00 local
   siteVisitMissedGraceHours    Int          @default(2) // past endsAt before it counts as missed
+  // ---- Interiors costing approvals (client, 2026-10-17) ----
+  // Which roles may do each step. SUPER_ADMIN always may, and is the only role that can
+  // change these lists. Defaults are the client's answer: Founder and PM have every power.
+  interiorLockRoles            String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
+  interiorUnlockRoles          String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
+  // A change order up to this amount needs one of interiorCoApproverRoles; above it, one of
+  // interiorCoAboveLimitRoles. The meeting set the line at the $60-72k range.
+  interiorCoLimit              Decimal      @default(60000) @db.Decimal(14, 2)
+  interiorCoApproverRoles      String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
+  interiorCoAboveLimitRoles    String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
+  interiorPoApproverRoles      String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
+  // A PO that takes a cost code past its revised budget.
+  interiorVarianceRoles        String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
+  interiorBillApproverRoles    String[]     @default(["FOUNDER", "PROJECT_MANAGER"])
   createdAt                    DateTime     @default(now())
   updatedAt                    DateTime     @updatedAt
 
@@ -3163,46 +3186,69 @@ enum SalePaymentTrigger {
 // Owns the operational work (phases, scope, sub-contractor invoices, snags).
 // The client-facing per-sqft price lives on the linked Sale as a SalePayment installment.
 model InteriorProject {
-  id                String                   @id @default(cuid())
+  id                    String                   @id @default(cuid())
   // Anchor — exactly one of (unitId, buildingId); service-enforced (mirrors Sale/Loan).
-  unitId            String?
-  unit              Unit?                    @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  buildingId        String?
-  building          Building?                @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  unitId                String?
+  unit                  Unit?                    @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  buildingId            String?
+  building              Building?                @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   // Optional context links — "interior is part of the contract agreement".
-  saleId            String?
-  sale              Sale?                    @relation(fields: [saleId], references: [id])
-  leaseId           String?
-  lease             Lease?                   @relation(fields: [leaseId], references: [id])
-  name              String
-  status            InteriorStatus           @default(NOT_STARTED)
-  phase             InteriorPhase            @default(DESIGN)
-  pmId              String? // same PM pool — no new role
-  pm                User?                    @relation("InteriorPM", fields: [pmId], references: [id])
-  contractType      InteriorContractType     @default(PER_SQFT)
-  ratePerSqft       Decimal?                 @db.Decimal(12, 2)
-  area              Decimal?                 @db.Decimal(10, 2) // sqft used for pricing
-  contractValue     Decimal?                 @db.Decimal(14, 2) // internal cost-to-build; client price is on Sale
-  encryptedFields   String? // optional AES blob (open question — currently unused)
-  packageTemplateId String?
-  packageTemplate   InteriorPackageTemplate? @relation(fields: [packageTemplateId], references: [id])
-  startDate         DateTime?
-  targetEnd         DateTime?
-  handoverAt        DateTime?
-  handoverSignedBy  String? // client representative who signed off at handover
-  handoverNotes     String?
+  saleId                String?
+  sale                  Sale?                    @relation(fields: [saleId], references: [id])
+  leaseId               String?
+  lease                 Lease?                   @relation(fields: [leaseId], references: [id])
+  name                  String
+  status                InteriorStatus           @default(NOT_STARTED)
+  phase                 InteriorPhase            @default(DESIGN)
+  pmId                  String? // same PM pool — no new role
+  pm                    User?                    @relation("InteriorPM", fields: [pmId], references: [id])
+  contractType          InteriorContractType     @default(PER_SQFT)
+  ratePerSqft           Decimal?                 @db.Decimal(12, 2)
+  area                  Decimal?                 @db.Decimal(10, 2) // sqft used for pricing
+  contractValue         Decimal?                 @db.Decimal(14, 2) // internal cost-to-build; client price is on Sale
+  encryptedFields       String? // optional AES blob (open question — currently unused)
+  packageTemplateId     String?
+  packageTemplate       InteriorPackageTemplate? @relation(fields: [packageTemplateId], references: [id])
+  startDate             DateTime?
+  targetEnd             DateTime?
+  handoverAt            DateTime?
+  handoverSignedBy      String? // client representative who signed off at handover
+  handoverNotes         String?
   // Approval audit (construction team + city)
-  clientApprovedAt  DateTime?
-  cityApprovedAt    DateTime?
-  createdAt         DateTime                 @default(now())
-  updatedAt         DateTime                 @updatedAt
-  deletedAt         DateTime? // soft-delete (matches Sale/Unit/Loan)
+  clientApprovedAt      DateTime?
+  cityApprovedAt        DateTime?
+  // ── Costing (2026-10-17) — replaces BuilderTrend's estimate / budget / PO screens ──
+  // The scope items ARE the estimate. DRAFT -> SUBMITTED -> LOCKED; locking snapshots the
+  // estimate into InteriorBudgetSnapshot as the ORIGINAL budget, and from then on every
+  // change is a change order. Unlocking (with a reason) drops the snapshot.
+  estimateStatus        String                   @default("DRAFT")
+  estimateSubmittedAt   DateTime?
+  estimateSubmittedById String?
+  estimateSubmittedBy   User?                    @relation("InteriorEstimateSubmitter", fields: [estimateSubmittedById], references: [id])
+  estimateLockedAt      DateTime?
+  estimateLockedById    String?
+  estimateLockedBy      User?                    @relation("InteriorEstimateLocker", fields: [estimateLockedById], references: [id])
+  // "LUX" -> PO numbers LUX-0001, LUX-0002 ... (BuilderTrend's scheme).
+  poPrefix              String?
+  // What PRIME contributes to the tenant's fit-out. Null = take it from the linked lease.
+  tiAllowance           Decimal?                 @db.Decimal(14, 2)
+  priority              String? // HIGH | MEDIUM | LOW
+  plansSubmittedAt      DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  deletedAt             DateTime? // soft-delete (matches Sale/Unit/Loan)
 
-  scopeItems InteriorScopeItem[]
-  snags      SnagItem[]
-  invoices   InteriorInvoice[]
-  documents  Document[]
-  actuals    Actual[]
+  scopeItems     InteriorScopeItem[]
+  snags          SnagItem[]
+  invoices       InteriorInvoice[]
+  documents      Document[]
+  actuals        Actual[]
+  budgetSnapshot InteriorBudgetSnapshot[]
+  changeOrders   InteriorChangeOrder[]
+  purchaseOrders InteriorPurchaseOrder[]
+  activity       InteriorActivity[]
+  // Further units this fit-out covers, beyond `unitId` ("Units 805-815" is one job).
+  extraUnits     InteriorProjectUnit[]
 
   @@index([unitId])
   @@index([buildingId])
@@ -3248,41 +3294,193 @@ model InteriorPackageItem {
 
 // BOQ / scope line item; can be seeded from a package template.
 model InteriorScopeItem {
-  id                String          @id @default(cuid())
+  id                String            @id @default(cuid())
   interiorProjectId String
-  interiorProject   InteriorProject @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  interiorProject   InteriorProject   @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
   description       String
   category          String? // flooring | ceiling | MEP_ROUGH | MEP_FINISH | joinery
-  quantity          Decimal?        @db.Decimal(12, 2)
+  quantity          Decimal?          @db.Decimal(12, 2)
   unit              String? // sqft | nos | lm
-  unitPrice         Decimal?        @db.Decimal(12, 2)
-  total             Decimal?        @db.Decimal(14, 2)
-  createdAt         DateTime        @default(now())
+  unitPrice         Decimal?          @db.Decimal(12, 2)
+  total             Decimal?          @db.Decimal(14, 2)
+  // Estimate fields (2026-10-17).
+  costCodeId        String?
+  costCode          InteriorCostCode? @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  costType          String? // Subcontractor | Material | Labor | Equipment | Other
+  supplier          String?
+  paidBy            String            @default("PRIME") // PRIME | TENANT
+  sortOrder         Int               @default(0)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @default(now()) @updatedAt
 
   @@index([interiorProjectId])
+  @@index([costCodeId])
   @@map("interior_scope_items")
 }
 
 // Sub-contractor invoice for an interior project. Mirrors into an Actual (tagged
 // interiorProjectId) so the cashflow forecast + TI reporting see the outflow.
 model InteriorInvoice {
-  id                String          @id @default(cuid())
+  id                String                 @id @default(cuid())
   interiorProjectId String
-  interiorProject   InteriorProject @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  interiorProject   InteriorProject        @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
   vendorId          String
-  vendor            Vendor          @relation(fields: [vendorId], references: [id])
-  amount            Decimal         @db.Decimal(14, 2)
+  vendor            Vendor                 @relation(fields: [vendorId], references: [id])
+  amount            Decimal                @db.Decimal(14, 2)
   invoiceNo         String?
   invoiceDate       DateTime?
   paidAt            DateTime?
-  status            String          @default("PENDING") // PENDING | APPROVED | PAID
+  status            String                 @default("PENDING") // PENDING | APPROVED | PAID
   actualId          String? // paired Actual id (set when mirrored)
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  // The bill's purchase order (2026-10-17). Null for bills logged before POs existed.
+  purchaseOrderId   String?
+  purchaseOrder     InteriorPurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
 
   @@index([interiorProjectId])
   @@index([vendorId])
+  @@index([purchaseOrderId])
   @@map("interior_invoices")
+}
+
+/// BuilderTrend's cost codes, copied as they appear there (client, 2026-10-17). A code may
+/// be a number ("07.05", "1415") or absent ("Concrete", "Tile"), so lines point at the ROW,
+/// not at the code text — renaming a code never orphans a line.
+model InteriorCostCode {
+  id           String                      @id @default(cuid())
+  code         String?
+  name         String
+  groupCode    String?
+  groupName    String
+  sortOrder    Int                         @default(0)
+  active       Boolean                     @default(true)
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+  scopeItems   InteriorScopeItem[]
+  snapshots    InteriorBudgetSnapshot[]
+  changeOrders InteriorChangeOrder[]
+  poLines      InteriorPurchaseOrderLine[]
+
+  @@unique([groupName, name])
+  @@index([active, sortOrder])
+  @@map("interior_cost_codes")
+}
+
+/// The ORIGINAL budget: the estimate as it stood when it was locked, per cost code and
+/// payer. Never edited — unlocking deletes it, re-locking writes a new one.
+model InteriorBudgetSnapshot {
+  id                String            @id @default(cuid())
+  interiorProjectId String
+  interiorProject   InteriorProject   @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  costCodeId        String?
+  costCode          InteriorCostCode? @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  paidBy            String            @default("PRIME")
+  amount            Decimal           @db.Decimal(14, 2)
+  createdAt         DateTime          @default(now())
+
+  @@index([interiorProjectId])
+  @@map("interior_budget_snapshots")
+}
+
+/// A change to the locked budget. Approved ones raise (or, negative, lower) the revised
+/// budget of their cost code. Numbered CO-001, CO-002 ... per fit-out.
+model InteriorChangeOrder {
+  id                String            @id @default(cuid())
+  interiorProjectId String
+  interiorProject   InteriorProject   @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  number            Int
+  costCodeId        String?
+  costCode          InteriorCostCode? @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  amount            Decimal           @db.Decimal(14, 2)
+  reason            String
+  note              String
+  paidBy            String            @default("PRIME")
+  status            String            @default("PENDING") // PENDING | APPROVED | REJECTED
+  requestedById     String?
+  requestedBy       User?             @relation("InteriorCoRequester", fields: [requestedById], references: [id])
+  decidedById       String?
+  decidedBy         User?             @relation("InteriorCoDecider", fields: [decidedById], references: [id])
+  decidedAt         DateTime?
+  createdAt         DateTime          @default(now())
+
+  @@unique([interiorProjectId, number])
+  @@map("interior_change_orders")
+}
+
+/// A purchase order to a supplier or sub-contractor. Approved POs are the COMMITTED cost;
+/// bills (InteriorInvoice) against them are the ACTUAL cost.
+model InteriorPurchaseOrder {
+  id                  String                      @id @default(cuid())
+  interiorProjectId   String
+  interiorProject     InteriorProject             @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  number              Int
+  title               String
+  vendorId            String
+  vendor              Vendor                      @relation(fields: [vendorId], references: [id])
+  scope               String?
+  scheduledCompletion DateTime?
+  materialsOnly       Boolean                     @default(false)
+  status              String                      @default("DRAFT") // DRAFT | PENDING | APPROVED | VOID
+  // Takes a cost code past its revised budget — allowed only with this flag and a
+  // variance approver (OrgSettings.interiorVarianceRoles).
+  variance            Boolean                     @default(false)
+  workCompletedAt     DateTime?
+  createdById         String?
+  createdBy           User?                       @relation("InteriorPoCreator", fields: [createdById], references: [id])
+  approvedById        String?
+  approvedBy          User?                       @relation("InteriorPoApprover", fields: [approvedById], references: [id])
+  approvedAt          DateTime?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+  lines               InteriorPurchaseOrderLine[]
+  invoices            InteriorInvoice[]
+
+  @@unique([interiorProjectId, number])
+  @@index([vendorId])
+  @@map("interior_purchase_orders")
+}
+
+model InteriorPurchaseOrderLine {
+  id              String                @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   InteriorPurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  costCodeId      String?
+  costCode        InteriorCostCode?     @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  description     String?
+  amount          Decimal               @db.Decimal(14, 2)
+  paidBy          String                @default("PRIME")
+  sortOrder       Int                   @default(0)
+
+  @@index([purchaseOrderId])
+  @@index([costCodeId])
+  @@map("interior_purchase_order_lines")
+}
+
+/// Who did what on a fit-out's money: locks, unlocks (with the reason), approvals, POs, bills.
+model InteriorActivity {
+  id                String          @id @default(cuid())
+  interiorProjectId String
+  interiorProject   InteriorProject @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  actorId           String?
+  actor             User?           @relation("InteriorActivityActor", fields: [actorId], references: [id])
+  text              String
+  createdAt         DateTime        @default(now())
+
+  @@index([interiorProjectId, createdAt])
+  @@map("interior_activity")
+}
+
+/// Extra units a fit-out covers. `InteriorProject.unitId` is the first; same building only.
+model InteriorProjectUnit {
+  interiorProjectId String
+  interiorProject   InteriorProject @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  unitId            String
+  unit              Unit            @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@id([interiorProjectId, unitId])
+  @@index([unitId])
+  @@map("interior_project_units")
 }
 
 // Punch-list item. Attaches to an interior project and (later) reusable on construction milestones.

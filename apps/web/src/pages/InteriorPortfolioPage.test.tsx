@@ -16,10 +16,6 @@ const state = { rows: [] as any[], permissions: ['interior:view', 'interior:fina
 
 vi.mock('../hooks/useApi', () => ({
   useInteriorPortfolio: () => ({ data: state.rows, isLoading: false }),
-  useInteriorTemplates: () => ({ data: [] }),
-  useCreateInteriorTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateInteriorTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeleteInteriorTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }) as any);
 
 vi.mock('../store/authStore', () => ({
@@ -44,6 +40,29 @@ function row(overrides: Record<string, any> = {}) {
 
 const renderPage = () =>
   render(<MemoryRouter><InteriorPortfolioPage /></MemoryRouter>);
+
+describe('InteriorPortfolioPage — property blocks', () => {
+  beforeEach(() => { state.permissions = ['interior:view', 'interior:finance']; });
+
+  /** monday's layout: one block per property, each fit-out under the property it is in. */
+  it('groups fit-outs under their property', () => {
+    state.rows = [
+      row({ id: 'a', name: 'Luxyn', unit: { id: 'u1', unitNumber: '805', building: { name: 'B1', project: { id: 'p1', name: 'Centro' } } } }),
+      row({ id: 'b', name: 'Clinic', unit: { id: 'u2', unitNumber: '12', building: { name: 'B2', project: { id: 'p2', name: 'Westpark' } } } }),
+      row({ id: 'c', name: 'Salon', unit: { id: 'u3', unitNumber: '807', building: { name: 'B1', project: { id: 'p1', name: 'Centro' } } } }),
+    ];
+    renderPage();
+    const centro = screen.getByRole('button', { name: /Centro/ });
+    expect(centro.textContent).toContain('2 fit-outs');
+    expect(screen.getByRole('button', { name: /Westpark/ }).textContent).toContain('1 fit-out');
+  });
+
+  it('lists every unit a multi-unit fit-out covers', () => {
+    state.rows = [row({ extraUnits: [{ unit: { id: 'u2', unitNumber: '806' } }, { unit: { id: 'u3', unitNumber: '807' } }] })];
+    renderPage();
+    expect(screen.getByText('Units 101, 806, 807')).toBeTruthy();
+  });
+});
 
 
 /**
@@ -219,28 +238,41 @@ describe('InteriorPortfolioPage — money is gated', () => {
   const onScreen = (text: string) =>
     screen.queryAllByText(text).filter((el) => el.tagName !== 'OPTION');
 
-  /** Column headers only — the sort dropdown also contains the words "Contract value". */
+  /** Column headers only — the sort dropdown also mentions the budget. */
   const headers = () =>
     within(screen.getByRole('table')).getAllByRole('columnheader').map((h) => h.textContent!.trim());
 
-  it('hides the contract and spend columns without interior:finance', () => {
+  const MONEY_COLS = ['Revised', 'Committed', 'Actual', 'Over / under'];
+
+  it('hides the job-costing columns without interior:finance', () => {
     state.permissions = ['interior:view'];
-    state.rows = [row()];
+    state.rows = [row({ contractValue: null, spend: null, costing: null })];
     renderPage();
-    expect(headers()).not.toContain('Contract');
-    expect(headers()).not.toContain('Spend');
+    for (const h of MONEY_COLS) expect(headers()).not.toContain(h);
     // ...and no money reaches the summary strip either. HeroUI keeps a hidden native
-    // <select> for each filter, and "Contract value" is also a SORT option label — so
-    // options are excluded rather than matched by text alone.
-    expect(onScreen('Contract value')).toHaveLength(0);
-    expect(onScreen('Spend to date')).toHaveLength(0);
+    // <select> for each filter, so options are excluded rather than matched by text alone.
+    expect(onScreen('Revised budget')).toHaveLength(0);
+    expect(onScreen('Actual cost')).toHaveLength(0);
   });
 
   it('shows them with it', () => {
     state.rows = [row()];
     renderPage();
-    expect(headers()).toContain('Contract');
-    expect(headers()).toContain('Spend');
+    for (const h of MONEY_COLS) expect(headers()).toContain(h);
+  });
+
+  /** BuilderTrend's numbers once a fit-out is costed; the old contract value until then. */
+  it('reads the costed budget, and marks a fit-out that is over it', () => {
+    state.rows = [row({
+      contractValue: 1000,
+      costing: { revised: 452186.71, committed: 318007.06, actual: 1200, overUnder: -576.71, estimateStatus: 'LOCKED' },
+      estimateStatus: 'LOCKED',
+    })];
+    renderPage();
+    expect(screen.getAllByText('$452,186.71').length).toBeGreaterThan(0);
+    const over = screen.getAllByText('-$576.71').find((el) => el.tagName === 'TD');
+    expect(over?.className).toContain('text-red-700');
+    expect(onScreen('Actual cost · 1 over budget')).toHaveLength(1);
   });
 
   /**

@@ -14,6 +14,7 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
+import { InteriorCostingService, type CostingActor } from './interior-costing.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { canTransition, getPhaseGate, isSnagOpen } from './interior-state-machine';
 import { AddScopeItemDto, AddInteriorInvoiceDto } from './dto/scope-invoice.dto';
@@ -44,14 +45,22 @@ interface CreateInteriorInput {
   ratePerSqft?: number;
   area?: number;
   contractValue?: number;
-  packageTemplateId?: string;
   startDate?: string;
   targetEnd?: string;
+  /** Further units this fit-out covers — same building as `unitId` ("Units 805–815"). */
+  extraUnitIds?: string[];
+  priority?: string | null;
+  plansSubmittedAt?: string | null;
+  /** What Prime contributes. Null = take it from the linked lease. */
+  tiAllowance?: number | null;
+  poPrefix?: string | null;
 }
 
-type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildingId' | 'packageTemplateId'>> & {
+type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildingId'>> & {
   status?: InteriorStatus;
 };
+
+const PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'];
 
 @Injectable()
 export class InteriorService {
@@ -59,7 +68,29 @@ export class InteriorService {
     private prisma: PrismaService,
     private bus: EventBus,
     private storage: StorageService,
+    private costing: InteriorCostingService,
   ) {}
+
+  /**
+   * The units beyond the anchor, checked: they must exist, be live, and sit in the same
+   * building as the anchor unit — one fit-out is one job on one site. Returns their sqft
+   * total so the area can default to the sum.
+   */
+  private async checkExtraUnits(anchorUnitId: string | null | undefined, extraUnitIds: string[]) {
+    const ids = [...new Set(extraUnitIds.filter((u) => u && u !== anchorUnitId))];
+    if (!ids.length) return { ids, sqft: 0 };
+    if (!anchorUnitId) throw new BadRequestException('Extra units need a unit-anchored fit-out');
+    const anchor = await this.prisma.unit.findUnique({ where: { id: anchorUnitId }, select: { buildingId: true } });
+    const units = await this.prisma.unit.findMany({ where: { id: { in: ids }, deletedAt: null }, select: { id: true, unitNumber: true, buildingId: true, sqft: true } });
+    if (units.length !== ids.length) throw new BadRequestException('One of the units no longer exists');
+    const elsewhere = units.filter((u) => u.buildingId !== anchor?.buildingId);
+    if (elsewhere.length) throw new BadRequestException(`Unit ${elsewhere.map((u) => u.unitNumber).join(', ')} is in a different building — a fit-out covers units in one building`);
+    return { ids, sqft: units.reduce((t, u) => t + (u.sqft ?? 0), 0) };
+  }
+
+  private checkPriority(priority?: string | null) {
+    if (priority && !PRIORITIES.includes(priority)) throw new BadRequestException('Priority is HIGH, MEDIUM or LOW');
+  }
 
   // ─────── Reads ───────
 
@@ -105,7 +136,7 @@ export class InteriorService {
     // that money is riding along. Omitting `viewerPermissions` (internal calls) stays
     // full trust, matching findById's convention.
     if (!viewerPermissions || viewerPermissions.includes('interior:finance')) return projects;
-    return projects.map((p) => ({ ...p, contractValue: null, ratePerSqft: null }));
+    return projects.map((p) => ({ ...p, contractValue: null, ratePerSqft: null, tiAllowance: null }));
   }
 
   async findById(id: string, viewerPermissions?: string[]) {
@@ -126,7 +157,9 @@ export class InteriorService {
         building: { select: { id: true, name: true, phase: true, projectId: true } },
         sale: { select: { id: true, buyer: true } },
         pm: { select: { id: true, name: true, email: true } },
-        scopeItems: { orderBy: { createdAt: 'asc' } },
+        lease: { select: { id: true, tenantName: true, tiAllowance: true } },
+        extraUnits: { include: { unit: { select: { id: true, unitNumber: true, sqft: true } } } },
+        scopeItems: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
         invoices: {
           orderBy: { createdAt: 'desc' },
           include: { vendor: { select: { id: true, name: true } } },
@@ -160,6 +193,9 @@ export class InteriorService {
       ...project,
       contractValue: null,
       ratePerSqft: null,
+      // The TI allowance is money too, on the fit-out and on the lease it may come from.
+      tiAllowance: null,
+      lease: project.lease ? { ...project.lease, tiAllowance: null } : null,
       scopeItems: project.scopeItems.map((s) => ({ ...s, unitPrice: null, total: null })),
       invoices: [],
     };
@@ -174,10 +210,11 @@ export class InteriorService {
       where: { deletedAt: null, status: { not: 'CANCELLED' } },
       orderBy: { targetEnd: 'asc' },
       include: {
-        unit: { select: { id: true, unitNumber: true } },
-        building: { select: { id: true, name: true } },
+        unit: { select: { id: true, unitNumber: true, building: { select: { id: true, name: true, project: { select: { id: true, name: true } } } } } },
+        building: { select: { id: true, name: true, project: { select: { id: true, name: true } } } },
         pm: { select: { id: true, name: true } },
         invoices: { select: { amount: true } },
+        extraUnits: { select: { unit: { select: { id: true, unitNumber: true } } } },
       },
     });
     const now = Date.now();
@@ -192,6 +229,7 @@ export class InteriorService {
       const { invoices, ...rest } = p;
       return {
         ...rest,
+        tiAllowance: canViewFinance && p.tiAllowance !== null ? Number(p.tiAllowance) : null,
         contractValue: canViewFinance && p.contractValue ? Number(p.contractValue) : null,
         spend: canViewFinance ? spend : null,
         daysToHandover,
@@ -213,24 +251,21 @@ export class InteriorService {
     // fit-out not running in parallel with the unit/building SHELL construction —
     // that gate is unchanged and still enforced in advancePhase() below.
 
-    // If a package template is chosen, default the rate from it and seed its BOQ lines.
-    let templateItems: Array<{
-      description: string; category: string | null;
-      quantity: Prisma.Decimal | null; unit: string | null; unitPrice: Prisma.Decimal | null;
-    }> = [];
-    let ratePerSqft = input.ratePerSqft;
-    if (input.packageTemplateId) {
-      const tpl = await this.prisma.interiorPackageTemplate.findFirst({
-        where: { id: input.packageTemplateId, deletedAt: null },
-        include: { items: { orderBy: { sequence: 'asc' } } },
-      });
-      if (!tpl) throw new BadRequestException('Package template not found');
-      templateItems = tpl.items;
-      if (ratePerSqft == null && tpl.defaultRatePerSqft != null) ratePerSqft = Number(tpl.defaultRatePerSqft);
-    }
+    // Package templates were removed (client, 2026-10-16): the estimate is built line by
+    // line against BuilderTrend cost codes instead. Old rows keep their packageTemplateId.
+    const ratePerSqft = input.ratePerSqft;
 
+    this.checkPriority(input.priority);
+    const extra = await this.checkExtraUnits(input.unitId, input.extraUnitIds ?? []);
+    // A fit-out across several units defaults its area to their combined square feet.
+    let area = input.area;
+    if (area == null && input.unitId && extra.ids.length) {
+      const anchor = await this.prisma.unit.findUnique({ where: { id: input.unitId }, select: { sqft: true } });
+      const total = (anchor?.sqft ?? 0) + extra.sqft;
+      if (total > 0) area = total;
+    }
     const contractType = input.contractType ?? 'PER_SQFT';
-    const contractValue = this.computeContractValue(contractType, ratePerSqft, input.area, input.contractValue);
+    const contractValue = this.computeContractValue(contractType, ratePerSqft, area, input.contractValue);
 
     return this.prisma.$transaction(async (tx) => {
       const project = await tx.interiorProject.create({
@@ -243,153 +278,21 @@ export class InteriorService {
           pmId: input.pmId ?? null,
           contractType,
           ratePerSqft: ratePerSqft ?? null,
-          area: input.area ?? null,
+          area: area ?? null,
           contractValue,
-          packageTemplateId: input.packageTemplateId ?? null,
           startDate: input.startDate ? new Date(input.startDate) : null,
           targetEnd: input.targetEnd ? new Date(input.targetEnd) : null,
+          priority: input.priority ?? null,
+          plansSubmittedAt: input.plansSubmittedAt ? new Date(input.plansSubmittedAt) : null,
+          tiAllowance: input.tiAllowance ?? null,
+          poPrefix: input.poPrefix?.trim().toUpperCase() || null,
         },
       });
-      if (templateItems.length) {
-        await tx.interiorScopeItem.createMany({
-          data: templateItems.map((it) => ({
-            interiorProjectId: project.id,
-            description: it.description,
-            category: it.category,
-            quantity: it.quantity,
-            unit: it.unit,
-            unitPrice: it.unitPrice,
-            total: it.quantity != null && it.unitPrice != null ? Number(it.quantity) * Number(it.unitPrice) : null,
-          })),
-        });
+      if (extra.ids.length) {
+        await tx.interiorProjectUnit.createMany({ data: extra.ids.map((unitId) => ({ interiorProjectId: project.id, unitId })) });
       }
       return project;
     });
-  }
-
-  // ─────── Package templates (the "2-3 generic options"; otherwise custom) ───────
-
-  listPackageTemplates() {
-    return this.prisma.interiorPackageTemplate.findMany({
-      where: { deletedAt: null },
-      orderBy: { createdAt: 'asc' },
-      include: { items: { orderBy: { sequence: 'asc' } }, _count: { select: { interiorProjects: true } } },
-    });
-  }
-
-  async createPackageTemplate(input: {
-    name: string; description?: string; defaultRatePerSqft?: number;
-    items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
-  }) {
-    if (!input.name?.trim()) throw new BadRequestException('name is required');
-    // A negative defaultRatePerSqft would otherwise flow unchecked into create()'s rate
-    // default (which runs before the template is fetched), so validate it here.
-    if (input.defaultRatePerSqft != null && input.defaultRatePerSqft < 0) {
-      throw new BadRequestException('defaultRatePerSqft cannot be negative');
-    }
-    for (const it of input.items ?? []) {
-      if (it.quantity != null && it.quantity < 0) throw new BadRequestException('item quantity cannot be negative');
-      if (it.unitPrice != null && it.unitPrice < 0) throw new BadRequestException('item unitPrice cannot be negative');
-    }
-    return this.prisma.interiorPackageTemplate.create({
-      data: {
-        name: input.name.trim(),
-        description: input.description ?? null,
-        defaultRatePerSqft: input.defaultRatePerSqft ?? null,
-        items: input.items?.length
-          ? {
-              create: input.items.map((it, i) => ({
-                description: it.description,
-                category: it.category ?? null,
-                quantity: it.quantity ?? null,
-                unit: it.unit ?? null,
-                unitPrice: it.unitPrice ?? null,
-                sequence: i,
-              })),
-            }
-          : undefined,
-      },
-      include: { items: { orderBy: { sequence: 'asc' } } },
-    });
-  }
-
-  /**
-   * Update a package template. When `items` is supplied the line list is REPLACED wholesale
-   * — the rows carry no stable client-side identity, and a merge would need one.
-   *
-   * Fit-outs already created from this template keep the lines they were seeded with:
-   * `create()` copies items into `InteriorScopeItem` rather than referencing them, so a BOQ
-   * that has since been priced, revised or partly delivered is not silently rewritten by an
-   * edit to the template it came from. Editing the template changes what the NEXT fit-out
-   * starts with, which is the only thing it should change.
-   *
-   * Omit `items` entirely to edit just the name/description/rate.
-   */
-  async updatePackageTemplate(id: string, input: {
-    name?: string; description?: string; defaultRatePerSqft?: number | null;
-    items?: Array<{ description: string; category?: string; quantity?: number; unit?: string; unitPrice?: number }>;
-  }) {
-    const tpl = await this.prisma.interiorPackageTemplate.findFirst({ where: { id, deletedAt: null } });
-    if (!tpl) throw new NotFoundException('Package template not found');
-    if (input.defaultRatePerSqft != null && input.defaultRatePerSqft < 0) {
-      throw new BadRequestException('defaultRatePerSqft cannot be negative');
-    }
-    for (const it of input.items ?? []) {
-      if (!it.description?.trim()) throw new BadRequestException('Every package item needs a description');
-      if (it.quantity != null && it.quantity < 0) throw new BadRequestException('item quantity cannot be negative');
-      if (it.unitPrice != null && it.unitPrice < 0) throw new BadRequestException('item unitPrice cannot be negative');
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      if (input.items) {
-        await tx.interiorPackageItem.deleteMany({ where: { packageTemplateId: id } });
-        if (input.items.length) {
-          await tx.interiorPackageItem.createMany({
-            data: input.items.map((it, i) => ({
-              packageTemplateId: id,
-              description: it.description.trim(),
-              category: it.category ?? null,
-              quantity: it.quantity ?? null,
-              unit: it.unit ?? null,
-              unitPrice: it.unitPrice ?? null,
-              sequence: i,
-            })),
-          });
-        }
-      }
-      return tx.interiorPackageTemplate.update({
-        where: { id },
-        data: {
-          name: input.name?.trim() ?? undefined,
-          description: input.description !== undefined ? (input.description.trim() || null) : undefined,
-          defaultRatePerSqft: input.defaultRatePerSqft !== undefined ? input.defaultRatePerSqft : undefined,
-        },
-        include: { items: { orderBy: { sequence: 'asc' } }, _count: { select: { interiorProjects: true } } },
-      });
-    });
-  }
-
-  async removePackageTemplate(id: string) {
-    const tpl = await this.prisma.interiorPackageTemplate.findFirst({
-      where: { id, deletedAt: null },
-      include: {
-        _count: {
-          select: {
-            interiorProjects: {
-              where: { deletedAt: null, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
-            },
-          },
-        },
-      },
-    });
-    if (!tpl) throw new NotFoundException('Package template not found');
-    const activeCount = tpl._count.interiorProjects;
-    if (activeCount > 0) {
-      throw new ConflictException(
-        `Cannot delete this package — ${activeCount} active interior project${activeCount !== 1 ? 's' : ''} still use it. Complete or cancel those fit-outs first.`,
-      );
-    }
-    return this.prisma.interiorPackageTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
   }
 
   async update(id: string, input: UpdateInteriorInput) {
@@ -408,6 +311,7 @@ export class InteriorService {
         ? this.computeContractValue(contractType, ratePerSqft, area)
         : undefined);
 
+    this.checkPriority(input.priority);
     const data: Prisma.InteriorProjectUpdateInput = {
       name: input.name?.trim(),
       status: input.status,
@@ -417,7 +321,18 @@ export class InteriorService {
       contractValue,
       startDate: input.startDate ? new Date(input.startDate) : undefined,
       targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
+      ...(input.priority !== undefined ? { priority: input.priority || null } : {}),
+      ...(input.plansSubmittedAt !== undefined ? { plansSubmittedAt: input.plansSubmittedAt ? new Date(input.plansSubmittedAt) : null } : {}),
+      ...(input.tiAllowance !== undefined ? { tiAllowance: input.tiAllowance } : {}),
+      ...(input.poPrefix !== undefined ? { poPrefix: input.poPrefix?.trim().toUpperCase() || null } : {}),
     };
+    if (input.extraUnitIds !== undefined) {
+      const extra = await this.checkExtraUnits(project.unitId, input.extraUnitIds);
+      await this.prisma.$transaction([
+        this.prisma.interiorProjectUnit.deleteMany({ where: { interiorProjectId: id } }),
+        ...(extra.ids.length ? [this.prisma.interiorProjectUnit.createMany({ data: extra.ids.map((unitId) => ({ interiorProjectId: id, unitId })) })] : []),
+      ]);
+    }
     if (input.pmId !== undefined) {
       data.pm = input.pmId ? { connect: { id: input.pmId } } : { disconnect: true };
     }
@@ -574,7 +489,9 @@ export class InteriorService {
   // ─────── Scope (BOQ) items ───────
 
   async addScopeItem(interiorProjectId: string, input: AddScopeItemDto) {
-    await this.findById(interiorProjectId);
+    const ip = await this.findById(interiorProjectId);
+    // The scope lines ARE the estimate; once it is locked they are the original budget.
+    if ((ip as any).estimateStatus === 'LOCKED') throw new ConflictException('The estimate is locked. Raise a change order instead.');
     const { description, category, quantity, unit, unitPrice } = input;
     const total = quantity != null && unitPrice != null ? quantity * unitPrice : undefined;
     return this.prisma.interiorScopeItem.create({
@@ -592,6 +509,8 @@ export class InteriorService {
     if (!item || item.interiorProjectId !== interiorProjectId) {
       throw new NotFoundException('Scope item not found');
     }
+    const ip = await this.prisma.interiorProject.findUnique({ where: { id: interiorProjectId }, select: { estimateStatus: true } });
+    if (ip?.estimateStatus === 'LOCKED') throw new ConflictException('The estimate is locked. Raise a change order instead.');
     return this.prisma.interiorScopeItem.delete({ where: { id: itemId } });
   }
 
@@ -603,8 +522,15 @@ export class InteriorService {
    * `InteriorInvoice.actualId`; TI is reported as a top-level category by joining actuals
    * through interior_invoices (never mixed into construction actuals).
    */
-  async addInvoice(interiorProjectId: string, input: AddInteriorInvoiceDto) {
+  async addInvoice(interiorProjectId: string, input: AddInteriorInvoiceDto, actorId?: string) {
     if (!(input.amount > 0)) throw new BadRequestException('Invoice amount must be positive');
+    // A bill against a purchase order takes its supplier from the PO and may not exceed
+    // what is left unbilled on it (InteriorCostingService.checkBill).
+    let vendorId = input.vendorId;
+    if (input.purchaseOrderId) {
+      vendorId = (await this.costing.checkBill(interiorProjectId, input.purchaseOrderId, input.amount)).vendorId;
+    }
+    if (!vendorId) throw new BadRequestException('Pick the purchase order this bill is for');
     const ip = await this.prisma.interiorProject.findFirst({
       where: { id: interiorProjectId, deletedAt: null },
       select: {
@@ -641,16 +567,21 @@ export class InteriorService {
           txnDate,
         },
       });
-      return tx.interiorInvoice.create({
+      const bill = await tx.interiorInvoice.create({
         data: {
           interiorProjectId,
-          vendorId: input.vendorId,
+          vendorId: vendorId!,
           amount: input.amount,
           invoiceNo: input.invoiceNo,
           invoiceDate: input.invoiceDate ? new Date(input.invoiceDate) : null,
           actualId: actual.id,
+          purchaseOrderId: input.purchaseOrderId ?? null,
         },
       });
+      await tx.interiorActivity.create({
+        data: { interiorProjectId, actorId: actorId ?? null, text: `Added bill ${input.invoiceNo ?? ''} for $${Number(input.amount).toLocaleString('en-US')}.`.replace('  ', ' ') },
+      });
+      return bill;
     });
   }
 
@@ -667,9 +598,15 @@ export class InteriorService {
     PAID: [],
   };
 
-  async updateInvoice(invoiceId: string, input: { status?: string; invoiceNo?: string; invoiceDate?: string }) {
+  async updateInvoice(
+    invoiceId: string,
+    input: { status?: string; invoiceNo?: string; invoiceDate?: string },
+    actor?: CostingActor,
+  ) {
     const inv = await this.prisma.interiorInvoice.findUnique({ where: { id: invoiceId } });
     if (!inv) throw new NotFoundException('Invoice not found');
+    // Approving a bill is one of the configurable powers (OrgSettings.interiorBillApproverRoles).
+    if (actor && input.status === 'APPROVED' && inv.status !== 'APPROVED') await this.costing.assertBillApprover(actor);
 
     const data: Prisma.InteriorInvoiceUncheckedUpdateInput = {};
     if (input.invoiceNo !== undefined) data.invoiceNo = input.invoiceNo.trim() || null;
@@ -690,11 +627,16 @@ export class InteriorService {
       data.paidAt = input.status === 'PAID' ? new Date() : null;
     }
 
-    return this.prisma.interiorInvoice.update({
+    const updated = await this.prisma.interiorInvoice.update({
       where: { id: invoiceId },
       data,
       include: { vendor: { select: { id: true, name: true } } },
     });
+    if (data.status) {
+      const verb = data.status === 'PAID' ? 'Marked paid' : data.status === 'APPROVED' ? 'Approved' : 'Moved back to pending';
+      await this.costing.logActivity(inv.interiorProjectId, actor?.userId ?? null, `${verb}: bill ${inv.invoiceNo ?? ''} ($${Number(inv.amount).toLocaleString('en-US')}).`.replace(': bill  (', ': bill ('));
+    }
+    return updated;
   }
 
   /**

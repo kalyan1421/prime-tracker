@@ -19,8 +19,13 @@ export class AddScopeItemDto {
 }
 
 export class AddInteriorInvoiceDto {
-  @IsString() @IsNotEmpty()
-  vendorId!: string;
+  /** Required unless the bill is against a purchase order, which names the supplier. */
+  @IsOptional() @IsString() @IsNotEmpty()
+  vendorId?: string;
+
+  /** The purchase order this bill is for (2026-10-17). */
+  @IsOptional() @IsString() @IsNotEmpty()
+  purchaseOrderId?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 }) @IsPositive()
   amount!: number;
