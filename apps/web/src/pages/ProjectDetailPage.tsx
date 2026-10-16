@@ -29,6 +29,7 @@ import { TenantProfilePanel } from '../components/TenantProfilePanel';
 import { DocumentGateChip, SALE_STAGE_DOCS } from '../components/DocumentGateChip';
 import { SaleGateDocuments } from '../components/SaleGateDocuments';
 import { LeadDocumentsPanel } from '../components/LeadDocumentsPanel';
+import { EditLeadActivityModal } from '../components/EditLeadActivityModal';
 import {
   useProject, useFinancialSummary, useBudgetByBuildingUnitReport, useMilestones, useUnits, useLeases, useActuals,
   useRentRoll, useSalesPipeline, useLoans, useCreateLoan, useUpdateLoan, useDeleteLoan, useCommitments, useBuildings,
@@ -6167,7 +6168,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   // Was entirely ungated — New/Edit/Delete/Convert/Log-Activity all rendered for
   // anyone who could merely open the tab (lead:view). DrawsTab, one component below
   // this one in the same file, already does this correctly; this tab just never had it.
-  const { hasPermission } = useAuthStore();
+  const { hasPermission, user } = useAuthStore();
   const canCreateLead = hasPermission('lead:create');
   const canEditLead = hasPermission('lead:edit');
   const canDeleteLead = hasPermission('lead:delete');
@@ -6205,6 +6206,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
   const [editLead, setEditLead] = useState<any>(null);
   const [activityNote, setActivityNote] = useState('');
   const [activityType, setActivityType] = useState('NOTE');
+  const [editingActivity, setEditingActivity] = useState<any>(null);
   const [convertForm, setConvertForm] = useState({ unitId: '', buyer: '', salePrice: '', contractDate: '', closingDate: '' });
   const setCF = (f: string, v: string) => setConvertForm((prev) => ({ ...prev, [f]: v }));
   const [filterGroup, setFilterGroup] = useState<'all' | 'active' | 'converted' | 'lost'>('all');
@@ -6714,12 +6716,23 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                           <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 z-10 ${ACT_BG[act.type] || 'bg-gray-100 text-gray-600'}`}>
                             {ACT_ICON[act.type] || <FiMessageSquare size={10} />}
                           </div>
-                          <div className="flex-1 min-w-0 pt-0.5">
+                          <div className="flex-1 min-w-0 pt-0.5 group">
                             <div className="flex items-baseline gap-1.5 flex-wrap">
                               <span className="text-[11px] font-semibold text-gray-600">{act.type.replace('_', ' ')}</span>
-                              <span className="text-[11px] text-gray-600">{fmtDate(act.createdAt)}</span>
+                              {/* occurredAt: the list is ordered by when it happened, so show that day. */}
+                              <span className="text-[11px] text-gray-600">{fmtDate(act.occurredAt ?? act.createdAt)}</span>
+                              {canEditLead && act.createdBy === user?.id && (
+                                <button
+                                  type="button"
+                                  aria-label="Edit activity"
+                                  onClick={() => setEditingActivity(act)}
+                                  className="ml-auto self-center p-1 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                                >
+                                  <FiEdit2 size={11} />
+                                </button>
+                              )}
                             </div>
-                            <p className="text-xs text-gray-600 leading-snug mt-0.5">{act.note}</p>
+                            <p className="text-xs text-gray-600 leading-snug mt-0.5 whitespace-pre-wrap break-words">{act.note}</p>
                           </div>
                         </div>
                       ))}
@@ -6731,6 +6744,12 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
           </div>
         )}
       </div>
+
+      <EditLeadActivityModal
+        activity={editingActivity}
+        leadId={selectedLead?.id || ''}
+        onClose={() => setEditingActivity(null)}
+      />
 
       {/* Lead Form Modal */}
       <Modal isOpen={showForm} onClose={() => setShowForm(false)} size="lg">

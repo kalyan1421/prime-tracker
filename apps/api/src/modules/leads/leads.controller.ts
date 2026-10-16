@@ -3,7 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { LeadsService } from './leads.service';
 import {
-  AddLeadActivityDto, CreateLeadDto, LeadCommentDto, UpdateLeadDto,
+  AddLeadActivityDto, CreateLeadDto, LeadCommentDto, UpdateLeadActivityDto, UpdateLeadDto,
 } from './dto/lead.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -123,6 +123,20 @@ export class LeadsController {
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.addActivity(leadId, userId, body.type, body.note, body.occurredAt);
+  }
+
+  // Nested under the lead (not `activities/:activityId`) so ProjectAccessGuard resolves the
+  // project from :id — a bare activity id has no resolver and would skip scoping entirely.
+  @Put(':id/activities/:activityId')
+  @RequirePermissions('lead:edit')
+  @ApiOperation({ summary: 'Edit an activity you logged' })
+  updateActivity(
+    @Param('id') leadId: string,
+    @Param('activityId') activityId: string,
+    @Body() body: UpdateLeadActivityDto,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.updateActivity(leadId, activityId, userId, body);
   }
 
   // ---- Discussion thread ----
