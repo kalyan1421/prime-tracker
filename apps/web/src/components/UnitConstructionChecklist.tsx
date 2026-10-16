@@ -31,6 +31,7 @@ import { LoadingState, EmptyState, chipColor } from './ui';
 import { PeoplePicker, personLabel } from './PeoplePicker';
 import { StatusCell, InlineText, InlineDate, TimelinePill, Cell } from './BoardCells';
 import { useAuthStore } from '../store/authStore';
+import { MentionBox, MentionText } from './MentionText';
 
 /**
  * The delete rule (client, 2026-10-16): you may remove what you added; anybody else's needs
@@ -548,6 +549,15 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
 
   const [note, setNote] = useState(stage.notes ?? '');
   const [text, setText] = useState('');
+  const postStageUpdate = async () => {
+    if (!text.trim() || create.isPending) return;
+    try {
+      await create.mutateAsync({ projectId, unitId, stageId: stage.id, notes: text.trim() });
+      setText('');
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not post the update'), color: 'danger' });
+    }
+  };
   const photos: any[] = stage.photos ?? [];
 
   // Only this stage's updates. The feed query is already cached for the unit, so this costs
@@ -677,26 +687,22 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
                     <span className="font-medium text-gray-700">{u.author?.name}</span>
                     <span>{fmtDate(u.logDate)}</span>
                   </div>
-                  <p className="mt-0.5 whitespace-pre-wrap text-xs text-gray-700">{u.notes}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-xs text-gray-700">
+                    <MentionText text={u.notes ?? ''} names={(users ?? []).map((x: any) => x.name ?? '').filter(Boolean)} />
+                  </p>
                 </div>
               ))}
             </div>
             {canEdit && projectId && (
-              <div className="mt-2 flex gap-1.5">
-                <Input
-                  size="sm" value={text} onChange={(e) => setText(e.target.value)}
-                  placeholder="Post an update on this stage" aria-label="Stage update"
+              <div className="mt-2 flex items-start gap-1.5">
+                <MentionBox
+                  label="Stage update" hideLabel className="min-w-0 flex-1" minRows={1} maxRows={4}
+                  value={text} onChange={setText} users={users ?? []} onSubmit={() => postStageUpdate()}
+                  placeholder="Post an update on this stage… type @ to notify someone"
                 />
                 <Button
                   size="sm" color="primary" isLoading={create.isPending} isDisabled={!text.trim()}
-                  onPress={async () => {
-                    try {
-                      await create.mutateAsync({ projectId, unitId, stageId: stage.id, notes: text.trim() });
-                      setText('');
-                    } catch (e) {
-                      addToast({ title: errMsg(e, 'Could not post the update'), color: 'danger' });
-                    }
-                  }}
+                  onPress={() => postStageUpdate()}
                 >
                   Post
                 </Button>

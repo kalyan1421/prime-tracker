@@ -1,13 +1,15 @@
 import { useRef, useState } from 'react';
 import {
-  Card, CardBody, CardHeader, Button, Input, Textarea, Avatar, Chip, Select, SelectItem, addToast,
+  Card, CardBody, CardHeader, Button, Input, Avatar, Chip, Select, SelectItem, addToast,
 } from '@heroui/react';
 import { FiCamera, FiTrash2, FiPlus, FiCloud, FiUsers, FiClipboard, FiX, FiImage, FiHome, FiGrid, FiSmartphone, FiCornerDownRight, FiCheckSquare, FiEdit2 } from 'react-icons/fi';
 import {
   useDailyLogs, useCreateDailyLog, useDeleteDailyLog, useUpdateDailyLog,
   useAddDailyLogPhoto, useRemoveDailyLogPhoto,
-  usePresignedUpload, useBuildings, useUnitConstructionStages,
+  usePresignedUpload, useBuildings, useUnitConstructionStages, useAssignableUsers,
 } from '../hooks/useApi';
+import { MentionBox, MentionText } from './MentionText';
+import type { MentionUser } from './MentionTextarea';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
 import { useAuthStore } from '../store/authStore';
@@ -17,6 +19,12 @@ import { wideSelectProps } from './ui';
 const photoUrl = (photo: { url?: string; storagePath: string }) => photo.url || '';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
+
+/** Who can be @mentioned in a site update (ST-10) — the same list the owner pickers use. */
+function useMentionUsers(): MentionUser[] {
+  const { data } = useAssignableUsers();
+  return Array.isArray(data) ? data : [];
+}
 
 /**
  * How the update arrived. WEB is deliberately absent: it is the unremarkable default and a
@@ -58,6 +66,7 @@ export function DailyLogFeed({
   const create = useCreateDailyLog();
   const addPhoto = useAddDailyLogPhoto();
   const presigned = usePresignedUpload();
+  const mentionUsers = useMentionUsers();
   const logs: any[] = Array.isArray(data) ? data : [];
   const buildings: any[] = Array.isArray(buildingsData) ? buildingsData : [];
 
@@ -133,15 +142,13 @@ export function DailyLogFeed({
         <PermissionGate permission="dailylog:edit">
           <div className="rounded-lg border border-gray-100 p-3 space-y-2 bg-gray-50/50">
             <FormError message={logFeedErr} />
-            <Textarea
-              size="sm" minRows={2} label={unitId ? 'What happened on this unit?' : 'What happened on site today?'}
-              value={form.notes}
-              onChange={(e) => { set('notes')(e); setLogFeedErr(null); }}
+            <MentionBox
+              label={unitId ? 'What happened on this unit?' : 'What happened on site today?'}
+              value={form.notes} users={mentionUsers}
+              onChange={(v) => { setForm((f) => ({ ...f, notes: v })); setLogFeedErr(null); }}
               placeholder={unitId
-                ? 'Cabinets delivered, countertop template still not scheduled…'
-                : 'Poured foundation for Building A, inspection passed…'}
-              isInvalid={!!logFeedErr && !form.notes.trim()}
-              errorMessage="Required"
+                ? 'Cabinets delivered, countertop template still not scheduled… type @ to notify someone'
+                : 'Poured foundation for Building A, inspection passed… type @ to notify someone'}
             />
 
             {/* Photo previews */}
@@ -307,6 +314,8 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
   const [editErr, setEditErr] = useState<string | null>(null);
   const [replying, setReplying] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const mentionUsers = useMentionUsers();
+  const mentionNames = mentionUsers.map((u) => u.name ?? '').filter(Boolean);
   const addPhoto = useAddDailyLogPhoto();
   const removePhoto = useRemoveDailyLogPhoto();
   const presigned = usePresignedUpload();
@@ -368,10 +377,7 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
       {editing ? (
         <div className="mt-2 space-y-2">
           <FormError message={editErr} />
-          <Textarea
-            size="sm" minRows={2} value={draft} onValueChange={setDraft} autoFocus
-            aria-label="Update text"
-          />
+          <MentionBox label="Update text" hideLabel value={draft} onChange={setDraft} users={mentionUsers} />
           <div className="flex items-center gap-2">
             <Button
               size="sm" color="primary" isLoading={update.isPending}
@@ -396,7 +402,7 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
           </div>
         </div>
       ) : (
-        <p className="text-sm text-gray-700 whitespace-pre-wrap mt-2">{log.notes}</p>
+        <p className="text-sm text-gray-700 whitespace-pre-wrap mt-2"><MentionText text={log.notes ?? ''} names={mentionNames} /></p>
       )}
 
       {/* Chips: building tag + weather + crew */}
@@ -481,9 +487,9 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
           <PermissionGate permission="dailylog:edit">
             {replying ? (
               <div className="mt-3 space-y-2 border-l-2 border-gray-100 pl-3">
-                <Textarea
-                  size="sm" minRows={2} autoFocus value={replyText} onValueChange={setReplyText}
-                  aria-label="Reply" placeholder="Reply to this update…"
+                <MentionBox
+                  label="Reply" hideLabel value={replyText} onChange={setReplyText} users={mentionUsers}
+                  placeholder="Reply to this update… type @ to notify someone"
                 />
                 <div className="flex gap-1.5">
                   <Button

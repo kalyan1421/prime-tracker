@@ -322,6 +322,9 @@ export class SiteTrackerImportService {
         leadId: lead.id, buildingId: lead.buildingId, projectId: projectId,
         memberIds: members.map((m) => m.id),
         stages, ownerIds, blocker: base.blocker, blockerReason: reason, priority: base.priority, note,
+        // monday's (AI-written) "Next actions" seeds the typed Next action field; the team
+        // owns it from here.
+        nextAction: item.nextActions?.trim().slice(0, 500) || null,
       },
     };
   }
@@ -361,6 +364,9 @@ export class SiteTrackerImportService {
         data.blockerStatus = 'NO';
       }
       if (plan.priority) data.sitePriority = plan.priority;
+      if (plan.nextAction) {
+        data.siteNextAction = plan.nextAction; data.siteNextActionAt = new Date(); data.siteNextActionById = userId;
+      }
       if (Object.keys(data).length) await tx.unit.update({ where: { id: plan.leadId }, data });
       if (plan.ownerIds.length) {
         await tx.unitAssignee.createMany({
@@ -398,5 +404,6 @@ interface RowPlan {
   blocker: 'YES' | 'NO' | null;
   blockerReason: string;
   priority: string | null;
+  nextAction: string | null;
   note: string | null;
 }

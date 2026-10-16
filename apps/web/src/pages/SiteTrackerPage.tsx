@@ -42,6 +42,7 @@ import { SiteTrackerRowActions } from '../components/SiteTrackerRowActions';
 import { UnitConstructionChecklist } from '../components/UnitConstructionChecklist';
 import { PeoplePicker } from '../components/PeoplePicker';
 import { MondayImportModal } from '../components/MondayImportModal';
+import { NextActionCell } from '../components/NextActionCell';
 import { StatusCell, TimelinePill, Cell, fillFor, groupColor, type CellOption } from '../components/BoardCells';
 import { useAuthStore } from '../store/authStore';
 import { errMsg, fmtDateShort } from '../utils/fmt';
@@ -61,6 +62,8 @@ interface Row {
   building: { id: string; name: string };
   blockerStatus: string | null; blockerReason: string | null; blockerDays: number | null;
   sitePriority: string | null;
+  /** The typed "Next action" (client, 2026-10-16). Null when nobody has written one. */
+  nextAction?: { text: string; at: string | null; by: { id: string; name: string | null } | null } | null;
   template: { id: string; name: string; version: number; stampedVersion: number | null } | null;
   assignees: Assignee[];
   tenantName?: string | null;
@@ -619,13 +622,14 @@ const PropertyBlock = memo(function PropertyBlock({
         <div className="flex overflow-hidden rounded-md border border-gray-200 bg-white">
           <div className={`w-1.5 shrink-0 ${color.stripe}`} aria-hidden />
           <div className="min-w-0 flex-1 overflow-x-auto">
-            <table className="w-full min-w-[1220px] border-collapse">
+            <table className="w-full min-w-[1440px] border-collapse">
               <thead>
                 <tr>
                   <BoardTh className="w-[240px] text-left">Unit</BoardTh>
                   <BoardTh className="w-[120px]">Blocker</BoardTh>
                   <BoardTh className="w-[100px]">Priority</BoardTh>
                   <BoardTh className="min-w-[240px] text-left">Latest update</BoardTh>
+                  <BoardTh className="w-[220px] text-left">Next action</BoardTh>
                   <BoardTh className="w-[100px]">Owners</BoardTh>
                   <BoardTh className="w-[140px]">Progress</BoardTh>
                   <BoardTh className="w-[170px]">Current stage</BoardTh>
@@ -643,7 +647,7 @@ const PropertyBlock = memo(function PropertyBlock({
                 ))}
                 {canEditChecklist && (
                   <tr>
-                    <td colSpan={8} className="border-b border-gray-200 px-3 py-1.5">
+                    <td colSpan={9} className="border-b border-gray-200 px-3 py-1.5">
                       <button type="button" onClick={onTrackUnit}
                         className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-blue-600">
                         <FiPlus size={12} /> Track a unit in {group.project.name}
@@ -655,7 +659,7 @@ const PropertyBlock = memo(function PropertyBlock({
                   <td className="border-r border-gray-200" />
                   <td className="border-r border-gray-200 px-2 py-2"><Battery parts={group.blockerBattery} options={BLOCKER_OPTIONS} /></td>
                   <td className="border-r border-gray-200 px-2 py-2"><Battery parts={group.priorityBattery} options={priorityOpts} /></td>
-                  <td colSpan={5} />
+                  <td colSpan={6} />
                 </tr>
               </tbody>
             </table>
@@ -755,6 +759,8 @@ function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEd
 
         <Cell className="py-1.5"><LatestUpdateCell row={u} onOpenFeed={onOpenFeed} /></Cell>
 
+        <Cell className="py-1"><NextActionCell row={u} canEdit={canEdit} /></Cell>
+
         <Cell className="text-center"><div className="flex justify-center"><AssigneeCell row={u} canEdit={canEdit} /></div></Cell>
 
         <Cell>
@@ -795,7 +801,7 @@ function UnitRow({ row, isOpen, onToggle, onOpenFeed, onEditUnit, canEdit, canEd
 
       {isOpen && (
         <tr>
-          <td colSpan={8} className="border-b border-gray-200 bg-gray-50/60 py-3 pl-8 pr-3">
+          <td colSpan={9} className="border-b border-gray-200 bg-gray-50/60 py-3 pl-8 pr-3">
             <ChecklistPanel row={u} canEdit={canEditChecklist} />
           </td>
         </tr>
@@ -955,6 +961,12 @@ function UnitCard({ row, canEdit, canEditChecklist, isOpen, onToggle, onOpenFeed
           <p className="text-xs text-gray-500">No updates yet</p>
         )}
       </button>
+      {(row.nextAction || canEdit) && (
+        <div className="mt-2 rounded-md bg-gray-50 px-2 py-1.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Next action</span>
+          <NextActionCell row={row} canEdit={canEdit} roomy />
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-600">
         <span>{row.pctComplete === null ? 'No checklist' : `${row.pctComplete}% · ${row.doneStages}/${row.totalStages} steps`}</span>
         {row.currentStage && <span className="text-gray-700">{stripStepPrefix(row.currentStage.label)}</span>}

@@ -48,6 +48,7 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
     blockerStatus: unit.blockerStatus ?? 'NONE',
     blockerReason: unit.blockerReason ?? '',
     sitePriority: unit.sitePriority ?? '',
+    nextAction: unit.nextAction?.text ?? '',
   });
   const [owners, setOwners] = useState<string[]>((unit.assignees ?? []).map((a: any) => a.id));
   const [err, setErr] = useState<string | null>(null);
@@ -85,6 +86,9 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
           blockerStatus: form.blockerStatus === 'NONE' ? null : form.blockerStatus,
           blockerReason: form.blockerStatus === 'YES' ? form.blockerReason.trim() : null,
           sitePriority: form.sitePriority || null,
+          // Only when it changed: the API stamps who/when on every save of a new value.
+          ...(form.nextAction.trim() !== (unit.nextAction?.text ?? '')
+            ? { siteNextAction: form.nextAction.trim() || null } : {}),
         },
       });
       // One PUT with the whole set, never a write per person: the API throttles at
@@ -149,6 +153,13 @@ export function SiteTrackerDetailsModal({ unit, canEdit, onClose, onEditUnitDeta
               onValueChange={(v) => setForm((f) => ({ ...f, blockerReason: v }))}
             />
           )}
+
+          <Textarea
+            size="sm" label="Next action" labelPlacement="outside" minRows={2} maxLength={500}
+            placeholder="What happens next, and who does it" isDisabled={!canEdit}
+            value={form.nextAction}
+            onValueChange={(v) => setForm((f) => ({ ...f, nextAction: v }))}
+          />
 
           <div className="flex flex-col gap-1.5">
             <span className="text-xs text-gray-700">Owners</span>

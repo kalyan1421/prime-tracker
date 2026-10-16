@@ -711,12 +711,16 @@ export class UnitsService {
       blockerStatus?: 'YES' | 'NO' | null;
       blockerReason?: string | null;
       sitePriority?: string | null;
+      siteNextAction?: string | null;
     },
     userId?: string,
   ) {
     const unit = await this.prisma.unit.findUnique({
       where: { id },
-      select: { id: true, deletedAt: true, blockerStatus: true, blockerReason: true, trackedWithId: true },
+      select: {
+        id: true, deletedAt: true, blockerStatus: true, blockerReason: true, trackedWithId: true,
+        siteNextAction: true,
+      },
     });
     if (!unit || unit.deletedAt) throw new NotFoundException('Unit not found');
     await this.assertNotGroupMember(unit);
@@ -726,6 +730,18 @@ export class UnitsService {
     if (input.sitePriority !== undefined) {
       await this.assertOption('site_priority', input.sitePriority);
       data.sitePriority = input.sitePriority;
+    }
+
+    // Next action: typed by the team (the AI-written version was cut in August). Who and
+    // when are stamped on every real change, so the board can show how old a plan is;
+    // re-saving the same text keeps the original stamp. Clearing it clears all three.
+    if (input.siteNextAction !== undefined) {
+      const next = input.siteNextAction?.trim() || null;
+      if (next !== (unit.siteNextAction ?? null)) {
+        data.siteNextAction = next;
+        data.siteNextActionAt = next ? new Date() : null;
+        data.siteNextActionById = next ? (userId ?? null) : null;
+      }
     }
 
     // Reason may be edited on its own while a unit stays blocked.

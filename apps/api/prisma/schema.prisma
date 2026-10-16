@@ -105,6 +105,7 @@ model User {
   interiorPosCreated                InteriorPurchaseOrder[]         @relation("InteriorPoCreator")
   interiorPosApproved               InteriorPurchaseOrder[]         @relation("InteriorPoApprover")
   interiorActivity                  InteriorActivity[]              @relation("InteriorActivityActor")
+  siteNextActions                   Unit[]                          @relation("UnitNextActionBy")
   constructionStagesCreated         UnitConstructionStage[]         @relation("UnitConstructionStageCreator")
   // Unit occupancy log
   unitStatusEvents                  UnitStatusEvent[]               @relation("UnitStatusEventRecorder")
@@ -390,26 +391,33 @@ model Unit {
   // nowhere to put them here. Three-state on purpose: 'YES' | 'NO' | null. The board
   // itself has 23 NO, 1 YES and 1 genuinely-empty row, and "nobody has assessed this yet"
   // is not the same claim as "not blocked" — a boolean would erase that distinction.
-  blockerStatus   String?
+  blockerStatus      String?
   // The board has no such field, which makes its own YES flag unactionable: you can see
   // that something is stuck and not why. Required by the service whenever status is YES.
-  blockerReason   String?
+  blockerReason      String?
   // Stamped on the flip TO 'YES', cleared on the flip away — the same maintained-in-
   // service pattern as `availableSince` above. Gives blocker AGE, which the board cannot
   // show at all; "blocked" matters much less than "blocked for eleven days".
-  blockerSince    DateTime?
+  blockerSince       DateTime?
   // CustomOption category "site_priority". Deliberately LOW/MEDIUM/HIGH only: the board's
   // PRIORITY column also carries a "DONE" value, which mixes priority with completion and
   // is why its own group battery reports the wrong number. Completion is the checklist %.
-  sitePriority    String?
+  sitePriority       String?
+  // The board's "Next action" column (client, 2026-10-16). On monday it was AI-written from
+  // the comments; the AI layer was cut in August, so here the team types it. Who and when
+  // are stamped by the service on every change, so a stale plan shows its age.
+  siteNextAction     String?
+  siteNextActionAt   DateTime?
+  siteNextActionById String?
+  siteNextActionBy   User?              @relation("UnitNextActionBy", fields: [siteNextActionById], references: [id], onDelete: SetNull)
   // ── Checklist template provenance (Phase 2) ───────────────────────────────
   // Which template this unit's checklist was built from, stamped once at apply time.
   // This is the field the source board lacks, and the direct cause of the five divergent
   // step lists found on it. Nullable: units whose checklist predates templating, and
   // units whose stages were built ad-hoc, legitimately have no provenance.
-  templateId      String?
-  template        ChecklistTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  templateVersion Int?
+  templateId         String?
+  template           ChecklistTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateVersion    Int?
 
   siteAssignees UnitAssignee[]
   siteWatchers  UnitWatcher[]
@@ -2244,6 +2252,10 @@ enum NotificationType {
   SITE_UNIT_ASSIGNED
   /// Site Tracker — a unit was flagged Blocked. Same recipients as SITE_UPDATE_POSTED.
   SITE_BLOCKER_FLAGGED
+  /// Site Tracker — you were @mentioned in a site update (or a reply to one). ACTION-tier:
+  /// it names one person. Its own type, like LEAD_COMMENT_MENTION, so muting site mentions
+  /// does not mute the others; same resolveMentions() parser.
+  SITE_UPDATE_MENTION
 }
 
 model Notification {

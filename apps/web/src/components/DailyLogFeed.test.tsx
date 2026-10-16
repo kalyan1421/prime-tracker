@@ -42,6 +42,10 @@ vi.mock('../hooks/useApi', () => ({
   usePresignedUpload: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useBuildings: () => ({ data: [{ id: 'b1', name: 'Building One' }] }),
   useUnitConstructionStages: () => ({ data: state.stages }),
+  useAssignableUsers: () => ({ data: [
+    { id: 'ana', name: 'Ana P', email: 'ana@prime.dev' },
+    { id: 'kevin', name: 'Kevin P', email: 'kevin@prime.dev' },
+  ] }),
 }) as any);
 
 vi.mock('../store/authStore', () => ({
@@ -281,5 +285,33 @@ describe('DailyLogFeed — editing an update', () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(screen.queryByLabelText(/update text/i)).toBeNull());
     expect(edits).toHaveLength(0);
+  });
+});
+
+describe('DailyLogFeed — @mentions (ST-10)', () => {
+  it('offers the people list when you type "@" in a new update', async () => {
+    render(<DailyLogFeed projectId="p1" unitId="u1" />);
+    const box = screen.getByLabelText('What happened on this unit?');
+    fireEvent.change(box, { target: { value: 'Framing ready @An' } });
+    fireEvent.click(box);
+    expect(await screen.findByText('Ana P')).toBeInTheDocument();
+  });
+
+  it('posts the mention as plain text — the server resolves who it names', async () => {
+    render(<DailyLogFeed projectId="p1" unitId="u1" />);
+    fireEvent.change(screen.getByLabelText('What happened on this unit?'), {
+      target: { value: '@Ana P framing is ready for inspection' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /post/i }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0].notes).toBe('@Ana P framing is ready for inspection');
+  });
+
+  it('highlights a real person\'s name in a posted update, and leaves "@2pm" alone', () => {
+    state.logs = [{ ...LOG, notes: '@Kevin P please sign off before @2pm' }];
+    render(<DailyLogFeed projectId="p1" unitId="u1" />);
+    const hit = screen.getByText('@Kevin P');
+    expect(hit.className).toContain('text-blue-700');
+    expect(screen.queryByText('@2pm')).not.toBeInTheDocument(); // stays inside the plain text run
   });
 });

@@ -195,6 +195,16 @@ describe('SiteTrackerImportService', () => {
     expect(note).toContain('Tenant / business: MUGDHA');
   });
 
+  it('seeds the typed Next action from monday\'s "Next Actions", stamped with the importer', async () => {
+    await svc().run(await boardXlsx(), { apply: true, userId: 'f1' });
+    const u103 = tx.unit.update.mock.calls.find((c: any) => c[0].where.id === 'u103')[0].data;
+    expect(u103).toMatchObject({ siteNextAction: 'Complete the mechanical install.', siteNextActionById: 'f1' });
+    expect(u103.siteNextActionAt).toBeInstanceOf(Date);
+    // A blank monday cell writes nothing.
+    const u805 = tx.unit.update.mock.calls.find((c: any) => c[0].where.id === 'u805')[0].data;
+    expect(u805.siteNextAction).toBeUndefined();
+  });
+
   it('skips, never merges, a row whose unit went onto the tracker after the preview', async () => {
     tx.unit.findUnique.mockResolvedValue({
       trackedWithId: null, blockerStatus: 'NO', sitePriority: null,

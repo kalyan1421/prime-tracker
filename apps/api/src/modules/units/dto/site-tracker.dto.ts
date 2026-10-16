@@ -21,6 +21,10 @@ export class UpdateSiteTrackerDto {
 
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() @MaxLength(100)
   sitePriority?: string | null;
+
+  /** The board's typed "Next action". Empty or null clears it. */
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() @MaxLength(500)
+  siteNextAction?: string | null;
 }
 
 export class SetUnitAssigneesDto {
