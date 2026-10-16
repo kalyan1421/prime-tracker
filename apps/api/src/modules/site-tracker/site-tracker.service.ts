@@ -148,6 +148,8 @@ export class SiteTrackerService {
         unitType: true, sqft: true, askingPrice: true, askingRent: true, notes: true,
         blockerStatus: true, blockerReason: true, blockerSince: true,
         sitePriority: true, templateVersion: true,
+        siteNextAction: true, siteNextActionAt: true,
+        siteNextActionBy: { select: { id: true, name: true } },
         building: {
           select: { id: true, name: true, project: { select: { id: true, name: true } } },
         },
@@ -285,6 +287,9 @@ export class SiteTrackerService {
           ? Math.floor((now - new Date(u.blockerSince).getTime()) / DAY_MS)
           : null,
         sitePriority: u.sitePriority,
+        nextAction: u.siteNextAction
+          ? { text: u.siteNextAction, at: u.siteNextActionAt, by: u.siteNextActionBy ?? null }
+          : null,
         template: u.template
           ? { ...u.template, stampedVersion: u.templateVersion }
           : null,
@@ -348,7 +353,7 @@ export class SiteTrackerService {
       const q = filters.search.trim().toLowerCase();
       rows = rows.filter((r) => [
         r.unitNumber, r.tenantName, r.building.name, r.project.name,
-        r.blockerReason, ...r.stages.map((s: any) => s.label),
+        r.blockerReason, r.nextAction?.text, ...r.stages.map((s: any) => s.label),
         // "807" finds the "Units 805, 807, 809" row.
         ...r.groupUnits.map((g: any) => g.unitNumber),
       ].some((v) => v && String(v).toLowerCase().includes(q)));

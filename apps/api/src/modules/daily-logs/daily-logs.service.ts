@@ -6,6 +6,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { loadSiteUnitContext } from '../site-tracker/site-unit-context';
 import { assertMayDelete, type DeleteActor } from '../site-tracker/site-delete-rule';
+import { resolveMentions } from '../comments/mentions';
 import { CreateDailyLogDto, UpdateDailyLogDto, AddDailyLogPhotoDto } from './dto/create-daily-log.dto';
 
 /**
@@ -155,10 +156,44 @@ export class DailyLogsService {
       ? (await this.prisma.dailyLog.findUnique({ where: { id: parentId }, select: { authorId: true } }))?.authorId ?? null
       : null;
     const actor = await this.prisma.user.findUnique({ where: { id: log.authorId }, select: { name: true } });
-    await this.notifications.notifySiteUpdatePosted({
+    // ST-10: @mentions. A named person gets the specific "mentioned you" alert and NOT the
+    // general "posted on" one as well — one post, one notification each.
+    const mentioned = (await this.mentionsIn(log.notes)).filter((id) => id !== log.authorId);
+    const base = {
       unitId: ctx.unitId, unitLabel: ctx.label, projectId: ctx.projectId, projectName: ctx.projectName,
       actorId: log.authorId, actorName: actor?.name ?? null, notes: log.notes,
-      parentAuthorId,
+    };
+    if (mentioned.length) await this.notifications.notifySiteUpdateMention({ ...base, mentionedUserIds: mentioned });
+    await this.notifications.notifySiteUpdatePosted({ ...base, parentAuthorId, skipUserIds: mentioned });
+  }
+
+  /** Active users named in `text` — the same resolveMentions() the comments use. */
+  private async mentionsIn(text: string): Promise<string[]> {
+    if (!text.includes('@')) return [];
+    const users = await this.prisma.user.findMany({
+      where: { isActive: true }, select: { id: true, name: true, email: true },
+    });
+    return resolveMentions(text, users);
+  }
+
+  /**
+   * An edit that names somebody new tells that person — and only them. Re-saving a post
+   * must not re-alert everyone it already mentioned.
+   */
+  private async notifyNewMentions(
+    log: { unitId: string | null; authorId: string; notes: string },
+    before: string,
+  ) {
+    if (!this.notifications || !log.unitId) return;
+    const [now, was] = await Promise.all([this.mentionsIn(log.notes), this.mentionsIn(before)]);
+    const fresh = now.filter((id) => !was.includes(id) && id !== log.authorId);
+    if (!fresh.length) return;
+    const ctx = await loadSiteUnitContext(this.prisma, log.unitId);
+    if (!ctx) return;
+    const actor = await this.prisma.user.findUnique({ where: { id: log.authorId }, select: { name: true } });
+    await this.notifications.notifySiteUpdateMention({
+      unitId: ctx.unitId, unitLabel: ctx.label, projectId: ctx.projectId, projectName: ctx.projectName,
+      actorId: log.authorId, actorName: actor?.name ?? null, notes: log.notes, mentionedUserIds: fresh,
     });
   }
 
@@ -221,7 +256,7 @@ export class DailyLogsService {
         input.unitId === undefined ? existing.unitId : (input.unitId ?? null),
       );
     }
-    return this.prisma.dailyLog.update({
+    const updated = await this.prisma.dailyLog.update({
       where: { id },
       data: {
         logDate: input.logDate ? new Date(input.logDate) : undefined,
@@ -233,6 +268,11 @@ export class DailyLogsService {
         stageId: input.stageId === undefined ? undefined : input.stageId,
       },
     });
+    if (input.notes !== undefined && updated.notes !== existing.notes) {
+      void this.notifyNewMentions(updated, existing.notes ?? '')
+        .catch((e) => this.logger.warn(`Site mention notification failed: ${e}`));
+    }
+    return updated;
   }
 
   async remove(id: string, actor?: DeleteActor) {

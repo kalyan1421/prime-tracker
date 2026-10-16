@@ -1534,6 +1534,16 @@ export default function UnitDetailPage() {
                 </div>
               </div>
             )}
+            {/* The Site Tracker's typed "Next action" — set on the board, read here too. */}
+            {u.siteNextAction && (
+              <p className="mt-2 flex items-start gap-1.5 text-sm text-gray-700">
+                <FiClipboard className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-500" />
+                <span className="min-w-0 break-words">
+                  <span className="font-medium text-gray-900">Next: </span>{u.siteNextAction}
+                  {u.siteNextActionAt && <span className="ml-1.5 text-xs text-gray-500">{fmtDate(u.siteNextActionAt)}</span>}
+                </span>
+              </p>
+            )}
           </div>
           {/* `canEditUnit` was computed and used in four other places on this page but not
               here, so Construction, Viewer, Legal and Finance — none of whom hold unit:edit —

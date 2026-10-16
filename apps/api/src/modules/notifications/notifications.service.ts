@@ -84,6 +84,8 @@ export const NOTIFICATION_TIERS = {
   SITE_VISIT_MISSED: 'ACTION',
   // Addressed at one named person, same reasoning as COMMENT_MENTION and TASK_ASSIGNED.
   LEAD_COMMENT_MENTION: 'ACTION',
+  // Names one person, same reasoning as COMMENT_MENTION.
+  SITE_UPDATE_MENTION: 'ACTION',
   // Site Tracker. Being made an owner of a unit is TASK_ASSIGNED for the site team. A
   // blocker is something somebody has to clear — the reason the flag exists at all.
   SITE_UNIT_ASSIGNED: 'ACTION',
@@ -251,6 +253,7 @@ export const RECURRING_TYPES = {
   SITE_UPDATE_POSTED: false,
   SITE_UNIT_ASSIGNED: false,
   SITE_BLOCKER_FLAGGED: false,
+  SITE_UPDATE_MENTION: false,
 } as const satisfies Record<string, boolean>;
 
 /** Same exhaustiveness guard as the tiers: a new type must be classified explicitly. */
@@ -776,17 +779,41 @@ export class NotificationsService {
     actorId: string; actorName?: string | null; notes: string;
     /** Set for a reply: the original poster hears about the answer even if not an owner. */
     parentAuthorId?: string | null;
+    /** People who get the more specific SITE_UPDATE_MENTION for this post instead. */
+    skipUserIds?: string[];
   }) {
-    const userIds = await this.siteRecipients({
+    const skip = new Set(p.skipUserIds ?? []);
+    const userIds = (await this.siteRecipients({
       unitId: p.unitId, projectId: p.projectId, actorId: p.actorId,
       extra: p.parentAuthorId ? [p.parentAuthorId] : [],
-    });
+    })).filter((id) => !skip.has(id));
     const who = p.actorName ?? 'Someone';
     const text = p.notes.replace(/\s+/g, ' ').trim();
     await this.send({
       userIds,
       type: NotificationType.SITE_UPDATE_POSTED,
       title: `${who} ${p.parentAuthorId ? 'replied on' : 'posted on'} ${p.unitLabel}`,
+      body: `${text.length > 160 ? `${text.slice(0, 160)}…` : text}${p.projectName ? ` — ${p.projectName}` : ''}`,
+      link: `/projects/${p.projectId}/units/${p.unitId}`,
+    });
+  }
+
+  /**
+   * "Victor mentioned you on Unit 103". Sent to whoever was named, owner or not — being
+   * named is personal, the same rule as notifyCommentMention. The author is never told
+   * about their own post.
+   */
+  async notifySiteUpdateMention(p: {
+    unitId: string; unitLabel: string; projectId: string; projectName?: string | null;
+    actorId: string; actorName?: string | null; notes: string; mentionedUserIds: string[];
+  }) {
+    const userIds = p.mentionedUserIds.filter((id) => id !== p.actorId);
+    if (!userIds.length) return;
+    const text = p.notes.replace(/\s+/g, ' ').trim();
+    await this.send({
+      userIds,
+      type: NotificationType.SITE_UPDATE_MENTION,
+      title: `${p.actorName ?? 'Someone'} mentioned you on ${p.unitLabel}`,
       body: `${text.length > 160 ? `${text.slice(0, 160)}…` : text}${p.projectName ? ` — ${p.projectName}` : ''}`,
       link: `/projects/${p.projectId}/units/${p.unitId}`,
     });

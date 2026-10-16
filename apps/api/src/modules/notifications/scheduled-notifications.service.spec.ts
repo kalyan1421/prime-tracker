@@ -630,7 +630,8 @@ describe('NotificationsService — severity tiers and emailEnabled', () => {
     // TOMORROW/MISSED) — 41 -> 47.
     // 2026-09-21: +1 for LEAD_COMMENT_MENTION (lead discussion thread) — 47 -> 48.
     // 2026-10-16: +3 for the Site Tracker (UPDATE_POSTED, UNIT_ASSIGNED, BLOCKER_FLAGGED) — 48 -> 51.
-    expect(Object.values(NotificationType)).toHaveLength(51);
+    // 2026-10-16: +1 for SITE_UPDATE_MENTION (ST-10, @mentions in site updates) — 51 -> 52.
+    expect(Object.values(NotificationType)).toHaveLength(52);
   });
 
   it('agrees with the client-confirmed tier assignment', () => {
