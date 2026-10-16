@@ -183,3 +183,37 @@ export function codesOverBudget(
   }
   return over;
 }
+
+export type FitOutBudgetBasis = 'LOCKED_ESTIMATE' | 'PER_SQFT' | 'CONTRACT_VALUE' | 'ESTIMATE' | 'NONE';
+
+/**
+ * THE budget figure for a fit-out, wherever one number has to stand for it (report,
+ * portfolio, project tab, unit card). One rule so those screens cannot disagree:
+ *
+ *   1. estimate LOCKED  -> the revised budget (locked estimate + approved change orders)
+ *   2. a contract figure -> PER_SQFT rate x area, else the flat contractValue
+ *   3. a draft estimate  -> its live total
+ *   4. nothing           -> 0, basis NONE (Finance has nothing to review)
+ *
+ * A contract figure outranks a DRAFT estimate on purpose: an estimate nobody has
+ * approved is a working document, not a commitment. CANCELLED fit-outs commit nothing.
+ */
+export function fitOutBudget(f: {
+  status?: string | null;
+  estimateStatus?: string | null;
+  revised: number;
+  estimateTotal: number;
+  contractType?: string | null;
+  ratePerSqft?: unknown;
+  area?: unknown;
+  contractValue?: unknown;
+}): { amount: number; basis: FitOutBudgetBasis } {
+  if (f.status === 'CANCELLED') return { amount: 0, basis: 'NONE' };
+  if (f.estimateStatus === 'LOCKED') return { amount: r2(f.revised), basis: 'LOCKED_ESTIMATE' };
+  const rate = f.ratePerSqft === null || f.ratePerSqft === undefined ? null : Number(f.ratePerSqft);
+  const area = f.area === null || f.area === undefined ? null : Number(f.area);
+  if (f.contractType === 'PER_SQFT' && rate !== null && area !== null) return { amount: r2(rate * area), basis: 'PER_SQFT' };
+  if (f.contractValue !== null && f.contractValue !== undefined) return { amount: r2(toNum(f.contractValue)), basis: 'CONTRACT_VALUE' };
+  if (f.estimateTotal > 0) return { amount: r2(f.estimateTotal), basis: 'ESTIMATE' };
+  return { amount: 0, basis: 'NONE' };
+}

@@ -16,6 +16,7 @@ import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { INTERIOR_PHASES } from '../constants/interior';
 import { FormError } from './FormError';
+import { BUDGET_BASIS_LABEL } from './InteriorCostingParts';
 
 export { INTERIOR_PHASES };
 
@@ -412,9 +413,13 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
               a hand-entered contractValue same as PER_SQFT does. */}
           <p className="text-xs text-gray-500">
             {[
-              project.contractValue != null
-                ? `${fmt(Number(project.contractValue))}${project.contractType === 'PER_SQFT' ? ' · per sqft' : ''}`
-                : null,
+              // Job costing (2026-10-16): the budget follows the same rule as the portfolio
+              // and the report — a locked estimate outranks the contract figure.
+              project.costing?.budget != null
+                ? `Budget ${fmt(Number(project.costing.budget))} (${BUDGET_BASIS_LABEL[project.costing.budgetBasis] ?? 'contract'})`
+                : project.contractValue != null
+                  ? `${fmt(Number(project.contractValue))}${project.contractType === 'PER_SQFT' ? ' · per sqft' : ''}`
+                  : null,
               project.pm?.name ? `PM: ${project.pm.name}` : null,
               project.handoverAt ? `handed over ${fmtDate(project.handoverAt)}` : null,
             ].filter(Boolean).join(' · ')}

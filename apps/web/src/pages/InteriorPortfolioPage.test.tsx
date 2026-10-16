@@ -242,7 +242,7 @@ describe('InteriorPortfolioPage — money is gated', () => {
   const headers = () =>
     within(screen.getByRole('table')).getAllByRole('columnheader').map((h) => h.textContent!.trim());
 
-  const MONEY_COLS = ['Revised', 'Committed', 'Actual', 'Over / under'];
+  const MONEY_COLS = ['Budget', 'Committed', 'Actual', 'Over / under'];
 
   it('hides the job-costing columns without interior:finance', () => {
     state.permissions = ['interior:view'];
@@ -251,7 +251,7 @@ describe('InteriorPortfolioPage — money is gated', () => {
     for (const h of MONEY_COLS) expect(headers()).not.toContain(h);
     // ...and no money reaches the summary strip either. HeroUI keeps a hidden native
     // <select> for each filter, so options are excluded rather than matched by text alone.
-    expect(onScreen('Revised budget')).toHaveLength(0);
+    expect(onScreen('Total budget')).toHaveLength(0);
     expect(onScreen('Actual cost')).toHaveLength(0);
   });
 
@@ -261,18 +261,37 @@ describe('InteriorPortfolioPage — money is gated', () => {
     for (const h of MONEY_COLS) expect(headers()).toContain(h);
   });
 
-  /** BuilderTrend's numbers once a fit-out is costed; the old contract value until then. */
+  /** The server's one budget rule (fitOutBudget): a locked estimate's revised budget wins. */
   it('reads the costed budget, and marks a fit-out that is over it', () => {
     state.rows = [row({
       contractValue: 1000,
-      costing: { revised: 452186.71, committed: 318007.06, actual: 1200, overUnder: -576.71, estimateStatus: 'LOCKED' },
+      costing: {
+        revised: 452186.71, committed: 318007.06, actual: 1200, overUnder: -576.71, estimateStatus: 'LOCKED',
+        budget: 452186.71, budgetBasis: 'LOCKED_ESTIMATE',
+      },
       estimateStatus: 'LOCKED',
     })];
     renderPage();
     expect(screen.getAllByText('$452,186.71').length).toBeGreaterThan(0);
+    expect(screen.getByText('locked estimate')).toBeTruthy();
     const over = screen.getAllByText('-$576.71').find((el) => el.tagName === 'TD');
     expect(over?.className).toContain('text-red-700');
     expect(onScreen('Actual cost · 1 over budget')).toHaveLength(1);
+  });
+
+  /**
+   * A fit-out with a contract value but no estimate yet used to read $0 here — the board
+   * took the (empty) costing over the contract. Now it says what the budget is AND where
+   * it came from, so a contract figure is never mistaken for an approved budget.
+   */
+  it('shows the contract figure, labelled as such, while there is no locked estimate', () => {
+    state.rows = [row({
+      contractValue: 180000,
+      costing: { revised: 0, committed: 0, actual: 0, overUnder: 0, estimateStatus: 'DRAFT', budget: 180000, budgetBasis: 'CONTRACT_VALUE' },
+    })];
+    renderPage();
+    expect(screen.getAllByText('$180,000').length).toBeGreaterThan(0);
+    expect(screen.getByText('contract')).toBeTruthy();
   });
 
   /**

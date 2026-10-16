@@ -169,3 +169,34 @@ export const fmtDay = (d?: string | null) =>
 
 export const roleList = (roles: string[]) =>
   roles.map((r) => r.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())).join(', ');
+
+/**
+ * Where a fit-out's one budget figure came from — the server's fitOutBudget() rule:
+ * locked estimate (revised) > contract figure > draft estimate. Shown under the number so
+ * a contract value is never mistaken for an approved budget.
+ */
+export const BUDGET_BASIS_LABEL: Record<string, string> = {
+  LOCKED_ESTIMATE: 'locked estimate',
+  PER_SQFT: 'contract · per SF',
+  CONTRACT_VALUE: 'contract',
+  ESTIMATE: 'draft estimate',
+  NONE: 'not set',
+};
+
+/** The budget for a row carrying `costing` (finance viewers), else its contract value. */
+export function fitOutBudgetOf(r: { costing?: { budget?: number | null } | null; contractValue?: unknown }): number | null {
+  if (r.costing && r.costing.budget != null) return Number(r.costing.budget) || 0;
+  return r.contractValue != null ? Number(r.contractValue) || 0 : null;
+}
+
+export function BudgetFigure({ row }: { row: { costing?: { budget?: number | null; budgetBasis?: string } | null; contractValue?: unknown } }) {
+  const amount = fitOutBudgetOf(row);
+  if (amount === null) return <span className="text-gray-500">—</span>;
+  const basis = row.costing?.budgetBasis ?? 'CONTRACT_VALUE';
+  return (
+    <span className="inline-flex flex-col items-end leading-tight">
+      <span className="tabular-nums">{money(amount)}</span>
+      <span className="text-[11px] font-normal text-gray-500">{BUDGET_BASIS_LABEL[basis] ?? basis}</span>
+    </span>
+  );
+}

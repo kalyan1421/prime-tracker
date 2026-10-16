@@ -46,14 +46,19 @@ export class InteriorController {
   @Get()
   @RequirePermissions('interior:view')
   @ApiOperation({ summary: 'List interior projects (filter by unit / building / project / status)' })
-  findAll(
+  async findAll(
     @Query('unitId') unitId?: string,
     @Query('buildingId') buildingId?: string,
     @Query('projectId') projectId?: string,
     @Query('status') status?: InteriorStatus,
     @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.findAll({ unitId, buildingId, projectId, status }, permissions ?? []);
+    const rows = await this.service.findAll({ unitId, buildingId, projectId, status }, permissions ?? []);
+    // Same job-costing totals as the portfolio, so the project tab and the unit card show
+    // the same budget figure. Money, so interior:finance only.
+    if (!(permissions ?? []).includes('interior:finance')) return rows.map((r: any) => ({ ...r, costing: null }));
+    const totals = await this.costing.portfolioTotals(rows.map((r: any) => r.id));
+    return rows.map((r: any) => ({ ...r, costing: totals.get(r.id) ?? null }));
   }
 
   @Get(':id')
