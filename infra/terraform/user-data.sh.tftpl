@@ -120,6 +120,19 @@ server {
     location / { try_files $uri $uri/ /index.html; }
 }
 NGINX
+# Compress the app's scripts and styles. Ubuntu's nginx.conf turns gzip on but leaves
+# gzip_types commented out, so ONLY text/html was compressed and every phone downloaded the
+# app script uncompressed (2.9 MB instead of ~0.7 MB; found 2026-10-17). A separate conf.d
+# file so certbot's rewrite of the site file never touches it. The live box got the same
+# file from infra/scripts/nginx-compression.sh.
+cat >/etc/nginx/conf.d/prime-compression.conf <<'NGINX'
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 6;
+gzip_min_length 1024;
+gzip_types text/css application/javascript text/javascript application/json application/manifest+json image/svg+xml text/plain;
+NGINX
+
 # certbot --nginx rewrites this file in place to add :443 and the http->https redirect.
 ln -sf /etc/nginx/sites-available/prime-web /etc/nginx/sites-enabled/prime-web
 rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/prime-api
