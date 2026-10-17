@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 import { ProjectAccessService } from '../../common/access/project-access.service';
+import { fitOutBudget, lineValue } from '../interior/interior-budget';
 
 /** Same shape LeadsService/DashboardService thread through for project scoping. */
 type Viewer = { userId: string; role: string; roles?: string[] } | undefined;
@@ -19,7 +20,8 @@ const INTERIOR_PHASES = [
 ] as const;
 
 /** Where an interior project's committed value came from — so Finance can judge the number. */
-type CommitmentBasis = 'PER_SQFT' | 'CONTRACT_VALUE' | 'SCOPE_ITEMS' | 'NONE';
+// SCOPE_ITEMS is the draft estimate's live total (scope items ARE the estimate lines).
+type CommitmentBasis = 'LOCKED_ESTIMATE' | 'PER_SQFT' | 'CONTRACT_VALUE' | 'SCOPE_ITEMS' | 'NONE';
 
 @Injectable()
 export class ReportsService {
@@ -721,7 +723,10 @@ export class ReportsService {
           building: { select: { id: true, name: true, projectId: true } },
           pm: { select: { id: true, name: true } },
           invoices: { select: { amount: true, paidAt: true, status: true } },
-          scopeItems: { select: { total: true } },
+          scopeItems: { select: { total: true, quantity: true, unitPrice: true } },
+          // Job costing (2026-10-16): a LOCKED estimate's revised budget is the commitment.
+          budgetSnapshot: { select: { amount: true } },
+          changeOrders: { where: { status: 'APPROVED' }, select: { amount: true } },
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -862,41 +867,33 @@ export class ReportsService {
   }
 
   /**
-   * Fit-out commitment, derived per contract type rather than trusting one column.
-   *
-   * `contractValue` is only auto-populated for PER_SQFT at create time, an explicit
-   * value can override it on update, and COST_PLUS engagements often have neither —
-   * so PER_SQFT recomputes rate x area, everything else falls back to the flat
-   * contractValue, and a BOQ sum is the last resort.
-   *
-   * A CANCELLED fit-out commits nothing; whatever was already invoiced against it
-   * surfaces as `overrun` and `cancelledSpend`, not as a live commitment.
+   * Fit-out commitment — fitOutBudget(), the same rule the portfolio, project tab and unit
+   * card use, so the report cannot disagree with them:
+   *   LOCKED estimate -> revised budget (snapshot + approved change orders);
+   *   else PER_SQFT rate x area, else the flat contractValue;
+   *   else the draft estimate's live total (reported as SCOPE_ITEMS);
+   *   CANCELLED commits nothing — what was invoiced shows as overrun / cancelledSpend.
    */
   private deriveInteriorCommitment(ip: {
     status: string;
+    estimateStatus?: string | null;
     contractType: string;
     ratePerSqft: unknown;
     area: unknown;
     contractValue: unknown;
-    scopeItems: Array<{ total: unknown }>;
+    scopeItems: Array<{ total: unknown; quantity?: unknown; unitPrice?: unknown }>;
+    budgetSnapshot?: Array<{ amount: unknown }>;
+    changeOrders?: Array<{ amount: unknown }>;
   }): { committed: number; basis: CommitmentBasis } {
-    if (ip.status === 'CANCELLED') return { committed: 0, basis: 'NONE' };
-
-    const rate = ip.ratePerSqft === null || ip.ratePerSqft === undefined ? null : Number(ip.ratePerSqft);
-    const area = ip.area === null || ip.area === undefined ? null : Number(ip.area);
-    if (ip.contractType === 'PER_SQFT' && rate !== null && area !== null) {
-      return { committed: rate * area, basis: 'PER_SQFT' };
-    }
-
-    const flat = ip.contractValue === null || ip.contractValue === undefined ? null : Number(ip.contractValue);
-    if (flat !== null) return { committed: flat, basis: 'CONTRACT_VALUE' };
-
-    const scopeLines = ip.scopeItems.filter((s) => s.total !== null && s.total !== undefined);
-    if (scopeLines.length) {
-      return { committed: scopeLines.reduce((s, l) => s + Number(l.total), 0), basis: 'SCOPE_ITEMS' };
-    }
-
-    return { committed: 0, basis: 'NONE' };
+    const n = (v: unknown) => (v === null || v === undefined ? 0 : Number(v)) || 0;
+    const revised = (ip.budgetSnapshot ?? []).reduce((t, s) => t + n(s.amount), 0)
+      + (ip.changeOrders ?? []).reduce((t, c) => t + n(c.amount), 0);
+    const { amount, basis } = fitOutBudget({
+      status: ip.status, estimateStatus: ip.estimateStatus, revised,
+      estimateTotal: ip.scopeItems.reduce((t, l) => t + lineValue(l), 0),
+      contractType: ip.contractType, ratePerSqft: ip.ratePerSqft, area: ip.area, contractValue: ip.contractValue,
+    });
+    return { committed: amount, basis: basis === 'ESTIMATE' ? 'SCOPE_ITEMS' : basis };
   }
 
   /** Roll a set of interior rows up into the shape used for both a project and the portfolio. */

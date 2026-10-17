@@ -4,7 +4,7 @@
  * (805–815): original $342,250, committed $318,007.06, projected $452,186.71.
  */
 import { ConflictException, ForbiddenException } from '@nestjs/common';
-import { computeBudget, codesOverBudget, leftOnCode, type BudgetInput } from './interior-budget';
+import { computeBudget, codesOverBudget, fitOutBudget, leftOnCode, type BudgetInput } from './interior-budget';
 import { InteriorCostingService, derivePoPrefix, codeLabel, DEFAULT_SETTINGS } from './interior-costing.service';
 
 // ── Luxyn, as BuilderTrend had it ────────────────────────────────────────────
@@ -106,6 +106,28 @@ describe('budget checks for purchase orders', () => {
   it('flags only the codes a new PO would take over', () => {
     expect(codesOverBudget(LUXYN, [{ costCodeId: '15.25', amount: 20000 }, { costCodeId: '09.00', amount: 1 }])).toEqual(['09.00']);
     expect(codesOverBudget(LUXYN, [{ costCodeId: '15.25', amount: 15000 }, { costCodeId: '15.25', amount: 7000 }])).toEqual(['15.25']);
+  });
+});
+
+describe('fitOutBudget — the one budget figure every screen shows', () => {
+  const base = { revised: 226_860, estimateTotal: 154_860, contractType: 'PER_SQFT', ratePerSqft: 120, area: 1500, contractValue: 180_000 };
+
+  it('a LOCKED estimate wins: revised budget', () => {
+    expect(fitOutBudget({ ...base, estimateStatus: 'LOCKED' })).toEqual({ amount: 226_860, basis: 'LOCKED_ESTIMATE' });
+  });
+  it('a draft estimate does not outrank the contract (rate x area first)', () => {
+    expect(fitOutBudget({ ...base, estimateStatus: 'DRAFT' })).toEqual({ amount: 180_000, basis: 'PER_SQFT' });
+  });
+  it('then the flat contract value', () => {
+    expect(fitOutBudget({ ...base, contractType: 'FIXED', estimateStatus: 'SUBMITTED' })).toEqual({ amount: 180_000, basis: 'CONTRACT_VALUE' });
+  });
+  it('then the draft estimate, when there is no contract figure at all', () => {
+    expect(fitOutBudget({ ...base, contractType: 'COST_PLUS', contractValue: null, estimateStatus: 'DRAFT' }))
+      .toEqual({ amount: 154_860, basis: 'ESTIMATE' });
+  });
+  it('nothing to go on is NONE, and a cancelled fit-out commits nothing', () => {
+    expect(fitOutBudget({ revised: 0, estimateTotal: 0, contractType: 'COST_PLUS' })).toEqual({ amount: 0, basis: 'NONE' });
+    expect(fitOutBudget({ ...base, status: 'CANCELLED', estimateStatus: 'LOCKED' })).toEqual({ amount: 0, basis: 'NONE' });
   });
 });
 

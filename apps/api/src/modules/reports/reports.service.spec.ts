@@ -113,6 +113,33 @@ describe('ReportsService — interior / TI summary', () => {
       expect(ip.commitmentBasis).toBe('SCOPE_ITEMS');
     });
 
+    /**
+     * Job costing (2026-10-16): once the estimate is LOCKED, the commitment is the revised
+     * budget — locked estimate + approved change orders — not the contract figure. The
+     * portfolio, project tab and unit card use the same rule (fitOutBudget).
+     */
+    it('uses the revised budget of a LOCKED estimate, ahead of any contract figure', async () => {
+      stub([PROJ_A], [interior({
+        contractType: 'PER_SQFT', ratePerSqft: 120, area: 1500, contractValue: 180_000,
+        estimateStatus: 'LOCKED',
+        budgetSnapshot: [{ amount: 154_860 }],
+        changeOrders: [{ amount: 72_000 }],
+      })]);
+      const ip = row(await service.getInteriorSummary(), 'p1').interiors[0];
+      expect(ip.committed).toBe(226_860);
+      expect(ip.commitmentBasis).toBe('LOCKED_ESTIMATE');
+    });
+
+    it('keeps the contract figure while the estimate is only a draft', async () => {
+      stub([PROJ_A], [interior({
+        contractType: 'FIXED', contractValue: 90_000, estimateStatus: 'DRAFT',
+        scopeItems: [{ total: 40_000 }],
+      })]);
+      const ip = row(await service.getInteriorSummary(), 'p1').interiors[0];
+      expect(ip.committed).toBe(90_000);
+      expect(ip.commitmentBasis).toBe('CONTRACT_VALUE');
+    });
+
     it('flags a fit-out with no reviewable commitment instead of inventing one', async () => {
       stub([PROJ_A], [interior({ contractType: 'COST_PLUS' })]);
 

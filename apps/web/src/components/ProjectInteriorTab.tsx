@@ -18,6 +18,7 @@ import { useInteriorProjects } from '../hooks/useApi';
 import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate } from '../utils/fmt';
 import { LoadingState, EmptyState, Pagination } from './ui';
+import { BudgetFigure } from './InteriorCostingParts';
 import { usePagination } from '../hooks/usePagination';
 import { INTERIOR_PHASES } from '../constants/interior';
 
@@ -83,7 +84,7 @@ export function ProjectInteriorTab({ projectId }: { projectId: string }) {
                 <th className="text-left px-4 py-3">PM</th>
                 <th className="text-left px-4 py-3">Phase</th>
                 <th className="text-left px-4 py-3">Status</th>
-                {canViewFinance && <th className="text-right px-4 py-3">Contract</th>}
+                {canViewFinance && <th className="text-right px-4 py-3">Budget</th>}
                 <th className="text-right px-4 py-3">Snags</th>
                 <th className="text-right px-4 py-3">Target</th>
               </tr>
@@ -123,8 +124,9 @@ export function ProjectInteriorTab({ projectId }: { projectId: string }) {
                       <Chip size="sm" variant="flat" color={STATUS_COLOR[r.status] ?? 'default'}>{r.status}</Chip>
                     </td>
                     {canViewFinance && (
-                      <td className="px-4 py-3 text-right tabular-nums">
-                        {r.contractValue != null ? fmt(Number(r.contractValue)) : '—'}
+                      <td className="px-4 py-3 text-right">
+                        {/* Same rule as the portfolio and the Interior report (fitOutBudget). */}
+                        <BudgetFigure row={r} />
                       </td>
                     )}
                     <td className="px-4 py-3 text-right tabular-nums text-gray-500">{r._count?.snags ?? 0}</td>

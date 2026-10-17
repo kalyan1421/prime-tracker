@@ -3,7 +3,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { computeBudget, codesOverBudget, leftOnCode, lineValue, type BudgetInput } from './interior-budget';
+import { computeBudget, codesOverBudget, fitOutBudget, leftOnCode, lineValue, type BudgetInput } from './interior-budget';
 
 /**
  * Interiors costing (client, 2026-10-17) — the estimate, its lock, the job-costing budget,
@@ -343,13 +343,18 @@ export class InteriorCostingService {
     };
   }
 
-  /** Totals per fit-out for the portfolio board. Money only for interior:finance. */
+  /**
+   * Totals per fit-out for the portfolio board, the project tab and the unit card — plus
+   * `budget` / `budgetBasis` from fitOutBudget(), the one number those screens show.
+   * Money only for interior:finance (the callers gate it).
+   */
   async portfolioTotals(ids: string[]) {
-    if (!ids.length) return new Map<string, ReturnType<typeof computeBudget>['totals'] & { estimateStatus: string }>();
+    if (!ids.length) return new Map<string, any>();
     const projects = await this.prisma.interiorProject.findMany({
       where: { id: { in: ids } },
       select: {
-        id: true, estimateStatus: true,
+        id: true, estimateStatus: true, status: true,
+        contractType: true, ratePerSqft: true, area: true, contractValue: true,
         scopeItems: { select: { costCodeId: true, paidBy: true, quantity: true, unitPrice: true, total: true } },
         budgetSnapshot: { select: { costCodeId: true, paidBy: true, amount: true } },
         changeOrders: { select: { costCodeId: true, paidBy: true, amount: true, status: true } },
@@ -363,7 +368,12 @@ export class InteriorCostingService {
         locked: p.estimateStatus === 'LOCKED', snapshot: p.budgetSnapshot, lines: p.scopeItems,
         changeOrders: p.changeOrders, purchaseOrders: p.purchaseOrders, bills: p.invoices.map((b) => ({ ...b })),
       });
-      out.set(p.id, { ...totals, estimateStatus: p.estimateStatus });
+      const fb = fitOutBudget({
+        status: p.status, estimateStatus: p.estimateStatus, revised: totals.revised,
+        estimateTotal: p.scopeItems.reduce((t, l) => t + lineValue(l), 0),
+        contractType: p.contractType, ratePerSqft: p.ratePerSqft, area: p.area, contractValue: p.contractValue,
+      });
+      out.set(p.id, { ...totals, estimateStatus: p.estimateStatus, budget: fb.amount, budgetBasis: fb.basis });
     }
     return out;
   }

@@ -11,7 +11,7 @@ import { usePagination } from '../hooks/usePagination';
 import { useDebounced } from '../hooks/useDebounced';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { groupColor } from '../components/BoardCells';
-import { money, StatusTag } from '../components/InteriorCostingParts';
+import { BudgetFigure, fitOutBudgetOf, money, StatusTag } from '../components/InteriorCostingParts';
 
 const PHASE_LABEL: Record<string, string> = {
   DESIGN: 'Design', CLIENT_APPROVAL: 'Client Approval', CITY_APPROVAL: 'City Approval',
@@ -43,8 +43,8 @@ const PRIORITY_FILL: Record<string, string> = {
 const propertyOf = (r: any): string =>
   r.unit?.building?.project?.name ?? r.building?.project?.name ?? 'No property';
 
-/** Revised budget once costed (the BuilderTrend figure), else the old contract value. */
-const budgetOf = (r: any) => (r.costing ? Number(r.costing.revised) || 0 : Number(r.contractValue ?? 0));
+/** The server's one budget rule (locked estimate > contract > draft estimate). */
+const budgetOf = (r: any) => fitOutBudgetOf(r) ?? 0;
 
 const unitsOf = (r: any): string => {
   const nums = [r.unit?.unitNumber, ...(r.extraUnits ?? []).map((x: any) => x.unit?.unitNumber)].filter(Boolean);
@@ -175,7 +175,7 @@ export default function InteriorPortfolioPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label={isFiltered ? 'Active (filtered)' : 'Active fit-outs'} value={String(summary.active)} />
-        {canViewFinance && <StatCard label="Revised budget" value={fmt(summary.budget)} />}
+        {canViewFinance && <StatCard label="Total budget" value={fmt(summary.budget)} />}
         {canViewFinance && (
           <StatCard
             label={summary.overBudget ? `Actual cost · ${summary.overBudget} over budget` : 'Actual cost'}
@@ -281,7 +281,7 @@ export default function InteriorPortfolioPage() {
                             <th className="px-3 py-2 text-center">Priority</th>
                             <th className="px-3 py-2 text-left">Phase</th>
                             <th className="px-3 py-2 text-left">Estimate</th>
-                            {canViewFinance && <th className="px-3 py-2 text-right">Revised</th>}
+                            {canViewFinance && <th className="px-3 py-2 text-right">Budget</th>}
                             {canViewFinance && <th className="px-3 py-2 text-right">Committed</th>}
                             {canViewFinance && <th className="px-3 py-2 text-right">Actual</th>}
                             {canViewFinance && <th className="px-3 py-2 text-right">Over / under</th>}
@@ -314,7 +314,7 @@ export default function InteriorPortfolioPage() {
                                 <td className="px-3 py-2">
                                   <StatusTag status={r.estimateStatus ?? 'DRAFT'} labels={{ SUBMITTED: 'Waiting' }} />
                                 </td>
-                                {canViewFinance && <td className="px-3 py-2 text-right tabular-nums">{c ? money(c.revised) : r.contractValue != null ? fmt(r.contractValue) : '—'}</td>}
+                                {canViewFinance && <td className="px-3 py-2 text-right"><BudgetFigure row={r} /></td>}
                                 {canViewFinance && <td className="px-3 py-2 text-right tabular-nums">{c ? money(c.committed) : '—'}</td>}
                                 {canViewFinance && <td className="px-3 py-2 text-right tabular-nums">{c ? money(c.actual) : fmt(r.spend ?? 0)}</td>}
                                 {canViewFinance && (
@@ -341,8 +341,9 @@ export default function InteriorPortfolioPage() {
                           <tfoot>
                             <tr className="border-t border-gray-200 bg-gray-50 text-xs font-semibold text-gray-900">
                               <td className="px-3 py-2" colSpan={6}>{g.name} total</td>
-                              {(['revised', 'committed', 'actual', 'overUnder'] as const).map((k) => {
-                                const v = g.items.reduce((t, r) => t + (r.costing ? Number(r.costing[k]) || 0 : 0), 0);
+                              {(['budget', 'committed', 'actual', 'overUnder'] as const).map((k) => {
+                                // Budget follows the same rule as the rows (contract figures included).
+                                const v = g.items.reduce((t, r) => t + (k === 'budget' ? budgetOf(r) : r.costing ? Number(r.costing[k]) || 0 : 0), 0);
                                 return <td key={k} className={`px-3 py-2 text-right tabular-nums ${k === 'overUnder' && v < -0.5 ? 'text-red-700' : ''}`}>{money(v)}</td>;
                               })}
                               <td />
