@@ -285,15 +285,17 @@ export function HistoricalRecordControls({ record, onDeleted, variant = 'card' }
         )}
         {!pendingReq && !approvedReq && (canDecide || canRequest) && (
           <Tooltip content={canDecide ? 'Delete this historical record' : 'Request deletion'}>
+            {/* Grey at rest, red on hover, like the live-record bin beside it on the timeline.
+                The two states above keep their colour: they report something, this one waits. */}
             <Button
               isIconOnly
               size="sm"
               variant="light"
-              color="danger"
+              className="text-gray-500 data-[hover=true]:text-red-700"
               aria-label={canDecide ? 'Delete this historical record' : 'Request deletion'}
               onPress={() => (canDecide ? setConfirmOpen(true) : setAskOpen(true))}
             >
-              <FiTrash2 className="w-4 h-4" />
+              <FiTrash2 className="w-3.5 h-3.5" />
             </Button>
           </Tooltip>
         )}

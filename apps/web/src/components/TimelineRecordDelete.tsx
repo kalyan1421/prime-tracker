@@ -72,15 +72,17 @@ export function TimelineRecordDelete({ record }: { record: TimelineRecord }) {
   return (
     <span className="shrink-0">
       <Tooltip content={isLease ? 'Delete this tenancy' : 'Delete this sale'}>
+        {/* Grey at rest, red on hover: it shows on every row of the timeline, and a red bin
+            on each one made a rare, destructive action the loudest thing in the list. */}
         <Button
           isIconOnly
           size="sm"
           variant="light"
-          color="danger"
+          className="text-gray-500 data-[hover=true]:text-red-700"
           aria-label={isLease ? 'Delete this tenancy' : 'Delete this sale'}
           onPress={() => setConfirmOpen(true)}
         >
-          <FiTrash2 className="w-4 h-4" />
+          <FiTrash2 className="w-3.5 h-3.5" />
         </Button>
       </Tooltip>
 

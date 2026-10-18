@@ -4,7 +4,7 @@ import {
   Chip, Button, Avatar, Textarea, Select, SelectItem, Switch, Tooltip, Tabs, Tab,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiCreditCard, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiTrendingUp, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers, FiCheckSquare, FiUsers, FiClipboard, FiPlus } from 'react-icons/fi';
+import { FiAlertTriangle, FiArrowLeft, FiSend, FiTrash2, FiMessageSquare, FiEdit2, FiTarget, FiMail, FiPhone, FiClock, FiFileText, FiDownload, FiHome, FiAlignLeft, FiCheck, FiX, FiUpload, FiEye, FiExternalLink, FiChevronDown, FiChevronRight, FiDollarSign, FiLogOut, FiRepeat, FiLayers, FiCheckSquare, FiUsers, FiClipboard } from 'react-icons/fi';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useUnit, useUpdateUnit, useLeads, useDocuments,
@@ -22,7 +22,7 @@ const COMMENT_TYPE_COLORS: Record<string, string> = {
   FINANCIAL: 'bg-green-100 text-green-700',
 };
 import { fmt, fmtDate, fmtPct, errMsg } from '../utils/fmt';
-import { StatusBadge, LoadingState, ErrorState, PermissionGate } from '../components/ui';
+import { StatusBadge, LoadingState, ErrorState, PermissionGate, AddButton } from '../components/ui';
 import { TimeOnMarketBar } from '../components/TimeOnMarketBar';
 import { UnitActivity } from '../components/UnitActivity';
 import { InteriorPanel } from '../components/InteriorPanel';
@@ -80,7 +80,11 @@ function Metric({ label, value, unit, accent, sub }: { label: string; value: str
 }
 
 /**
- * Consistent section card shell: tinted icon, title, optional right-side action/hint.
+ * Consistent section card shell: icon, title, optional right-side action/hint.
+ *
+ * The icon slot colours the icon itself, grey. Section icons came in seven colours that
+ * meant nothing (design audit, 2026-10-18) and competed with the colours that DO mean
+ * something — status chips, overdue dates, money in and out. Pass a bare `<Fi… />`.
  *
  * `empty` collapses the card to its header alone. A card that spends ninety vertical
  * pixels, a centred icon and a border to say "No linked loans" is using real estate to
@@ -88,12 +92,11 @@ function Metric({ label, value, unit, accent, sub }: { label: string; value: str
  * so the emptiest one used to set the height of the row it was in.
  */
 function Section({
-  icon, title, subtitle, count, action, children, empty, className = '', id, headerClassName = '',
+  icon, title, subtitle, count, action, children, empty, className = '', id,
 }: {
   icon: React.ReactNode;
   title: string;
-  /** One line under the title — for two sections whose names alone could be
-   *  mistaken for each other (e.g. "Construction" vs. "Construction Checklist"). */
+  /** One line under the title, when the name alone does not say what the section holds. */
   subtitle?: string;
   count?: number;
   action?: React.ReactNode;
@@ -103,17 +106,13 @@ function Section({
   className?: string;
   /** DOM id so other pages (e.g. the Construction dashboard) can deep-link via #hash. */
   id?: string;
-  /** Optional tint on the header strip — for a card sitting next to a same-named
-   *  neighbor (e.g. "Construction" / "Construction Checklist"), so the two are
-   *  distinguishable at a glance rather than only on reading the subtitle. */
-  headerClassName?: string;
 }) {
   if (empty) {
     return (
       <div id={id} className={`scroll-mt-20 rounded-2xl border border-gray-200 bg-white overflow-hidden ${className}`}>
-        <div className={`flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 ${headerClassName}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5">
           <div className="flex items-center gap-2.5">
-            {icon}
+            <span className="shrink-0 text-gray-500">{icon}</span>
             <div>
               <h2 className="font-semibold text-sm text-gray-800">{title}</h2>
               {subtitle && <p className="text-[11px] text-gray-500">{subtitle}</p>}
@@ -129,9 +128,9 @@ function Section({
   }
   return (
     <div id={id} className={`scroll-mt-20 rounded-2xl border border-gray-200 bg-white overflow-hidden ${className}`}>
-      <div className={`flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-3 ${headerClassName}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 pt-4 pb-3">
         <div className="flex items-center gap-2.5">
-          {icon}
+          <span className="shrink-0 text-gray-500">{icon}</span>
           <div>
             <h2 className="font-semibold text-sm text-gray-800">
               {title}
@@ -153,16 +152,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between py-2.5">
       <dt className="text-gray-500">{label}</dt>
       <dd className="text-right">{children}</dd>
-    </div>
-  );
-}
-
-// Compact, centered empty state for a section body.
-function EmptyRow({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-2 py-6 text-gray-300">
-      {icon}
-      <p className="text-sm text-gray-500">{text}</p>
     </div>
   );
 }
@@ -310,9 +299,11 @@ function UnitHistorySummary({ summary, unitStatus }: { summary: any; unitStatus?
           ))}
         </div>
       )}
-      {tiles.length > 0 && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {/* Never an orphan: a fixed two-column phone grid wrapped three tiles 2 + 1, so three
+          share one row. Four on a phone is the one case that needs two rows, and goes 2 + 2. */}
+      {tiles.length > 0 && <div className={`grid gap-2 ${tiles.length === 3 ? 'grid-cols-3' : 'grid-cols-2'} sm:grid-cols-4`}>
         {tiles.map((t) => (
-          <div key={t.label} className="rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-2">
+          <div key={t.label} className="min-w-0 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-1.5">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{t.label}</p>
             <p className={`text-sm font-semibold tabular-nums ${t.tone}`}>{t.value}</p>
             {t.note && <p className="text-[11px] text-amber-700 mt-0.5">{t.note}</p>}
@@ -393,9 +384,8 @@ function UnitHistoryTimeline({ unitId, onEditLease, onEditSale }: {
   if (error) return <ErrorState message={errMsg(error, 'Failed to load unit history')} />;
 
   const all: any[] = data?.entries ?? [];
-  if (all.length === 0) {
-    return <EmptyRow icon={<FiClock className="w-5 h-5" />} text="No history yet" />;
-  }
+  // Nothing to lay out: UnitHistoryCard collapses to its header and says so.
+  if (all.length === 0) return null;
 
   // Rent movements can outnumber everything else on a long tenancy, so the timeline
   // has to still be readable as "who was here and when" with them switched off.
@@ -421,7 +411,15 @@ function UnitHistoryTimeline({ unitId, onEditLease, onEditSale }: {
           </button>
         </div>
       )}
-      {entries.map((e, i) => (
+      {entries.map((e, i) => {
+        // Edit and delete sit in one column at the row's right edge. Inline after the title
+        // they wrapped onto a line of their own on a phone, and a red bin on every row was
+        // loud for a rare, destructive action — grey now, red only on hover.
+        const editLease = e.kind === 'lease' && onEditLease && e.data?.leaseId ? () => onEditLease(e.data.leaseId) : null;
+        const editSale = e.kind === 'sale' && onEditSale && e.data?.saleId ? () => onEditSale(e.data.saleId) : null;
+        const edit = editLease ?? editSale;
+        const hasActions = !!edit || e.kind === 'lease' || e.kind === 'sale';
+        return (
         <div key={e.id} className="flex gap-3">
           <div className="flex flex-col items-center">
             <div className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${entryDot(e)}`} />
@@ -449,18 +447,6 @@ function UnitHistoryTimeline({ unitId, onEditLease, onEditSale }: {
                       {e.isOngoing ? 'Backfilled' : 'Historical'}
                     </span>
                   )}
-                  {onEditLease && e.data?.leaseId && (
-                    <button
-                      type="button"
-                      onClick={() => onEditLease(e.data.leaseId)}
-                      className="shrink-0 text-gray-500 hover:text-blue-600 transition-colors"
-                      title="Edit this tenancy"
-                      aria-label={`Edit tenancy ${e.title}`}
-                    >
-                      <FiEdit2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <HistoricalEntryDelete entry={e} />
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {fmtDate(e.startDate)} – {e.isOngoing ? 'present' : fmtDate(e.endDate)}
@@ -500,18 +486,6 @@ function UnitHistoryTimeline({ unitId, onEditLease, onEditSale }: {
                       Historical
                     </span>
                   )}
-                  {onEditSale && e.data?.saleId && (
-                    <button
-                      type="button"
-                      onClick={() => onEditSale(e.data.saleId)}
-                      className="shrink-0 text-gray-500 hover:text-blue-600 transition-colors"
-                      title="Edit this sale"
-                      aria-label={`Edit sale ${e.title}`}
-                    >
-                      <FiEdit2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <HistoricalEntryDelete entry={e} />
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {fmtDate(e.startDate)}
@@ -680,8 +654,26 @@ function UnitHistoryTimeline({ unitId, onEditLease, onEditSale }: {
               </>
             )}
           </div>
+          {hasActions && (
+            <div className="-mt-1 flex shrink-0 items-start">
+              {edit && (
+                <Tooltip content={e.kind === 'lease' ? 'Edit this tenancy' : 'Edit this sale'}>
+                  <Button
+                    isIconOnly size="sm" variant="light"
+                    className="text-gray-500 data-[hover=true]:text-blue-600"
+                    aria-label={e.kind === 'lease' ? `Edit tenancy ${e.title}` : `Edit sale ${e.title}`}
+                    onPress={edit}
+                  >
+                    <FiEdit2 className="w-3.5 h-3.5" />
+                  </Button>
+                </Tooltip>
+              )}
+              <HistoricalEntryDelete entry={e} />
+            </div>
+          )}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -731,9 +723,7 @@ function UnitRentHistory({
   const toggle = (id: string) =>
     setOpenIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
 
-  if (ordered.length === 0) {
-    return <EmptyRow icon={<FiTrendingUp className="w-5 h-5" />} text="No leases yet — rent history starts with the first lease" />;
-  }
+  if (ordered.length === 0) return null;
 
   return (
     <div className="space-y-3">
@@ -744,7 +734,7 @@ function UnitRentHistory({
           // One card per lease — the button is its header row, the expanded content is
           // its body, so open and closed read as the same object rather than a floating
           // toggle followed by a separately-chromed pile of unrelated-looking panels.
-          <div key={l.id} className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+          <div key={l.id} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
             <button
               type="button"
               onClick={() => toggle(l.id)}
@@ -832,6 +822,68 @@ function UnitRentHistory({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The History tab's one card: the timeline ("who was here and when"), then — for those same
+ * leases — the rent and deposits ("how much, and when did it change").
+ *
+ * Rent History used to sit under it as a loose heading with its own empty message, the only
+ * section on the page that was not a card (design audit, 2026-10-18). Both halves are the
+ * unit's record, so they share one card, one empty state and one add action. Recording a past
+ * tenancy writes a whole settled ledger; it sits here, with the history, rather than beside the
+ * Tenant card's "Add lease", so the heavier action is never the easier slip.
+ */
+function UnitHistoryCard({
+  unitId, leases, buildingId, canViewLeases, canEditLease, canCollect,
+  onBackfill, onEditLease, onEditSale, onLeaseDeleted,
+}: {
+  unitId: string | undefined;
+  leases: any[];
+  buildingId: string | undefined;
+  canViewLeases: boolean;
+  canEditLease: boolean;
+  canCollect: boolean;
+  onBackfill?: () => void;
+  onEditLease?: (leaseId: string) => void;
+  onEditSale?: (saleId: string) => void;
+  onLeaseDeleted?: () => void;
+}) {
+  // Same query key as the timeline inside, so this costs no second request.
+  const { data, isLoading } = useUnitHistory(unitId);
+  const showRent = canViewLeases && leases.length > 0;
+  const empty = !isLoading && !(data?.entries?.length) && !showRent;
+
+  return (
+    <Section
+      icon={<FiClock className="w-4 h-4" />}
+      title="History"
+      empty={empty ? 'None yet' : null}
+      action={onBackfill ? <AddButton onPress={onBackfill}>Record a past tenancy</AddButton> : undefined}
+    >
+      <UnitHistoryTimeline unitId={unitId} onEditLease={onEditLease} onEditSale={onEditSale} />
+      {showRent && (
+        <div className="mt-5 space-y-3 border-t border-gray-100 pt-4">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+            Rent and deposits{leases.length > 1 && ` · ${leases.length} leases`}
+          </p>
+          {/* Unit-wide rollup — ONLY when there is more than one tenancy to roll up. Each lease
+              below already shows its own money-in / money-out; on a single-lease unit the two
+              were identical, so the page said "Deposits & Allowances" twice with the same
+              numbers. It earns its place only when it aggregates across tenancies. */}
+          {leases.length > 1 && <ObligationSummaryCard scope="unit" id={unitId} embedded />}
+          <UnitRentHistory
+            leases={leases}
+            canEdit={canEditLease}
+            canCollect={canCollect}
+            unitId={unitId}
+            buildingId={buildingId}
+            onLeaseDeleted={onLeaseDeleted}
+          />
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -1341,10 +1393,9 @@ export default function UnitDetailPage() {
   const checklistSection = (
     <Section
       id="construction-checklist"
-      icon={<FiCheckSquare className="w-4 h-4 text-teal-600" />}
-      title="Construction Checklist"
-      subtitle="Build stages — fixed template checklist"
-      headerClassName="bg-teal-50/60"
+      icon={<FiCheckSquare className="w-4 h-4" />}
+      title="Build checklist"
+      subtitle="The unit's build stages"
     >
       {/* One job across several units (Site Tracker): a MEMBER has no checklist of its own
           — the job's lives on the lead unit, and the API refuses stages added here. Point
@@ -1388,10 +1439,9 @@ export default function UnitDetailPage() {
   const activitySection = (
     <div id="section-activity" className="mb-5 sm:mb-6">
       <Section
-        icon={<FiClipboard className="w-4 h-4 text-blue-600" />}
+        icon={<FiClipboard className="w-4 h-4" />}
         title="Activity"
         subtitle="Site updates and team comments, newest first"
-        headerClassName="bg-blue-50/60"
       >
         <UnitActivity unitId={unitId!} projectId={u.building?.project?.id} />
       </Section>
@@ -1941,7 +1991,7 @@ export default function UnitDetailPage() {
                             <p className="text-sm">This unit is marked SOLD, but no sale has been recorded yet.</p>
                           </div>
                           {canEditSale ? (
-                            <Button size="sm" color="primary" variant="flat" className="shrink-0" onPress={openAddSale}>+ Add Sale</Button>
+                            <AddButton className="shrink-0" onPress={openAddSale}>Add sale</AddButton>
                           ) : (
                             <span className="text-xs text-gray-500 shrink-0">Ask someone with sales access to record it.</span>
                           )}
@@ -1962,7 +2012,7 @@ export default function UnitDetailPage() {
                         <div className="mb-5 sm:mb-6 rounded-2xl border border-gray-200 bg-white p-5">
                           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                             <div className="flex items-center gap-2.5">
-                              <FiDollarSign className="w-4 h-4 text-blue-600" />
+                              <FiDollarSign className="w-4 h-4 text-gray-500" />
                               <h2 className="font-semibold text-sm text-gray-800">Sale in Progress</h2>
                             </div>
                             <Chip size="sm" color="primary" variant="flat" className="font-medium">
@@ -1989,15 +2039,12 @@ export default function UnitDetailPage() {
                           </p>
                         </div>
                         {canEditLease ? (
-                          <Button
-                            size="sm"
-                            color="primary"
-                            variant="flat"
+                          <AddButton
                             className="shrink-0"
                             onPress={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
                           >
-                            + Add tenant
-                          </Button>
+                            Add tenant
+                          </AddButton>
                         ) : (
                           <span className="text-xs text-amber-700 shrink-0">Ask someone with lease access to record it.</span>
                         )}
@@ -2048,13 +2095,10 @@ export default function UnitDetailPage() {
                           cash flow and dunning. What changes is that it can now be seen and edited. */}
                       {shownLease && (
                       <Section
-                        icon={<FiHome className="w-4 h-4 text-blue-600" />}
+                        icon={<FiHome className="w-4 h-4" />}
                         title="Tenant"
-                        // Collapses to a one-line header, like Construction and Financing. A unit with
-                        // no tenancy on record — not even an ended one — has nothing to lay out, and a
-                        // card whose whole body is a centred "No active lease" is a screenful spent
-                        // saying so. The "+ Add Lease" action stays in the header either way.
-                        empty={shownLease ? null : 'No tenancy recorded'}
+                        // Rendered only when there is a tenancy to show, current or past. A unit with
+                        // none is named in the "Not recorded yet" strip, with its Add lease action.
                         action={canEditLease ? (
                           activeLease ? (
                             <div className="flex items-center gap-1">
@@ -2101,14 +2145,13 @@ export default function UnitDetailPage() {
                                   <FiEdit2 className="w-3.5 h-3.5" />
                                 </button>
                               )}
-                              <button
-                                // Wrapped, not passed bare: openAddLease now takes the lease status to
-                                // seed, and a bare handler would hand it the click event.
-                                onClick={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
-                                className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                              <AddButton
+                                // Wrapped, not passed bare: openAddLease takes the lease status to seed,
+                                // and a bare handler would hand it the press event.
+                                onPress={() => openAddLease(u.status === 'LEASE_PENDING' ? 'DRAFT' : 'ACTIVE')}
                               >
-                                + Add Lease
-                              </button>
+                                Add lease
+                              </AddButton>
                             </div>
                           )
                         ) : undefined}
@@ -2247,12 +2290,7 @@ export default function UnitDetailPage() {
                               </Row>
                             </dl>
                           </div>
-                        ) : (
-                          // Unreachable in practice: `empty` above collapses the card to its header
-                          // when there is no tenancy, so the body never renders. Kept as null rather
-                          // than an EmptyRow so the two cannot both claim the empty state.
-                          null
-                        )}
+                        ) : null}
 
                         {/* Said once, at the bottom, rather than as a banner over the card: on a sold
                             unit this is a standing condition of the record, not a problem to act on.
@@ -2284,13 +2322,8 @@ export default function UnitDetailPage() {
                         if (!hasLoans && !hasBudget) return null;
                         return (
                           <Section
-                            icon={<FiDollarSign className="w-4 h-4 text-emerald-600" />}
+                            icon={<FiDollarSign className="w-4 h-4" />}
                             title="Financing" subtitle="Linked loans & budget"
-                            // Collapses to a one-line header instead of a card whose whole body is an
-                            // illustrated "nothing here". Construction already did this; on a unit with
-                            // no loans and no budget the page was three tall boxes announcing their own
-                            // emptiness.
-                            empty={!hasLoans && !hasBudget ? 'None' : null}
                           >
                             {hasLoans && (
                               <div className={`space-y-4 ${hasBudget ? 'mb-4 pb-4 border-b border-gray-100' : ''}`}>
@@ -2332,9 +2365,6 @@ export default function UnitDetailPage() {
                                 </dl>
                               </div>
                             )}
-                            {!hasLoans && !hasBudget && (
-                              <EmptyRow icon={<FiCreditCard className="w-5 h-5" />} text="No loans or budget on this unit" />
-                            )}
                           </Section>
                         );
                       })()}
@@ -2343,7 +2373,7 @@ export default function UnitDetailPage() {
                       {(u.notes || editingNotes) && (
                         <div id="section-notes" className="mb-5 sm:mb-6">
                           <Section
-                            icon={<FiAlignLeft className="w-4 h-4 text-gray-500" />}
+                            icon={<FiAlignLeft className="w-4 h-4" />}
                             title="Notes"
                             action={canEditUnit && !editingNotes ? (
                               <button
@@ -2396,9 +2426,7 @@ export default function UnitDetailPage() {
                           <span key={n.label} className="inline-flex items-center gap-2 text-sm text-gray-700">
                             {n.label}
                             {n.onAdd && (
-                              <Button size="sm" variant="flat" startContent={<FiPlus className="w-3.5 h-3.5" />} onPress={n.onAdd}>
-                                {n.addLabel}
-                              </Button>
+                              <AddButton onPress={n.onAdd}>{n.addLabel}</AddButton>
                             )}
                           </span>
                         ))}
@@ -2415,9 +2443,9 @@ export default function UnitDetailPage() {
                           it" are the two questions this page exists to answer, and until now the first
                           one lived in Monday. */}
                       <Section
-                        icon={<FiLayers className="w-4 h-4 text-amber-600" />}
-                        title="Construction"
-                        subtitle="Work items — ad-hoc tasks & day-by-day updates"
+                        icon={<FiLayers className="w-4 h-4" />}
+                        title="Work items"
+                        subtitle="Tasks outside the checklist, with day-by-day updates"
                         count={constructionItems.length}
                         empty={constructionItems.length ? null : 'None'}
                       >
@@ -2431,78 +2459,33 @@ export default function UnitDetailPage() {
                 {t === 'history' && (
                   <>
                     {/* History — full lease + sale timeline, survives the unit changing status
-                        (e.g. a past tenant stays visible after the unit is later sold) */}
+                        (e.g. a past tenant stays visible after the unit is later sold) — with each
+                        lease's rent and deposits inside the same card. */}
                     <div id="section-history" className="mb-5 sm:mb-6">
-                      <Section icon={<FiClock className="w-4 h-4 text-gray-600" />} title="History">
-                        <UnitHistoryTimeline
-                          unitId={unitId}
-                          // Resolved from the unit's own arrays, so the form opens on the full record
-                          // rather than the timeline's flattened copy of it.
-                          onEditLease={canEditLease ? (leaseId: string) => {
-                            const lease = (u.leases ?? []).find((l: any) => l.id === leaseId);
-                            if (lease) openEditLease(lease);
-                          } : undefined}
-                          onEditSale={canEditSale ? (saleId: string) => {
-                            const sale = (u.sales ?? []).find((sl: any) => sl.id === saleId);
-                            if (sale) setEditSale(sale);
-                          } : undefined}
-                        />
-                      </Section>
+                      <UnitHistoryCard
+                        unitId={unitId}
+                        leases={u.leases || []}
+                        buildingId={u.building?.id}
+                        // Gated on lease:view like BuildingDetailPage does: every endpoint behind the
+                        // rent block (obligation summary, rent periods, rent invoices) requires it,
+                        // and this route is not permission-guarded in App.tsx.
+                        canViewLeases={canViewLeases}
+                        canEditLease={canEditLease}
+                        canCollect={canCollectRent}
+                        onBackfill={canViewLeases && hasPermission('unit:history:backfill') ? () => setBackfilling(true) : undefined}
+                        // Resolved from the unit's own arrays, so the form opens on the full record
+                        // rather than the timeline's flattened copy of it.
+                        onEditLease={canEditLease ? (leaseId: string) => {
+                          const lease = (u.leases ?? []).find((l: any) => l.id === leaseId);
+                          if (lease) openEditLease(lease);
+                        } : undefined}
+                        onEditSale={canEditSale ? (saleId: string) => {
+                          const sale = (u.sales ?? []).find((sl: any) => sl.id === saleId);
+                          if (sale) setEditSale(sale);
+                        } : undefined}
+                        onLeaseDeleted={refreshUnit}
+                      />
                     </div>
-
-                    {/* Rent & deposits — deliberately directly under History. History answers
-                        "who was here and when"; this answers "how much, and when did it change"
-                        for those same leases, so the drill-down sits against the summary it
-                        expands rather than at the foot of the page. Not rendered inside a
-                        Section: ObligationSummaryCard brings its own card chrome, and each lease
-                        row in UnitRentHistory is its OWN card (button = header, expanded content =
-                        body) so LeaseRentSchedule/RentCollectionPanel/LeaseObligationsPanel read as
-                        one bordered unit per tenancy rather than loose panels floating in the page.
-
-                        Gated on lease:view like BuildingDetailPage does: every endpoint behind
-                        this block (obligation summary, rent periods, rent invoices) requires
-                        lease:view, and this route is not permission-guarded in App.tsx — so
-                        without the gate an ACCOUNTING / AR_AP / CONSTRUCTION / VIEWER user is
-                        shown a card whose only possible outcome is a 403. */}
-                    {canViewLeases && (
-                      <div className="mb-5 sm:mb-6 space-y-4">
-                        {/* Unit-wide rollup — ONLY when there is more than one tenancy to roll up.
-                            LeaseObligationsPanel (inside Rent History, per lease) already shows the
-                            same money-in / money-out totals, plus the editable rows behind them. On a
-                            single-lease unit the two were identical, so the page said "Deposits &
-                            Allowances" twice with the same numbers. It earns its place only when it
-                            aggregates across tenancies, which is something no per-lease panel can do. */}
-                        {(u.leases?.length ?? 0) > 1 && <ObligationSummaryCard scope="unit" id={unitId} />}
-
-                        <div className="flex items-center justify-between gap-2 pt-1">
-                          <div className="flex items-center gap-2.5">
-                            <FiTrendingUp className="w-4 h-4 text-emerald-600" />
-                            <h2 className="font-semibold text-sm text-gray-800">
-                              Rent History
-                              {(u.leases?.length ?? 0) > 1 && (
-                                <span className="text-gray-500 font-normal ml-1">({u.leases.length} leases)</span>
-                              )}
-                            </h2>
-                          </div>
-                          {/* Entering history sits with the history, not with the "+ Add Lease" action
-                              above — they read similarly and do very different things, and the one
-                              that writes a whole settled ledger should not be the easier slip. */}
-                          {hasPermission('unit:history:backfill') && (
-                            <Button size="sm" variant="flat" onPress={() => setBackfilling(true)}>
-                              + Record a past tenancy
-                            </Button>
-                          )}
-                        </div>
-                        <UnitRentHistory
-                          leases={u.leases || []}
-                          canEdit={canEditLease}
-                          canCollect={canCollectRent}
-                          unitId={unitId}
-                          buildingId={u.building?.id}
-                          onLeaseDeleted={refreshUnit}
-                        />
-                      </div>
-                    )}
 
                   </>
                 )}
@@ -2714,48 +2697,36 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
     }
   };
 
-  // "Nothing has been filed against this unit" is a fact worth stating in the header rather
-  // than only by an empty list further down — a sold unit with no Deed on it is the case
-  // this is here to make visible at a glance. Held back while the list is still loading so
-  // it never claims "none" about an answer that has not arrived.
-  const uploadAction = (
-    <div className="flex items-center gap-2">
-      {!isLoading && docs.length === 0 && (
-        <Chip size="sm" variant="flat" color="warning" className="text-[11px]">
-          No documents uploaded
-        </Chip>
-      )}
-      {canUpload && (
-        <Button
-          size="sm" variant="flat" color="primary"
-          startContent={<FiUpload className="w-3 h-3" />}
-          onPress={() => fileInputRef.current?.click()}
-          isLoading={upload.isPending}
-          className="text-xs h-7"
-        >
-          Upload
-        </Button>
-      )}
-    </div>
-  );
+  // "Nothing has been filed against this unit" is said once, in the header, where a sold
+  // unit with no Deed on it is visible at a glance. It used to be said twice — a warning
+  // chip AND a centred "No documents yet" underneath. Held back while the list is still
+  // loading so it never claims "none" about an answer that has not arrived.
+  const empty = !isLoading && docs.length === 0 && !showUploadForm;
 
   return (
+    <>
+    {/* Outside the Section: an empty one collapses to its header and renders no body, and
+        the Upload button still has to reach this input. */}
+    {canUpload && (
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp"
+        onChange={onFileChange}
+      />
+    )}
     <Section
-      icon={<FiFileText className="w-4 h-4 text-indigo-600" />}
+      icon={<FiFileText className="w-4 h-4" />}
       title="Documents"
       count={docs.length || undefined}
-      action={uploadAction}
+      empty={empty ? 'None yet' : null}
+      action={canUpload ? (
+        <AddButton onPress={() => fileInputRef.current?.click()} isLoading={upload.isPending}>
+          Upload
+        </AddButton>
+      ) : undefined}
     >
-      {/* Hidden file input */}
-      {canUpload && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp"
-          onChange={onFileChange}
-        />
-      )}
 
       {/* Upload form — shown after file is picked */}
       {showUploadForm && pendingFile && (
@@ -2792,19 +2763,6 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
       )}
 
       {isLoading && <div className="text-sm text-gray-500 py-4 text-center">Loading…</div>}
-
-      {!isLoading && docs.length === 0 && !showUploadForm && (
-        <div className="flex flex-col items-center gap-2 py-6 text-center">
-          <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center">
-            <FiFileText className="w-4 h-4 text-violet-400" />
-          </div>
-          <p className="text-sm font-medium text-gray-500">No documents yet</p>
-          {canUpload
-            ? <p className="text-xs text-gray-500">Click <span className="font-medium text-gray-500">Upload</span> to attach a file directly to this unit.</p>
-            : <p className="text-xs text-gray-500">Upload from the project's Documents tab.</p>
-          }
-        </div>
-      )}
 
       {/* Document preview modal */}
       {preview && (
@@ -2977,6 +2935,7 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
         </div>
       )}
     </Section>
+    </>
   );
 }
 
@@ -3041,7 +3000,7 @@ function UnitWaitlistPanel({ unitId }: { unitId: string }) {
   return (
     <div className="mb-5 sm:mb-6">
       <Section
-        icon={<FiUsers className="w-4 h-4 text-rose-600" />}
+        icon={<FiUsers className="w-4 h-4" />}
         title="Waitlist"
         count={rows.length || undefined}
       >
@@ -3113,12 +3072,9 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
 
   const tabToggle = (
     <div className="flex flex-wrap items-center justify-end gap-2">
-      {canAddLead && (
-        <Button size="sm" variant="flat" color="primary" startContent={<FiTarget />} onPress={() => setAddLeadOpen(true)} className="text-xs h-7">
-          Add Lead
-        </Button>
-      )}
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+      {canAddLead && <AddButton onPress={() => setAddLeadOpen(true)}>Add lead</AddButton>}
+      {/* Leads / Activity only means something once there is a lead to have activity. */}
+      {leadsArr.length > 0 && <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
         {(['leads', 'activity'] as const).map((t) => (
           <button
             key={t}
@@ -3130,7 +3086,7 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
             {t === 'leads' ? `Leads${leadsArr.length > 0 ? ` (${leadsArr.length})` : ''}` : 'Activity'}
           </button>
         ))}
-      </div>
+      </div>}
     </div>
   );
 
@@ -3164,21 +3120,12 @@ function UnitLeadsPanel({ unitId, projectId }: { unitId: string; projectId: stri
         </ModalContent>
       </Modal>
     <Section
-      icon={<FiTarget className="w-4 h-4 text-blue-600" />}
+      icon={<FiTarget className="w-4 h-4" />}
       title="Leads"
+      empty={!isLoading && leadsArr.length === 0 ? 'None yet' : null}
       action={tabToggle}
     >
       {isLoading && <div className="text-sm text-gray-500 py-6 text-center">Loading…</div>}
-
-      {!isLoading && leadsArr.length === 0 && (
-        <div className="flex flex-col items-center gap-2 py-6 text-center">
-          <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
-            <FiTarget className="w-4 h-4 text-blue-400" />
-          </div>
-          <p className="text-sm font-medium text-gray-500">No leads linked</p>
-          <p className="text-xs text-gray-500">{canAddLead ? 'Click "Add Lead" to create one for this unit.' : 'Attach a lead from the Leads page or the project\'s Leads tab.'}</p>
-        </div>
-      )}
 
       {!isLoading && leadsArr.length > 0 && tab === 'leads' && (
         <div className="space-y-0.5">

@@ -27,7 +27,7 @@ import {
   useCreateDailyLog, useDailyLogs,
 } from '../hooks/useApi';
 import { errMsg, fmtDate, fmtDateShort } from '../utils/fmt';
-import { LoadingState, EmptyState, chipColor } from './ui';
+import { LoadingState, EmptyState, chipColor, AddButton } from './ui';
 import { PeoplePicker, personLabel } from './PeoplePicker';
 import { StatusCell, InlineText, InlineDate, TimelinePill, Cell } from './BoardCells';
 import { useAuthStore } from '../store/authStore';
@@ -193,12 +193,7 @@ export function UnitConstructionChecklist({
                   Apply template
                 </Button>
               )}
-              <Button
-                size="sm" variant="flat" startContent={<FiPlus size={13} />}
-                onPress={() => setAdding(true)}
-              >
-                Add stage
-              </Button>
+              <AddButton onPress={() => setAdding(true)}>Add stage</AddButton>
             </div>
           )}
         </div>
@@ -221,9 +216,7 @@ export function UnitConstructionChecklist({
       <div className="flex items-center justify-between text-xs text-gray-500">
         <span>{doneCount} of {stages.length} stages done</span>
         {canEdit && (
-          <Button size="sm" variant="light" startContent={<FiPlus size={13} />} onPress={() => setAdding(true)}>
-            Add stages from list
-          </Button>
+          <AddButton onPress={() => setAdding(true)}>Add stages from list</AddButton>
         )}
       </div>
 

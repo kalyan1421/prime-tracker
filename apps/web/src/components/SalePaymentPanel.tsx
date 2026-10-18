@@ -3,13 +3,13 @@ import {
   Chip, Button, Input, Select, SelectItem, Progress,
   Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, useDisclosure, addToast,
 } from '@heroui/react';
-import { FiPlus, FiDollarSign, FiEdit2 } from 'react-icons/fi';
+import { FiDollarSign, FiEdit2 } from 'react-icons/fi';
 import {
   useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment,
   useUpdateSalePayment,
 } from '../hooks/useApi';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
-import { PermissionGate } from './ui';
+import { PermissionGate, AddButton } from './ui';
 import { FormError } from './FormError';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
@@ -140,10 +140,9 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-gray-700">Payment schedule</p>
-        <Button size="sm" variant="flat" startContent={<FiPlus />}
-          onPress={() => { setAdding((v) => !v); setAddErr(null); }}>
+        <AddButton onPress={() => { setAdding((v) => !v); setAddErr(null); }}>
           Add installment
-        </Button>
+        </AddButton>
       </div>
 
       {isLoading && <p className="text-sm text-gray-500">Loading…</p>}

@@ -151,7 +151,9 @@ export function SaleGateDocuments({ saleId, currentStatus = '', targetStatus = '
           variant="flat"
           color={none ? 'default' : countedHave.length === counted.length ? 'success' : 'warning'}
         >
-          {none && !isLoading ? 'No documents uploaded' : `${countedHave.length} of ${counted.length}`}
+          {/* A count, never "No documents uploaded": the five open circles below already say
+              which are missing, and the chip only has to say how many. */}
+          {`${countedHave.length} of ${counted.length} uploaded`}
         </Chip>
       </div>
 

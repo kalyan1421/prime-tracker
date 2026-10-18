@@ -32,6 +32,14 @@
      text-sm      14px emphasis
      text-lg+     headings
      8px, 9px and 10px are gone. Do not reintroduce them.
+
+   SECTIONS — from the Unit Detail design audit (2026-10-18). Enforced on the
+     screens listed in design-system.test.ts; others adopt it as they are redesigned.
+     Section icons are grey (gray-500). Colour is for status, never decoration.
+     An empty section collapses to its one-line header with its add action. No
+       illustrated "nothing here" inside a card, and never two ways of saying it.
+     "Add" actions are <AddButton> (components/ui): small, grey, + icon. A text
+       link is only for a link inside a sentence.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @theme {

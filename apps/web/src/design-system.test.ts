@@ -180,3 +180,66 @@ describe('design system: three type tiers', () => {
     )).toEqual([]);
   });
 });
+
+/**
+ * Sections, from the Unit Detail design audit (2026-10-18).
+ *
+ * Seven icon colours that meant nothing, three empty-state styles and six looks for "add"
+ * had accumulated on one page, each reasonable on its own. Scoped to the screens that have
+ * been through the audit; a screen joins this list when it is redesigned, not before —
+ * failing the whole app on day one would only teach people to delete the test.
+ */
+describe('design system: sections (audited screens)', () => {
+  const AUDITED = [
+    'pages/UnitDetailPage.tsx',
+    'components/SoldUnitPanel.tsx',
+    'components/InteriorPanel.tsx',
+    'components/SaleGateDocuments.tsx',
+    'components/SalePaymentPanel.tsx',
+    'components/UnitConstructionChecklist.tsx',
+  ];
+  const files = AUDITED.map((name) => ({ name, code: readFileSync(join(SRC, name), 'utf8') }));
+
+  it('keeps section icons grey — colour is for status', () => {
+    const hits: string[] = [];
+    for (const { name, code } of files) {
+      const lines = code.split('\n');
+      lines.forEach((line, i) => {
+        // An icon handed to <Section icon={…}>, or the icon on the line(s) just above a
+        // section heading.
+        const sectionIcon = /icon=\{<Fi[A-Za-z0-9]+[^>]*\btext-(?!gray-)[a-z]+-\d{3}/.test(line);
+        const headingIcon = /<Fi[A-Za-z0-9]+[^>]*\btext-(?!gray-)[a-z]+-\d{3}/.test(line)
+          && lines.slice(i + 1, i + 4).some((l) => l.includes('<h2'));
+        if (sectionIcon || headingIcon) hits.push(`${name}:${i + 1}  ${line.trim().slice(0, 90)}`);
+      });
+    }
+    expect(hits, report(hits,
+      'Section icons are gray-500. Seven decorative colours competed with the ones that ' +
+      'carry meaning — status chips, overdue dates, money in and out. Pass a bare <Fi… /> ' +
+      'to <Section icon>; it colours the slot.',
+    )).toEqual([]);
+  });
+
+  it('labels add actions with an icon, not a "+ " typed into the text', () => {
+    const hits: string[] = [];
+    for (const { name, code } of files) {
+      code.split('\n').forEach((line, i) => {
+        // JSX text, either after a tag on the same line or alone on its own line.
+        if (/(?:>|^)\s*\+ (?:Add|Record|New|Upload|Start|Create)\b/.test(line)) hits.push(`${name}:${i + 1}  ${line.trim().slice(0, 90)}`);
+      });
+    }
+    expect(hits, report(hits,
+      'Use <AddButton> from components/ui: small, grey, with the + as an icon. A "+ Add …" ' +
+      'label is how one page ended up with six different-looking add actions.',
+    )).toEqual([]);
+  });
+
+  it('has no illustrated empty state on Unit Detail', () => {
+    const code = files[0].code;
+    expect(
+      /function EmptyRow\b|<EmptyRow\b/.test(code),
+      'An empty section collapses to its header: <Section empty="None yet" action={…}>. ' +
+      'A centred icon-and-sentence inside a card spends a screenful saying nothing is there.',
+    ).toBe(false);
+  });
+});
