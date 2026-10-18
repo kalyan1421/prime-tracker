@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import type { AxiosError } from 'axios';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
@@ -49,7 +49,13 @@ export async function flushSiteOutbox(userId: string): Promise<number> {
     const mine = store.items.filter((i) => i.userId === userId && !i.error).sort((a, b) => a.createdAt - b.createdAt);
     for (const item of mine) {
       try {
-        await api.post('/daily-logs', { ...item.payload, clientRef: item.clientRef });
+        // logDate is stamped when an update is kept (postOrQueue); the fallback covers anything
+        // kept before that stamp existed.
+        await api.post('/daily-logs', {
+          ...item.payload,
+          logDate: item.payload.logDate ?? new Date(item.createdAt).toISOString(),
+          clientRef: item.clientRef,
+        });
         useSiteOutboxStore.getState().remove(item.clientRef);
         sent += 1;
       } catch (err) {
@@ -66,6 +72,29 @@ export async function flushSiteOutbox(userId: string): Promise<number> {
   return sent;
 }
 
+/**
+ * One clientRef per post the user is trying to make, kept across retries of the SAME content.
+ *
+ * A post whose answer was lost may have landed. Retrying it with a fresh ref would make the
+ * server create it again — with photos, the composer keeps everything for a retry (they are
+ * never queued), so that is exactly the retry it invites. Reusing the ref gets the first post
+ * back instead, and the photos attach to it.
+ *
+ * Keyed on the content, not just "the last failure": once the text, photos, stage or date
+ * change it is a different post, and reusing the old ref would hand back the OLD post and
+ * silently drop the new one. Call `done()` once a post is accepted or kept.
+ */
+export function useAttemptRef() {
+  const current = useRef<{ key: string; ref: string } | null>(null);
+  return useMemo(() => ({
+    refFor(key: string) {
+      if (current.current?.key !== key) current.current = { key, ref: newClientRef() };
+      return current.current.ref;
+    },
+    done() { current.current = null; },
+  }), []);
+}
+
 export function useSiteOutbox() {
   // Tolerates a mocked store that ignores the selector (component tests).
   const u = useAuthStore((st) => st.user?.id ?? '');
@@ -80,15 +109,25 @@ export function useSiteOutbox() {
    */
   const postOrQueue = useCallback(async (
     payload: Record<string, any>,
-    opts: { send: (body: Record<string, any>) => Promise<any>; hasPhotos?: boolean },
+    opts: {
+      send: (body: Record<string, any>) => Promise<any>;
+      hasPhotos?: boolean;
+      /** The composer's ref for this content (useAttemptRef), so a retry cannot duplicate. */
+      clientRef?: string;
+    },
   ) => {
-    const clientRef = newClientRef();
+    const clientRef = opts.clientRef ?? newClientRef();
+    const writtenAt = Date.now();
     try {
       const log = await opts.send({ ...payload, clientRef });
       return { status: 'posted' as const, log };
     } catch (err) {
       if (!isRetryable(err) || opts.hasPhotos || !userId) throw err;
-      useSiteOutboxStore.getState().add({ clientRef, userId, payload, createdAt: Date.now(), attempts: 1, error: null });
+      // The server dates a post with no logDate at the moment it ARRIVES (DailyLogsService.create).
+      // For a post that waited for signal that is when the signal came back, not when the work
+      // was recorded — so it is dated now, as it would have been had it gone straight through.
+      const kept = { ...payload, logDate: payload.logDate ?? new Date(writtenAt).toISOString() };
+      useSiteOutboxStore.getState().add({ clientRef, userId, payload: kept, createdAt: writtenAt, attempts: 1, error: null });
       return { status: 'queued' as const, log: null };
     }
   }, [userId]);

@@ -9,7 +9,7 @@ import {
   usePresignedUpload, useBuildings, useUnitConstructionStages, useAssignableUsers,
 } from '../hooks/useApi';
 import { MentionBox, MentionText } from './MentionText';
-import { useSiteOutbox } from '../hooks/useSiteOutbox';
+import { useAttemptRef, useSiteOutbox } from '../hooks/useSiteOutbox';
 import { SiteOutboxNotice } from './SiteOutbox';
 import type { MentionUser } from './MentionTextarea';
 import { fmtDate, errMsg } from '../utils/fmt';
@@ -72,6 +72,7 @@ export function DailyLogFeed({
   const presigned = usePresignedUpload();
   const mentionUsers = useMentionUsers();
   const outbox = useSiteOutbox();
+  const attempt = useAttemptRef();
   const logs: any[] = Array.isArray(data) ? data : [];
   const buildings: any[] = Array.isArray(buildingsData) ? buildingsData : [];
 
@@ -108,6 +109,9 @@ export function DailyLogFeed({
     setLogFeedErr(null);
     try {
       setUploading(true);
+      // The same text, photos, stage and date retried after a lost answer reuse one ref, so a
+      // first attempt that did land is returned rather than posted twice.
+      const attemptKey = JSON.stringify([form, pendingFiles.map(({ file }) => [file.name, file.size, file.lastModified])]);
       // No signal: a text-only update is kept on this device and sent later (SiteOutbox).
       const result = await outbox.postOrQueue({
         projectId,
@@ -120,7 +124,8 @@ export function DailyLogFeed({
         weather: form.weather || undefined,
         crewCount: form.crewCount ? Number(form.crewCount) : undefined,
         stageId: form.stageId || undefined,
-      }, { send: create.mutateAsync, hasPhotos: pendingFiles.length > 0 });
+      }, { send: create.mutateAsync, hasPhotos: pendingFiles.length > 0, clientRef: attempt.refFor(attemptKey) });
+      attempt.done();
       if (result.status === 'queued') {
         setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
         addToast({ title: 'No signal — saved on this device. It will post on its own when there is.', color: 'warning' });
@@ -338,6 +343,7 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
   const mentionUsers = useMentionUsers();
   const mentionNames = mentionUsers.map((u) => u.name ?? '').filter(Boolean);
   const outbox = useSiteOutbox();
+  const replyAttempt = useAttemptRef();
   const addPhoto = useAddDailyLogPhoto();
   const removePhoto = useRemoveDailyLogPhoto();
   const presigned = usePresignedUpload();
@@ -520,8 +526,9 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
                       try {
                         const r = await outbox.postOrQueue(
                           { projectId, parentId: log.id, notes: replyText.trim() },
-                          { send: create.mutateAsync },
+                          { send: create.mutateAsync, clientRef: replyAttempt.refFor(replyText.trim()) },
                         );
+                        replyAttempt.done();
                         setReplyText(''); setReplying(false);
                         if (r.status === 'queued') addToast({ title: 'No signal — reply saved on this device. It will post on its own.', color: 'warning' });
                       } catch (e) {

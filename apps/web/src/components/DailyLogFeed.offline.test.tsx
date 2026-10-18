@@ -9,12 +9,14 @@ import { DailyLogFeed } from './DailyLogFeed';
 import { useSiteOutboxStore } from '../store/siteOutboxStore';
 
 const offline = () => Object.assign(new Error('Network Error'), { isAxiosError: true, code: 'ERR_NETWORK' });
+const serverError = () => Object.assign(new Error('Server error'), { isAxiosError: true, response: { status: 500, data: { message: 'Server error' } } });
 const sent: any[] = [];
+const fail: { with: () => Error } = { with: offline };
 
 vi.mock('../hooks/useApi', () => ({
   useDailyLogs: () => ({ data: [], isLoading: false }),
   useCreateDailyLog: () => ({
-    mutateAsync: (p: any) => { sent.push(p); return Promise.reject(offline()); },
+    mutateAsync: (p: any) => { sent.push(p); return Promise.reject(fail.with()); },
     isPending: false,
   }),
   useDeleteDailyLog: () => ({ mutate: vi.fn(), isPending: false }),
@@ -42,6 +44,7 @@ const renderFeed = () => render(
 
 beforeEach(() => {
   sent.length = 0;
+  fail.with = offline;
   useSiteOutboxStore.setState({ items: [] });
 });
 
@@ -59,5 +62,27 @@ describe('DailyLogFeed with no signal', () => {
     expect(box.value).toBe('');
     expect(await screen.findByText('1 update saved on this device, not sent yet')).toBeTruthy();
     expect(screen.getByText('Drywall hung on the north wall')).toBeTruthy();
+  });
+});
+
+describe('DailyLogFeed retrying a post that failed', () => {
+  it('retries the same post under the same ref, and a changed post under a new one', async () => {
+    // A 500 can arrive after the write committed, and the composer keeps the text for a retry.
+    // The same ref lets the server hand back the post that landed instead of making a second.
+    fail.with = serverError;
+    renderFeed();
+    const box = screen.getByLabelText('What happened on this unit?') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'Countertops templated' } });
+    fireEvent.click(screen.getByRole('button', { name: /post/i }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: /post/i }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1].clientRef).toBe(sent[0].clientRef);
+
+    fireEvent.change(box, { target: { value: 'Countertops templated, install Friday' } });
+    fireEvent.click(screen.getByRole('button', { name: /post/i }));
+    await waitFor(() => expect(sent).toHaveLength(3));
+    expect(sent[2].clientRef).not.toBe(sent[0].clientRef);
+    expect(useSiteOutboxStore.getState().items).toHaveLength(0); // a refusal is never kept
   });
 });

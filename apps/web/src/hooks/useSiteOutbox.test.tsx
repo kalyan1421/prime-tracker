@@ -32,7 +32,7 @@ vi.mock('../store/authStore', () => ({
   useAuthStore: (sel: any) => sel({ user: { id: auth.userId } }),
 }));
 
-import { flushSiteOutbox, isRetryable, useSiteOutbox } from './useSiteOutbox';
+import { flushSiteOutbox, isRetryable, useAttemptRef, useSiteOutbox } from './useSiteOutbox';
 import { useSiteOutboxStore } from '../store/siteOutboxStore';
 
 const offline = () => Object.assign(new Error('Network Error'), { isAxiosError: true, code: 'ERR_NETWORK' });
@@ -75,6 +75,30 @@ describe('postOrQueue', () => {
     expect(item).toMatchObject({ userId: 'victor', payload: { notes: 'Framing done' }, error: null });
     // The kept copy carries the SAME ref the failed attempt used — that attempt may have landed.
     expect(item.clientRef).toBe(send.mock.calls[0][0].clientRef);
+  });
+
+  it('dates a kept update when it was written, not when signal comes back', async () => {
+    // The server dates a post with no logDate on ARRIVAL; a stage update or reply sent
+    // after midnight would otherwise land on the wrong day.
+    const send = vi.fn().mockRejectedValue(offline());
+    const before = Date.now();
+    await hook().current.postOrQueue({ projectId: 'p1', unitId: 'u1', stageId: 's1', notes: 'Rebar tied' }, { send });
+    const [item] = useSiteOutboxStore.getState().items;
+    const stamped = new Date(item.payload.logDate).getTime();
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBe(item.createdAt);
+  });
+
+  it('keeps a logDate the writer chose', async () => {
+    const send = vi.fn().mockRejectedValue(offline());
+    await hook().current.postOrQueue({ notes: 'x', logDate: '2026-10-01T00:00:00.000Z' }, { send });
+    expect(useSiteOutboxStore.getState().items[0].payload.logDate).toBe('2026-10-01T00:00:00.000Z');
+  });
+
+  it("sends the composer's own ref when it has one", async () => {
+    const send = vi.fn().mockResolvedValue({ id: 'l1' });
+    await hook().current.postOrQueue({ notes: 'x' }, { send, clientRef: 'draft-1' });
+    expect(send.mock.calls[0][0].clientRef).toBe('draft-1');
   });
 
   it('fails as before when the server refuses — nothing is kept', async () => {
@@ -121,10 +145,33 @@ describe('flushSiteOutbox', () => {
     expect(posts).toHaveLength(0); // the refused one is not retried
   });
 
+  it('dates an update kept before the stamp existed by when it was kept', async () => {
+    useSiteOutboxStore.getState().add({ clientRef: 'old', userId: 'victor', payload: { projectId: 'p1', notes: 'old' }, createdAt: Date.UTC(2026, 9, 17, 23, 50), attempts: 1, error: null });
+    await act(async () => { await flushSiteOutbox('victor'); });
+    expect(posts[0].body.logDate).toBe('2026-10-17T23:50:00.000Z');
+  });
+
   it('only ever sends the signed-in user\'s updates from a shared device', async () => {
     keep('mine', 1, 'victor'); keep('theirs', 2, 'ana');
     await act(async () => { await flushSiteOutbox('victor'); });
     expect(posts.map((p) => p.body.clientRef)).toEqual(['mine']);
     expect(useSiteOutboxStore.getState().items.map((i) => i.clientRef)).toEqual(['theirs']);
+  });
+});
+
+describe('useAttemptRef', () => {
+  it('reuses one ref while the content is unchanged, and starts a new one when it changes', () => {
+    const { result } = renderHook(() => useAttemptRef());
+    const a = result.current.refFor('Framing done');
+    expect(result.current.refFor('Framing done')).toBe(a); // a retry of the same post
+    const b = result.current.refFor('Framing done, inspector booked');
+    expect(b).not.toBe(a); // a different post must never get the old one back
+  });
+
+  it('starts fresh once the post was accepted or kept', () => {
+    const { result } = renderHook(() => useAttemptRef());
+    const a = result.current.refFor('Framing done');
+    result.current.done();
+    expect(result.current.refFor('Framing done')).not.toBe(a);
   });
 });

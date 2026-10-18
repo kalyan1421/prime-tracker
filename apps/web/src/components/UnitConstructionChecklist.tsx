@@ -33,7 +33,7 @@ import { StatusCell, InlineText, InlineDate, TimelinePill, Cell } from './BoardC
 import { useAuthStore } from '../store/authStore';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { MentionBox, MentionText } from './MentionText';
-import { useSiteOutbox } from '../hooks/useSiteOutbox';
+import { useAttemptRef, useSiteOutbox } from '../hooks/useSiteOutbox';
 
 /**
  * The delete rule (client, 2026-10-16): you may remove what you added; anybody else's needs
@@ -601,10 +601,16 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
   const [note, setNote] = useState(stage.notes ?? '');
   const [text, setText] = useState('');
   const outbox = useSiteOutbox();
+  // A retry of the same text after a lost answer reuses one ref, so it cannot post twice.
+  const attempt = useAttemptRef();
   const postStageUpdate = async () => {
     if (!text.trim() || create.isPending) return;
     try {
-      const r = await outbox.postOrQueue({ projectId, unitId, stageId: stage.id, notes: text.trim() }, { send: create.mutateAsync });
+      const r = await outbox.postOrQueue(
+        { projectId, unitId, stageId: stage.id, notes: text.trim() },
+        { send: create.mutateAsync, clientRef: attempt.refFor(text.trim()) },
+      );
+      attempt.done();
       setText('');
       if (r.status === 'queued') addToast({ title: 'No signal — saved on this device. It will post on its own.', color: 'warning' });
     } catch (e) {
