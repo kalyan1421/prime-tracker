@@ -1,5 +1,6 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from './ErrorBoundary';
+import { LoadingState } from './ui';
 import {
   Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem,
   Chip, Tooltip, Button, Badge, Popover, PopoverTrigger, PopoverContent,
@@ -11,7 +12,7 @@ import {
   FiRss, FiTool, FiDollarSign, FiMessageSquare, FiFileText, FiColumns, FiCalendar,
 } from 'react-icons/fi';
 import type { IconType } from 'react-icons';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/authStore';
 import { useDisclosure } from '@heroui/react';
@@ -536,7 +537,11 @@ export default function Layout() {
               content area only — the sidebar/topbar stay intact. Keyed by pathname so
               navigating to another route remounts it and clears the caught error. */}
           <ErrorBoundary key={location.pathname} section="page">
-            <Outlet />
+            {/* Pages load on demand (utils/lazyPage); the sidebar and top bar stay put
+                while a page's code arrives. */}
+            <Suspense fallback={<LoadingState />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
