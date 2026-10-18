@@ -171,3 +171,59 @@ describe('DailyLogsService — @mentions (ST-10)', () => {
     expect(notifications.notifySiteUpdateMention).not.toHaveBeenCalled();
   });
 });
+
+describe('DailyLogsService — clientRef (an update re-sent after a dropped signal)', () => {
+  const prisma: any = {
+    dailyLog: { findUnique: jest.fn(), create: jest.fn() },
+    unit: { findUnique: jest.fn() },
+    unitConstructionStage: { findUnique: jest.fn() },
+    user: { findUnique: jest.fn(), findMany: jest.fn() },
+  };
+  const notifications: any = {
+    notifySiteUpdatePosted: jest.fn().mockResolvedValue(undefined),
+    notifySiteUpdateMention: jest.fn().mockResolvedValue(undefined),
+  };
+  const svc = () => new DailyLogsService(prisma, { signedUrl: jest.fn() } as any, notifications);
+  const body = { projectId: 'p1', unitId: 'u1', notes: 'Framing done', authorId: 'victor', clientRef: 'ph-123' } as any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma.user.findUnique.mockResolvedValue({ name: 'Victor R' });
+    prisma.unit.findUnique.mockResolvedValue({
+      id: 'u1', unitNumber: '103', trackedWithId: null, deletedAt: null, buildingId: 'b1',
+      trackedUnits: [], building: { projectId: 'p1', project: { id: 'p1', name: 'Centro Plaza' } },
+    });
+  });
+
+  it('returns the post that already landed, writes nothing and notifies nobody', async () => {
+    prisma.dailyLog.findUnique.mockResolvedValue({ id: 'l1', unitId: 'u1', authorId: 'victor', notes: 'Framing done' });
+    const out = await svc().create(body);
+    await flush();
+    expect(out).toMatchObject({ id: 'l1' });
+    expect(prisma.dailyLog.findUnique).toHaveBeenCalledWith({ where: { authorId_clientRef: { authorId: 'victor', clientRef: 'ph-123' } } });
+    expect(prisma.dailyLog.create).not.toHaveBeenCalled();
+    expect(notifications.notifySiteUpdatePosted).not.toHaveBeenCalled();
+  });
+
+  it('stores the ref on a first send', async () => {
+    prisma.dailyLog.findUnique.mockResolvedValue(null);
+    prisma.dailyLog.create.mockResolvedValue({ id: 'l2', unitId: 'u1', authorId: 'victor', notes: 'Framing done' });
+    await svc().create(body);
+    expect(prisma.dailyLog.create.mock.calls[0][0].data.clientRef).toBe('ph-123');
+  });
+
+  it('two copies racing: the loser gets the winner\'s post back, not an error', async () => {
+    prisma.dailyLog.findUnique
+      .mockResolvedValueOnce(null) // the pre-check, before the other copy landed
+      .mockResolvedValueOnce({ id: 'l3', unitId: 'u1', authorId: 'victor', notes: 'Framing done' });
+    prisma.dailyLog.create.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+    await expect(svc().create(body)).resolves.toMatchObject({ id: 'l3' });
+  });
+
+  it('a post with no ref behaves exactly as before', async () => {
+    prisma.dailyLog.create.mockResolvedValue({ id: 'l4', unitId: 'u1', authorId: 'victor', notes: 'x' });
+    await svc().create({ ...body, clientRef: undefined });
+    expect(prisma.dailyLog.findUnique).not.toHaveBeenCalled();
+    expect(prisma.dailyLog.create.mock.calls[0][0].data.clientRef).toBeNull();
+  });
+});

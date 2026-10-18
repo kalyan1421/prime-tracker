@@ -3608,11 +3608,17 @@ model DailyLog {
   notes     String // work done / summary
   weather   String?
   crewCount Int?
+  /// The phone's own id for this post (2026-10-17). An update written with no signal is
+  /// kept on the phone and re-sent later; if the first attempt actually reached the server
+  /// before the signal dropped, the retry carries the same ref and gets the existing post
+  /// back instead of a duplicate. Unique per author; null for posts that never needed it.
+  clientRef String?
   createdAt DateTime               @default(now())
   updatedAt DateTime               @updatedAt
 
   photos DailyLogPhoto[]
 
+  @@unique([authorId, clientRef])
   @@index([projectId, logDate])
   @@index([buildingId])
   @@index([unitId, logDate])

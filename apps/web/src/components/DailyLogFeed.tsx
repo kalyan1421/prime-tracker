@@ -9,6 +9,8 @@ import {
   usePresignedUpload, useBuildings, useUnitConstructionStages, useAssignableUsers,
 } from '../hooks/useApi';
 import { MentionBox, MentionText } from './MentionText';
+import { useSiteOutbox } from '../hooks/useSiteOutbox';
+import { SiteOutboxNotice } from './SiteOutbox';
 import type { MentionUser } from './MentionTextarea';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
@@ -67,6 +69,7 @@ export function DailyLogFeed({
   const addPhoto = useAddDailyLogPhoto();
   const presigned = usePresignedUpload();
   const mentionUsers = useMentionUsers();
+  const outbox = useSiteOutbox();
   const logs: any[] = Array.isArray(data) ? data : [];
   const buildings: any[] = Array.isArray(buildingsData) ? buildingsData : [];
 
@@ -103,7 +106,8 @@ export function DailyLogFeed({
     setLogFeedErr(null);
     try {
       setUploading(true);
-      const log = await create.mutateAsync({
+      // No signal: a text-only update is kept on this device and sent later (SiteOutbox).
+      const result = await outbox.postOrQueue({
         projectId,
         unitId: unitId || undefined,
         // At unit scope the server derives this from the unit; sending the form value
@@ -114,7 +118,13 @@ export function DailyLogFeed({
         weather: form.weather || undefined,
         crewCount: form.crewCount ? Number(form.crewCount) : undefined,
         stageId: form.stageId || undefined,
-      });
+      }, { send: create.mutateAsync, hasPhotos: pendingFiles.length > 0 });
+      if (result.status === 'queued') {
+        setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
+        addToast({ title: 'No signal — saved on this device. It will post on its own when there is.', color: 'warning' });
+        return;
+      }
+      const log = result.log;
       for (const { file } of pendingFiles) {
         try {
           const { storagePath } = await presigned.mutateAsync({ file, category: 'daily-logs' });
@@ -128,8 +138,14 @@ export function DailyLogFeed({
       setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
       addToast({ title: 'Log posted', color: 'success' });
     } catch (e) {
-      setLogFeedErr(errMsg(e, 'Failed to post log'));
-      addToast({ title: errMsg(e, 'Failed to post log'), color: 'danger' });
+      // With photos attached nothing is queued: they need a connection to upload, so the
+      // text and the photos stay in the composer for another try.
+      const offlineWithPhotos = pendingFiles.length > 0 && !(e as any)?.response;
+      const msg = offlineWithPhotos
+        ? 'No signal. Photos need a connection — your update and photos are still here, try again when you have signal.'
+        : errMsg(e, 'Failed to post log');
+      setLogFeedErr(msg);
+      addToast({ title: msg, color: 'danger' });
     } finally {
       setUploading(false);
     }
@@ -141,6 +157,7 @@ export function DailyLogFeed({
     <>
         <PermissionGate permission="dailylog:edit">
           <div className="rounded-lg border border-gray-100 p-3 space-y-2 bg-gray-50/50">
+            <SiteOutboxNotice projectId={projectId} unitId={unitId} />
             <FormError message={logFeedErr} />
             <MentionBox
               label={unitId ? 'What happened on this unit?' : 'What happened on site today?'}
@@ -316,6 +333,7 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
   const [replyText, setReplyText] = useState('');
   const mentionUsers = useMentionUsers();
   const mentionNames = mentionUsers.map((u) => u.name ?? '').filter(Boolean);
+  const outbox = useSiteOutbox();
   const addPhoto = useAddDailyLogPhoto();
   const removePhoto = useRemoveDailyLogPhoto();
   const presigned = usePresignedUpload();
@@ -496,8 +514,12 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
                     size="sm" color="primary" isDisabled={!replyText.trim()} isLoading={create.isPending}
                     onPress={async () => {
                       try {
-                        await create.mutateAsync({ projectId, parentId: log.id, notes: replyText.trim() });
+                        const r = await outbox.postOrQueue(
+                          { projectId, parentId: log.id, notes: replyText.trim() },
+                          { send: create.mutateAsync },
+                        );
                         setReplyText(''); setReplying(false);
+                        if (r.status === 'queued') addToast({ title: 'No signal — reply saved on this device. It will post on its own.', color: 'warning' });
                       } catch (e) {
                         addToast({ title: errMsg(e, 'Could not post the reply'), color: 'danger' });
                       }

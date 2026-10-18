@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsDateString, IsInt, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsDateString, IsInt, Min, MaxLength, Matches } from 'class-validator';
 import { EmptyStringToUndefined } from '../../documents/dto/upload-document.dto';
 
 export class CreateDailyLogDto {
@@ -36,6 +36,13 @@ export class CreateDailyLogDto {
 
   @IsOptional() @IsInt() @Min(0)
   crewCount?: number;
+
+  /**
+   * The phone's id for this post, so a retry after a dropped signal returns the post that
+   * already landed instead of creating a second one. See DailyLog.clientRef.
+   */
+  @IsOptional() @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9_-]+$/)
+  clientRef?: string;
 }
 
 export class UpdateDailyLogDto {

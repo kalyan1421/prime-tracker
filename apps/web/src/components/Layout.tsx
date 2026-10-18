@@ -1,6 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from './ErrorBoundary';
 import { LoadingState } from './ui';
+import { SiteOutboxIndicator, SiteOutboxSync } from './SiteOutbox';
 import {
   Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem,
   Chip, Tooltip, Button, Badge, Popover, PopoverTrigger, PopoverContent,
@@ -405,6 +406,8 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2">
+        {/* Site updates written with no signal, still on this device. */}
+        <SiteOutboxIndicator />
         <Popover placement="bottom-end" offset={8}>
           <PopoverTrigger>
             <Button
@@ -546,6 +549,7 @@ export default function Layout() {
         </main>
       </div>
       <MfaStepUpModal />
+      <SiteOutboxSync />
     </div>
   );
 }

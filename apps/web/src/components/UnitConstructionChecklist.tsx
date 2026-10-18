@@ -32,6 +32,7 @@ import { PeoplePicker, personLabel } from './PeoplePicker';
 import { StatusCell, InlineText, InlineDate, TimelinePill, Cell } from './BoardCells';
 import { useAuthStore } from '../store/authStore';
 import { MentionBox, MentionText } from './MentionText';
+import { useSiteOutbox } from '../hooks/useSiteOutbox';
 
 /**
  * The delete rule (client, 2026-10-16): you may remove what you added; anybody else's needs
@@ -549,11 +550,13 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
 
   const [note, setNote] = useState(stage.notes ?? '');
   const [text, setText] = useState('');
+  const outbox = useSiteOutbox();
   const postStageUpdate = async () => {
     if (!text.trim() || create.isPending) return;
     try {
-      await create.mutateAsync({ projectId, unitId, stageId: stage.id, notes: text.trim() });
+      const r = await outbox.postOrQueue({ projectId, unitId, stageId: stage.id, notes: text.trim() }, { send: create.mutateAsync });
       setText('');
+      if (r.status === 'queued') addToast({ title: 'No signal — saved on this device. It will post on its own.', color: 'warning' });
     } catch (e) {
       addToast({ title: errMsg(e, 'Could not post the update'), color: 'danger' });
     }

@@ -111,6 +111,15 @@ export class DailyLogsService {
   async create(input: CreateDailyLogDto & { authorId: string }, source: DailyLogSource = 'WEB') {
     if (!input.projectId) throw new BadRequestException('projectId is required');
     if (!input.notes?.trim()) throw new BadRequestException('notes are required');
+    // A re-send of a post that already landed (written with no signal, retried later):
+    // hand back the original, and do not notify anyone twice.
+    const clientRef = input.clientRef?.trim() || null;
+    if (clientRef) {
+      const existing = await this.prisma.dailyLog.findUnique({
+        where: { authorId_clientRef: { authorId: input.authorId, clientRef } },
+      });
+      if (existing) return existing;
+    }
     // Parent FIRST. A reply inherits its parent's placement wholesale, so validating a
     // unitId the caller sent would reject a perfectly good reply for naming the wrong unit —
     // a value that is about to be discarded anyway.
@@ -120,21 +129,34 @@ export class DailyLogsService {
       : await this.resolveUnit(input.unitId ?? null, input.projectId, input.buildingId ?? null);
     await this.assertStageBelongsToUnit(input.stageId ?? null, thread?.unitId ?? input.unitId ?? null);
 
-    const log = await this.prisma.dailyLog.create({
-      data: {
-        projectId: thread?.projectId ?? input.projectId,
-        buildingId,
-        unitId: thread ? thread.unitId : (input.unitId ?? null),
-        parentId: thread?.id ?? null,
-        stageId: input.stageId ?? null,
-        logDate: input.logDate ? new Date(input.logDate) : new Date(),
-        notes: input.notes.trim(),
-        weather: input.weather,
-        crewCount: input.crewCount,
-        authorId: input.authorId,
-        source,
-      },
-    });
+    let log;
+    try {
+      log = await this.prisma.dailyLog.create({
+        data: {
+          projectId: thread?.projectId ?? input.projectId,
+          buildingId,
+          unitId: thread ? thread.unitId : (input.unitId ?? null),
+          parentId: thread?.id ?? null,
+          stageId: input.stageId ?? null,
+          logDate: input.logDate ? new Date(input.logDate) : new Date(),
+          notes: input.notes.trim(),
+          weather: input.weather,
+          crewCount: input.crewCount,
+          authorId: input.authorId,
+          clientRef,
+          source,
+        },
+      });
+    } catch (e: any) {
+      // Two copies of the same re-send racing each other: the loser returns the winner's post.
+      if (clientRef && e?.code === 'P2002') {
+        const won = await this.prisma.dailyLog.findUnique({
+          where: { authorId_clientRef: { authorId: input.authorId, clientRef } },
+        });
+        if (won) return won;
+      }
+      throw e;
+    }
     // After the write, and never awaited into the response: a mail server being slow must
     // not make posting from site feel slow, and a failed notification must not fail a post
     // that has already been saved.
