@@ -2,6 +2,8 @@
 @plugin './lib/hero.ts';
 @source '../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}';
 @custom-variant dark (&:is(.dark *));
+/* Devices with a pointer that can hover. See HOVER in the design-system header below. */
+@custom-variant can-hover (@media (hover: hover));
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PRIME TRACKER DESIGN SYSTEM
@@ -40,6 +42,12 @@
        illustrated "nothing here" inside a card, and never two ways of saying it.
      "Add" actions are <AddButton> (components/ui): small, grey, + icon. A text
        link is only for a link inside a sentence.
+
+   HOVER — Tailwind's hover: already applies only on devices that can hover, so
+     nothing stays highlighted after a tap. The trap is the reverse:
+     `opacity-0 group-hover:opacity-100` hides a control FOREVER on a phone, where no
+     hover ever comes. Hide only where hover exists, and show it to the keyboard too:
+       can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @theme {

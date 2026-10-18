@@ -734,8 +734,9 @@ function UpdatesDialog({
                       {canEdit && (
                         <button
                           // Revealed on hover for pointers, always reachable by keyboard,
-                          // and never hidden on touch — where there is no hover at all.
-                          className="ml-auto p-1 text-gray-300 opacity-100 transition-opacity hover:text-red-700 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                          // and never hidden on touch — where there is no hover at all. Keyed
+                          // to the device's hover, not its width: an iPad is md and has none.
+                          className="ml-auto p-1 text-gray-500 transition-opacity hover:text-red-700 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
                           onClick={() => {
                             // task:edit (which shows this button to everyone here) is wider
                             // than the backend's actual rule — only the update's own author

@@ -2853,11 +2853,11 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
             }
 
             return (
-              <div key={d.id} className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-b-0 group">
+              <div key={d.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 border-b border-gray-50 last:border-b-0 group">
                 <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
                   <FiFileText className="text-violet-500 w-3.5 h-3.5" />
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="min-w-0 flex-1 basis-40">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium text-gray-800 truncate">{d.fileName || d.name}</p>
                     <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium ${color.bg} ${color.text}`}>
@@ -2882,7 +2882,9 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                     {sizeKb && <> · {sizeKb < 1024 ? `${sizeKb} KB` : `${(sizeKb / 1024).toFixed(1)} MB`}</>}
                   </p>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
+                {/* On a phone the actions wrap onto their own line instead of squeezing the name to
+                    "Scre…" — they are always visible there (no hover), so they take real room. */}
+                <div className="ml-auto flex items-center gap-1 shrink-0">
                   {d.fileUrl && (() => {
                     const kind = docPreviewKind(d.fileUrl);
                     return kind !== 'other' ? (
@@ -2912,7 +2914,8 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                     <>
                       <button
                         onClick={() => openEdit(d)}
-                        className="p-1.5 text-gray-300 hover:text-blue-600 transition-colors rounded opacity-0 group-hover:opacity-100"
+                        className="p-1.5 text-gray-500 hover:text-blue-600 transition-colors rounded can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        aria-label={`Edit ${d.fileName || d.name}`}
                         title="Edit"
                       >
                         <FiEdit2 className="w-3.5 h-3.5" />
@@ -2920,7 +2923,8 @@ function UnitDocumentsPanel({ unitId }: { unitId: string }) {
                       {canDelete && (
                       <button
                         onClick={() => handleDelete(d.id, d.fileName || d.name)}
-                        className="p-1.5 text-gray-300 hover:text-red-700 transition-colors rounded opacity-0 group-hover:opacity-100"
+                        className="p-1.5 text-gray-500 hover:text-red-700 transition-colors rounded can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        aria-label={`Delete ${d.fileName || d.name}`}
                         title="Delete"
                       >
                         <FiTrash2 className="w-3.5 h-3.5" />

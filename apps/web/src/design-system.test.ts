@@ -243,3 +243,36 @@ describe('design system: sections (audited screens)', () => {
     ).toBe(false);
   });
 });
+
+/**
+ * Hover on touch screens. Tailwind v4's `hover:` already applies only where a device can
+ * hover, so nothing sticks after a tap. The trap is the reverse: a control hidden with
+ * `opacity-0` and revealed by `group-hover:` is never revealed on a phone — the document
+ * Edit/Delete icons and the photo "remove" buttons were invisible to the field team.
+ */
+describe('design system: hover (audited screens)', () => {
+  const FILES = [
+    'pages/UnitDetailPage.tsx',
+    'components/DailyLogFeed.tsx',
+    'components/UnitConstructionChecklist.tsx',
+    'components/ConstructionBoard.tsx',
+    'components/UnitActivity.tsx',
+  ];
+
+  it('never hides a control behind hover on a device that cannot hover', () => {
+    const hits: string[] = [];
+    for (const name of FILES) {
+      readFileSync(join(SRC, name), 'utf8').split('\n').forEach((line, i) => {
+        // A bare `opacity-0` (not already scoped to hover devices) revealed only by hover.
+        if (/(?<![\w:-])opacity-0\b/.test(line) && /group-hover:opacity-100/.test(line)) {
+          hits.push(`${name}:${i + 1}  ${line.trim().slice(0, 90)}`);
+        }
+      });
+    }
+    expect(hits, report(hits,
+      'opacity-0 + group-hover:opacity-100 hides the control for good on a phone. Use ' +
+      'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 ' +
+      '(the can-hover variant is defined in index.css).',
+    )).toEqual([]);
+  });
+});

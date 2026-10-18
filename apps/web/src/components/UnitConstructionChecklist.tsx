@@ -708,7 +708,7 @@ function StageDetailModal({ stage, unitId, projectId, canEdit, pending, onSaveNo
                     <button
                       type="button" aria-label="Remove photo"
                       onClick={() => removePhoto.mutate({ photoId: p.id, unitId })}
-                      className="absolute right-0 top-0 bg-white/85 p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                      className="absolute right-0 top-0 bg-white/85 p-0.5 can-hover:opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                     >
                       <FiX className="text-[11px] text-red-700" />
                     </button>

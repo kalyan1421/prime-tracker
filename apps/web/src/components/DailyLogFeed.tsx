@@ -52,13 +52,15 @@ const SOURCE_MARKS: Record<string, { icon: JSX.Element; label: string; color: 'd
  * one unit's fit-out, and every unit-level post would otherwise carry the same two values.
  */
 export function DailyLogFeed({
-  projectId, buildingId, unitId, title, showList = true, bare = false,
+  projectId, buildingId, unitId, title, showList = true, bare = false, onPosted,
 }: {
   projectId: string; buildingId?: string; unitId?: string; title?: string;
   /** Composer only. Used when a merged timeline elsewhere is already showing the posts. */
   showList?: boolean;
   /** Drop the Card chrome, for embedding inside another section. */
   bare?: boolean;
+  /** After an update is posted or kept on the device — e.g. to close a collapsible composer. */
+  onPosted?: () => void;
 }) {
   const { data, isLoading } = useDailyLogs(projectId, buildingId, unitId);
   const { data: buildingsData } = useBuildings(projectId);
@@ -122,6 +124,7 @@ export function DailyLogFeed({
       if (result.status === 'queued') {
         setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
         addToast({ title: 'No signal — saved on this device. It will post on its own when there is.', color: 'warning' });
+        onPosted?.();
         return;
       }
       const log = result.log;
@@ -137,6 +140,7 @@ export function DailyLogFeed({
       setPendingFiles([]);
       setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
       addToast({ title: 'Log posted', color: 'success' });
+      onPosted?.();
     } catch (e) {
       // With photos attached nothing is queued: they need a connection to upload, so the
       // text and the photos stay in the composer for another try.
@@ -177,7 +181,7 @@ export function DailyLogFeed({
                     <button
                       type="button"
                       onClick={() => removePending(idx)}
-                      className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                       aria-label="Remove photo"
                     >
                       <FiX className="w-2.5 h-2.5 text-white" />
@@ -470,7 +474,7 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
                 onClick={() => removePhoto.mutate(p.id, {
                   onError: (e) => addToast({ title: errMsg(e, 'Could not remove the photo'), color: 'danger' }),
                 })}
-                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
               >
                 <FiTrash2 className="text-[11px] text-red-600" />
               </button>
