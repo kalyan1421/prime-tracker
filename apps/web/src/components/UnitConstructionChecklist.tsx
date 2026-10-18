@@ -31,6 +31,7 @@ import { LoadingState, EmptyState, chipColor } from './ui';
 import { PeoplePicker, personLabel } from './PeoplePicker';
 import { StatusCell, InlineText, InlineDate, TimelinePill, Cell } from './BoardCells';
 import { useAuthStore } from '../store/authStore';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { MentionBox, MentionText } from './MentionText';
 import { useSiteOutbox } from '../hooks/useSiteOutbox';
 
@@ -121,6 +122,9 @@ export function UnitConstructionChecklist({
 
   const stages: any[] = Array.isArray(stagesQ.data) ? stagesQ.data : [];
   const template: any[] = Array.isArray(templateQ.data) ? templateQ.data : [];
+  // Below tablet width the 10-column grid pushed Owner and Status off-screen — the two
+  // things anyone checks on a phone at site. One layout is MOUNTED, not merely hidden.
+  const isPhone = useMediaQuery('(max-width: 767px)');
 
   if (stagesQ.isLoading) return <LoadingState message="Loading checklist…" />;
 
@@ -223,127 +227,180 @@ export function UnitConstructionChecklist({
         )}
       </div>
 
-      {/* The subitem grid, monday-style (client, 2026-10-16): every value edits where it
-          sits — name, owner, status, inspection, dates, timeline, notes. Status-type cells
-          are colour-filled. Updates and photos still open the stage dialog, from the bubble. */}
-      <div className="overflow-x-auto rounded-md border border-gray-200 border-l-4 border-l-blue-500 bg-white">
-        <table className="w-full min-w-[1120px] border-collapse text-xs">
-          <thead>
-            <tr className="text-[11px] font-medium text-gray-600">
-              <GridTh className="w-16">#</GridTh>
-              <GridTh className="min-w-[220px] text-left">Subitem</GridTh>
-              <GridTh className="w-20">Owner</GridTh>
-              <GridTh className="w-36">Status</GridTh>
-              <GridTh className="w-40">Inspection status</GridTh>
-              <GridTh className="w-32">Inspection date</GridTh>
-              <GridTh className="w-40">Timeline</GridTh>
-              <GridTh className="min-w-[200px] text-left">Notes</GridTh>
-              <GridTh className="w-20">Updates</GridTh>
-              <GridTh className="w-10" />
-            </tr>
-          </thead>
-          <tbody>
-            {stages.map((s, i) => (
-              <tr key={s.id} className="hover:bg-gray-50">
-                <Cell className="tabular-nums text-gray-500">
-                  {canEdit ? (
-                    // Arrows rather than drag-and-drop: this table scrolls sideways and is
-                    // read on a phone at a site, where a drag competes with the scroll.
-                    <div className="flex items-center gap-1">
-                      <span className="w-5 text-right">{i + 1}</span>
-                      <div className="flex flex-col">
-                        <button
-                          type="button" aria-label={`Move ${s.label} up`}
-                          disabled={i === 0 || reorder.isPending}
-                          onClick={() => move(i, -1)}
-                          className="leading-none text-gray-500 hover:text-gray-800 disabled:opacity-30"
-                        >
-                          <FiChevronUp size={11} />
-                        </button>
-                        <button
-                          type="button" aria-label={`Move ${s.label} down`}
-                          disabled={i === stages.length - 1 || reorder.isPending}
-                          onClick={() => move(i, 1)}
-                          className="leading-none text-gray-500 hover:text-gray-800 disabled:opacity-30"
-                        >
-                          <FiChevronDown size={11} />
-                        </button>
-                      </div>
-                    </div>
-                  ) : <span className="block text-center">{i + 1}</span>}
-                </Cell>
-                <Cell>
-                  <InlineText
-                    value={s.label} nullable={false} canEdit={canEdit} label="Subitem name"
-                    textClassName="font-medium"
-                    onSave={(v) => { if (v) patch(s.id, { label: v }); }}
-                  />
-                </Cell>
-                <Cell className="text-center">
+      {isPhone ? (
+        // Phone: one row per stage — name, status and owner where a thumb can reach them.
+        // Everything else (inspection, dates, notes, photos, updates) is one tap away in
+        // the stage dialog, which already edits all of it.
+        <>
+          <ul className="divide-y divide-gray-100 rounded-md border border-gray-200 border-l-4 border-l-blue-500 bg-white">
+            {stages.map((s, i) => {
+              const insp = inspectionOptions.find((o) => o.value === s.inspectionStatus);
+              const updates = s._count?.dailyLogs ?? 0;
+              const meta = [
+                insp?.label,
+                s.inspectionDate ? `inspection ${fmtDateShort(s.inspectionDate)}` : null,
+                s.startsOn || s.endsOn
+                  ? `${s.startsOn ? fmtDateShort(s.startsOn) : '…'} – ${s.endsOn ? fmtDateShort(s.endsOn) : '…'}`
+                  : null,
+                updates ? `${updates} update${updates === 1 ? '' : 's'}` : null,
+              ].filter(Boolean);
+              return (
+                <li key={s.id} className="flex items-center gap-2 px-2 py-2">
+                  <span className="w-5 shrink-0 text-right text-[11px] tabular-nums text-gray-500">{i + 1}</span>
+                  <button
+                    type="button" onClick={() => setDetailStageId(s.id)}
+                    className="min-w-0 flex-1 text-left" aria-label={`Open stage ${s.label}`}
+                  >
+                    <span className="block truncate text-sm font-medium text-gray-900">{s.label}</span>
+                    {meta.length > 0 && <span className="block truncate text-[11px] text-gray-500">{meta.join(' · ')}</span>}
+                  </button>
                   <OwnerAvatar
                     ownerId={s.ownerId} users={users} canEdit={canEdit}
                     onChange={(id) => patch(s.id, { ownerId: id })}
                   />
-                </Cell>
-                <Cell pad={false}>
-                  <StatusCell
-                    value={s.status} options={statusOptions} canEdit={canEdit} label="Status"
-                    onChange={(v) => { if (v) patch(s.id, { status: v }); }}
-                  />
-                </Cell>
-                <Cell pad={false}>
-                  <StatusCell
-                    value={s.inspectionStatus} options={inspectionOptions} canEdit={canEdit} allowClear
-                    label="Inspection status" onChange={(v) => patch(s.id, { inspectionStatus: v })}
-                  />
-                </Cell>
-                <Cell>
-                  <InlineDate
-                    value={s.inspectionDate} canEdit={canEdit} label="Inspection date"
-                    onSave={(v) => patch(s.id, { inspectionDate: v })}
-                  />
-                </Cell>
-                <Cell className="text-center">
-                  <TimelinePill
-                    start={s.startsOn} end={s.endsOn} canEdit={canEdit}
-                    onSave={(v) => patch(s.id, v)}
-                  />
-                </Cell>
-                <Cell>
-                  <InlineText
-                    value={s.notes} canEdit={canEdit} label="Notes" placeholder={canEdit ? 'Add a note' : '—'}
-                    onSave={(v) => patch(s.id, { notes: v })}
-                  />
-                </Cell>
-                <Cell className="text-center">
-                  <UpdatesBubble stage={s} onOpen={() => setDetailStageId(s.id)} />
-                </Cell>
-                <Cell className="text-center">
-                  {canEdit && mayDelete(s.createdById) && (
-                    <Tooltip content="Remove this subitem" size="sm">
-                      <button
-                        type="button"
-                        aria-label={`Remove stage ${s.label}`}
-                        onClick={() => setConfirmDelete(s)}
-                        className="text-gray-300 transition-colors hover:text-red-700"
-                      >
-                        <FiTrash2 size={13} />
-                      </button>
-                    </Tooltip>
-                  )}
-                </Cell>
-              </tr>
-            ))}
+                  <div className="w-28 shrink-0 overflow-hidden rounded">
+                    <StatusCell
+                      value={s.status} options={statusOptions} canEdit={canEdit} label="Status"
+                      onChange={(v) => { if (v) patch(s.id, { status: v }); }}
+                    />
+                  </div>
+                </li>
+              );
+            })}
             {canEdit && (
-              <tr>
-                <td colSpan={10} className="border-b border-gray-200 px-2 py-1">
-                  <AddSubitemRow unitId={unitId} existing={stages.map((st) => st.label)} />
-                </td>
-              </tr>
+              <li className="px-2 py-1">
+                <AddSubitemRow unitId={unitId} existing={stages.map((st) => st.label)} />
+              </li>
             )}
-          </tbody>
-        </table>
-      </div>
+          </ul>
+          <p className="text-[11px] text-gray-500">Tap a stage for its inspection, dates, notes, photos and updates.</p>
+        </>
+      ) : (
+        <>
+        {/* The subitem grid, monday-style (client, 2026-10-16): every value edits where it
+            sits — name, owner, status, inspection, dates, timeline, notes. Status-type cells
+            are colour-filled. Updates and photos still open the stage dialog, from the bubble. */}
+        <div className="overflow-x-auto rounded-md border border-gray-200 border-l-4 border-l-blue-500 bg-white">
+          <table className="w-full min-w-[1120px] border-collapse text-xs">
+            <thead>
+              <tr className="text-[11px] font-medium text-gray-600">
+                <GridTh className="w-16">#</GridTh>
+                <GridTh className="min-w-[220px] text-left">Subitem</GridTh>
+                <GridTh className="w-20">Owner</GridTh>
+                <GridTh className="w-36">Status</GridTh>
+                <GridTh className="w-40">Inspection status</GridTh>
+                <GridTh className="w-32">Inspection date</GridTh>
+                <GridTh className="w-40">Timeline</GridTh>
+                <GridTh className="min-w-[200px] text-left">Notes</GridTh>
+                <GridTh className="w-20">Updates</GridTh>
+                <GridTh className="w-10" />
+              </tr>
+            </thead>
+            <tbody>
+              {stages.map((s, i) => (
+                <tr key={s.id} className="hover:bg-gray-50">
+                  <Cell className="tabular-nums text-gray-500">
+                    {canEdit ? (
+                      // Arrows rather than drag-and-drop: this table scrolls sideways and is
+                      // read on a phone at a site, where a drag competes with the scroll.
+                      <div className="flex items-center gap-1">
+                        <span className="w-5 text-right">{i + 1}</span>
+                        <div className="flex flex-col">
+                          <button
+                            type="button" aria-label={`Move ${s.label} up`}
+                            disabled={i === 0 || reorder.isPending}
+                            onClick={() => move(i, -1)}
+                            className="leading-none text-gray-500 hover:text-gray-800 disabled:opacity-30"
+                          >
+                            <FiChevronUp size={11} />
+                          </button>
+                          <button
+                            type="button" aria-label={`Move ${s.label} down`}
+                            disabled={i === stages.length - 1 || reorder.isPending}
+                            onClick={() => move(i, 1)}
+                            className="leading-none text-gray-500 hover:text-gray-800 disabled:opacity-30"
+                          >
+                            <FiChevronDown size={11} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : <span className="block text-center">{i + 1}</span>}
+                  </Cell>
+                  <Cell>
+                    <InlineText
+                      value={s.label} nullable={false} canEdit={canEdit} label="Subitem name"
+                      textClassName="font-medium"
+                      onSave={(v) => { if (v) patch(s.id, { label: v }); }}
+                    />
+                  </Cell>
+                  <Cell className="text-center">
+                    <OwnerAvatar
+                      ownerId={s.ownerId} users={users} canEdit={canEdit}
+                      onChange={(id) => patch(s.id, { ownerId: id })}
+                    />
+                  </Cell>
+                  <Cell pad={false}>
+                    <StatusCell
+                      value={s.status} options={statusOptions} canEdit={canEdit} label="Status"
+                      onChange={(v) => { if (v) patch(s.id, { status: v }); }}
+                    />
+                  </Cell>
+                  <Cell pad={false}>
+                    <StatusCell
+                      value={s.inspectionStatus} options={inspectionOptions} canEdit={canEdit} allowClear
+                      label="Inspection status" onChange={(v) => patch(s.id, { inspectionStatus: v })}
+                    />
+                  </Cell>
+                  <Cell>
+                    <InlineDate
+                      value={s.inspectionDate} canEdit={canEdit} label="Inspection date"
+                      onSave={(v) => patch(s.id, { inspectionDate: v })}
+                    />
+                  </Cell>
+                  <Cell className="text-center">
+                    <TimelinePill
+                      start={s.startsOn} end={s.endsOn} canEdit={canEdit}
+                      onSave={(v) => patch(s.id, v)}
+                    />
+                  </Cell>
+                  <Cell>
+                    <InlineText
+                      value={s.notes} canEdit={canEdit} label="Notes" placeholder={canEdit ? 'Add a note' : '—'}
+                      onSave={(v) => patch(s.id, { notes: v })}
+                    />
+                  </Cell>
+                  <Cell className="text-center">
+                    <UpdatesBubble stage={s} onOpen={() => setDetailStageId(s.id)} />
+                  </Cell>
+                  <Cell className="text-center">
+                    {canEdit && mayDelete(s.createdById) && (
+                      <Tooltip content="Remove this subitem" size="sm">
+                        <button
+                          type="button"
+                          aria-label={`Remove stage ${s.label}`}
+                          onClick={() => setConfirmDelete(s)}
+                          className="text-gray-300 transition-colors hover:text-red-700"
+                        >
+                          <FiTrash2 size={13} />
+                        </button>
+                      </Tooltip>
+                    )}
+                  </Cell>
+                </tr>
+              ))}
+              {canEdit && (
+                <tr>
+                  <td colSpan={10} className="border-b border-gray-200 px-2 py-1">
+                    <AddSubitemRow unitId={unitId} existing={stages.map((st) => st.label)} />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        </>
+      )}
 
       {adding && (
         <AddStageModal
