@@ -300,9 +300,11 @@ function SplitRow({
 
 // ─── shells ───────────────────────────────────────────────────────────────────
 
-function Shell({ subtitle, children }: { subtitle: string; children: React.ReactNode }) {
+function Shell({ subtitle, embedded, children }: { subtitle: string; embedded?: boolean; children: React.ReactNode }) {
   return (
-    <Card shadow="sm">
+    // Inside another card (the unit's History) a shadow would read as a second floating
+    // surface; a hairline border keeps it a sub-section of the card it sits in.
+    <Card shadow={embedded ? 'none' : 'sm'} className={embedded ? 'rounded-xl border border-gray-200' : undefined}>
       <CardHeader className="flex-col items-start gap-0 pb-0">
         <p className="text-sm font-semibold text-gray-700">Deposits &amp; Allowances</p>
         <p className="text-xs text-gray-500">{subtitle}</p>
@@ -340,9 +342,11 @@ export interface ObligationSummaryCardProps {
   scope: Scope;
   /** Unit id when scope="unit", building id when scope="building". */
   id?: string;
+  /** Rendered inside another card: border instead of shadow. */
+  embedded?: boolean;
 }
 
-export function ObligationSummaryCard({ scope, id }: ObligationSummaryCardProps) {
+export function ObligationSummaryCard({ scope, id, embedded }: ObligationSummaryCardProps) {
   const isUnit = scope === 'unit';
 
   // Both hooks must be called every render (rules of hooks); the one that isn't
@@ -357,7 +361,7 @@ export function ObligationSummaryCard({ scope, id }: ObligationSummaryCardProps)
 
   if (!id || isLoading) {
     return (
-      <Shell subtitle={subtitle}>
+      <Shell subtitle={subtitle} embedded={embedded}>
         {!id ? <EmptyBody scope={scope} /> : <div className="h-24 animate-pulse rounded-xl bg-gray-50" />}
       </Shell>
     );
@@ -365,14 +369,14 @@ export function ObligationSummaryCard({ scope, id }: ObligationSummaryCardProps)
 
   if (error) {
     return (
-      <Shell subtitle={subtitle}>
+      <Shell subtitle={subtitle} embedded={embedded}>
         <ErrorState message="Could not load deposits and allowances." />
       </Shell>
     );
   }
 
   return (
-    <Shell subtitle={subtitle}>
+    <Shell subtitle={subtitle} embedded={embedded}>
       {isUnit
         ? <UnitBody data={data} />
         : <BuildingBody data={data} />}

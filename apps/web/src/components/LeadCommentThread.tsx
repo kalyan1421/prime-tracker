@@ -136,7 +136,7 @@ export function LeadCommentThread({ leadId }: { leadId: string }) {
                     </Tooltip>
                   )}
                   {mine && canPost && editingId !== c.id && (
-                    <span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                    <span className="ml-auto flex items-center gap-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                       <Button
                         isIconOnly size="sm" variant="light" aria-label="Edit comment"
                         className="h-6 w-6 min-w-0"

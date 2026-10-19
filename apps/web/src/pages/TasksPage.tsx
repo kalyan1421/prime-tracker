@@ -699,7 +699,8 @@ function TaskSidePanel({
                                     {(att.uploadedById === user?.id || ['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER'].includes(user?.role ?? '')) && (
                                         <button
                                             onClick={() => deleteAttachment.mutate({ taskId, attachmentId: att.id })}
-                                            className="text-red-400 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            aria-label={`Remove ${att.fileName}`}
+                                            className="text-gray-500 hover:text-red-700 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                                         >
                                             <FiX />
                                         </button>
@@ -737,7 +738,8 @@ function TaskSidePanel({
                                             {(c.userId === user?.id || ['SUPER_ADMIN', 'FOUNDER'].includes(user?.role ?? '')) && (
                                                 <button
                                                     onClick={() => deleteComment.mutate({ taskId, commentId: c.id })}
-                                                    className="text-red-400 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
+                                                    aria-label="Delete comment"
+                                                    className="text-gray-500 hover:text-red-700 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity ml-auto"
                                                 >
                                                     <FiX className="text-xs" />
                                                 </button>

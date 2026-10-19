@@ -6,7 +6,7 @@ import {
   useDisclosure, addToast,
 } from '@heroui/react';
 import {
-  FiHome, FiPlus, FiArrowRight, FiCheckCircle, FiExternalLink, FiEdit2, FiX, FiCheck, FiAlertTriangle,
+  FiHome, FiArrowRight, FiCheckCircle, FiExternalLink, FiEdit2, FiX, FiCheck, FiAlertTriangle,
 } from 'react-icons/fi';
 import {
   useInteriorProjects, useCreateInterior, useUpdateInterior,
@@ -16,6 +16,7 @@ import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
 import { INTERIOR_PHASES } from '../constants/interior';
 import { FormError } from './FormError';
+import { AddButton } from './ui';
 import { BUDGET_BASIS_LABEL } from './InteriorCostingParts';
 
 export { INTERIOR_PHASES };
@@ -144,40 +145,45 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
     }
   };
 
+  const empty = !isLoading && projects.length === 0;
+
   return (
     // Matches the unit page's Section chrome (rounded-2xl, bordered, no shadow) rather
     // than HeroUI's default Card look — this panel sits directly among Section-wrapped
     // panels on UnitDetailPage and previously looked like a different component's UI.
     <Card className="border border-gray-200 shadow-none rounded-2xl">
-      <CardHeader className="pb-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <FiHome className="text-amber-600" />
-          <p className="font-semibold text-sm text-gray-600">
-            Interior / Fit-Out {projects.length > 0 && `(${projects.length})`}
-          </p>
+      {/* Same header as the unit page's other sections: grey icon, title, and — with nothing
+          to show — the card collapses to this one line with its add action, instead of a body
+          whose only content is a sentence about being empty. */}
+      <CardHeader className={`flex flex-wrap items-center justify-between gap-2 px-5 ${empty ? 'py-3.5' : 'pt-4 pb-3'}`}>
+        <div className="flex items-center gap-2.5">
+          <FiHome className="w-4 h-4 shrink-0 text-gray-500" />
+          <div>
+            <h2 className="font-semibold text-sm text-gray-800">
+              Interior / Fit-Out
+              {projects.length > 0 && <span className="text-gray-500 font-normal ml-1">({projects.length})</span>}
+            </h2>
+            {empty && <p className="text-[11px] text-gray-500">Optional — starts once the shell is complete</p>}
+          </div>
         </div>
-        {canCreate && (
-          <Button size="sm" variant="flat" color="primary" startContent={<FiPlus />} onPress={openModal}>
-            Start fit-out
-          </Button>
-        )}
-        {/* Only worth a chip once it's not just restating the header count — i.e. some
-            projects on this unit have wrapped up (COMPLETED/CANCELLED) and some haven't. */}
-        {canEditInterior && activeCount > 0 && activeCount < projects.length && (
-          <Chip size="sm" variant="flat" color="warning">{activeCount} active</Chip>
-        )}
+        <div className="flex items-center gap-3">
+          {empty && <span className="text-xs text-gray-500">None yet</span>}
+          {/* Only worth a chip once it's not just restating the header count — i.e. some
+              projects on this unit have wrapped up (COMPLETED/CANCELLED) and some haven't. */}
+          {canEditInterior && activeCount > 0 && activeCount < projects.length && (
+            <Chip size="sm" variant="flat" color="warning">{activeCount} active</Chip>
+          )}
+          {canCreate && <AddButton onPress={openModal}>Start fit-out</AddButton>}
+        </div>
       </CardHeader>
-      <CardBody className="pt-0 space-y-3">
-        {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
-        {!isLoading && projects.length === 0 && (
-          <p className="text-sm text-gray-500">
-            No interior project yet. Fit-out is optional and starts after the shell is complete.
-          </p>
-        )}
-        {projects.map((p) => (
-          <InteriorProjectCard key={p.id} project={p} users={users} />
-        ))}
-      </CardBody>
+      {!empty && (
+        <CardBody className="px-5 pt-0 pb-5 space-y-3">
+          {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
+          {projects.map((p) => (
+            <InteriorProjectCard key={p.id} project={p} users={users} />
+          ))}
+        </CardBody>
+      )}
 
       {/* Create modal */}
       <Modal isOpen={isOpen} onClose={onClose} size="lg">

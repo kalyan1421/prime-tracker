@@ -2,6 +2,8 @@
 @plugin './lib/hero.ts';
 @source '../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}';
 @custom-variant dark (&:is(.dark *));
+/* Devices with a pointer that can hover. See HOVER in the design-system header below. */
+@custom-variant can-hover (@media (hover: hover));
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PRIME TRACKER DESIGN SYSTEM
@@ -32,6 +34,20 @@
      text-sm      14px emphasis
      text-lg+     headings
      8px, 9px and 10px are gone. Do not reintroduce them.
+
+   SECTIONS — from the Unit Detail design audit (2026-10-18). Enforced on the
+     screens listed in design-system.test.ts; others adopt it as they are redesigned.
+     Section icons are grey (gray-500). Colour is for status, never decoration.
+     An empty section collapses to its one-line header with its add action. No
+       illustrated "nothing here" inside a card, and never two ways of saying it.
+     "Add" actions are <AddButton> (components/ui): small, grey, + icon. A text
+       link is only for a link inside a sentence.
+
+   HOVER — Tailwind's hover: already applies only on devices that can hover, so
+     nothing stays highlighted after a tap. The trap is the reverse:
+     `opacity-0 group-hover:opacity-100` hides a control FOREVER on a phone, where no
+     hover ever comes. Hide only where hover exists, and show it to the keyboard too:
+       can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @theme {

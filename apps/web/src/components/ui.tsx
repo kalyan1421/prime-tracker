@@ -1,6 +1,6 @@
 import React from 'react';
-import { Card, CardBody, Chip, Progress, Spinner, Button } from '@heroui/react';
-import { FiArrowRight } from 'react-icons/fi';
+import { Card, CardBody, Chip, Progress, Spinner, Button, type ButtonProps } from '@heroui/react';
+import { FiArrowRight, FiPlus } from 'react-icons/fi';
 import { useAuthStore } from '../store/authStore';
 
 // ---- Stat Card ----
@@ -162,6 +162,21 @@ export function EmptyState({ title, message, action }: { title?: string; message
         {action && <div className="mt-2">{action}</div>}
       </div>
     </div>
+  );
+}
+
+// ---- Add action ----
+/**
+ * The one look for "add something here": small, grey, with a + icon (design system).
+ * The Unit Detail page had six — a blue text link, a blue icon button, a "+ "-prefixed
+ * label, a primary flat button — for the same kind of action, so none of them read as
+ * the same kind of thing. A text link stays right only inside a sentence.
+ */
+export function AddButton({ children, ...props }: Omit<ButtonProps, 'size' | 'variant' | 'color' | 'startContent'>) {
+  return (
+    <Button size="sm" variant="flat" startContent={<FiPlus className="w-3.5 h-3.5" />} {...props}>
+      {children}
+    </Button>
   );
 }
 

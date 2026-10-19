@@ -186,7 +186,7 @@ function ActivityTimeline({ leadId }: { leadId: string }) {
                 {canEdit && act.createdBy === user?.id && (
                   <Button
                     isIconOnly size="sm" variant="light" aria-label="Edit activity"
-                    className="ml-auto h-6 w-6 min-w-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                    className="ml-auto h-6 w-6 min-w-0 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity"
                     onPress={() => setEditing(act)}
                   >
                     <FiEdit2 className="w-3 h-3" />
@@ -1639,8 +1639,9 @@ export default function LeadsPage() {
                           </Tooltip>
                         )}
                       </div>
-                      {/* Actions — only visible on hover/focus to keep cards clean */}
-                      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                      {/* Actions — revealed on hover/focus with a mouse to keep cards clean; always
+                          shown on a touch screen, which has no hover to reveal them. */}
+                      <div className="flex items-center gap-0.5 shrink-0 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                         <Tooltip content="Edit lead">
                           <Button
                             isIconOnly

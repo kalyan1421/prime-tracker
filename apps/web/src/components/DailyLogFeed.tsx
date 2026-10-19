@@ -9,6 +9,8 @@ import {
   usePresignedUpload, useBuildings, useUnitConstructionStages, useAssignableUsers,
 } from '../hooks/useApi';
 import { MentionBox, MentionText } from './MentionText';
+import { useAttemptRef, useSiteOutbox } from '../hooks/useSiteOutbox';
+import { SiteOutboxNotice } from './SiteOutbox';
 import type { MentionUser } from './MentionTextarea';
 import { fmtDate, errMsg } from '../utils/fmt';
 import { PermissionGate } from './ui';
@@ -50,13 +52,15 @@ const SOURCE_MARKS: Record<string, { icon: JSX.Element; label: string; color: 'd
  * one unit's fit-out, and every unit-level post would otherwise carry the same two values.
  */
 export function DailyLogFeed({
-  projectId, buildingId, unitId, title, showList = true, bare = false,
+  projectId, buildingId, unitId, title, showList = true, bare = false, onPosted,
 }: {
   projectId: string; buildingId?: string; unitId?: string; title?: string;
   /** Composer only. Used when a merged timeline elsewhere is already showing the posts. */
   showList?: boolean;
   /** Drop the Card chrome, for embedding inside another section. */
   bare?: boolean;
+  /** After an update is posted or kept on the device — e.g. to close a collapsible composer. */
+  onPosted?: () => void;
 }) {
   const { data, isLoading } = useDailyLogs(projectId, buildingId, unitId);
   const { data: buildingsData } = useBuildings(projectId);
@@ -67,6 +71,8 @@ export function DailyLogFeed({
   const addPhoto = useAddDailyLogPhoto();
   const presigned = usePresignedUpload();
   const mentionUsers = useMentionUsers();
+  const outbox = useSiteOutbox();
+  const attempt = useAttemptRef();
   const logs: any[] = Array.isArray(data) ? data : [];
   const buildings: any[] = Array.isArray(buildingsData) ? buildingsData : [];
 
@@ -103,7 +109,11 @@ export function DailyLogFeed({
     setLogFeedErr(null);
     try {
       setUploading(true);
-      const log = await create.mutateAsync({
+      // The same text, photos, stage and date retried after a lost answer reuse one ref, so a
+      // first attempt that did land is returned rather than posted twice.
+      const attemptKey = JSON.stringify([form, pendingFiles.map(({ file }) => [file.name, file.size, file.lastModified])]);
+      // No signal: a text-only update is kept on this device and sent later (SiteOutbox).
+      const result = await outbox.postOrQueue({
         projectId,
         unitId: unitId || undefined,
         // At unit scope the server derives this from the unit; sending the form value
@@ -114,7 +124,15 @@ export function DailyLogFeed({
         weather: form.weather || undefined,
         crewCount: form.crewCount ? Number(form.crewCount) : undefined,
         stageId: form.stageId || undefined,
-      });
+      }, { send: create.mutateAsync, hasPhotos: pendingFiles.length > 0, clientRef: attempt.refFor(attemptKey) });
+      attempt.done();
+      if (result.status === 'queued') {
+        setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
+        addToast({ title: 'No signal — saved on this device. It will post on its own when there is.', color: 'warning' });
+        onPosted?.();
+        return;
+      }
+      const log = result.log;
       for (const { file } of pendingFiles) {
         try {
           const { storagePath } = await presigned.mutateAsync({ file, category: 'daily-logs' });
@@ -127,9 +145,16 @@ export function DailyLogFeed({
       setPendingFiles([]);
       setForm({ logDate: todayStr(), notes: '', weather: '', crewCount: '', buildingId: buildingId || '', stageId: '' });
       addToast({ title: 'Log posted', color: 'success' });
+      onPosted?.();
     } catch (e) {
-      setLogFeedErr(errMsg(e, 'Failed to post log'));
-      addToast({ title: errMsg(e, 'Failed to post log'), color: 'danger' });
+      // With photos attached nothing is queued: they need a connection to upload, so the
+      // text and the photos stay in the composer for another try.
+      const offlineWithPhotos = pendingFiles.length > 0 && !(e as any)?.response;
+      const msg = offlineWithPhotos
+        ? 'No signal. Photos need a connection — your update and photos are still here, try again when you have signal.'
+        : errMsg(e, 'Failed to post log');
+      setLogFeedErr(msg);
+      addToast({ title: msg, color: 'danger' });
     } finally {
       setUploading(false);
     }
@@ -141,6 +166,7 @@ export function DailyLogFeed({
     <>
         <PermissionGate permission="dailylog:edit">
           <div className="rounded-lg border border-gray-100 p-3 space-y-2 bg-gray-50/50">
+            <SiteOutboxNotice projectId={projectId} unitId={unitId} />
             <FormError message={logFeedErr} />
             <MentionBox
               label={unitId ? 'What happened on this unit?' : 'What happened on site today?'}
@@ -160,7 +186,7 @@ export function DailyLogFeed({
                     <button
                       type="button"
                       onClick={() => removePending(idx)}
-                      className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                       aria-label="Remove photo"
                     >
                       <FiX className="w-2.5 h-2.5 text-white" />
@@ -316,6 +342,8 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
   const [replyText, setReplyText] = useState('');
   const mentionUsers = useMentionUsers();
   const mentionNames = mentionUsers.map((u) => u.name ?? '').filter(Boolean);
+  const outbox = useSiteOutbox();
+  const replyAttempt = useAttemptRef();
   const addPhoto = useAddDailyLogPhoto();
   const removePhoto = useRemoveDailyLogPhoto();
   const presigned = usePresignedUpload();
@@ -452,7 +480,7 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
                 onClick={() => removePhoto.mutate(p.id, {
                   onError: (e) => addToast({ title: errMsg(e, 'Could not remove the photo'), color: 'danger' }),
                 })}
-                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
               >
                 <FiTrash2 className="text-[11px] text-red-600" />
               </button>
@@ -496,8 +524,13 @@ function DailyLogCard({ log, showUnit = true, projectId, isReply = false }: {
                     size="sm" color="primary" isDisabled={!replyText.trim()} isLoading={create.isPending}
                     onPress={async () => {
                       try {
-                        await create.mutateAsync({ projectId, parentId: log.id, notes: replyText.trim() });
+                        const r = await outbox.postOrQueue(
+                          { projectId, parentId: log.id, notes: replyText.trim() },
+                          { send: create.mutateAsync, clientRef: replyAttempt.refFor(replyText.trim()) },
+                        );
+                        replyAttempt.done();
                         setReplyText(''); setReplying(false);
+                        if (r.status === 'queued') addToast({ title: 'No signal — reply saved on this device. It will post on its own.', color: 'warning' });
                       } catch (e) {
                         addToast({ title: errMsg(e, 'Could not post the reply'), color: 'danger' });
                       }

@@ -14,13 +14,14 @@
  * feed and lose the type taxonomy the dashboard groups by. What was worth fixing was having
  * to look in two places, and that is a reading problem, not a storage one.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Button, Chip, Avatar, Textarea, Select, SelectItem, addToast } from '@heroui/react';
-import { FiClipboard, FiMessageSquare, FiCamera, FiCornerDownRight, FiCheckSquare, FiSmartphone } from 'react-icons/fi';
+import { FiClipboard, FiMessageSquare, FiCamera, FiCornerDownRight, FiCheckSquare, FiSmartphone, FiEdit3 } from 'react-icons/fi';
 import {
   useDailyLogs, useUnitComments, useCreateComment, useCustomOptions,
 } from '../hooks/useApi';
 import { DailyLogFeed } from './DailyLogFeed';
+import { SiteOutboxNotice } from './SiteOutbox';
 import { LoadingState } from './ui';
 import { useAuthStore } from '../store/authStore';
 import { fmtDate, errMsg } from '../utils/fmt';
@@ -45,6 +46,17 @@ export function UnitActivity({ unitId, projectId }: { unitId: string; projectId:
   const canPostUpdate = hasPermission('dailylog:edit');
   const canPostComment = hasPermission('comment:edit');
   const [composing, setComposing] = useState<'update' | 'comment'>(canPostUpdate ? 'update' : 'comment');
+  // One line until it is wanted (design audit, 2026-10-18). Open, the composer — text box,
+  // date, stage pin, photos, Post — took about 200 px above the first update, on every
+  // visit, for the reader as much as the writer.
+  const [composerOpen, setComposerOpen] = useState(false);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const openComposer = () => {
+    setComposerOpen(true);
+    // After the box is shown: focus is what makes the tap feel like it opened a text box.
+    requestAnimationFrame(() => composerRef.current?.querySelector('textarea')?.focus());
+  };
+  const closeComposer = () => setComposerOpen(false);
 
   const logsQ = useDailyLogs(projectId, undefined, unitId);
   const commentsQ = useUnitComments(unitId);
@@ -70,29 +82,48 @@ export function UnitActivity({ unitId, projectId }: { unitId: string; projectId:
 
   return (
     <div className="space-y-4">
+      {composerTabs.length > 0 && !composerOpen && (
+        <>
+          {/* Collapsed, the composer's own notice is hidden with it — an update waiting for
+              signal must still be visible on the unit it was written about. */}
+          {canPostUpdate && <SiteOutboxNotice projectId={projectId} unitId={unitId} />}
+          <button
+            type="button" onClick={openComposer}
+            className="flex w-full items-center gap-2.5 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-left text-sm text-gray-500 transition-colors hover:border-gray-300 hover:text-gray-700"
+          >
+            <FiEdit3 className="h-4 w-4 shrink-0" />
+            {canPostUpdate ? 'Post a site update…' : 'Add a note for the team…'}
+          </button>
+        </>
+      )}
       {composerTabs.length > 0 && (
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3">
-          {composerTabs.length > 1 && (
-            <div className="mb-2 flex gap-1">
-              {composerTabs.map((k) => (
-                <button
-                  key={k} type="button" onClick={() => setComposing(k)}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    composing === k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  {k === 'update' ? <FiClipboard size={12} /> : <FiMessageSquare size={12} />}
-                  {k === 'update' ? 'Site update' : 'Comment'}
-                </button>
-              ))}
-            </div>
-          )}
+        // Hidden, not unmounted, when closed: a half-written update survives closing it.
+        <div ref={composerRef} hidden={!composerOpen} className="rounded-lg border border-gray-100 bg-gray-50/50 p-3">
+          <div className="mb-2 flex items-center gap-1">
+            {composerTabs.length > 1 && composerTabs.map((k) => (
+              <button
+                key={k} type="button" onClick={() => setComposing(k)}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  composing === k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {k === 'update' ? <FiClipboard size={12} /> : <FiMessageSquare size={12} />}
+                {k === 'update' ? 'Site update' : 'Comment'}
+              </button>
+            ))}
+            <button
+              type="button" onClick={closeComposer}
+              className="ml-auto rounded-md px-2 py-1 text-xs text-gray-500 transition-colors hover:text-gray-800"
+            >
+              Close
+            </button>
+          </div>
           {(composerTabs.length > 1 ? composing : composerTabs[0]) === 'update' ? (
             /* The full site-update composer — photos, stage pin, date. `showList` off
                because the merged timeline below is already showing the posts. */
-            <DailyLogFeed projectId={projectId} unitId={unitId} showList={false} bare />
+            <DailyLogFeed projectId={projectId} unitId={unitId} showList={false} bare onPosted={closeComposer} />
           ) : (
-            <CommentComposer unitId={unitId} />
+            <CommentComposer unitId={unitId} onPosted={closeComposer} />
           )}
         </div>
       )}
@@ -114,7 +145,7 @@ export function UnitActivity({ unitId, projectId }: { unitId: string; projectId:
   );
 }
 
-function CommentComposer({ unitId }: { unitId: string }) {
+function CommentComposer({ unitId, onPosted }: { unitId: string; onPosted?: () => void }) {
   const create = useCreateComment();
   const { data: typeOpts } = useCustomOptions('comment_type');
   const types: any[] = Array.isArray(typeOpts) && typeOpts.length
@@ -146,6 +177,7 @@ function CommentComposer({ unitId }: { unitId: string }) {
             try {
               await create.mutateAsync({ unitId, content: text.trim(), commentType });
               setText('');
+              onPosted?.();
             } catch (e) {
               addToast({ title: errMsg(e, 'Could not add the comment'), color: 'danger' });
             }
