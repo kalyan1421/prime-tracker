@@ -145,7 +145,7 @@ function MilestonePhotoStrip({ milestoneId }: { milestoneId: string }) {
                 type="button"
                 aria-label="Remove photo"
                 onClick={() => remove.mutate(p.id)}
-                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute top-0.5 right-0.5 bg-white/80 rounded p-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
               >
                 <FiTrash2 className="text-xs text-red-500" />
               </button>
@@ -6565,9 +6565,10 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                   {lead.budget && (
                     <span className="text-xs font-semibold text-gray-600 tabular-nums">${Number(lead.budget).toLocaleString()}</span>
                   )}
-                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex gap-0.5 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                     {canEditLead && (
                       <button
+                        aria-label="Edit lead"
                         onClick={(e) => { e.stopPropagation(); openEditForm(lead); }}
                         className="p-1 rounded text-gray-600 hover:text-gray-700 hover:bg-gray-100"
                       >
@@ -6576,6 +6577,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                     )}
                     {canDeleteLead && (
                       <button
+                        aria-label="Delete lead"
                         onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
                         className="p-1 rounded text-gray-600 hover:text-rose-700 hover:bg-rose-50"
                       >
@@ -6726,7 +6728,7 @@ function ProjectLeadsTab({ projectId }: { projectId: string }) {
                                   type="button"
                                   aria-label="Edit activity"
                                   onClick={() => setEditingActivity(act)}
-                                  className="ml-auto self-center p-1 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                                  className="ml-auto self-center p-1 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity"
                                 >
                                   <FiEdit2 size={11} />
                                 </button>

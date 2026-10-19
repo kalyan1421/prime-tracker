@@ -909,7 +909,8 @@ function PostSidePanel({
                                     {(att.uploadedById === user?.id || UPDATE_BOARD_ADMIN_ROLES.includes(user?.role ?? '')) && (
                                         <button
                                             onClick={() => deleteAttachment.mutate({ postId, attachmentId: att.id })}
-                                            className="text-red-400 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            aria-label={`Remove ${att.fileName}`}
+                                            className="text-gray-500 hover:text-red-700 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                                         >
                                             <FiX />
                                         </button>
@@ -947,7 +948,8 @@ function PostSidePanel({
                                             {(c.authorId === user?.id || UPDATE_BOARD_ADMIN_ROLES.includes(user?.role ?? '')) && (
                                                 <button
                                                     onClick={() => deleteComment.mutate({ postId, commentId: c.id })}
-                                                    className="text-red-400 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity ml-auto"
+                                                    aria-label="Delete comment"
+                                                    className="text-gray-500 hover:text-red-700 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity ml-auto"
                                                 >
                                                     <FiX className="text-xs" />
                                                 </button>

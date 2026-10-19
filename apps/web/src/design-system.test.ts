@@ -250,21 +250,16 @@ describe('design system: sections (audited screens)', () => {
  * `opacity-0` and revealed by `group-hover:` is never revealed on a phone — the document
  * Edit/Delete icons and the photo "remove" buttons were invisible to the field team.
  */
-describe('design system: hover (audited screens)', () => {
-  const FILES = [
-    'pages/UnitDetailPage.tsx',
-    'components/DailyLogFeed.tsx',
-    'components/UnitConstructionChecklist.tsx',
-    'components/ConstructionBoard.tsx',
-    'components/UnitActivity.tsx',
-  ];
-
+describe('design system: hover', () => {
+  // App-wide since 2026-10-19: the Unit Detail fix, then the same ten controls on Leads,
+  // Project, Tasks, Updates and the lead comment thread.
   it('never hides a control behind hover on a device that cannot hover', () => {
     const hits: string[] = [];
-    for (const name of FILES) {
-      readFileSync(join(SRC, name), 'utf8').split('\n').forEach((line, i) => {
-        // A bare `opacity-0` (not already scoped to hover devices) revealed only by hover.
-        if (/(?<![\w:-])opacity-0\b/.test(line) && /group-hover:opacity-100/.test(line)) {
+    for (const { name, code } of sourceFiles()) {
+      code.split('\n').forEach((line, i) => {
+        // A bare `opacity-0`, or one keyed to screen WIDTH (md:opacity-0 — an iPad is md and
+        // has no hover), revealed only by hover. `can-hover:opacity-0` is the fix, not a hit.
+        if (/(?<![\w:-])(?:(?:sm|md|lg|xl):)?opacity-0\b/.test(line) && /group-hover:opacity-100/.test(line)) {
           hits.push(`${name}:${i + 1}  ${line.trim().slice(0, 90)}`);
         }
       });
