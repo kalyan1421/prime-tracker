@@ -23,10 +23,15 @@ locals {
     # there. A client id is only semi-secret — it travels in the browser OAuth flow —
     # but matching reality costs nothing and a downgrade buys nothing.
     "GOOGLE_CLIENT_ID",
+    # Signs unit snapshots pushed to the public website; equals the website API's
+    # TRACKER_SYNC_SECRET. Left at REPLACE_ME, the API treats the sync as off.
+    "WEBSITE_SYNC_SECRET",
   ]
   ssm_plain_params = [
     # Genuinely String in the live account, and left that way.
     "QB_CLIENT_ID",
+    # The website API's /api/integrations/tracker/snapshot URL. Not secret.
+    "WEBSITE_SYNC_URL",
   ]
 }
 

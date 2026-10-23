@@ -41,5 +41,5 @@ resource "aws_route53_record" "api" {
   records = [aws_eip.api.public_ip]
 }
 
-# NOTE: apex (theprimedeveloper.com) -> Amplify is added in Phase 2 when the
-# public Next.js site exists. Left out intentionally for now.
+# Apex and www (theprimedeveloper.com) -> the public website's CloudFront
+# distribution: see website.tf, gated on enable_website as well as enable_dns.
