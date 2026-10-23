@@ -38,6 +38,37 @@ locals {
   website_on_domain = var.enable_website && var.enable_dns
   # AWS-managed SecurityHeadersPolicy: HSTS, nosniff, frame-options, referrer-policy.
   cf_security_headers = "67f7725c-6f97-4210-82d7-5512b31e9d03"
+  # AWS-managed CachingDisabled and AllViewerExceptHostHeader, for the API.
+  cf_caching_disabled       = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+  cf_all_viewer_except_host = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+  # The website API runs on the tracker's EC2 host as a second process; nginx there
+  # answers on the nip.io name it holds a certificate for, and maps /website-api/ to
+  # that process. Same-origin from the browser's side: no CORS on AWS at all.
+  website_api_origin = trimprefix(local.nip_io_app_origin, "https://")
+}
+
+# Resized images (/api/img/...) differ only by width and quality, and their paths are
+# never reused, so they are cached on exactly those two parameters for up to a year.
+resource "aws_cloudfront_cache_policy" "website_images" {
+  count       = var.enable_website ? 1 : 0
+  name        = "${local.name}-website-images"
+  min_ttl     = 1
+  default_ttl = 86400
+  max_ttl     = 31536000
+  parameters_in_cache_key_and_forwarded_to_origin {
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "none"
+    }
+    query_strings_config {
+      query_string_behavior = "whitelist"
+      query_strings {
+        items = ["width", "quality"]
+      }
+    }
+  }
 }
 
 resource "aws_s3_bucket" "website" {
@@ -87,6 +118,45 @@ resource "aws_cloudfront_distribution" "website" {
     domain_name              = aws_s3_bucket.website[0].bucket_regional_domain_name
     origin_id                = "website-s3"
     origin_access_control_id = aws_cloudfront_origin_access_control.website[0].id
+  }
+
+  # /api/... -> https://<nip.io>/website-api/api/... -> nginx -> 127.0.0.1:3002.
+  origin {
+    domain_name = local.website_api_origin
+    origin_id   = "website-api"
+    origin_path = "/website-api"
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "https-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+      # A resize of a 2 MB original on a t3.micro, or a cold API, can take seconds.
+      origin_read_timeout = 60
+    }
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/api/img/*"
+    target_origin_id       = "website-api"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    cache_policy_id        = aws_cloudfront_cache_policy.website_images[0].id
+    compress               = false # already WebP
+  }
+
+  # Everything else under /api: never cached here (admin responses are per-user, and
+  # the public ones carry their own short Cache-Control for browsers), every method,
+  # every header but Host — nginx needs its own name for SNI and server_name.
+  ordered_cache_behavior {
+    path_pattern             = "/api/*"
+    target_origin_id         = "website-api"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = local.cf_caching_disabled
+    origin_request_policy_id = local.cf_all_viewer_except_host
+    compress                 = true
   }
 
   default_cache_behavior {
