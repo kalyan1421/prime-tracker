@@ -224,6 +224,11 @@ model Project {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   deletedAt      DateTime? // soft-delete: archived rows excluded from default reads
+  // Slug of the property on the public website that mirrors this project's units.
+  // Set = published: WebsiteSyncCron pushes this project's unit snapshot to the website
+  // every few minutes. Null = never leaves the tracker. Separate from `slug` because the
+  // two sites name things independently ("centro" here, "centro-plaza" there).
+  websiteSlug    String?       @unique
   // tenantId  String?
   orgId          String?
   org            Organization? @relation(fields: [orgId], references: [id])

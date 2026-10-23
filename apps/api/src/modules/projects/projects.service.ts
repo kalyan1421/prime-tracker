@@ -349,6 +349,7 @@ export class ProjectsService {
     description?: string;
     startDate?: string;
     targetEnd?: string;
+    websiteSlug?: string | null;
   }) {
     await this.findById(id);
 
@@ -357,6 +358,13 @@ export class ProjectsService {
       const conflict = await this.prisma.project.findUnique({ where: { slug: input.slug } });
       if (conflict && conflict.id !== id) {
         throw new ConflictException(`Slug '${input.slug}' is already taken`);
+      }
+    }
+    // Two projects pushing to one website property would each overwrite the other's units.
+    if (input.websiteSlug) {
+      const conflict = await this.prisma.project.findUnique({ where: { websiteSlug: input.websiteSlug } });
+      if (conflict && conflict.id !== id) {
+        throw new ConflictException(`Website slug '${input.websiteSlug}' is already published by ${conflict.name}`);
       }
     }
 
@@ -375,6 +383,7 @@ export class ProjectsService {
         description: input.description,
         startDate: input.startDate ? new Date(input.startDate) : undefined,
         targetEnd: input.targetEnd ? new Date(input.targetEnd) : undefined,
+        websiteSlug: input.websiteSlug,
       },
     });
   }
