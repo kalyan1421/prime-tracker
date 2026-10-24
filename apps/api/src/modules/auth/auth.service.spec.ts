@@ -27,6 +27,8 @@ const mockPrisma = {
 
 const mockJwtService = {
   sign: jest.fn().mockReturnValue('mock-token'),
+  // generateTokens reports the access token's lifetime from its own iat/exp claims.
+  decode: jest.fn().mockReturnValue({ iat: 1_000, exp: 1_900 }),
   signAsync: jest.fn(),
   verifyAsync: jest.fn(),
 };
@@ -93,7 +95,7 @@ describe('AuthService', () => {
    */
   describe('validateGoogleUser: allowed-domain gate', () => {
     const profileOn = (email: string) => ({
-      id: 'g-1', email, displayName: 'Someone', picture: '',
+      id: 'g-1', email, emailVerified: true, displayName: 'Someone', picture: '',
     });
     // Every case below states its own findUnique result. Without this, a mock set by
     // one test leaks into the next and quietly inverts what it proves.
@@ -213,6 +215,7 @@ describe('AuthService', () => {
     const googleProfile = {
       id: 'google-123',
       email: 'mallik@primedevelopers.com',
+      emailVerified: true,
       displayName: 'Mallik Reddy',
       picture: 'https://lh3.google.com/photo.jpg',
     };

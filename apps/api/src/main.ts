@@ -76,6 +76,18 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  // Outside production the guard itself now refuses demo tokens unless NODE_ENV is
+  // exactly 'development' (isDemoModeActive in jwt-auth.guard.ts). Say so at boot, so a
+  // developer whose Dev Quick Login stopped working finds the reason in the first screen
+  // of logs rather than in a 401.
+  if (config.get('DEMO_MODE') === 'true' && config.get('NODE_ENV') !== 'development') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `DEMO_MODE=true is IGNORED: demo tokens are honoured only with NODE_ENV=development ` +
+      `(NODE_ENV is ${JSON.stringify(config.get('NODE_ENV') ?? null)}).`,
+    );
+  }
+
   const port = Number(config.get('PORT') ?? config.get('API_PORT', 3001));
   const frontendUrl = config.get('FRONTEND_URL', 'http://localhost:5173');
 

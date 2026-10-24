@@ -13,8 +13,9 @@
  *     by grepping dist/ for the marker string (see DEV_LOGIN.md).
  *
  *  2. THE BACKEND MUST OPT IN. The tokens minted here are `demo-<ROLE>`, which
- *     only JwtAuthGuard's DEMO_MODE branch accepts. With DEMO_MODE unset — as on
- *     any real deployment — they are rejected like any other malformed token.
+ *     JwtAuthGuard accepts only with DEMO_MODE=true AND NODE_ENV=development. With
+ *     either missing — as on any real deployment — they are rejected like any other
+ *     malformed token.
  *
  *  3. THE API REFUSES TO BOOT IF BOTH ARE EVER TRUE. main.ts exits with a fatal
  *     error on NODE_ENV=production + DEMO_MODE=true, so the bypass cannot be
@@ -108,7 +109,7 @@ export function DevQuickLogin() {
       navigate('/', { replace: true });
     } catch {
       useAuthStore.getState().logout();
-      setError('Demo token rejected — is DEMO_MODE=true set on the API?');
+      setError('Demo token rejected — the API needs DEMO_MODE=true and NODE_ENV=development.');
     } finally {
       setBusy(null);
     }

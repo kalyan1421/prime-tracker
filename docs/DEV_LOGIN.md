@@ -12,18 +12,18 @@
 
 ## Using it
 
-1. `DEMO_MODE=true` in `apps/api/.env` (already set locally)
+1. `DEMO_MODE=true` **and** `NODE_ENV=development` in `apps/api/.env` (both already set locally)
 2. `pnpm run dev`
 3. Open the login page → **Dev Quick Login** panel below the form → click a role
 
 No password is typed, stored, or transmitted. It mints a `demo-<ROLE>` bearer token, which
-`JwtAuthGuard` accepts only when `DEMO_MODE=true`, then calls `GET /auth/me` so the **server**
+`JwtAuthGuard` accepts only when `DEMO_MODE=true` and `NODE_ENV=development`, then calls `GET /auth/me` so the **server**
 decides what permissions that role actually has.
 
 Seed the demo users if they are missing:
 
 ```bash
-pnpm --filter api exec ts-node prisma/seed-demo-users.ts
+ALLOW_DEMO_SEED=true pnpm --filter api exec ts-node prisma/seed-demo-users.ts
 ```
 
 Signing in as **Viewer** or **Sales** is the fastest way to check an RBAC change — those roles
@@ -49,10 +49,12 @@ Last run (2026-08-12): all four `0`.
 
 ### 2. The API must opt in (deploy-time)
 
-The `demo-<ROLE>` token is only accepted inside the `DEMO_MODE === 'true'` branch of
-[jwt-auth.guard.ts](../apps/api/src/common/guards/jwt-auth.guard.ts). With the variable unset —
-the default, and how AWS should be configured — those tokens are rejected like any other garbage
-credential. **Do not set `DEMO_MODE` in the AWS task definition, SSM parameters, or `.env`.**
+The `demo-<ROLE>` token is only accepted when `isDemoModeActive()` in
+[jwt-auth.guard.ts](../apps/api/src/common/guards/jwt-auth.guard.ts) is true: `DEMO_MODE === 'true'`
+**and** `NODE_ENV === 'development'` exactly. With either one missing — `NODE_ENV` unset, `staging`,
+`test`, `production` — those tokens are rejected like any other garbage credential. (Until
+2026-10-24 only `DEMO_MODE` was checked, so any non-production environment that picked it up was
+open.) **Do not set `DEMO_MODE` in the AWS task definition, SSM parameters, or `.env`.**
 
 ### 3. The API refuses to boot if 1 and 2 are both bypassed (runtime)
 
