@@ -180,6 +180,85 @@ resource "aws_cloudfront_function" "website_spa" {
   JS
 }
 
+locals {
+  # The two inline <script>s in PrimeDevelopers-web's apps/web/index.html, as built for
+  # AWS: `node scripts/csp-hashes.mjs apps/web/dist/index.html` prints these. Editing
+  # either script changes its hash; scripts/deploy-web-aws.sh warns when a build's
+  # hashes are missing here.
+  website_inline_script_hashes = [
+    "'sha256-MWOenPb/0DJ7K6cRoF3wv9jbY4E3DDKYpTbC86DJapI='", # content prefetch + hero preload
+    "'sha256-uAzqyD1wWKUpp5mDstOH3HMDtTK+v/nBvnZ9EOL2fvo='", # theme before first paint
+  ]
+
+  # What the site loads, and from where:
+  # - 'wasm-unsafe-eval' and blob: workers: the Draco and Meshopt decoders of the 3D
+  #   floor plans compile WebAssembly, Draco inside a worker built from a blob.
+  # - style 'unsafe-inline': React style attributes and the animation libraries.
+  # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
+  # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
+  # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
+  website_csp = join("; ", [
+    "default-src 'self'",
+    "script-src 'self' ${join(" ", local.website_inline_script_hashes)} 'wasm-unsafe-eval'",
+    "worker-src 'self' blob:",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://storage.googleapis.com",
+    "font-src 'self' data:",
+    "connect-src 'self' https://cdn.jsdelivr.net",
+    "media-src 'self' blob:",
+    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+    "report-uri /api/csp-report",
+  ])
+}
+
+# The site's own pages: the AWS-managed SecurityHeadersPolicy's headers, unchanged,
+# plus a Content-Security-Policy that is report-only for now. Nothing is blocked;
+# each violation a visitor's browser sees is posted to /api/csp-report and lands as a
+# `[CSP]` line in the website API's log group. When a week of those shows only
+# expected noise, rename the header to Content-Security-Policy to enforce it.
+# Only the default behaviour uses this — /api/* answers JSON, which a CSP does not
+# govern.
+resource "aws_cloudfront_response_headers_policy" "website_site" {
+  count   = var.enable_website ? 1 : 0
+  name    = "${local.name}-website-site"
+  comment = "Security headers + report-only CSP for the website's pages"
+
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      override                   = false
+    }
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "SAMEORIGIN"
+      override     = false
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = false
+    }
+    xss_protection {
+      protection = true
+      mode_block = true
+      override   = false
+    }
+  }
+
+  custom_headers_config {
+    items {
+      header   = "Content-Security-Policy-Report-Only"
+      value    = local.website_csp
+      override = true
+    }
+  }
+}
+
 # Its own OAC rather than cloudfront.tf's: that one exists only with enable_dns, and
 # the preview has to work before the domain does.
 resource "aws_cloudfront_origin_access_control" "website" {
@@ -261,7 +340,7 @@ resource "aws_cloudfront_distribution" "website" {
     allowed_methods            = ["GET", "HEAD", "OPTIONS"]
     cached_methods             = ["GET", "HEAD"]
     cache_policy_id            = local.cf_caching_optimized
-    response_headers_policy_id = local.cf_security_headers
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.website_site[0].id
     compress                   = true
     function_association {
       event_type   = "viewer-request"
