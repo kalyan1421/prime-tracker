@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller';
 import { GoogleStrategy } from './google.strategy';
 import { JwtStrategy } from './jwt.strategy';
 import { GoogleAuthGuard } from './google-auth.guard';
+import { RefreshTokenCleanupCron } from './refresh-token-cleanup.cron';
 import { EncryptionModule } from '../../common/encryption/encryption.module';
 import { AuditService } from '../../common/utils/audit.service';
 
@@ -41,6 +42,7 @@ import { AuditService } from '../../common/utils/audit.service';
       inject: [ConfigService],
     },
     AuditService,
+    RefreshTokenCleanupCron,
   ],
   exports: [AuthService, JwtModule],
 })

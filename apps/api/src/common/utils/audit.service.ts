@@ -74,7 +74,10 @@ const ACTIVITY_ENTITY_MAP: Record<string, { area: string; permission: string }> 
  * rows of noise in a business activity feed, and they stay available on the admin audit
  * page where they belong.
  */
-const ACTIVITY_EXCLUDED_ACTIONS = new Set(['LOGIN', 'LOGOUT', 'MFA_VERIFY', 'MFA_ENABLE', 'MFA_DISABLE']);
+const ACTIVITY_EXCLUDED_ACTIONS = new Set([
+  'LOGIN', 'LOGOUT', 'MFA_VERIFY', 'MFA_ENABLE', 'MFA_DISABLE',
+  'LOGIN_FAILED', 'REFRESH_TOKEN_REUSE',
+]);
 
 /** Past-tense verb per action, so a row reads as a sentence rather than an enum. */
 const ACTIVITY_VERBS: Record<string, string> = {

@@ -31,6 +31,14 @@ model User {
   passwordHash String?
   mfaEnabled   Boolean    @default(false)
   mfaSecret    String? // encrypted TOTP secret
+  // The 30-second TOTP time-step of the last code accepted. A code is valid for its whole
+  // window (±1 step), so without this the same six digits could be replayed — by a
+  // shoulder-surfer or a logged request — for up to 90 seconds after the owner used them.
+  mfaLastUsedStep  Int?
+  // Per-account lockout. In the database, not memory, so a restart or a second API
+  // process does not hand an attacker a fresh set of guesses.
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?
   lastLoginAt  DateTime?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -133,7 +141,11 @@ model User {
 
 model RefreshToken {
   id        String    @id @default(cuid())
-  token     String    @unique
+  // SHA-256 (hex) of the token handed to the client — never the token itself, so a read
+  // of this table (a backup, a leaked DB credential) yields nothing that can be replayed
+  // against /auth/refresh. The token is 64 random bytes, so an unsalted fast hash is
+  // enough: there is no dictionary to attack.
+  tokenHash String    @unique
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime

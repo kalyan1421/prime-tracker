@@ -356,3 +356,22 @@ describe('UsersService.toggleActive — session revocation', () => {
     expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
   });
 });
+
+describe('UsersService.setPassword — lifts a login lockout', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'u2', email: 'x@y.z', role: 'SALES', roles: [] });
+    mockPrisma.user.update.mockResolvedValue({});
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  // The lockout message sends a locked-out user to an admin for a reset. If the reset did
+  // not also clear the lock, it would not take effect until the fifteen minutes ran out.
+  it('clears the failure count and the lock along with the new hash', async () => {
+    await makeService().setPassword('u2', 'BrandNew-456', { id: 'admin', role: 'FOUNDER' });
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u2' },
+      data: { passwordHash: expect.any(String), failedLoginCount: 0, lockedUntil: null },
+    });
+  });
+});
