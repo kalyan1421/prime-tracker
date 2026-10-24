@@ -147,9 +147,10 @@ resource "aws_ssm_document" "deploy" {
         allowedPattern = "^s3://[a-z0-9.\\-]+/releases/[A-Za-z0-9._\\-/]+\\.tgz$"
       }
       GitSha = {
-        type           = "String"
-        description    = "Commit being released, for the log line."
-        allowedPattern = "^[0-9a-f]{7,40}$"
+        type        = "String"
+        description = "Commit being released — the box checks out exactly this commit."
+        # Full SHA only: it is what the box checks out (a short SHA cannot be fetched).
+        allowedPattern = "^[0-9a-f]{40}$"
       }
     }
     mainSteps = [{
@@ -192,8 +193,11 @@ resource "aws_ssm_document" "deploy" {
           "#    token that later expires breaks fetch with a 403 nobody expects.",
           "#    (If this repo is ever made private, this line is what has to change.)",
           "git remote set-url origin https://github.com/${var.github_repository}.git",
-          "git fetch --depth=1 origin main",
-          "git reset --hard origin/main",
+          "#    Exactly the released commit, not whatever main is by now: the checkout",
+          "#    supplies the migrations and package manifests, and they must match the",
+          "#    artifact built from {{ GitSha }}.",
+          "git fetch --depth=1 origin {{ GitSha }}",
+          "git reset --hard FETCH_HEAD",
 
           "# 2. Runtime deps. CI=true stops pnpm 10 at its interactive build-scripts prompt.",
           "CI=true pnpm install --frozen-lockfile",
@@ -205,21 +209,10 @@ resource "aws_ssm_document" "deploy" {
           "tar xzf /tmp/dist.tgz -C \"$REPO_DIR\"",
           "rm -f /tmp/dist.tgz",
 
-          "# 4. .env from SSM. GetParameter per name — GetParametersByPath needs the",
-          "#    parent-path ARN, which the instance policy does not grant.",
-          "#",
-          "#    Values are SINGLE-quoted. DATABASE_URL and DIRECT_URL are postgres URLs",
-          "#    carrying '?schema=public&connection_limit=5', and unquoted that '&' makes",
-          "#    `set -a; . ./.env` background the assignment — the variable silently ends up",
-          "#    EMPTY rather than erroring, and psql then falls back to a local socket that",
-          "#    does not exist. dotenv strips the quotes, so the app is unaffected. Single,",
-          "#    not double, so a '$' or backslash in a secret is never expanded.",
-          "for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD; do V=$(aws ssm get-parameter --name /${var.project}/$P --with-decryption --region ${var.aws_region} --query Parameter.Value --output text 2>/dev/null || echo ''); echo \"$P='$V'\"; done > apps/api/.env",
-          "printf 'NODE_ENV=production\\nAPI_PORT=3001\\nFRONTEND_URL=%s\\nCORS_ORIGINS=%s\\nAPP_BASE_URL=%s\\nGOOGLE_ALLOWED_DOMAIN=primedevelopers.com\\nJWT_ACCESS_EXPIRY=15m\\nJWT_REFRESH_EXPIRY=7d\\n' \"${var.app_origin}\" \"${var.app_origin}\" \"${var.app_origin}\" >> apps/api/.env",
-          "# Strips the surrounding single quotes written above — without this DIRECT_URL",
-          "#    would be written as a doubly-quoted string and prisma would reject it.",
-          "printf 'DIRECT_URL=%s\\n' \"$(grep -m1 '^DATABASE_URL=' apps/api/.env | sed -E \"s/^[^=]*=//; s/^'//; s/'$//\")\" >> apps/api/.env",
-          "chmod 600 apps/api/.env",
+          "# 4. .env from SSM — built by the same script the manual deploy uses, so the two",
+          "#    can no longer drift apart (infra/scripts/write-api-env.sh says what they",
+          "#    used to disagree on). It fails the deploy if a required secret is unreadable.",
+          "APP_URL='${var.app_origin}' S3_BUCKET='${aws_s3_bucket.documents.bucket}' AWS_REGION='${var.aws_region}' PROJECT='${var.project}' SMTP_FROM='${var.api_mail_from}' bash infra/scripts/write-api-env.sh apps/api/.env",
 
           "# 5. Migrations, then restart.",
           "DATABASE_URL=$(grep -m1 '^DATABASE_URL=' apps/api/.env | sed -E \"s/^[^=]*=//; s/^'//; s/'$//\") pnpm --filter @prime-tracker/api exec prisma migrate deploy",

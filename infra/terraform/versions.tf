@@ -8,17 +8,32 @@ terraform {
     }
   }
 
-  # Remote state (recommended once more than one person touches this).
-  # Create the bucket + lock table once, then uncomment and run
-  # `terraform init -migrate-state`.
+  # Remote state: an encrypted, versioned, private S3 bucket with a DynamoDB lock.
   #
-  # backend "s3" {
-  #   bucket         = "prime-tracker-tfstate-<ACCOUNT_ID>"
-  #   key            = "prod/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "prime-tracker-tflock"
-  #   encrypt        = true
-  # }
+  # The state holds every production secret (the RDS password and every SSM value
+  # Terraform has refreshed), and until 24 Oct 2026 it lived only in files on one
+  # laptop — lose the laptop, lose the ability to manage production; let someone read
+  # it, and they have every key. The settings are in backend-client.hcl; create the
+  # bucket and table once with infra/scripts/bootstrap-state-backend.sh, then:
+  #
+  #   terraform init -backend-config=backend-client.hcl -migrate-state
+  #
+  # which copies the local state (both workspaces) up and points this directory at it.
+  backend "s3" {}
+}
+
+# Every plan stops unless the credentials are for the account this workspace manages.
+# On the operator's machine the default AWS credentials belong to an old test
+# account; a plan against the `client` state with those would see none of the real
+# resources and propose creating all of them again.
+resource "terraform_data" "account_guard" {
+  input = local.account_id
+  lifecycle {
+    precondition {
+      condition     = local.account_id == var.expected_account_id
+      error_message = "These credentials are for AWS account ${local.account_id}, not ${var.expected_account_id}. Use: AWS_PROFILE=prime-client"
+    }
+  }
 }
 
 provider "aws" {

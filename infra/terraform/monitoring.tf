@@ -132,6 +132,45 @@ resource "aws_cloudwatch_metric_alarm" "api_endpoint_down" {
   ok_actions    = local.alarm_actions # "it came back" is half the information
 }
 
+# The public website, end to end: CloudFront, the WAF, the origin header, nginx, the
+# website API and its database, in one request. It had no monitoring at all until the
+# 24 Oct 2026 audit. /api/health/ready answers 503 when the database is down.
+resource "aws_route53_health_check" "website" {
+  count = var.enable_endpoint_monitor && var.enable_website ? 1 : 0
+
+  type              = "HTTPS_STR_MATCH"
+  fqdn              = aws_cloudfront_distribution.website[0].domain_name
+  port              = 443
+  resource_path     = local.health_check_path
+  search_string     = "\"status\":\"ok\""
+  request_interval  = 30
+  failure_threshold = 3
+
+  tags = { Name = "${local.name}-website-endpoint" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "website_endpoint_down" {
+  count    = var.enable_endpoint_monitor && var.enable_website ? 1 : 0
+  provider = aws.us_east_1
+
+  alarm_name        = "${local.name}-website-DOWN"
+  alarm_description = "The public website's API is not answering ${local.health_check_path} through CloudFront. Check pm2 for prime-website-api (as the prime-website user), the nginx /website-api/ snippet, and RDS."
+
+  namespace   = "AWS/Route53"
+  metric_name = "HealthCheckStatus"
+  dimensions  = { HealthCheckId = aws_route53_health_check.website[0].id }
+
+  statistic           = "Minimum"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  period              = 60
+  evaluation_periods  = 2
+  treat_missing_data  = "breaching"
+
+  alarm_actions = local.alarm_actions
+  ok_actions    = local.alarm_actions
+}
+
 # ── Layer 2: the host ────────────────────────────────────────────────────────
 
 # Recover the instance when the UNDERLYING HOST fails. There is one box and no ASG, so
@@ -201,6 +240,8 @@ resource "aws_cloudwatch_metric_alarm" "cpu_credits_low" {
   treat_missing_data = "missing"
 
   alarm_actions = local.alarm_actions
+
+  ok_actions = local.alarm_actions
 }
 
 # ── Layer 3: the database ────────────────────────────────────────────────────
@@ -224,21 +265,23 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage_low" {
   comparison_operator = "LessThanThreshold"
   treat_missing_data  = "breaching"
   alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
 }
 
 resource "aws_cloudwatch_metric_alarm" "rds_memory_low" {
   alarm_name          = "${local.name}-rds-memory-low"
-  alarm_description   = "RDS freeable memory is under 128 MB on a 1 GB db.t3.micro. Postgres will start swapping and then killing backends."
+  alarm_description   = "RDS freeable memory is under ${var.rds_memory_alarm_mb} MB on ${var.db_instance_class}. Postgres will start swapping and then killing backends."
   namespace           = "AWS/RDS"
   metric_name         = "FreeableMemory"
   dimensions          = { DBInstanceIdentifier = aws_db_instance.main.identifier }
   statistic           = "Minimum"
   period              = 300
   evaluation_periods  = 3
-  threshold           = 134217728 # 128 MiB
+  threshold           = var.rds_memory_alarm_mb * 1048576
   comparison_operator = "LessThanThreshold"
   treat_missing_data  = "missing"
   alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
 }
 
 resource "aws_cloudwatch_metric_alarm" "rds_cpu_high" {
@@ -254,6 +297,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu_high" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "missing"
   alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
 }
 
 # DATABASE_URL pins `connection_limit=5`, so steady state is single digits. Forty open
@@ -272,6 +316,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections_high" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "missing"
   alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
 }
 
 # ── Layer 4: disk and memory on the box ──────────────────────────────────────
@@ -305,7 +350,27 @@ resource "aws_ssm_parameter" "cw_agent_config" {
   value = jsonencode({
     agent = {
       metrics_collection_interval = 300
-      run_as_user                 = "cwagent"
+      # root, not cwagent, so it can read the logs below: nginx's are root:adm 640, and
+      # each app's pm2 logs sit in a home directory closed to other users. The agent is
+      # AWS's own package, installed and configured only through SSM.
+      run_as_user = "root"
+    }
+    # Until the 24 Oct 2026 audit nothing left the box: a crash, a 5xx burst or an
+    # attack was visible only to someone who opened a shell in time. Groups and their
+    # retention are below (aws_cloudwatch_log_group.host).
+    logs = {
+      logs_collected = {
+        files = {
+          collect_list = [
+            for g in local.host_log_files : {
+              file_path       = g.path
+              log_group_name  = g.group
+              log_stream_name = "{instance_id}-${g.stream}"
+              timezone        = "UTC"
+            }
+          ]
+        }
+      }
     }
     metrics = {
       namespace = "PrimeTracker/Host"
@@ -392,6 +457,8 @@ resource "aws_cloudwatch_metric_alarm" "host_disk_high" {
   treat_missing_data = "missing"
 
   alarm_actions = local.alarm_actions
+
+  ok_actions = local.alarm_actions
 }
 
 resource "aws_cloudwatch_metric_alarm" "host_memory_high" {
@@ -408,6 +475,7 @@ resource "aws_cloudwatch_metric_alarm" "host_memory_high" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "missing"
   alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
 }
 
 # ── Cost ─────────────────────────────────────────────────────────────────────
@@ -509,4 +577,53 @@ resource "aws_cloudwatch_dashboard" "main" {
       }] : []
     )
   })
+}
+
+# ── Logs from the host ───────────────────────────────────────────────────────
+
+locals {
+  host_log_files = [
+    { path = "/var/log/nginx/access.log", group = "/${var.project}/nginx/access", stream = "access" },
+    { path = "/var/log/nginx/error.log", group = "/${var.project}/nginx/error", stream = "error" },
+    { path = "/home/ubuntu/.pm2/logs/prime-api-out.log", group = "/${var.project}/app/tracker-api", stream = "out" },
+    { path = "/home/ubuntu/.pm2/logs/prime-api-error.log", group = "/${var.project}/app/tracker-api", stream = "error" },
+    { path = "/srv/prime-website/.pm2/logs/prime-website-api-out.log", group = "/${var.project}/app/website-api", stream = "out" },
+    { path = "/srv/prime-website/.pm2/logs/prime-website-api-error.log", group = "/${var.project}/app/website-api", stream = "error" },
+  ]
+}
+
+resource "aws_cloudwatch_log_group" "host" {
+  for_each          = var.enable_host_metrics ? toset([for f in local.host_log_files : f.group]) : toset([])
+  name              = each.value
+  retention_in_days = 90
+}
+
+# nginx's default "combined" format: address, ident, user, [time], "request", status, …
+resource "aws_cloudwatch_log_metric_filter" "nginx_5xx" {
+  count          = var.enable_host_metrics ? 1 : 0
+  name           = "${local.name}-nginx-5xx"
+  log_group_name = aws_cloudwatch_log_group.host["/${var.project}/nginx/access"].name
+  pattern        = "[address, ident, user, time, request, status=5*, bytes, referrer, agent]"
+  metric_transformation {
+    name          = "Nginx5xx"
+    namespace     = "PrimeTracker/Host"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "nginx_5xx_high" {
+  count               = var.enable_host_metrics ? 1 : 0
+  alarm_name          = "${local.name}-nginx-5xx"
+  alarm_description   = "More than 20 server errors in 5 minutes across both APIs. Check the app log groups /${var.project}/app/* first."
+  namespace           = "PrimeTracker/Host"
+  metric_name         = "Nginx5xx"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 20
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
 }

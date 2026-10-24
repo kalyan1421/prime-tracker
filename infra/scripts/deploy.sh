@@ -12,11 +12,33 @@
 
 set -euo pipefail
 
-EC2_INSTANCE="${EC2_INSTANCE:-i-03fee763407298417}"
-DEPLOY_BUCKET="${DEPLOY_BUCKET:-prime-tracker-documents-221082191502}"
+# Production defaults (client account 056836825737). They used to name the old test
+# account's instance and bucket, and nothing checked which account the credentials
+# were for — so a deploy could land on the wrong box and report success.
+ACCOUNT="${ACCOUNT:-056836825737}"
+EC2_INSTANCE="${EC2_INSTANCE:-i-0412241c8f6d080a1}"
+DEPLOY_BUCKET="${DEPLOY_BUCKET:-prime-tracker-documents-${ACCOUNT}}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
-APP_URL="${APP_URL:-https://98-89-192-161.nip.io}"
-GIT_BRANCH="${GIT_BRANCH:-main}"
+APP_URL="${APP_URL:-https://3-232-150-154.nip.io}"
+
+actual_account="$(aws sts get-caller-identity --query Account --output text)"
+if [ "$actual_account" != "$ACCOUNT" ]; then
+  echo "AWS credentials are for account $actual_account, not $ACCOUNT. Use AWS_PROFILE=prime-client." >&2
+  exit 1
+fi
+
+# The box checks out exactly the commit that is built here: the checkout supplies the
+# migrations and package manifests, and they must match the artifact. That commit has
+# to be committed and pushed, or the box cannot fetch it.
+GIT_SHA="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse HEAD)"
+if [ -n "$(git -C "$(dirname "${BASH_SOURCE[0]}")" status --porcelain --untracked-files=no)" ] && [ "${ALLOW_DIRTY:-}" != 1 ]; then
+  echo "Uncommitted changes — the build would not match the commit the box checks out. Commit them, or ALLOW_DIRTY=1." >&2
+  exit 1
+fi
+if [ -z "$(git -C "$(dirname "${BASH_SOURCE[0]}")" branch -r --contains "$GIT_SHA" 2>/dev/null)" ]; then
+  echo "Commit $GIT_SHA is not on any remote branch — push it first." >&2
+  exit 1
+fi
 # The .env below is rewritten from scratch on every deploy, so anything set by hand on the
 # box is silently lost. Mail settings live here for the same reason STORAGE_DRIVER/S3_BUCKET
 # do: without MAIL_DRIVER=ses the mailer falls back to smtp, finds no SMTP_HOST, and disables
@@ -135,9 +157,9 @@ set -eo pipefail
 cd /home/ubuntu/prime-tracker
 
 git config --global --add safe.directory /home/ubuntu/prime-tracker 2>/dev/null || true
-git fetch origin ${GIT_BRANCH}
-git reset --hard origin/${GIT_BRANCH}
-echo "=== Pulled: \$(git log --oneline -1) ==="
+git fetch --depth=1 origin ${GIT_SHA}
+git reset --hard FETCH_HEAD
+echo "=== Checked out: \$(git log --oneline -1) ==="
 
 pnpm install --frozen-lockfile 2>&1 | tail -5
 
@@ -154,29 +176,16 @@ aws s3 cp s3://${DEPLOY_BUCKET}/deploy/api-dist.tar.gz /tmp/api-dist.tar.gz --re
 tar -xzf /tmp/api-dist.tar.gz -C apps/api/
 echo "=== Dist extracted ==="
 
-for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
-          JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD \
-          WEBSITE_SYNC_URL WEBSITE_SYNC_SECRET; do
-  V=\$(aws ssm get-parameter --name /prime-tracker/\$P --with-decryption \
-        --region ${AWS_REGION} --query Parameter.Value --output text 2>/dev/null || echo "")
-  echo "\$P=\$V"
-done > apps/api/.env
-# GOOGLE_CALLBACK_URL is REQUIRED for Google SSO and was never written here.
-# auth.module only registers GoogleStrategy when CLIENT_ID, CLIENT_SECRET *and*
-# CALLBACK_URL are all present, so without it the strategy silently does not
-# register and /api/auth/google answers 503 — with real credentials loaded and no
-# error anywhere to explain why. Derived from APP_URL so it can never drift.
-printf "NODE_ENV=production\nAPI_PORT=3001\nFRONTEND_URL=${APP_URL}\nCORS_ORIGINS=${APP_URL}\nAPP_BASE_URL=${APP_URL}\nGOOGLE_ALLOWED_DOMAIN=${GOOGLE_ALLOWED_DOMAIN}\nGOOGLE_CALLBACK_URL=${APP_URL}/api/auth/google/callback\nJWT_ACCESS_EXPIRY=15m\nJWT_REFRESH_EXPIRY=7d\nSTORAGE_DRIVER=s3\nS3_BUCKET=${DEPLOY_BUCKET}\nAWS_REGION=${AWS_REGION}\nMAIL_DRIVER=${MAIL_DRIVER}\nSMTP_FROM=${SMTP_FROM}\n" >> apps/api/.env
-printf "DIRECT_URL=%s\n" "\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)" >> apps/api/.env
-chmod 600 apps/api/.env
-# Ownership, not just mode. This whole block runs as root over SSM, so a bare
-# \`chmod 600\` leaves the file root:root and PM2 — which runs as \`ubuntu\` — dies with
-# EACCES on boot and crash-loops. Invisible on a box where the file predates the
-# hardening and is already ubuntu-owned; fatal on every freshly built one.
-chown ubuntu:ubuntu apps/api/.env
-echo "=== .env written ==="
+# The same script the CI deploy runs, so the two can never write different files. It
+# fails here — before anything restarts — if a required secret cannot be read, and
+# leaves the file owner-only and owned by ubuntu (pm2 runs as ubuntu).
+APP_URL='${APP_URL}' S3_BUCKET='${DEPLOY_BUCKET}' AWS_REGION='${AWS_REGION}' \\
+  MAIL_DRIVER='${MAIL_DRIVER}' SMTP_FROM='${SMTP_FROM}' GOOGLE_ALLOWED_DOMAIN='${GOOGLE_ALLOWED_DOMAIN}' \\
+  bash infra/scripts/write-api-env.sh apps/api/.env
 
-export DATABASE_URL=\$(grep -m1 '^DATABASE_URL=' apps/api/.env | cut -d= -f2-)
+# Prisma reads apps/api/.env itself (DATABASE_URL for the app, DIRECT_URL — the owner
+# login when MIGRATE_DATABASE_URL is set — for migrations). The values are quoted
+# there, so they are not exported from this shell.
 pnpm --filter @prime-tracker/api exec prisma migrate deploy 2>&1 | tail -8
 
 # pnpm's build-script approval gate silently blocks Prisma's postinstall hook on this box,

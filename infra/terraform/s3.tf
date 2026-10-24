@@ -58,6 +58,55 @@ resource "aws_s3_bucket_versioning" "documents" {
   }
 }
 
+# Housekeeping for the staging prefixes only — never the tracker's documents, whose
+# version history is the DocumentVersion feature.
+#
+# migration/ holds the website's data exports (PrimeDevelopers-web scripts/aws), which
+# carried admin password hashes and enquiries. The scripts delete them on the way
+# out, but on a versioned bucket a plain delete only hides an object: the 24 Oct 2026
+# audit found the "deleted" exports still there as old versions. Anything under
+# migration/ now goes within a day whatever happens to the script.
+resource "aws_s3_bucket_lifecycle_configuration" "documents" {
+  bucket     = aws_s3_bucket.documents.id
+  depends_on = [aws_s3_bucket_versioning.documents]
+
+  rule {
+    id     = "migration-exports"
+    status = "Enabled"
+    filter {
+      prefix = "migration/"
+    }
+    expiration {
+      days = 1
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
+  rule {
+    id     = "deploy-artifacts-old-versions"
+    status = "Enabled"
+    filter {
+      prefix = "deploy/"
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+  }
+
+  rule {
+    id     = "deploys-artifacts-old-versions"
+    status = "Enabled"
+    filter {
+      prefix = "deploys/"
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+  }
+}
+
 # Browser uploads (presigned PUT) and reads need CORS on media + documents.
 resource "aws_s3_bucket_cors_configuration" "uploads" {
   for_each = {

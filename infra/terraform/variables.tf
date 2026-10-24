@@ -182,3 +182,44 @@ variable "enable_host_metrics" {
   type        = bool
   default     = true
 }
+
+variable "rds_memory_alarm_mb" {
+  description = <<-EOT
+    Alarm when RDS freeable memory stays under this many MB for 15 minutes. Scale it
+    with the instance: 128 on a 1 GB db.t3.micro was right at the edge once the
+    website shared it; about a tenth of the instance's memory is a sound default.
+  EOT
+  type        = number
+  default     = 128
+}
+
+variable "db_multi_az" {
+  description = "Keep a synchronous standby in a second AZ (automatic failover). Set true in client.tfvars."
+  type        = bool
+  default     = false
+}
+
+variable "rds_apply_immediately" {
+  description = <<-EOT
+    Apply RDS changes now instead of in the Monday 08:00-09:00 UTC maintenance window.
+    Leave false; set it on the command line for one deliberate apply:
+      terraform apply -var-file=client.tfvars -var=rds_apply_immediately=true
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "expected_account_id" {
+  description = <<-EOT
+    The AWS account this workspace manages. Every plan stops if the credentials in
+    use belong to any other — the default CLI credentials on the operator's machine
+    point at an old test account, and a plan there would try to recreate everything.
+  EOT
+  type        = string
+}
+
+variable "api_mail_from" {
+  description = "SES-verified sender for the tracker's email (SMTP_FROM). Must be verified in SES in this account."
+  type        = string
+  default     = "Prime Tracker <kalyan91333@gmail.com>"
+}

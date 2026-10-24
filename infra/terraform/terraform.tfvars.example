@@ -16,3 +16,12 @@ db_password = "REPLACE_with_a_strong_password"
 # Billing alarm (confirm the SNS email after apply)
 alarm_email           = "akprojects1431@gmail.com"
 billing_threshold_usd = 30
+
+# Every plan stops unless the credentials are for this account (versions.tf).
+expected_account_id = "000000000000"
+
+# Production database: an 8 GB non-burstable instance with a standby in a second AZ.
+# Changes wait for the Monday maintenance window unless rds_apply_immediately=true.
+# db_instance_class   = "db.m7g.large"
+# db_multi_az         = true
+# rds_memory_alarm_mb = 800
