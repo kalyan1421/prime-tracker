@@ -6,6 +6,7 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { CreateCashFlowEntryDto, UpdateCashFlowEntryDto } from './dto/cashflow-entry.dto';
 
 @ApiTags('CashFlow')
 @ApiBearerAuth()
@@ -57,14 +58,14 @@ export class CashFlowController {
   @Post()
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Create cash flow entry' })
-  create(@Body() body: any, @Request() req: any) {
+  create(@Body() body: CreateCashFlowEntryDto, @Request() req: any) {
     return this.service.create(body, req.user.sub);
   }
 
   @Put(':id')
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Update cash flow entry' })
-  update(@Param('id') id: string, @Body() body: any) {
+  update(@Param('id') id: string, @Body() body: UpdateCashFlowEntryDto) {
     return this.service.update(id, body);
   }
 

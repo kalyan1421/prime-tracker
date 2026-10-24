@@ -15,6 +15,7 @@ import { UpdateUnitDto } from './dto/update-unit.dto';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
 import { UpdateSiteTrackerDto, SetUnitAssigneesDto, SetSiteGroupDto } from './dto/site-tracker.dto';
 import { UserRole } from '@prisma/client';
+import { CombineUnitsDto } from './dto/combine-units.dto';
 
 @ApiTags('Units')
 @ApiBearerAuth()
@@ -102,7 +103,7 @@ export class UnitsController {
   @RequirePermissions('unit:edit')
   @ApiOperation({ summary: 'Combine 2+ adjacent units into one legal unit (sources archived, history kept)' })
   combine(
-    @Body() body: { buildingId: string; sourceUnitIds: string[]; unitNumber: string; unitType?: string; notes?: string },
+    @Body() body: CombineUnitsDto,
     @CurrentUser('role') userRole: UserRole,
   ) {
     return this.service.combine(body, userRole);

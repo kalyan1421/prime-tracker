@@ -14,6 +14,8 @@ import { UpdateProjectDto } from './dto/update-project.dto';
 import { ListProjectsDto } from './dto/list-projects.dto';
 import { AddMemberDto } from './dto/add-member.dto';
 import { AddMembersBulkDto } from './dto/add-members-bulk.dto';
+import { SetApprovedBudgetDto } from './dto/approved-budget.dto';
+import { clampLimit } from '../../common/pagination/pagination.dto';
 
 @ApiTags('Projects')
 @ApiBearerAuth()
@@ -91,7 +93,9 @@ export class ProjectsController {
     @Query('limit') limit?: string,
     @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.projectsService.getActivity(id, Number(page) || 1, Number(limit) || 60, permissions ?? []);
+    // The service merges at most 150 rows per source, so a page larger than this can only
+    // ever cost memory — capped like every other list.
+    return this.projectsService.getActivity(id, Number(page) || 1, clampLimit(limit, 60, 150), permissions ?? []);
   }
 
   @Get(':id')
@@ -131,7 +135,7 @@ export class ProjectsController {
   @Put(':id/approved-budget')
   @RequirePermissions('budget:edit')
   @ApiOperation({ summary: 'Set or clear the project approved budget (control total)' })
-  setApprovedBudget(@Param('id') id: string, @Body() body: { approvedBudget: number | null }) {
+  setApprovedBudget(@Param('id') id: string, @Body() body: SetApprovedBudgetDto) {
     return this.projectsService.setApprovedBudget(id, body.approvedBudget ?? null);
   }
 

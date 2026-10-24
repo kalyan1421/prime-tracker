@@ -7,6 +7,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
+import { clampLimit } from '../../common/pagination/pagination.dto';
 
 @ApiTags('Comments')
 @ApiBearerAuth()
@@ -32,7 +33,8 @@ export class CommentsController {
   @RequirePermissions('comment:view')
   @ApiOperation({ summary: 'Recent comments across all projects (grouped by type)' })
   findRecent(@Query('limit') limit?: string) {
-    return this.service.findRecent(limit ? parseInt(limit) : 20);
+    // Capped: this reads across every project, and `?limit=` used to be unbounded.
+    return this.service.findRecent(clampLimit(limit, 20, 100));
   }
 
   @Post()

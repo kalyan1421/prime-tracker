@@ -4,11 +4,11 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { basename, extname, join, resolve } from 'path';
-import { existsSync, mkdirSync } from 'fs';
-import { randomUUID } from 'crypto';
+import { memoryStorage } from 'multer';
+import { basename, join, resolve } from 'path';
+import { existsSync } from 'fs';
 import { TasksService } from './tasks.service';
+import { attachmentDisposition } from '../../common/storage/upload-policy';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -17,12 +17,14 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { ApiOperation } from '@nestjs/swagger';
 import { AddTaskUpdatePhotoDto, CreateTaskUpdateDto } from './dto/task-update.dto';
 import { CreateTaskDto, UpdateTaskDto } from './dto/create-task.dto';
+import { CommentContentDto } from '../update-board/dto/update-board.dto';
 
+/**
+ * Where attachments uploaded BEFORE 2026-10-24 live. New ones go through StorageService
+ * (see TasksService.uploadAttachment); this directory is now read-only legacy, kept so
+ * rows with `storagePath: null` stay downloadable. Nothing writes here any more.
+ */
 const UPLOADS_DIR = join(process.cwd(), 'uploads', 'tasks');
-
-function ensureUploadDir() {
-    if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
-}
 
 // Reads require task:view, writes task:edit.
 //
@@ -149,11 +151,11 @@ export class TasksController {
     @RequirePermissions('task:edit')
     addComment(
         @Param('id') id: string,
-        @Body('content') content: string,
+        @Body() body: CommentContentDto,
         @CurrentUser('sub') userId: string,
     ) {
-        if (!content?.trim()) throw new BadRequestException('Comment content is required');
-        return this.tasksService.addComment(id, userId, content.trim());
+        if (!body.content.trim()) throw new BadRequestException('Comment content is required');
+        return this.tasksService.addComment(id, userId, body.content.trim());
     }
 
     @Delete(':id/comments/:commentId')
@@ -196,38 +198,51 @@ export class TasksController {
     ) {
         const attachment = await this.tasksService.findAttachment(attachmentId);
 
-        // The stored fileUrl is ours, not user input — but take only its basename and
-        // re-check that the result is still inside UPLOADS_DIR, so a legacy or
-        // hand-edited row can never address a file elsewhere on the box.
+        // Current attachments live in the bucket. Streamed through here rather than
+        // redirected to a signed URL: the browser fetches this route with its
+        // Authorization header (XHR → blob), and a redirect would turn that into a
+        // cross-origin request the bucket's CORS rules do not allow.
+        if (attachment.storagePath) {
+            const file = await this.tasksService.openStoredAttachment(attachment.storagePath, attachment.fileName);
+            res.setHeader('Content-Type', file.contentType);
+            // Always an attachment from this route, whatever the type — the button is
+            // "Download", and the stored name is restored on the way out.
+            res.setHeader('Content-Disposition', attachmentDisposition(attachment.fileName));
+            if (file.contentLength != null) res.setHeader('Content-Length', String(file.contentLength));
+            // Headers are already sent by the time a mid-stream S3 error can happen, so the
+            // only honest response is to cut the connection rather than end a truncated file
+            // as if it were complete.
+            file.body.on('error', () => res.destroy());
+            file.body.pipe(res);
+            return;
+        }
+
+        // Legacy row: the bytes are on this host's disk. The stored fileUrl is ours, not
+        // user input — but take only its basename and re-check that the result is still
+        // inside UPLOADS_DIR, so a legacy or hand-edited row can never address a file
+        // elsewhere on the box.
         const filePath = resolve(UPLOADS_DIR, basename(attachment.fileUrl));
         if (!filePath.startsWith(resolve(UPLOADS_DIR) + '/') || !existsSync(filePath)) {
             throw new NotFoundException('Attachment file is no longer available');
         }
 
-        // Always an attachment, never inline: uploads keep the caller's extension with no
-        // allowlist, so an `.html` or `.svg` rendered inline would execute on the API's own
-        // origin. `download` sets Content-Disposition for us.
+        // Always an attachment, never inline: these legacy uploads predate the allowlist
+        // and kept the caller's extension, so an `.html` or `.svg` rendered inline would
+        // execute on the API's own origin. `download` sets Content-Disposition for us.
         res.download(filePath, attachment.fileName);
     }
 
+    /**
+     * Upload an attachment. Buffered in memory (25 MB cap) and handed to StorageService,
+     * which applies the upload allowlist and writes to the bucket — the same path as every
+     * other upload. It used to be multer diskStorage straight onto the API host, which had
+     * no type check at all and could not survive a second instance or a rebuilt box.
+     */
     @Post(':id/attachments')
     @RequirePermissions('task:edit')
     @UseInterceptors(
         FileInterceptor('file', {
-            storage: diskStorage({
-                destination: (_req, _file, cb) => {
-                    ensureUploadDir();
-                    cb(null, UPLOADS_DIR);
-                },
-                // randomUUID, not Date.now()+Math.random(): Math.random() is not a CSPRNG
-                // and the timestamp narrows the search space, which mattered while these
-                // files were served unauthenticated. They are behind a guard now, so the
-                // name is no longer load-bearing — but a guessable one should not be what
-                // is protecting them either way.
-                filename: (_req, file, cb) => {
-                    cb(null, `${randomUUID()}${extname(file.originalname)}`);
-                },
-            }),
+            storage: memoryStorage(),
             limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
         }),
     )
@@ -237,13 +252,7 @@ export class TasksController {
         @CurrentUser('sub') userId: string,
     ) {
         if (!file) throw new BadRequestException('File is required');
-        const fileUrl = `/uploads/tasks/${file.filename}`;
-        return this.tasksService.addAttachment(taskId, userId, {
-            fileName: file.originalname,
-            fileUrl,
-            fileSize: file.size,
-            mimeType: file.mimetype,
-        });
+        return this.tasksService.uploadAttachment(taskId, userId, file);
     }
 
     @Delete(':id/attachments/:attachmentId')

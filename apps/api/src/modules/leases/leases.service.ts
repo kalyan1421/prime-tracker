@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NOT_ON_SOLD_UNIT } from './lease-filters';
-import { Prisma } from '@prisma/client';
+import { Prisma, UnitStatus } from '@prisma/client';
 import { apportion } from './rent-apportionment';
 import {
   LeaseRentPeriodService, startOfUtcDay, addMonthsUtc, monthsBetweenUtc,
@@ -10,7 +10,7 @@ import { EventBus } from '../../common/events/event-bus.service';
 import { LeaseObligationService } from './lease-obligation.service';
 import { LeaseRentInvoiceService } from './lease-rent-invoice.service';
 import { AuditService } from '../../common/utils/audit.service';
-import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import { UnitStatusEventService, UnitStatusEventSource } from '../../common/utils/unit-status-event.service';
 import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 
@@ -674,42 +674,15 @@ export class LeasesService {
 
       let unitEventId: string | null = null;
       if (before.unitId && releaseUnit) {
-        const unit = await tx.unit.findUnique({
-          where: { id: before.unitId },
-          select: { status: true },
+        const released = await this.releaseUnitWithin(tx, {
+          unitId: before.unitId,
+          leaseId: id,
+          effectiveAt: terminationDate,
+          source: 'LEASE_ENDED',
+          reason: this.tenancyEndReason(input, successor),
+          userId,
         });
-        // A SOLD unit is not released by a lease ending — the tenant buying the unit is
-        // exactly the TENANT_BOUGHT case, and flipping it back to AVAILABLE would undo
-        // the sale. Leave the status and still log the lease ending against it.
-        const releasable = unit && unit.status !== 'SOLD';
-        if (releasable) {
-          await tx.unit.update({
-            where: { id: before.unitId },
-            // availableSince is the time-on-market clock. Setting it here is the whole
-            // point: it is what the vacancy report and stale-unit feed age from.
-            data: { status: 'AVAILABLE', availableSince: terminationDate },
-          });
-        }
-        // `record`, not `recordIfChanged`, even though from and to are often the same
-        // status. Nothing currently flips a unit to LEASED when its lease activates, so
-        // a released unit is frequently AVAILABLE → AVAILABLE — and that event is still
-        // the one that matters: currentVacancyStartByUnit takes the LATEST event landing
-        // on AVAILABLE, so this is what restarts the time-on-market clock at the move-out
-        // date. Suppressing it would date the vacancy from whenever the unit was created.
-        const event = await this.statusEvents.record(
-          {
-            unitId: before.unitId,
-            fromStatus: unit?.status ?? null,
-            toStatus: releasable ? 'AVAILABLE' : (unit?.status ?? 'AVAILABLE'),
-            effectiveAt: terminationDate,
-            source: 'LEASE_ENDED',
-            leaseId: id,
-            reason: this.tenancyEndReason(input, successor),
-            recordedById: userId,
-          },
-          tx,
-        );
-        unitEventId = event.id;
+        unitEventId = released.eventId;
       }
 
       // Relocation: the tenancy continues, but on a different unit. That unit's own
@@ -1113,6 +1086,73 @@ export class LeasesService {
       orderBy: { effectiveDate: 'asc' },
       include: { recordedBy: { select: { id: true, name: true, email: true } } },
     });
+  }
+
+  /**
+   * The unit side of a tenancy stopping — the ONE place that hands a unit back to the
+   * market for a lease. endTenancy uses it for a move-out; delete() uses it when a lease is
+   * removed while ACTIVE, which used to leave the unit reading LEASED with no lease behind
+   * it, and no occupancy event to say why.
+   *
+   * A SOLD unit is not released — the tenant buying the unit is exactly the TENANT_BOUGHT
+   * case, and flipping it back to AVAILABLE would undo the sale. The status is left and the
+   * event is still written against it.
+   *
+   * `onlyFrom` narrows when anything happens at all: delete() passes the statuses an
+   * ACTIVE lease puts a unit in, so a unit somebody has since moved on by hand is left
+   * exactly as it is, with no event.
+   *
+   * Runs in the caller's transaction, so the unit and its log move with the lease or not
+   * at all.
+   */
+  private async releaseUnitWithin(
+    tx: Prisma.TransactionClient,
+    p: {
+      unitId: string;
+      leaseId: string;
+      effectiveAt: Date;
+      source: UnitStatusEventSource;
+      reason: string;
+      userId?: string;
+      onlyFrom?: UnitStatus[];
+    },
+  ): Promise<{ eventId: string | null; released: boolean }> {
+    const unit = await tx.unit.findUnique({
+      where: { id: p.unitId },
+      select: { status: true },
+    });
+    if (p.onlyFrom && (!unit || !p.onlyFrom.includes(unit.status as UnitStatus))) {
+      return { eventId: null, released: false };
+    }
+    const releasable = !!unit && unit.status !== 'SOLD';
+    if (releasable) {
+      await tx.unit.update({
+        where: { id: p.unitId },
+        // availableSince is the time-on-market clock. Setting it here is the whole
+        // point: it is what the vacancy report and stale-unit feed age from.
+        data: { status: 'AVAILABLE', availableSince: p.effectiveAt },
+      });
+    }
+    // `record`, not `recordIfChanged`, even though from and to are often the same
+    // status. A released unit can be AVAILABLE → AVAILABLE (a lease that never moved its
+    // unit) — and that event is still the one that matters: currentVacancyStartByUnit
+    // takes the LATEST event landing on AVAILABLE, so this is what restarts the
+    // time-on-market clock at the move-out date. Suppressing it would date the vacancy
+    // from whenever the unit was created.
+    const event = await this.statusEvents.record(
+      {
+        unitId: p.unitId,
+        fromStatus: (unit?.status as UnitStatus | undefined) ?? null,
+        toStatus: releasable ? 'AVAILABLE' : ((unit?.status as UnitStatus | undefined) ?? 'AVAILABLE'),
+        effectiveAt: p.effectiveAt,
+        source: p.source,
+        leaseId: p.leaseId,
+        reason: p.reason,
+        recordedById: p.userId,
+      },
+      tx,
+    );
+    return { eventId: event.id, released: releasable };
   }
 
   /**
@@ -2354,13 +2394,18 @@ export class LeasesService {
    * The lease's periods, invoices and obligations are not written to: every query for
    * them filters on `lease: { deletedAt: null }`, so soft-deleting the lease takes its
    * whole ledger out of view in one write.
+   *
+   * An ACTIVE lease's unit IS written to: it is released (LEASED/OCCUPIED → AVAILABLE,
+   * with a LEASE_DELETED occupancy event) through releaseUnitWithin, the same path a
+   * move-out takes. Everything after the approval check is one transaction.
    */
   async delete(id: string, userId?: string, canApproveDeletion = false) {
     const lease = await this.findById(id);
     const historical = !!(lease as any).isHistorical;
     let approvalId: string | null = null;
-    let selfApproved = false;
+    let selfApprove = false;
 
+    // Decide BEFORE writing anything: the refusals below must leave every row untouched.
     if (historical) {
       const target = { leaseId: id };
       const approved = await this.historicalDeletions.findLatestApproved(target);
@@ -2368,9 +2413,7 @@ export class LeasesService {
       if (approved) {
         approvalId = approved.id;
       } else if (canApproveDeletion) {
-        selfApproved = true;
-        const record = await this.historicalDeletions.selfApprove(target, userId!);
-        approvalId = record.id;
+        selfApprove = true;
       } else {
         const pending = await this.historicalDeletions.findPending(target);
         throw new ForbiddenException(
@@ -2380,28 +2423,75 @@ export class LeasesService {
               + 'has to approve it.',
         );
       }
-
-      // Mark the approval used, so one approval cannot authorise a second deletion if the
-      // record is ever restored.
-      await this.historicalDeletions.markCompleted(approvalId!);
     }
 
-    const deleted = await this.prisma.lease.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    // ONE transaction for the approval, the soft delete, the unit release and the audit
+    // row. These were four separate writes: a failure after markCompleted burned the
+    // Founder's approval on a lease that was never deleted, and a failure after the delete
+    // left it gone with no audit row saying who removed it or under which approval.
+    return this.prisma.$transaction(async (tx) => {
+      if (historical) {
+        if (selfApprove) {
+          const record = await this.historicalDeletions.selfApprove({ leaseId: id }, userId!, tx);
+          approvalId = record.id;
+        }
+        // Mark the approval used, so one approval cannot authorise a second deletion if
+        // the record is ever restored.
+        await this.historicalDeletions.markCompleted(approvalId!, tx);
+      }
+
+      const deleted = await tx.lease.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+
+      // Deleting a lease that is still RUNNING takes its tenant off the unit as surely as
+      // ending it would — so the unit is released through the same path endTenancy uses,
+      // occupancy event included. Only when this lease is what holds the unit: a unit with
+      // another live lease on it (a signed successor) is that lease's to govern, and one
+      // already moved off LEASED/OCCUPIED by hand is left alone.
+      let unitReleased = false;
+      if (lease.status === 'ACTIVE' && lease.unitId && !(lease as any).terminationDate) {
+        const otherLive = await tx.lease.count({
+          where: {
+            unitId: lease.unitId,
+            id: { not: id },
+            deletedAt: null,
+            terminationDate: null,
+            status: { in: ['ACTIVE', 'DRAFT'] },
+          },
+        });
+        if (otherLive === 0) {
+          const released = await this.releaseUnitWithin(tx, {
+            unitId: lease.unitId,
+            leaseId: id,
+            effectiveAt: new Date(),
+            source: 'LEASE_DELETED',
+            reason: `Lease deleted — ${lease.tenantName}`,
+            userId,
+            onlyFrom: ['LEASED', 'OCCUPIED'],
+          });
+          unitReleased = released.released;
+        }
+      }
+
+      await this.audit.log(
+        {
+          userId,
+          action: historical ? 'LEASE_HISTORICAL_DELETED' : 'LEASE_DELETED',
+          entity: 'Lease',
+          entityId: id,
+          oldValues: {
+            tenantName: lease.tenantName,
+            isHistorical: historical,
+            ...(historical ? { approvalId, selfApproved: selfApprove } : {}),
+            ...(unitReleased ? { unitReleased: true } : {}),
+          },
+        },
+        tx,
+      );
+      return deleted;
     });
-    await this.audit.log({
-      userId,
-      action: historical ? 'LEASE_HISTORICAL_DELETED' : 'LEASE_DELETED',
-      entity: 'Lease',
-      entityId: id,
-      oldValues: {
-        tenantName: lease.tenantName,
-        isHistorical: historical,
-        ...(historical ? { approvalId, selfApproved } : {}),
-      },
-    });
-    return deleted;
   }
 
   // ─────── Historical deletion approval (R27) ───────

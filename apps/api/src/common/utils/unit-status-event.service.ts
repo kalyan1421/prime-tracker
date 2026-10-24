@@ -19,6 +19,12 @@ export type UnitStatusEventSource =
   // lost one.
   | 'SALE_TRANSFERRED_OUT' // the sale holding this unit moved off to another unit
   | 'SALE_TRANSFERRED_IN'  // an existing sale moved ONTO this unit
+  // The lease/sale holding the unit was soft-deleted (usually: entered in error). Kept
+  // apart from LEASE_ENDED / SALE_CANCELLED for the same reason as the transfer sources:
+  // a record removed is not a tenant moving out or a buyer walking away, and a vacancy
+  // report should not count it as either.
+  | 'LEASE_DELETED'   // an ACTIVE lease was deleted and released the unit
+  | 'SALE_DELETED'    // a CLOSED sale was deleted and released the SOLD unit
   | 'UNIT_CREATED'    // the unit's first state
   | 'UNIT_COMBINED'   // unit merge minted or archived this unit
   | 'BACKFILL'        // historical entry (Phase H2)

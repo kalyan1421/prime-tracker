@@ -18,8 +18,10 @@ import { UpdateSaleDto } from './dto/update-sale.dto';
 import { BackfillSaleDto } from './dto/backfill-sale.dto';
 import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
 import { TransferSaleUnitDto } from './dto/transfer-sale-unit.dto';
-import { UserRole, SalePaymentTrigger } from '@prisma/client';
-import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
+import { AddSalePaymentDto, ApplyPaymentTemplateDto, LogSalePaymentDto, UpdateSalePaymentDto } from './dto/sale-payment.dto';
+import { SaleImportCommitDto } from './dto/sale-import-commit.dto';
+import { UserRole } from '@prisma/client';
+import { SalePaymentsService } from './sale-payments.service';
 import { SaleUnitTransferService } from './sale-unit-transfer.service';
 import { SaleImportService, normalizeSaleOverrides } from './sale-import.service';
 import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
@@ -154,9 +156,8 @@ export class SalesController {
   @Post('backfill/import/commit')
   @RequirePermissions('unit:history:backfill')
   @ApiOperation({ summary: 'Commit previously-previewed sale-history rows — one backfillSale() per row' })
-  commitImport(@Body('rows') rows: any[], @CurrentUser('sub') userId: string) {
-    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('No rows to import');
-    return this.importService.commitImport(rows, userId);
+  commitImport(@Body() body: SaleImportCommitDto, @CurrentUser('sub') userId: string) {
+    return this.importService.commitImport(body.rows as Parameters<SaleImportService['commitImport']>[0], userId);
   }
 
   @Put(':id')
@@ -307,17 +308,7 @@ export class SalesController {
   @ApiOperation({ summary: 'Add an installment (fixed-date or milestone-triggered)' })
   addPayment(
     @Param('saleId') saleId: string,
-    @Body() body: {
-      label: string;
-      amount?: number;
-      percentOfPrice?: number;
-      trigger?: SalePaymentTrigger;
-      dueDate?: string;
-      milestoneId?: string;
-      interiorProjectId?: string;
-      sequence?: number;
-      notes?: string;
-    },
+    @Body() body: AddSalePaymentDto,
   ) {
     return this.salePayments.addPayment(saleId, body);
   }
@@ -327,7 +318,7 @@ export class SalesController {
   @ApiOperation({ summary: 'Seed a schedule from a standard template (e.g. 10-40-50)' })
   applyTemplate(
     @Param('saleId') saleId: string,
-    @Body() body: { template: keyof typeof PAYMENT_TEMPLATES },
+    @Body() body: ApplyPaymentTemplateDto,
   ) {
     return this.salePayments.applyTemplate(saleId, body.template);
   }
@@ -337,7 +328,7 @@ export class SalesController {
   @ApiOperation({ summary: 'Edit an installment' })
   updatePayment(
     @Param('id') id: string,
-    @Body() body: { label?: string; amount?: number; dueDate?: string; milestoneId?: string; sequence?: number; notes?: string },
+    @Body() body: UpdateSalePaymentDto,
   ) {
     return this.salePayments.updatePayment(id, body);
   }
@@ -345,7 +336,7 @@ export class SalesController {
   @Post('payments/:id/log')
   @RequirePermissions('payment:log')
   @ApiOperation({ summary: 'Log a (partial) payment against an installment' })
-  logPayment(@Param('id') id: string, @Body() body: { amount: number }) {
+  logPayment(@Param('id') id: string, @Body() body: LogSalePaymentDto) {
     return this.salePayments.logPayment(id, body.amount);
   }
 

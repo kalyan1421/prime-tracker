@@ -15,7 +15,7 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions } from '../../common/decorators/index';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
-import { PresignedUploadDto } from './dto/presigned-upload.dto';
+import { PresignedUploadDto, ReplaceDocumentDto, UploadFileDto } from './dto/presigned-upload.dto';
 import { Response } from 'express';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -42,11 +42,11 @@ export class DocumentsController {
   @RequirePermissions('document:upload')
   @ApiOperation({ summary: 'Issue a presigned S3 upload URL for client-direct upload' })
   presignedUpload(@Body() body: PresignedUploadDto) {
-    return this.storage.createPresignedUpload(body.filename, {
-      projectId: body.projectId,
-      projectName: body.projectName,
-      category: body.category,
-    });
+    return this.storage.createPresignedUpload(
+      body.filename,
+      { projectId: body.projectId, projectName: body.projectName, category: body.category },
+      { contentType: body.contentType, size: body.size },
+    );
   }
 
   /**
@@ -118,7 +118,7 @@ export class DocumentsController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } }))
   async uploadFile(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { projectId?: string; projectName?: string; category?: string },
+    @Body() body: UploadFileDto,
   ) {
     if (!file) throw new BadRequestException('No file was received');
     const { storagePath, publicUrl } = await this.storage.upload(
@@ -140,6 +140,7 @@ export class DocumentsController {
     @Body() body: UploadDocumentDto,
     @Request() req: any,
   ) {
+    if (!file) throw new BadRequestException('No file was received');
     return this.service.create(file, body, req.user.sub);
   }
 
@@ -166,8 +167,9 @@ export class DocumentsController {
   replace(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { fileName?: string },
+    @Body() body: ReplaceDocumentDto,
   ) {
+    if (!file) throw new BadRequestException('No file was received');
     return this.service.replaceFile(id, file, body.fileName);
   }
 

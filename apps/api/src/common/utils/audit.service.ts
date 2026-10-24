@@ -302,20 +302,34 @@ const SOFT_DELETABLE_ACTIVITY_ENTITIES = new Set(['Projects', 'Units', 'Building
 ACTIVITY_SUBJECTS.Sale = ACTIVITY_SUBJECTS.Sales;
 ACTIVITY_SUBJECTS.Lease = ACTIVITY_SUBJECTS.Leases;
 
+/** Largest page the admin audit log returns. The UI pages at 50. */
+export const MAX_AUDIT_PAGE = 200;
+
 @Injectable()
 export class AuditService {
   constructor(private prisma: PrismaService) {}
 
-  async log(payload: AuditPayload): Promise<void> {
+  /**
+   * Write one audit event.
+   *
+   * Standalone (no `tx`), a failure is logged and swallowed: a logging problem must never
+   * cost the user their write. Inside a caller's transaction (`tx` given) it is REthrown
+   * instead — the failed INSERT has already aborted that transaction in Postgres, so
+   * swallowing it would let the caller carry on and "commit" what is in fact a rollback.
+   * Passing `tx` therefore means "this write and its audit row succeed or fail together",
+   * which is what the lease/sale delete paths want.
+   */
+  async log(payload: AuditPayload, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx ?? this.prisma;
     try {
       // Verify userId exists before setting FK
       let userId = payload.userId;
       if (userId) {
-        const user = await this.prisma.user.findUnique({ where: { id: userId } });
+        const user = await client.user.findUnique({ where: { id: userId } });
         if (!user) userId = undefined;
       }
 
-      await this.prisma.auditEvent.create({
+      await client.auditEvent.create({
         data: {
           userId,
           action: payload.action,
@@ -329,6 +343,7 @@ export class AuditService {
         },
       });
     } catch (err) {
+      if (tx) throw err;
       console.error('Audit log failed:', err);
     }
   }
@@ -343,7 +358,9 @@ export class AuditService {
     endDate?: Date;
   }) {
     const page = Math.max(1, Number(params.page) || 1);
-    const limit = Math.max(1, Number(params.limit) || 50);
+    // Capped like activityFeed below. Uncapped, `?limit=1000000` loaded the whole audit
+    // table — the one that grows with every request — with a user join per row.
+    const limit = Math.min(MAX_AUDIT_PAGE, Math.max(1, Number(params.limit) || 50));
     const { userId, entity, action, startDate, endDate } = params;
 
     const where: Record<string, unknown> = {};

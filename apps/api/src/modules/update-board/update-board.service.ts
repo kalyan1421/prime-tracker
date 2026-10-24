@@ -431,7 +431,8 @@ export class UpdateBoardService {
     const attachments = await Promise.all(
       (post as any).attachments.map(async (a: any) => ({
         ...a,
-        url: await this.storage.signedUrl(a.storagePath, 3600).catch(() => ''),
+        // fileName, so a non-image attachment downloads under its own name (see upload-policy.ts).
+        url: await this.storage.signedUrl(a.storagePath, 3600, { downloadName: a.fileName }).catch(() => ''),
       })),
     );
     return { ...post, attachments };
@@ -498,7 +499,7 @@ export class UpdateBoardService {
     });
     return {
       ...attachment,
-      url: await this.storage.signedUrl(attachment.storagePath, 3600).catch(() => ''),
+      url: await this.storage.signedUrl(attachment.storagePath, 3600, { downloadName: attachment.fileName }).catch(() => ''),
     };
   }
 

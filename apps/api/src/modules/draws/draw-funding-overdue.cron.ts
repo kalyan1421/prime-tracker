@@ -16,6 +16,18 @@ export class DrawFundingOverdueCron {
 
   @Cron(CronExpression.EVERY_DAY_AT_8AM, { name: 'draw-funding-overdue' })
   async run() {
+    // Caught here, named, and logged: a throw out of a @Cron handler surfaces as an
+    // anonymous scheduler error with no job name, and this one shares the 08:00 slot with
+    // three other jobs. The scheduler itself carries on either way; the point is that the
+    // failure is visible and attributable in the logs.
+    try {
+      await this.check();
+    } catch (err) {
+      this.logger.error(`Cron draw-funding-overdue failed: ${(err as Error).message}`, (err as Error).stack);
+    }
+  }
+
+  async check() {
     const now = new Date();
     const overdue = await this.prisma.drawRequest.findMany({
       where: {

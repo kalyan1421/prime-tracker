@@ -82,7 +82,11 @@ export class DocumentsService {
         let signed = doc;
         if (doc.storagePath) {
           try {
-            const signedUrl = await this.storage.signedUrl(doc.storagePath);
+            // The document's own name rides along so a non-inline type (Word, Excel, CAD…)
+            // downloads as "Lease – Unit 4.docx" rather than as the bucket key.
+            const signedUrl = await this.storage.signedUrl(doc.storagePath, 3600, {
+              downloadName: (doc as { fileName?: string }).fileName,
+            });
             signed = { ...doc, fileUrl: signedUrl };
           } catch {
             // leave fileUrl as-is if signing fails (e.g. object deleted from S3)
@@ -337,7 +341,8 @@ export class DocumentsService {
       projectName = project?.name;
     }
 
-    const { storagePath, publicUrl } = await this.storage.upload(
+    // Throws 415 for a type off the allowlist (upload-policy.ts) before anything is written.
+    const { storagePath, publicUrl, contentType } = await this.storage.upload(
       file.buffer,
       file.mimetype,
       file.originalname,
@@ -359,7 +364,8 @@ export class DocumentsService {
         fileName,
         fileUrl: publicUrl,
         fileSize: file.size,
-        mimeType: file.mimetype,
+        // The type derived from the extension, not the browser's claim — see upload-policy.ts.
+        mimeType: contentType,
         category: (metadata.category as DocCategory) || DocCategory.GENERAL,
         uploadedById: userId,
         storagePath,
@@ -430,7 +436,7 @@ export class DocumentsService {
 
     // Upload new file; keep original project folder structure from storagePath if possible
     const projectId = doc.projectId ?? undefined;
-    const { storagePath, publicUrl } = await this.storage.upload(
+    const { storagePath, publicUrl, contentType } = await this.storage.upload(
       file.buffer,
       file.mimetype,
       file.originalname,
@@ -479,7 +485,7 @@ export class DocumentsService {
             fileUrl: publicUrl,
             storagePath,
             fileSize: file.size,
-            mimeType: file.mimetype,
+            mimeType: contentType,
             versionNumber: doc.versionNumber + 1,
           },
           include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
@@ -520,7 +526,7 @@ export class DocumentsService {
         let fileUrl: string | null = null;
         if (version.storagePath) {
           try {
-            fileUrl = await this.storage.signedUrl(version.storagePath);
+            fileUrl = await this.storage.signedUrl(version.storagePath, 3600, { downloadName: version.fileName });
           } catch {
             // Signing failed (object gone from the bucket by some other route) — report it
             // as unavailable rather than as a URL that will not resolve.
@@ -581,7 +587,7 @@ export class DocumentsService {
 
     const storagePath = (doc as any).storagePath as string | null;
     if (storagePath) {
-      const url = await this.storage.signedUrl(storagePath);
+      const url = await this.storage.signedUrl(storagePath, 3600, { downloadName: doc.fileName });
       return { url, fileName: doc.fileName };
     }
     return { url: doc.fileUrl, fileName: doc.fileName };

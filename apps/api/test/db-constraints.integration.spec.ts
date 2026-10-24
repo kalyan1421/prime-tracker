@@ -696,3 +696,49 @@ maybe()('rent_correction constraints (R22)', () => {
     });
   });
 });
+
+/**
+ * notifications_pending_dedupe_key (20261024010000) — at most one UNREAD copy of a
+ * recurring alert per person. NotificationsService treats the P2002 this raises as
+ * "already sent"; that only means anything if the index is really there and really
+ * partial.
+ */
+maybe()('notifications_pending_dedupe_key', () => {
+  const alert = (userId: string, over: Record<string, unknown> = {}) => ({
+    userId,
+    type: 'RENT_OVERDUE',
+    title: 'Rent overdue',
+    body: 'IT',
+    dedupeKey: `rentInvoice:it-${Math.abs(Number(process.hrtime.bigint() % 1_000_000n))}`,
+    ...over,
+  });
+
+  it('refuses a second unread copy of the same alert for the same person, as P2002', async () => {
+    await inRolledBackTx(async (tx) => {
+      const userId = await ensureUser(tx);
+      const first = alert(userId);
+      await tx.notification.create({ data: first });
+      await expect(tx.notification.create({ data: { ...first } })).rejects.toMatchObject({ code: 'P2002' });
+    });
+  });
+
+  it('allows the re-raise: a READ copy does not block a new unread one', async () => {
+    await inRolledBackTx(async (tx) => {
+      const userId = await ensureUser(tx);
+      const first = alert(userId, { readAt: new Date() });
+      await tx.notification.create({ data: first });
+      const again = await tx.notification.create({ data: { ...first, readAt: null } });
+      expect(again.id).toBeTruthy();
+    });
+  });
+
+  it('never constrains a keyless (event) notification', async () => {
+    await inRolledBackTx(async (tx) => {
+      const userId = await ensureUser(tx);
+      const event = alert(userId, { type: 'COMMENT_MENTION', dedupeKey: null });
+      await tx.notification.create({ data: event });
+      const second = await tx.notification.create({ data: { ...event } });
+      expect(second.id).toBeTruthy();
+    });
+  });
+});

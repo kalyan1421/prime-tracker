@@ -8,7 +8,7 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { AddTemplateItemDto } from './dto/template-item.dto';
 import {
-  AddUnitStageDto, AddUnitStagesDto, ReorderUnitStagesDto, UpdateUnitStageDto,
+  AddStagePhotoDto, AddUnitStageDto, AddUnitStagesDto, ReorderUnitStagesDto, UpdateUnitStageDto,
 } from './dto/unit-stage.dto';
 
 @ApiTags('Construction Checklist')
@@ -139,7 +139,7 @@ export class ConstructionChecklistController {
   @ApiOperation({ summary: 'Attach a photo to a checklist stage' })
   addStagePhoto(
     @Param('stageId') stageId: string,
-    @Body() body: { storagePath: string; caption?: string },
+    @Body() body: AddStagePhotoDto,
     @CurrentUser('sub') userId?: string,
   ) {
     return this.service.addStagePhoto(stageId, body.storagePath, body.caption, userId);

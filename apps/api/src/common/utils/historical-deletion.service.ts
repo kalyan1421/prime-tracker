@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /** Exactly one of these is set — mirrors CommissionInstallmentService's CommissionTarget. */
@@ -27,8 +28,8 @@ function whereForTarget(target: HistoricalDeletionTarget) {
 export class HistoricalDeletionService {
   constructor(private prisma: PrismaService) {}
 
-  findPending(target: HistoricalDeletionTarget) {
-    return this.prisma.historicalRecordDeletion.findFirst({
+  findPending(target: HistoricalDeletionTarget, tx?: Prisma.TransactionClient) {
+    return (tx ?? this.prisma).historicalRecordDeletion.findFirst({
       where: { ...whereForTarget(target), status: 'PENDING' },
     });
   }
@@ -109,10 +110,11 @@ export class HistoricalDeletionService {
    * act, so the trail reads the same shape as every other deletion rather than being a
    * hole where an approval should be.
    */
-  async selfApprove(target: HistoricalDeletionTarget, userId: string) {
-    const pending = await this.findPending(target);
+  async selfApprove(target: HistoricalDeletionTarget, userId: string, tx?: Prisma.TransactionClient) {
+    const client = tx ?? this.prisma;
+    const pending = await this.findPending(target, tx);
     return pending
-      ? this.prisma.historicalRecordDeletion.update({
+      ? client.historicalRecordDeletion.update({
           where: { id: pending.id },
           data: {
             status: 'APPROVED',
@@ -121,7 +123,7 @@ export class HistoricalDeletionService {
             decisionNote: 'Approved by deleting the record directly',
           },
         })
-      : this.prisma.historicalRecordDeletion.create({
+      : client.historicalRecordDeletion.create({
           data: {
             ...target,
             reason: 'Deleted directly by an approver',
@@ -133,9 +135,13 @@ export class HistoricalDeletionService {
         });
   }
 
-  /** Marks an approval used, so it cannot authorise a second deletion if the record is ever restored. */
-  markCompleted(id: string) {
-    return this.prisma.historicalRecordDeletion.update({ where: { id }, data: { status: 'COMPLETED' } });
+  /**
+   * Marks an approval used, so it cannot authorise a second deletion if the record is ever
+   * restored. Takes the caller's `tx` so the approval is only burned if the delete it
+   * authorised actually commits.
+   */
+  markCompleted(id: string, tx?: Prisma.TransactionClient) {
+    return (tx ?? this.prisma).historicalRecordDeletion.update({ where: { id }, data: { status: 'COMPLETED' } });
   }
 
   /** The Founder's queue — every request of a given status, oldest first. */
