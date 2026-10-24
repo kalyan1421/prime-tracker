@@ -2,12 +2,13 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChangeOrderStatus, ContractStatus } from '@prisma/client';
 import { CreateContractDto, UpdateContractDto, CreateChangeOrderDto, CreateContractPaymentDto } from './dto/create-contract.dto';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 @Injectable()
 export class ContractsService {
   constructor(private prisma: PrismaService) {}
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     return this.prisma.contract.findMany({
       where: { projectId },
       include: {
@@ -19,7 +20,7 @@ export class ContractsService {
     });
   }
 
-  async getProjectSummary(projectId: string) {
+  async getProjectSummary(projectId: ProjectIdFilter) {
     const contracts = await this.findByProject(projectId);
     const totalOriginal = contracts.reduce((s, c) => s + c.originalAmount, 0);
     const totalCurrent = contracts.reduce((s, c) => s + c.currentAmount, 0);

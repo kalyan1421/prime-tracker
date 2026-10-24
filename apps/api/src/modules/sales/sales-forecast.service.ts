@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DEFAULT_SALE_STAGE_PROBABILITIES } from '@prime-tracker/shared';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * Probability-weighted revenue forecast for the sales pipeline.
@@ -48,11 +49,14 @@ export class SalesForecastService {
   constructor(private prisma: PrismaService) {}
 
   async forProject(
-    projectId: string,
+    projectId: ProjectIdFilter,
     overrides?: Record<string, number>,
   ): Promise<PipelineForecast> {
     // An explicit argument wins outright; otherwise go and find the org's own tuning.
-    const resolved = overrides ?? (await this.resolveStageProbabilities(projectId));
+    // Only a single project names an org — a portfolio-wide or member-set forecast has
+    // always run on the defaults (the lookup used to throw on `id: undefined` and fall back).
+    const resolved = overrides
+      ?? (typeof projectId === 'string' ? await this.resolveStageProbabilities(projectId) : {});
     const probabilities = { ...DEFAULT_PROBABILITIES, ...resolved };
 
     const sales = await this.prisma.sale.findMany({

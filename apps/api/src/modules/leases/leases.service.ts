@@ -13,6 +13,7 @@ import { AuditService } from '../../common/utils/audit.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
 import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * Why a tenancy ended. The first six end it for good; the last five say the tenancy
@@ -287,7 +288,7 @@ export class LeasesService {
    * So a ref alone never identifies a group: it is always read with the project and with
    * liveness, exactly as the rent roll reads leases.
    */
-  async resolveDealGroup(projectId: string, combinedDealRef: string) {
+  async resolveDealGroup(projectId: ProjectIdFilter, combinedDealRef: string) {
     return this.prisma.lease.findMany({
       where: {
         combinedDealRef,
@@ -1480,7 +1481,7 @@ export class LeasesService {
     return this.prisma.lease.findMany({ where: { buildingId, deletedAt: null }, orderBy: { leaseStart: 'desc' } });
   }
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     // OR clause to capture both unit-leases (via unit→building→project) and
     // building-leases (via building→project) under one project.
     return this.prisma.lease.findMany({
@@ -1521,7 +1522,7 @@ export class LeasesService {
    * `contractedMonthlyRent` is the old flat sum, so the UI can show the gap and
    * explain it rather than looking like the number silently dropped.
    */
-  async getRentRoll(projectId: string, asOf: Date = new Date()) {
+  async getRentRoll(projectId: ProjectIdFilter, asOf: Date = new Date()) {
     const leases = await this.prisma.lease.findMany({
       where: {
         status: 'ACTIVE',

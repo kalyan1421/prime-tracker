@@ -12,14 +12,13 @@ const mockEncryption = {
 };
 
 const mockPrisma = { drawSchedule: { findMany: jest.fn() } };
-const mockBus = { emit: jest.fn() };
 
 describe('LoansService.findProjectDrawSchedules', () => {
   let service: LoansService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new LoansService(mockPrisma as any, mockEncryption as any, mockBus as any);
+    service = new LoansService(mockPrisma as any, mockEncryption as any);
   });
 
   /**

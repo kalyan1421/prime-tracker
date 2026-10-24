@@ -12,7 +12,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { PresignedUploadDto } from './dto/presigned-upload.dto';
@@ -30,6 +31,7 @@ export class DocumentsController {
     private service: DocumentsService,
     private storage: StorageService,
     private retention: DocumentRetentionService,
+    private access: ProjectAccessService,
   ) {}
 
   /**
@@ -73,13 +75,14 @@ export class DocumentsController {
   @ApiOperation({
     summary: 'List documents by projectId, buildingId, unitId, saleId, leadId, or interiorProjectId',
   })
-  find(
+  async find(
     @Query('projectId') projectId: string,
     @Query('unitId') unitId: string,
     @Query('buildingId') buildingId?: string,
     @Query('saleId') saleId?: string,
     @Query('leadId') leadId?: string,
     @Query('interiorProjectId') interiorProjectId?: string,
+    @CurrentUser() user?: ScopedUser,
   ) {
     if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId);
     // Before unitId: a sale-scoped read must not widen to the unit's whole file. The stage
@@ -92,7 +95,8 @@ export class DocumentsController {
     if (leadId) return this.service.findByLead(leadId);
     if (unitId) return this.service.findByUnit(unitId);
     if (buildingId) return this.service.findByBuilding(buildingId);
-    return this.service.findByProject(projectId);
+    // No filter at all used to mean every project's documents, each with a signed URL.
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
   }
 
   /**

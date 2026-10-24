@@ -232,3 +232,27 @@ describe('SalesForecastService', () => {
     });
   });
 });
+
+// A scoped role with no ?projectId= is handed its member set (ProjectAccessService
+// .projectIdFilter). That set names no single org, so the forecast runs on the defaults —
+// what the no-project call always did, minus the lookup on `id: undefined` and its warning.
+describe('SalesForecastService — member-project scope', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.sale.findMany.mockResolvedValue(SALES);
+  });
+
+  it('filters the sales to the member projects and does not look up an org', async () => {
+    const res = await makeService().forProject({ in: ['p1', 'p2'] });
+    expect(mockPrisma.sale.findMany.mock.calls[0][0].where).toEqual({ projectId: { in: ['p1', 'p2'] }, deletedAt: null });
+    expect(mockPrisma.project.findUnique).not.toHaveBeenCalled();
+    expect(res.weightedForecast).toBe(DEFAULT_WEIGHTED);
+  });
+
+  it('still reads the org tuning for a single project', async () => {
+    mockPrisma.project.findUnique.mockResolvedValue({ orgId: 'org1' });
+    mockPrisma.orgSettings.findUnique.mockResolvedValue(null);
+    await makeService().forProject('p1');
+    expect(mockPrisma.project.findUnique).toHaveBeenCalledWith({ where: { id: 'p1' }, select: { orgId: true } });
+  });
+});

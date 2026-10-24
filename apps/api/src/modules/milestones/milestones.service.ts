@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { EventBus } from '../../common/events/event-bus.service';
 import { MilestoneDepsService } from './milestone-deps.service';
 import { StorageService } from '../../common/storage/storage.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /** The shape the completion gate reads off a milestone's photos. */
 interface ReviewablePhoto {
@@ -35,7 +36,7 @@ export class MilestonesService {
     return { ...item, photos };
   }
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     const milestones = await this.prisma.milestone.findMany({
       where: { projectId },
       include: {

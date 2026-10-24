@@ -51,8 +51,21 @@ export class SiteVisitsService {
   async findAll(params: {
     status?: string; hostId?: string; leadId?: string; requestedById?: string;
     from?: string; to?: string;
+    /** Set for a scoped field role; absent = every project. */
+    scope?: { projectIds: string[]; userId: string };
   } = {}) {
     const where: Prisma.SiteVisitWhereInput = { project: { deletedAt: null } };
+    if (params.scope) {
+      // Member projects, plus any visit the viewer hosts or booked: a host is chosen by
+      // calendar, not by membership, and their own visit must not vanish from the list.
+      // Nothing else outside their projects — this used to return every project's visits,
+      // lead names included.
+      where.OR = [
+        { projectId: { in: params.scope.projectIds } },
+        { hostId: params.scope.userId },
+        { requestedById: params.scope.userId },
+      ];
+    }
     if (params.status) where.status = params.status;
     if (params.hostId) where.hostId = params.hostId;
     if (params.leadId) where.leadId = params.leadId;
@@ -82,11 +95,16 @@ export class SiteVisitsService {
    * missed ones that need rebooking. A rejected request that vanishes from the asker's
    * view is the failure this card exists to prevent.
    */
-  async attention(viewer: { userId: string; canApprove: boolean }) {
+  async attention(viewer: { userId: string; canApprove: boolean; projectIds?: string[] }) {
     const now = new Date();
     if (viewer.canApprove) {
       const pending = await this.prisma.siteVisit.findMany({
-        where: { status: 'REQUESTED', project: { deletedAt: null } },
+        // projectIds only for an approver who also holds a scoped role.
+        where: {
+          status: 'REQUESTED',
+          project: { deletedAt: null },
+          ...(viewer.projectIds && { projectId: { in: viewer.projectIds } }),
+        },
         include: VISIT_INCLUDE, orderBy: { startsAt: 'asc' },
       });
       return { role: 'approver' as const, pending, mine: [] as typeof pending };

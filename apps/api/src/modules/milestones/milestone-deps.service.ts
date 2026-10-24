@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, ConflictException }
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { AuditService } from '../../common/utils/audit.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -574,7 +575,7 @@ export class MilestoneDepsService {
   }
 
   /** The review queue. Defaults to what is actually waiting on someone. */
-  async listProposals(params: { projectId?: string; status?: string }) {
+  async listProposals(params: { projectId?: ProjectIdFilter; status?: string }) {
     return this.prisma.milestoneSlipProposal.findMany({
       where: {
         ...(params.projectId ? { projectId: params.projectId } : {}),

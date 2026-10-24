@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CommentType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { resolveMentions } from './mentions';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 @Injectable()
 export class CommentsService {
@@ -188,11 +189,13 @@ export class CommentsService {
 
   // ---- Recent (both types combined, ordered by type: MARKETING first, then SALES, then FINANCIAL) ----
 
-  async findRecent(limit = 20) {
+  async findRecent(limit = 20, projectId?: ProjectIdFilter) {
     const TYPE_ORDER = { MARKETING: 0, SALES: 1, FINANCIAL: 2 };
 
     const [unitComments, projectComments] = await Promise.all([
       this.prisma.unitComment.findMany({
+        // A unit comment reaches its project through the unit's building.
+        ...(projectId !== undefined && { where: { unit: { building: { projectId } } } }),
         take: limit,
         include: {
           user: { select: { id: true, name: true, avatarUrl: true } },
@@ -213,6 +216,7 @@ export class CommentsService {
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.projectComment.findMany({
+        where: { projectId },
         take: limit,
         include: {
           user: { select: { id: true, name: true, avatarUrl: true } },

@@ -23,6 +23,7 @@ import { usePagination } from '../hooks/usePagination';
 import { Pagination, PermissionGate } from '../components/ui';
 import { useAuthStore } from '../store/authStore';
 import { errMsg } from '../utils/fmt';
+import { isSafeLinkUrl } from '../utils/safeUrl';
 
 /** Narrower than updateBoard:create (which every role but CLIENT/VIEWER now holds) — matches
  * the backend's UPDATE_BOARD_ADMIN_ROLES for reaching into someone else's post. */
@@ -858,17 +859,27 @@ function PostSidePanel({
                             <span className="text-xs text-gray-600 uppercase tracking-wide">Links</span>
                             <div className="space-y-1 mt-1">
                                 {links.map((l, i) => (
-                                    <a
-                                        key={i}
-                                        href={l.url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline"
-                                    >
-                                        <FiLink className="shrink-0" />
-                                        <span className="truncate">{l.label || l.url}</span>
-                                        <FiExternalLink className="shrink-0 text-xs" />
-                                    </a>
+                                    // Only http(s)/mailto/tel become a link. The API refuses
+                                    // anything else now, but a row stored before that check
+                                    // could still hold a javascript: URL — shown as text, inert.
+                                    isSafeLinkUrl(l.url) ? (
+                                        <a
+                                            key={i}
+                                            href={l.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline"
+                                        >
+                                            <FiLink className="shrink-0" />
+                                            <span className="truncate">{l.label || l.url}</span>
+                                            <FiExternalLink className="shrink-0 text-xs" />
+                                        </a>
+                                    ) : (
+                                        <span key={i} className="flex items-center gap-1.5 text-sm text-gray-600" title="Link not opened: unsupported address">
+                                            <FiLink className="shrink-0" />
+                                            <span className="truncate">{l.label || l.url}</span>
+                                        </span>
+                                    )
                                 ))}
                             </div>
                         </div>

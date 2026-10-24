@@ -1,4 +1,5 @@
 import { CashFlowService } from './cashflow.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 
 const mockEngine = { buildTimeline: jest.fn().mockResolvedValue({ monthly: [], summary: {} }) };
 const mockAccess = {
@@ -58,5 +59,28 @@ describe('CashFlowService — forecast delegation + portfolio scoping', () => {
     expect(q3.byCategory.misc).toBe(500);
     expect(result.outstandingByCategory.loanPayments).toBe(8000); // 4 months
     expect(result.immediatePayables).toBe(87000); // 65000 + 12000 + 8000 + 2000 (first month)
+  });
+});
+
+// ANY scoped role scopes the user (isMultiRoleProjectScoped). Both of these read the
+// primary role alone, so [FINANCE, PROJECT_MANAGER] saw every project's cash position.
+describe('CashFlowService — multi-role scoping (real ProjectAccessService)', () => {
+  const access = new ProjectAccessService({
+    projectMember: { findMany: jest.fn().mockResolvedValue([{ projectId: 'p1' }]) },
+  } as any);
+  const service = new CashFlowService({} as any, mockEngine as any, access);
+  const MIXED = { userId: 'm', role: 'FINANCE', roles: ['FINANCE', 'PROJECT_MANAGER'] };
+
+  beforeEach(() => mockEngine.buildTimeline.mockClear());
+
+  it('restricts the portfolio forecast to member projects', async () => {
+    await service.getPortfolioForecast(MIXED, 12);
+    expect(mockEngine.buildTimeline).toHaveBeenCalledWith({ projectIds: ['p1'], months: 12 });
+  });
+
+  it('restricts the obligations view to member projects', async () => {
+    mockEngine.buildTimeline.mockResolvedValueOnce({ monthly: [], summary: {} });
+    await service.getObligations(MIXED, {});
+    expect(mockEngine.buildTimeline.mock.calls[0][0].projectIds).toEqual(['p1']);
   });
 });

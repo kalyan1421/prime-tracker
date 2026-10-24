@@ -127,7 +127,16 @@ const ACTIVITY_NOUNS: Record<string, string> = {
  * An entity with no resolver simply keeps the generic summary — that degrades the row,
  * it does not break the feed.
  */
-type ActivitySubject = { label: string; context?: string; href?: string };
+type ActivitySubject = {
+  label: string;
+  context?: string;
+  href?: string;
+  /**
+   * The project(s) the record belongs to, for the project-scoped feed. Undefined when it
+   * could not be determined; [] for a portfolio-wide campaign, which is no project's.
+   */
+  projectIds?: string[];
+};
 
 /** Building · Project, from whichever of the two sides a polymorphic row populated. */
 function assetContext(row: any): { context?: string; projectId?: string } {
@@ -183,7 +192,8 @@ const ACTIVITY_SUBJECTS: Record<string, { model: string; select: any; build: (r:
   },
   Campaigns: {
     model: 'campaign',
-    select: { id: true, name: true, channel: true },
+    // `projects` is read only for scoping (subjectProjectIds), never shown.
+    select: { id: true, name: true, channel: true, projects: { select: { projectId: true } } },
     build: (r) => ({ label: r.name, context: r.channel ? String(r.channel).replace(/_/g, ' ').toLowerCase() : undefined, href: '/campaigns' }),
   },
   Leases: {
@@ -304,6 +314,37 @@ const SOFT_DELETABLE_ACTIVITY_ENTITIES = new Set(['Projects', 'Units', 'Building
 // resolving. Aliased rather than duplicated so the two can never drift.
 ACTIVITY_SUBJECTS.Sale = ACTIVITY_SUBJECTS.Sales;
 ACTIVITY_SUBJECTS.Lease = ACTIVITY_SUBJECTS.Leases;
+
+/** Which project(s) a resolved subject row belongs to — see ActivitySubject.projectIds. */
+function subjectProjectIds(entity: string, row: any): string[] | undefined {
+  if (entity === 'Projects') return [row.id];
+  // A campaign spans several projects (or none, portfolio-wide) — same as the guard's
+  // campaign resolver, every one of them must be the viewer's.
+  if (entity === 'Campaigns') return (row.projects ?? []).map((p: { projectId: string }) => p.projectId);
+  const projectId = assetContext(row).projectId;
+  return projectId ? [projectId] : undefined;
+}
+
+/**
+ * Entities that belong to no project, so a project-scoped viewer sees them as anyone with
+ * the permission does: the org-wide update board, the portfolio-wide vendor, investor and
+ * broker books, and administration. Every OTHER entity is project-bound and, for a scoped
+ * viewer, must resolve to one of their projects or it is left out.
+ */
+const ORG_WIDE_ACTIVITY_ENTITIES = new Set([
+  'UpdateBoard', 'Vendors', 'Investors', 'Brokers',
+  'User', 'Organizations', 'OrgSettings', 'Notifications', 'AiSummaries',
+]);
+
+/** How far back a project-scoped viewer's feed reaches, in candidate events. */
+const SCOPED_ACTIVITY_WINDOW = 1000;
+
+// One select for every feed query — explicit, so a field added to AuditEvent later cannot
+// leak into the feed the way it would with `include`. Never the value payloads.
+const ACTIVITY_ROW_SELECT = {
+  id: true, action: true, entity: true, entityId: true, createdAt: true,
+  user: { select: { id: true, name: true, email: true } },
+} as const;
 
 @Injectable()
 export class AuditService {
@@ -446,7 +487,8 @@ export class AuditService {
    */
   async activityFeed(
     params: { page?: number; limit?: number; userId?: string; area?: string; search?: string },
-    viewer: { permissions: string[] },
+    // projectIds: set for a project-scoped field role (ProjectAccessService.listProjectScope).
+    viewer: { permissions: string[]; projectIds?: string[] },
   ) {
     const page = Math.max(1, Number(params.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(params.limit) || 30));
@@ -467,23 +509,29 @@ export class AuditService {
       ...(params.userId ? { userId: params.userId } : {}),
     };
 
-    const [rows, total] = await Promise.all([
-      this.prisma.auditEvent.findMany({
-        where,
-        // An explicit select, not an omit: a field added to AuditEvent later cannot leak
-        // into this feed by default the way it would with `include`.
-        select: {
-          id: true, action: true, entity: true, entityId: true, createdAt: true,
-          user: { select: { id: true, name: true, email: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.auditEvent.count({ where }),
-    ]);
-
-    const subjects = await this.resolveSubjects(rows);
+    let rows: Prisma.AuditEventGetPayload<{ select: typeof ACTIVITY_ROW_SELECT }>[];
+    let total: number;
+    let subjects: Map<string, ActivitySubject>;
+    if (viewer.projectIds) {
+      // Project-scoped viewer: membership is decided per record, so the page is cut from
+      // the filtered window rather than by SQL — see scopedActivity.
+      const scoped = await this.scopedActivity(where, viewer.projectIds);
+      rows = scoped.visible.slice((page - 1) * limit, page * limit);
+      total = scoped.visible.length;
+      subjects = scoped.subjects;
+    } else {
+      [rows, total] = await Promise.all([
+        this.prisma.auditEvent.findMany({
+          where,
+          select: ACTIVITY_ROW_SELECT,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.prisma.auditEvent.count({ where }),
+      ]);
+      subjects = await this.resolveSubjects(rows);
+    }
 
     return {
       events: rows.map((r) => {
@@ -564,7 +612,7 @@ export class AuditService {
           });
           for (const row of found) {
             const built = cfg.build(row);
-            if (built?.label) out.set(`${entity}:${row.id}`, built);
+            if (built?.label) out.set(`${entity}:${row.id}`, { ...built, projectIds: subjectProjectIds(entity, row) });
           }
         } catch {
           // Resolver out of step with the schema — leave these rows generic.
@@ -572,6 +620,39 @@ export class AuditService {
       }),
     );
     return out;
+  }
+
+  /**
+   * The feed's candidate events for a project-scoped viewer (PM / Construction / Sales /
+   * Marketing), narrowed to the ones on their projects.
+   *
+   * AuditEvent carries no projectId, so whether an event is on the viewer's project can
+   * only be known after resolving the record it points at — which rules out paging in SQL.
+   * Instead the newest SCOPED_ACTIVITY_WINDOW events that pass the permission filter are
+   * resolved (one query per entity type, as for a page), and those on a member project or
+   * on an org-wide record are kept. An event whose record no longer resolves — deleted,
+   * archived, or an entity with no resolver — is left out: it cannot be shown to be theirs.
+   *
+   * The trade-off is reach: a scoped viewer's history goes back SCOPED_ACTIVITY_WINDOW
+   * events rather than forever. The userId/area filters apply before the window, so a
+   * narrower question still reaches further back. Before this, these roles were shown
+   * every project's activity — lead and tenant names included.
+   */
+  private async scopedActivity(where: Prisma.AuditEventWhereInput, projectIds: string[]) {
+    const candidates = await this.prisma.auditEvent.findMany({
+      where,
+      select: ACTIVITY_ROW_SELECT,
+      orderBy: { createdAt: 'desc' },
+      take: SCOPED_ACTIVITY_WINDOW,
+    });
+    const subjects = await this.resolveSubjects(candidates);
+    const member = new Set(projectIds);
+    const visible = candidates.filter((r) => {
+      if (ORG_WIDE_ACTIVITY_ENTITIES.has(r.entity)) return true;
+      const owners = r.entityId ? subjects.get(`${r.entity}:${r.entityId}`)?.projectIds : undefined;
+      return owners !== undefined && owners.every((p) => member.has(p));
+    });
+    return { visible, subjects };
   }
 
   /** The area filter's options — only areas the viewer can actually read something in. */
@@ -590,22 +671,36 @@ export class AuditService {
    * would let someone infer that a colleague had been busy in a module they themselves
    * cannot read, which is the same leak the feed itself is careful to avoid.
    */
-  async activityActors(viewer: { permissions: string[] }) {
+  async activityActors(viewer: { permissions: string[]; projectIds?: string[] }) {
     const visibleEntities = Object.entries(ACTIVITY_ENTITY_MAP)
       .filter(([, cfg]) => viewer.permissions.includes(cfg.permission))
       .map(([entity]) => entity);
     if (visibleEntities.length === 0) return [];
 
-    const rows = await this.prisma.auditEvent.groupBy({
-      by: ['userId'],
-      where: {
-        entity: { in: visibleEntities },
-        action: { notIn: Array.from(ACTIVITY_EXCLUDED_ACTIONS) },
-        userId: { not: null },
-      },
-      _count: { userId: true },
-      orderBy: { _count: { userId: 'desc' } },
-    });
+    const where: Prisma.AuditEventWhereInput = {
+      entity: { in: visibleEntities },
+      action: { notIn: Array.from(ACTIVITY_EXCLUDED_ACTIONS) },
+      userId: { not: null },
+    };
+    let rows: Array<{ userId: string | null; _count: { userId: number } }>;
+    if (viewer.projectIds) {
+      // Same reasoning as the entity scoping above, one level out: a scoped viewer's list
+      // is the people in THEIR feed, not everyone busy on projects they cannot see.
+      const { visible } = await this.scopedActivity(where, viewer.projectIds);
+      const counts = new Map<string, number>();
+      for (const r of visible) if (r.user) counts.set(r.user.id, (counts.get(r.user.id) ?? 0) + 1);
+      rows = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([userId, n]) => ({ userId, _count: { userId: n } }));
+    } else {
+      const grouped = await this.prisma.auditEvent.groupBy({
+        by: ['userId'],
+        where,
+        _count: { userId: true },
+        orderBy: { _count: { userId: 'desc' } },
+      });
+      rows = grouped.map((g) => ({ userId: g.userId, _count: { userId: g._count.userId } }));
+    }
 
     const ids = rows.map((r) => r.userId).filter((id): id is string => !!id);
     const users = await this.prisma.user.findMany({
