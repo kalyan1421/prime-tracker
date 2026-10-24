@@ -302,6 +302,19 @@ describe('ConstructionChecklistService.getProjectRollup', () => {
     );
   });
 
+  it('judges scope on EVERY role the user holds, not the primary alone', async () => {
+    // A FOUNDER-primary user who also holds CONSTRUCTION is scoped by the shared rule;
+    // reading the primary role alone used to hand them the whole portfolio here.
+    mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
+    mockAccess.isScoped.mockImplementationOnce((_role: string, roles?: string[]) => !!roles?.includes('CONSTRUCTION'));
+    mockAccess.accessibleProjectIds.mockResolvedValue(['p1']);
+
+    await makeService().getProjectRollup(undefined, 'user1', 'FOUNDER', ['FOUNDER', 'CONSTRUCTION']);
+
+    expect(mockAccess.isScoped).toHaveBeenCalledWith('FOUNDER', ['FOUNDER', 'CONSTRUCTION']);
+    expect(mockAccess.accessibleProjectIds).toHaveBeenCalledWith('user1');
+  });
+
   it('with no projectId, applies no project filter for an unscoped role', async () => {
     mockPrisma.unitConstructionStage.findMany.mockResolvedValue([]);
     mockAccess.isScoped.mockReturnValue(false);

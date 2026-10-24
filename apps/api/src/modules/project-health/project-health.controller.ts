@@ -37,11 +37,12 @@ export class ProjectHealthController {
   @RequirePermissions('project:view')
   async getBulk(
     @Query('ids') idsCsv: string,
-    @CurrentUser() user: { sub: string; role: string },
+    @CurrentUser() user: { sub: string; role: string; roles?: string[] },
   ) {
     if (!idsCsv) return {};
     let ids = idsCsv.split(',').filter(Boolean);
-    const scope = await this.access.listProjectScope({ userId: user.sub, role: user.role });
+    // roles too — a user holding any scoped role is scoped, whatever their primary role.
+    const scope = await this.access.listProjectScope({ userId: user.sub, role: user.role, roles: user.roles });
     if (scope !== undefined) {
       const allowed = new Set(scope);
       ids = ids.filter((id) => allowed.has(id));

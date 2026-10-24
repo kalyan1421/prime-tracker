@@ -5,7 +5,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 import {
   CreateContractDto, UpdateContractDto, CreateChangeOrderDto,
   CreateContractPaymentDto, UpdateChangeOrderStatusDto,
@@ -17,20 +18,25 @@ import {
 @UseInterceptors(AuditInterceptor)
 @Controller('contracts')
 export class ContractsController {
-  constructor(private service: ContractsService) {}
+  constructor(
+    private service: ContractsService,
+    private access: ProjectAccessService,
+  ) {}
 
+  // An omitted projectId reaches the guard as "no project" and passes, so it is narrowed
+  // here to the caller's member projects rather than meaning every contract.
   @Get()
   @RequirePermissions('vendor:view')
   @ApiOperation({ summary: 'List contracts for a project' })
-  findByProject(@Query('projectId') projectId: string) {
-    return this.service.findByProject(projectId);
+  async findByProject(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
   }
 
   @Get('summary')
   @RequirePermissions('vendor:view')
   @ApiOperation({ summary: 'Get contract summary for a project' })
-  getSummary(@Query('projectId') projectId: string) {
-    return this.service.getProjectSummary(projectId);
+  async getSummary(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.getProjectSummary(await this.access.projectIdFilter(user, projectId));
   }
 
   @Post()
@@ -55,10 +61,12 @@ export class ContractsController {
     return this.service.addChangeOrder(id, body);
   }
 
-  @Patch('change-orders/:id/status')
+  // ':changeOrderId', not ':id' — this controller maps a bare ':id' to a CONTRACT, so a
+  // change-order id resolved to nothing and ProjectAccessGuard checked no project.
+  @Patch('change-orders/:changeOrderId/status')
   @RequirePermissions('vendor:edit')
   @ApiOperation({ summary: 'Update change order status' })
-  updateChangeOrderStatus(@Param('id') id: string, @Body() body: UpdateChangeOrderStatusDto) {
+  updateChangeOrderStatus(@Param('changeOrderId') id: string, @Body() body: UpdateChangeOrderStatusDto) {
     return this.service.updateChangeOrderStatus(id, body.status);
   }
 

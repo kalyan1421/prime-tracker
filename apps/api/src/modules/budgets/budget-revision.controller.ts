@@ -7,6 +7,7 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 
 @ApiTags('Budget Revisions')
 @ApiBearerAuth()
@@ -14,13 +15,20 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 @UseInterceptors(AuditInterceptor)
 @Controller('budgets')
 export class BudgetRevisionController {
-  constructor(private revisions: BudgetRevisionService) {}
+  constructor(
+    private revisions: BudgetRevisionService,
+    private access: ProjectAccessService,
+  ) {}
 
-  /** GET /api/budgets/revisions?projectId=  — project-wide budget change log */
+  /**
+   * GET /api/budgets/revisions?projectId=  — project-wide budget change log. With no
+   * projectId the guard has nothing to check, so the log is narrowed to the caller's
+   * member projects here; it used to be every project's.
+   */
   @Get('revisions')
   @RequirePermissions('budget:view')
-  listForProject(@Query('projectId') projectId: string) {
-    return this.revisions.listForProject(projectId);
+  async listForProject(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.revisions.listForProject(await this.access.projectIdFilter(user, projectId));
   }
 
   /**

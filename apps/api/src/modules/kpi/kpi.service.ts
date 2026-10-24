@@ -1,18 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 @Injectable()
 export class KpiService {
   constructor(private prisma: PrismaService) {}
 
-  async getLatest(projectId: string) {
+  async getLatest(projectId: ProjectIdFilter) {
     return this.prisma.kpiSnapshot.findFirst({
       where: { projectId },
       orderBy: { snapshotDate: 'desc' },
     });
   }
 
-  async getHistory(projectId: string, months = 12) {
+  async getHistory(projectId: ProjectIdFilter, months = 12) {
     const since = new Date();
     since.setMonth(since.getMonth() - months);
     return this.prisma.kpiSnapshot.findMany({

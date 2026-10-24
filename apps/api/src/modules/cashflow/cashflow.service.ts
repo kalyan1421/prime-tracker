@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CashFlowType } from '@prisma/client';
 import { CashflowEngineService } from './cashflow-engine.service';
-import { ProjectAccessService } from '../../common/access/project-access.service';
+import { ProjectAccessService, ProjectIdFilter } from '../../common/access/project-access.service';
 
 @Injectable()
 export class CashFlowService {
@@ -12,7 +12,7 @@ export class CashFlowService {
     private access: ProjectAccessService,
   ) {}
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     return this.prisma.cashFlowEntry.findMany({
       where: { projectId },
       orderBy: [{ month: 'asc' }, { entryType: 'asc' }],
@@ -68,7 +68,8 @@ export class CashFlowService {
    * (PM/Construction/Sales/Marketing) are restricted to their member projects.
    */
   async getPortfolioForecast(viewer: { userId: string; role: string; roles?: string[] }, months?: number) {
-    const projectIds = this.access.isScoped(viewer.role)
+    // All roles, not the primary alone — a user holding any scoped role is scoped.
+    const projectIds = this.access.isScoped(viewer.role, viewer.roles)
       ? await this.access.accessibleProjectIds(viewer.userId)
       : undefined; // undefined = all projects
     return this.engine.buildTimeline({ projectIds, months });
@@ -89,7 +90,7 @@ export class CashFlowService {
     const horizonMonths = granularity === 'year' ? 36 : 12;
     const projectIds = opts.projectId
       ? undefined
-      : this.access.isScoped(viewer.role)
+      : this.access.isScoped(viewer.role, viewer.roles)
         ? await this.access.accessibleProjectIds(viewer.userId)
         : undefined;
 

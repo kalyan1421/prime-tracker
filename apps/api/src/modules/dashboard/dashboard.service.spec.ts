@@ -1,4 +1,5 @@
 import { DashboardService } from './dashboard.service';
+import { ProjectAccessService } from '../../common/access/project-access.service';
 
 const mockPrisma: any = {
   project: { findMany: jest.fn() },
@@ -157,5 +158,25 @@ describe('DashboardService — interior/TI spend stays out of construction spend
       expect(d).not.toHaveProperty('totalActuals');
       expect(d.projectSummaries[0]).not.toHaveProperty('budgetSpentPct');
     });
+  });
+});
+
+// The shared rule (isMultiRoleProjectScoped): ANY scoped role scopes the user. The
+// dashboards judged on the primary role alone, so a FOUNDER who was also a PROJECT_MANAGER
+// got the cached all-projects construction dashboard. Uses the real ProjectAccessService.
+describe('dashboard scoping for a multi-role user', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('computes a per-user construction dashboard over member projects only', async () => {
+    const access = new ProjectAccessService({
+      projectMember: { findMany: jest.fn().mockResolvedValue([{ projectId: 'p1' }]) },
+    } as any);
+    const service = new DashboardService(mockPrisma as any, mockCache as any, access, mockEncryption as any);
+    mockPrisma.project.findMany.mockResolvedValue([]);
+
+    await service.getConstructionDashboard('FOUNDER', 'u-1', ['FOUNDER', 'PROJECT_MANAGER']);
+
+    expect(mockCache.wrap).not.toHaveBeenCalled();
+    expect(mockPrisma.project.findMany.mock.calls[0][0].where.id).toEqual({ in: ['p1'] });
   });
 });

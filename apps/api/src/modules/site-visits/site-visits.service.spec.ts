@@ -283,6 +283,36 @@ describe('SiteVisitsService', () => {
 // alerts and the mention flow all landed on a bare list with nothing selected. The link
 // must carry the LEAD id, because that is what the page selects by.
 // ---------------------------------------------------------------------------
+// GET /site-visits sits behind no ProjectAccessGuard and used to list every project's
+// visits, lead names included, to anyone with siteVisit:view.
+describe('SiteVisitsService — member-project scope', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.siteVisit.findMany.mockResolvedValue([]);
+  });
+
+  it('limits a scoped viewer to member projects, keeping visits they host or booked', async () => {
+    await make().findAll({ status: 'CONFIRMED', scope: { projectIds: ['p1'], userId: 'sales-1' } });
+    expect(mockPrisma.siteVisit.findMany.mock.calls[0][0].where).toEqual({
+      project: { deletedAt: null },
+      status: 'CONFIRMED',
+      OR: [{ projectId: { in: ['p1'] } }, { hostId: 'sales-1' }, { requestedById: 'sales-1' }],
+    });
+  });
+
+  it('adds nothing for an unscoped viewer', async () => {
+    await make().findAll({});
+    expect(mockPrisma.siteVisit.findMany.mock.calls[0][0].where).toEqual({ project: { deletedAt: null } });
+  });
+
+  it('narrows the approver queue for an approver who also holds a scoped role', async () => {
+    await make().attention({ userId: 'x', canApprove: true, projectIds: ['p1'] });
+    expect(mockPrisma.siteVisit.findMany.mock.calls[0][0].where.projectId).toEqual({ in: ['p1'] });
+    await make().attention({ userId: 'f', canApprove: true });
+    expect(mockPrisma.siteVisit.findMany.mock.calls[1][0].where.projectId).toBeUndefined();
+  });
+});
+
 describe('SiteVisitsService — notification deep links', () => {
   let service: SiteVisitsService;
 

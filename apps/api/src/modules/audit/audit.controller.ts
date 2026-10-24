@@ -4,13 +4,22 @@ import { AuditService } from '../../common/utils/audit.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 
 @ApiTags('Audit')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('audit')
 export class AuditController {
-  constructor(private auditService: AuditService) {}
+  constructor(
+    private auditService: AuditService,
+    private access: ProjectAccessService,
+  ) {}
+
+  /** A scoped field role's member projects; undefined for everyone else (no narrowing). */
+  private scopeOf(user: ScopedUser) {
+    return this.access.listProjectScope({ userId: user.sub, role: user.role, roles: user.roles });
+  }
 
   // Declared before @Get() has no bearing here (distinct paths), but keep it above the
   // list route so the filter endpoint stays visible next to what it feeds.
@@ -25,12 +34,14 @@ export class AuditController {
    * The Activity Log shown in the Updates section — deliberately NOT gated on
    * `audit:view` like the routes around it. It is safe to open this wide because the
    * service drops every entity the caller cannot read and never returns the
-   * oldValues/newValues payloads; see AuditService.activityFeed.
+   * oldValues/newValues payloads; see AuditService.activityFeed. A project-scoped role
+   * additionally sees only activity on its member projects.
    */
   @Get('activity')
   @RequirePermissions('updateBoard:view')
   @ApiOperation({ summary: 'Cross-module activity feed, filtered to what the viewer may read' })
-  activity(
+  async activity(
+    @CurrentUser() user: ScopedUser,
     @CurrentUser('permissions') permissions: string[],
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(30), ParseIntPipe) limit: number,
@@ -39,15 +50,15 @@ export class AuditController {
   ) {
     return this.auditService.activityFeed(
       { page, limit, userId, area },
-      { permissions: permissions ?? [] },
+      { permissions: permissions ?? [], projectIds: await this.scopeOf(user) },
     );
   }
 
   @Get('activity/actors')
   @RequirePermissions('updateBoard:view')
   @ApiOperation({ summary: 'People who appear in the activity the viewer can see' })
-  activityActors(@CurrentUser('permissions') permissions: string[]) {
-    return this.auditService.activityActors({ permissions: permissions ?? [] });
+  async activityActors(@CurrentUser() user: ScopedUser, @CurrentUser('permissions') permissions: string[]) {
+    return this.auditService.activityActors({ permissions: permissions ?? [], projectIds: await this.scopeOf(user) });
   }
 
   @Get()

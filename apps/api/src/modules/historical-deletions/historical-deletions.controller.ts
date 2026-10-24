@@ -8,6 +8,7 @@ import { HistoricalDeletionService } from '../../common/utils/historical-deletio
 import { AuditService } from '../../common/utils/audit.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { DecideHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 
 /**
  * R27's Founder-approval queue, generalized by R6 to cover both backfilled leases and
@@ -27,6 +28,7 @@ export class HistoricalDeletionsController {
     private deletions: HistoricalDeletionService,
     private audit: AuditService,
     private bus: EventBus,
+    private access: ProjectAccessService,
   ) {}
 
   @Get()
@@ -37,8 +39,11 @@ export class HistoricalDeletionsController {
     summary: 'Deletion requests awaiting a decision (the Founder queue)',
     description: 'Pass ?status=APPROVED|REJECTED|COMPLETED to see decided ones. Mixes leases and sales.',
   })
-  list(@Query('status') status?: string) {
-    return this.deletions.list(status || 'PENDING');
+  async list(@CurrentUser() user: ScopedUser, @Query('status') status?: string) {
+    // No ProjectAccessGuard here (a request names no project), so a scoped role is narrowed
+    // to its member projects in the query; it used to see every project's tenants and buyers.
+    const projectIds = await this.access.listProjectScope({ userId: user.sub, role: user.role, roles: user.roles });
+    return this.deletions.list(status || 'PENDING', projectIds);
   }
 
   /**

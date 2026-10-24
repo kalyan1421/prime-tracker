@@ -1,11 +1,13 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import type {
-  DrawStatus, DrawApprovalStep, DrawApprovalAction, DrawDocType,
+  DrawStatus, DrawApprovalStep, DrawApprovalAction, DrawDocType, Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { EventBus } from '../../common/events/event-bus.service';
-import { canTransition, getTransition, DrawAction } from './draw-state-machine';
+import {
+  canTransition, getTransition, actionReaching, APPROVAL_ACTIONS, DrawAction,
+} from './draw-state-machine';
 
 /**
  * Draw Request workflow service.
@@ -34,8 +36,18 @@ export class DrawsService {
     return updated;
   }
 
-  async approveInternal(drawId: string, actorId: string, comment?: string) {
-    const updated = await this.transition(drawId, 'approveInternal', actorId, 'INTERNAL_FOUNDER', 'APPROVED', comment);
+  /**
+   * `approvedAmount` is only passed by the legacy PATCH /loans/draws/:id/status route, which
+   * has always let the approver record less than was requested; markFunded already posts
+   * `approvedAmount ?? amount`. approvedDate/approvedById are the row's own record of the
+   * sign-off: the legacy route always wrote them and /draws/:id/approve-internal never did,
+   * so now that both run through here, both do.
+   */
+  async approveInternal(drawId: string, actorId: string, comment?: string, approvedAmount?: number) {
+    const updated = await this.transition(
+      drawId, 'approveInternal', actorId, 'INTERNAL_FOUNDER', 'APPROVED', comment,
+      { approvedDate: new Date(), approvedById: actorId, ...(approvedAmount !== undefined && { approvedAmount }) },
+    );
     this.bus.emit({ type: 'drawRequest.approved', drawId, approverId: actorId });
     return updated;
   }
@@ -135,6 +147,43 @@ export class DrawsService {
     });
   }
 
+  /**
+   * Drive the machine by TARGET status, for the deprecated PATCH /loans/draws/:id/status.
+   *
+   * That route used to write `status` straight onto the row behind only draw:edit, so a
+   * Project Manager could take a draft to APPROVED with any approvedAmount, or to FUNDED —
+   * which posts an Actual — with no document gate, no approval log and no draw:approve.
+   * It now resolves the one action the machine allows towards that status and runs the
+   * same method /draws/:id/* would, so the transition rules and the approval permission
+   * live here only. `canApprove` is the caller's draw:approve.
+   */
+  async transitionTo(
+    drawId: string,
+    status: DrawStatus,
+    actorId: string,
+    opts: { canApprove: boolean; approvedAmount?: number; rejectionReason?: string },
+  ) {
+    const draw = await this.findById(drawId);
+    const action = actionReaching(draw.status as DrawStatus, status);
+    if (!action) {
+      throw new BadRequestException(`Cannot move a draw from ${draw.status} to ${status}`);
+    }
+    if (APPROVAL_ACTIONS.has(action) && !opts.canApprove) {
+      // Same wording PermissionsGuard uses, since this is the check it makes on /draws/:id/*.
+      throw new ForbiddenException('Missing permissions: draw:approve');
+    }
+    switch (action) {
+      case 'submit': return this.submit(drawId, actorId);
+      case 'approveInternal': return this.approveInternal(drawId, actorId, undefined, opts.approvedAmount);
+      case 'returnForInfo': return this.returnForInfo(drawId, actorId);
+      case 'markFunded': return this.markFunded(drawId, actorId);
+      case 'reject': return this.reject(drawId, actorId, opts.rejectionReason ?? '');
+      case 'cancel': return this.cancel(drawId, actorId);
+      // REJECTED → DRAFT has no route of its own; it lands where returnForInfo does.
+      case 'revise': return this.transition(drawId, 'revise', actorId, 'INTERNAL_FOUNDER', 'RETURNED_FOR_INFO');
+    }
+  }
+
   // ─────── Documents ───────
 
   async attachDocument(input: {
@@ -223,6 +272,7 @@ export class DrawsService {
     step: DrawApprovalStep,
     actionOnAudit: DrawApprovalAction,
     comment?: string,
+    extra: Prisma.DrawRequestUncheckedUpdateInput = {},
   ) {
     const draw = await this.findById(drawId);
     const t = getTransition(draw.status as DrawStatus, action);
@@ -248,7 +298,7 @@ export class DrawsService {
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.drawRequest.update({
         where: { id: drawId },
-        data: { status: t.to },
+        data: { ...extra, status: t.to },
       });
       await tx.drawApproval.create({
         data: {

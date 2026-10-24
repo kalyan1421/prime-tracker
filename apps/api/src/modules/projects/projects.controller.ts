@@ -35,6 +35,8 @@ export class ProjectsController {
     return this.projectsService.getDashboardSummary({
       userId,
       role,
+      // Scoping reads `roles`; without it a multi-role user was judged on the primary alone.
+      roles,
       canViewFinancials: permissions?.includes('budget:view') ?? false,
     });
   }

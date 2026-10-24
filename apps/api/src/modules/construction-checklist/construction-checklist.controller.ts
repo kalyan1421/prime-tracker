@@ -93,8 +93,9 @@ export class ConstructionChecklistController {
     @Query('projectId') projectId: string | undefined,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.getAdHocStages({ buildingId, projectId }, userId, role);
+    return this.service.getAdHocStages({ buildingId, projectId }, userId, role, roles);
   }
 
   // One request, not a loop of the route above: the 10 req/sec throttle silently truncates
@@ -193,7 +194,8 @@ export class ConstructionChecklistController {
     @Query('projectId') projectId: string | undefined,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.getProjectRollup(projectId, userId, role);
+    return this.service.getProjectRollup(projectId, userId, role, roles);
   }
 }

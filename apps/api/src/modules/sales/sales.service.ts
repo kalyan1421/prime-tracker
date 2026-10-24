@@ -10,6 +10,7 @@ import { apportion } from '../leases/rent-apportionment';
 import { CommissionInstallmentService } from '../../common/utils/commission-installment.service';
 import { HistoricalDeletionService } from '../../common/utils/historical-deletion.service';
 import { AuditService } from '../../common/utils/audit.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 import {
   SALE_STAGE_ORDER,
   docCategoryLabel,
@@ -173,7 +174,7 @@ export class SalesService {
       : 'Sold to the sitting tenant — their tenancy ends at completion';
   }
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     return this.prisma.sale.findMany({
       where: {
         projectId,
@@ -198,7 +199,7 @@ export class SalesService {
     });
   }
 
-  async getPipeline(projectId: string) {
+  async getPipeline(projectId: ProjectIdFilter) {
     const sales = await this.findByProject(projectId);
     const byStatus: Record<string, any[]> = {};
     for (const s of sales) {
@@ -242,7 +243,7 @@ export class SalesService {
    * as LeasesService.resolveDealGroup — the ref is free text and not unique, so it is
    * never read without the project and liveness alongside it.
    */
-  async findDeal(projectId: string, combinedDealRef: string) {
+  async findDeal(projectId: ProjectIdFilter, combinedDealRef: string) {
     const sales = await this.prisma.sale.findMany({
       where: {
         combinedDealRef,

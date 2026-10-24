@@ -138,10 +138,23 @@ export class HistoricalDeletionService {
     return this.prisma.historicalRecordDeletion.update({ where: { id }, data: { status: 'COMPLETED' } });
   }
 
-  /** The Founder's queue — every request of a given status, oldest first. */
-  list(status = 'PENDING') {
+  /**
+   * The Founder's queue — every request of a given status, oldest first. `projectIds`
+   * narrows it for a scoped field role (Sales holds the backfill permission that opens it)
+   * to requests on its member projects; a lease reaches its project via unit or building.
+   */
+  list(status = 'PENDING', projectIds?: string[]) {
+    const inScope = projectIds && { projectId: { in: projectIds } };
     return this.prisma.historicalRecordDeletion.findMany({
-      where: { status },
+      where: {
+        status,
+        ...(inScope && {
+          OR: [
+            { sale: inScope },
+            { lease: { OR: [{ unit: { building: inScope } }, { building: inScope }] } },
+          ],
+        }),
+      },
       orderBy: { requestedAt: 'asc' },
       include: {
         lease: { select: { id: true, tenantName: true, leaseStart: true, leaseEnd: true, unitId: true } },

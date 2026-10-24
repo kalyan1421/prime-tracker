@@ -29,6 +29,27 @@ const POST_INCLUDE = {
 
 type LinkInput = { url?: string; label?: string };
 
+/**
+ * The only schemes a post's link may use. Links are rendered as a plain <a href> on the
+ * board, which every internal role reads — so a `javascript:` (or `data:`) link would run
+ * script in the tracker's origin for whoever clicks it.
+ *
+ * An allow-list checked on the PARSED url, not a prefix test on the string: browsers
+ * accept "JavaScript:", leading spaces and embedded tabs/newlines as the same scheme, and
+ * the WHATWG parser (which is what the browser uses for href) normalises all of them.
+ */
+export const SAFE_LINK_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+/** True when `url` is an absolute URL whose scheme is in SAFE_LINK_PROTOCOLS. */
+export function isSafeLinkUrl(url: string): boolean {
+  try {
+    return SAFE_LINK_PROTOCOLS.has(new URL(url).protocol);
+  } catch {
+    // Relative or unparseable — no scheme the browser would resolve against ours.
+    return false;
+  }
+}
+
 @Injectable()
 export class UpdateBoardService {
   private readonly logger = new Logger(UpdateBoardService.name);
@@ -214,6 +235,8 @@ export class UpdateBoardService {
 
     const reassigning = data.assigneeIds !== undefined;
     const nextAssigneeIds = reassigning ? await this.resolveAssigneeIds(data.assigneeIds) : null;
+    // Validated before the transaction opens, so a refused link fails the save up front.
+    const nextLinks = data.links !== undefined ? this.normalizeLinks(data.links) : undefined;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       if (nextAssigneeIds) {
@@ -246,8 +269,8 @@ export class UpdateBoardService {
           ...(data.projectId !== undefined ? { projectId: data.projectId || null } : {}),
           ...(data.buildingId !== undefined ? { buildingId: data.buildingId || null } : {}),
           ...(data.unitId !== undefined ? { unitId: data.unitId || null } : {}),
-          ...(data.links !== undefined
-            ? { links: this.normalizeLinks(data.links) as unknown as Prisma.InputJsonValue }
+          ...(nextLinks !== undefined
+            ? { links: nextLinks as unknown as Prisma.InputJsonValue }
             : {}),
         },
         include: POST_INCLUDE,
@@ -411,13 +434,24 @@ export class UpdateBoardService {
     return ids;
   }
 
-  /** Drop blank/malformed rows rather than rejecting the whole save over one bad link. */
+  /**
+   * Drop blank rows rather than rejecting the whole save over an empty one — but refuse a
+   * link whose scheme is not http(s)/mailto/tel outright (see isSafeLinkUrl). Silently
+   * dropping that would hide the fact the post did not save what was typed.
+   */
   private normalizeLinks(links: LinkInput[] | undefined): { url: string; label: string }[] {
     if (!links?.length) return [];
-    return links
-      .map((l) => ({ url: (l.url ?? '').trim(), label: (l.label ?? '').trim() }))
+    const rows = links
+      .map((l) => ({ url: String(l?.url ?? '').trim(), label: String(l?.label ?? '').trim() }))
       .filter((l) => l.url.length > 0)
       .slice(0, 20);
+    const unsafe = rows.find((l) => !isSafeLinkUrl(l.url));
+    if (unsafe) {
+      throw new BadRequestException(
+        `Link "${unsafe.url.slice(0, 100)}" is not allowed — links must start with http://, https://, mailto: or tel:`,
+      );
+    }
+    return rows;
   }
 
   /**

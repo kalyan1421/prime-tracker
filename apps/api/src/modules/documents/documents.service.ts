@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { DocCategory } from '@prisma/client';
 import { UpdateDocumentDto } from './dto/update-document.dto';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * D2 — the categories that genuinely LAPSE. An expiry on these is expected but never
@@ -115,7 +116,7 @@ export class DocumentsService {
     return doc;
   }
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     const docs = await this.prisma.document.findMany({
       where: { projectId, ...DocumentsService.LIVE },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },

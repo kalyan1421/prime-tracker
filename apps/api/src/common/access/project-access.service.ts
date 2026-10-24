@@ -14,6 +14,22 @@ import { isProjectScopedRole, isMultiRoleProjectScoped } from '@prime-tracker/sh
 // several (or none, when portfolio-wide), so a resolver may return an array too.
 type Resolver = (prisma: PrismaService, id: string) => Promise<string | string[] | null | undefined>;
 
+/**
+ * The `projectId` condition a LIST/aggregate endpoint applies (see projectIdFilter):
+ * one explicit project, the caller's member projects, or `undefined` for no filter.
+ * Shaped so it drops straight into a Prisma where clause at any depth —
+ * `{ projectId: f }`, `{ building: { projectId: f } }` — because Prisma reads
+ * `projectId: undefined` as "no condition" and `{ in: [] }` as "nothing".
+ */
+export type ProjectIdFilter = string | { in: string[] } | undefined;
+
+/** The fields of req.user (JwtStrategy.validate) that list scoping reads. */
+export interface ScopedUser {
+  sub: string;
+  role: string;
+  roles?: string[];
+}
+
 // A Lease hangs off a Unit *or* a Building, so every lease-child resolver funnels
 // through here instead of repeating the two-way traversal.
 const leaseProjectId = async (p: PrismaService, leaseId: string) => {
@@ -38,14 +54,34 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
       ?.building?.projectId,
   milestone: async (p, id) =>
     (await p.milestone.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  // POST .../photos/:photoId/sign-off and DELETE .../photos/:photoId on MilestonesController
+  // take the photo id alone — the same gap ConstructionChecklist and DailyLogs photos had.
+  milestonePhoto: async (p, id) =>
+    (await p.milestonePhoto.findUnique({ where: { id }, select: { milestone: { select: { projectId: true } } } }))
+      ?.milestone?.projectId,
   milestoneSlipProposal: async (p, id) =>
     (await p.milestoneSlipProposal.findUnique({ where: { id }, select: { projectId: true } }))
       ?.projectId,
   sale: async (p, id) =>
     (await p.sale.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  // PATCH/DELETE/POST .../sales/payments/:paymentId address an installment with no sale in
+  // the path. Before this (and the rename from ':id', which SalesController maps to a
+  // SALE) a scoped role could edit, log against or delete any project's installments.
+  salePayment: async (p, id) =>
+    (await p.salePayment.findUnique({ where: { id }, select: { sale: { select: { projectId: true } } } }))
+      ?.sale?.projectId,
   lead: async (p, id) =>
     (await p.lead.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  // DELETE /leads/interests/:interestId — the join row's own id, no lead in the path.
+  leadUnitInterest: async (p, id) =>
+    (await p.leadUnitInterest.findUnique({ where: { id }, select: { lead: { select: { projectId: true } } } }))
+      ?.lead?.projectId,
   lease: async (p, id) => leaseProjectId(p, id),
+  // PATCH /leases/rent-periods/:periodId/correct — rewrites billed rent, by period id alone.
+  leaseRentPeriod: async (p, id) => {
+    const rp = await p.leaseRentPeriod.findUnique({ where: { id }, select: { leaseId: true } });
+    return rp ? leaseProjectId(p, rp.leaseId) : undefined;
+  },
   leaseObligation: async (p, id) => {
     const o = await p.leaseObligation.findUnique({ where: { id }, select: { leaseId: true } });
     return o ? leaseProjectId(p, o.leaseId) : undefined;
@@ -67,6 +103,16 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
       select: { projectId: true, building: { select: { projectId: true } } },
     });
     return l?.projectId ?? l?.building?.projectId;
+  },
+  // DELETE /loans/schedule/:scheduleId addresses a schedule line by its own id. It used to
+  // be ':id', which LoansController maps to a LOAN, so the line's id resolved to nothing
+  // and the guard checked no project at all.
+  drawSchedule: async (p, id) => {
+    const s = await p.drawSchedule.findUnique({
+      where: { id },
+      select: { loan: { select: { projectId: true, building: { select: { projectId: true } } } } },
+    });
+    return s?.loan?.projectId ?? s?.loan?.building?.projectId;
   },
   draw: async (p, id) => {
     const d = await p.drawRequest.findUnique({
@@ -94,6 +140,11 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
     (await p.cashFlowEntry.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
   contract: async (p, id) =>
     (await p.contract.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
+  // PATCH /contracts/change-orders/:changeOrderId/status — approving one rewrites the
+  // contract's currentAmount, and it was ':id' (= a CONTRACT here), so it went unchecked.
+  changeOrder: async (p, id) =>
+    (await p.changeOrder.findUnique({ where: { id }, select: { contract: { select: { projectId: true } } } }))
+      ?.contract?.projectId,
   campaign: async (p, id) => {
     const c = await p.campaign.findUnique({ where: { id }, select: { projects: { select: { projectId: true } } } });
     return c?.projects.map((cp) => cp.projectId);
@@ -106,6 +157,11 @@ const ENTITY_RESOLVERS: Record<string, Resolver> = {
   // attachment. Same class of gap as unitConstructionStagePhoto / dailyLogPhoto below.
   taskAttachment: async (p, id) =>
     (await p.taskAttachment.findUnique({ where: { id }, select: { task: { select: { projectId: true } } } }))
+      ?.task?.projectId,
+  // POST .../updates/:updateId/photos and DELETE .../updates/:updateId — same shape, and a
+  // Project Manager may delete ANY update (TASK_MANAGER_ROLES), so this one mattered.
+  taskUpdate: async (p, id) =>
+    (await p.taskUpdate.findUnique({ where: { id }, select: { task: { select: { projectId: true } } } }))
       ?.task?.projectId,
   dailyLog: async (p, id) =>
     (await p.dailyLog.findUnique({ where: { id }, select: { projectId: true } }))?.projectId,
@@ -246,12 +302,33 @@ const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
   LeasesController: {
     paymentId: 'leaseObligationPayment',
     invoiceId: 'leaseRentInvoice',
+    periodId: 'leaseRentPeriod',
+  },
+  // ":paymentId" is a SalePayment here — the reuse of the name the LeasesController note
+  // above predicted. These routes were ':id', which this controller maps to a Sale.
+  SalesController: {
+    paymentId: 'salePayment',
   },
   // ":proposalId" is a slip cascade only here. Scoped rather than global because any
   // future approval queue would reuse the name, and a global entry would then resolve
   // those ids to nothing — i.e. to no membership check at all.
+  // ":photoId" is a MilestonePhoto here — the third controller to use that name.
   MilestonesController: {
     proposalId: 'milestoneSlipProposal',
+    photoId: 'milestonePhoto',
+  },
+  // ":scheduleId" is a DrawSchedule line. Draw routes here use ":drawId", which KEY_ENTITY
+  // already resolves globally — both were ':id' before, i.e. resolved as a LOAN id.
+  LoansController: {
+    scheduleId: 'drawSchedule',
+  },
+  // Change orders are reached by their own id; the contract's is ':id'.
+  ContractsController: {
+    changeOrderId: 'changeOrder',
+  },
+  // The interest join row is deleted by its own id, with no lead in the path.
+  LeadsController: {
+    interestId: 'leadUnitInterest',
   },
   // One controller, two id families — bare ":id" can't disambiguate them, so both are
   // named explicitly rather than relying on CONTROLLER_ID_ENTITY (which assumes a
@@ -272,6 +349,7 @@ const CONTROLLER_KEY_ENTITY: Record<string, Record<string, string>> = {
   // scoped rather than global.
   TasksController: {
     attachmentId: 'taskAttachment',
+    updateId: 'taskUpdate',
   },
   // ":installmentId" only exists on the broker commission routes. Note that BrokersController
   // is deliberately ABSENT from CONTROLLER_ID_ENTITY below: its bare ":id" is a Broker, which
@@ -313,7 +391,22 @@ const CONTROLLER_ID_ENTITY: Record<string, string> = {
   DailyLogsController: 'dailyLog',
   InteriorController: 'interior',
   DocumentsController: 'document',
+  // website-sync/projects/:id/{snapshot,push}. The controller was already behind the
+  // guard but absent from this map, so ':id' resolved to nothing and any role holding
+  // project:edit could push any project's inventory to the public website.
+  WebsiteSyncController: 'project',
 };
+
+/**
+ * Whether ProjectAccessGuard can resolve route param `key` on `controllerName` to a project.
+ * Exported for route-params.spec.ts, which sweeps every guarded route and fails when one
+ * names an id the guard cannot resolve — the gap this file has recorded finding over and
+ * over (photo ids, attachment ids, installment ids, draw ids read as loan ids…).
+ */
+export function guardResolvesParam(controllerName: string, key: string): boolean {
+  if (key === 'id') return !!CONTROLLER_ID_ENTITY[controllerName];
+  return !!(CONTROLLER_KEY_ENTITY[controllerName]?.[key] ?? KEY_ENTITY[key]);
+}
 
 @Injectable()
 export class ProjectAccessService {
@@ -352,6 +445,24 @@ export class ProjectAccessService {
     if (explicitProjectId) return undefined;
     if (!viewer || !this.isScoped(viewer.role, viewer.roles)) return undefined;
     return this.accessibleProjectIds(viewer.userId);
+  }
+
+  /**
+   * listProjectScope as a ready-made Prisma condition, for list/aggregate endpoints that
+   * take `?projectId=` but treat it as optional.
+   *
+   * Those endpoints passed the raw query param straight into `where: { projectId }`. With
+   * the param left off that is `projectId: undefined` — no filter to Prisma — and the
+   * guard has nothing to check either, so a PM, Sales or Marketing user got every
+   * project's sales, leases, draws and documents (audit, 24 Oct 2026). An explicit id is
+   * returned as-is: ProjectAccessGuard has already 404'd it for a non-member.
+   */
+  async projectIdFilter(user: ScopedUser | undefined, explicitProjectId?: string): Promise<ProjectIdFilter> {
+    if (explicitProjectId) return explicitProjectId;
+    const ids = await this.listProjectScope(
+      user ? { userId: user.sub, role: user.role, roles: user.roles } : undefined,
+    );
+    return ids ? { in: ids } : undefined;
   }
 
   async isMember(userId: string, projectId: string): Promise<boolean> {

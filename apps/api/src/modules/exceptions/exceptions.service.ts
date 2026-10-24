@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../common/cache/cache.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
 import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * Exception aggregator — the data source for the dashboard "Needs Attention" feed.
@@ -69,6 +70,18 @@ export class ExceptionsService {
   }
 
   /**
+   * A scoped field role's "portfolio": its member projects only. Computed for that set
+   * rather than filtered out of the shared portfolio result, because compute() caps each
+   * category (take: 20/30/50) — post-filtering would silently drop a member project's
+   * items that fell below another project's. Cached per project set, same TTL and tag.
+   */
+  async forProjects(projectIds: string[], perms: string[] = []): Promise<ExceptionItem[]> {
+    const key = `exceptions:projects:${[...projectIds].sort().join(',')}`;
+    const all = await this.cache.wrap(key, TTL, () => this.compute({ in: projectIds }), { tags: [TAG] });
+    return this.filterByPermissions(all, perms);
+  }
+
+  /**
    * Drop exception categories the viewer isn't allowed to see — the feed carries
    * lender/buyer/tenant names, so a Viewer/PM must not receive draw/sale/lease items
    * their role can't otherwise access. Applied per-request AFTER the cache so the
@@ -87,8 +100,8 @@ export class ExceptionsService {
     });
   }
 
-  /** Compute exceptions, scoped to one project or the whole portfolio. */
-  private async compute(projectId?: string): Promise<ExceptionItem[]> {
+  /** Compute exceptions, scoped to one project, a set of projects, or the whole portfolio. */
+  private async compute(projectId?: ProjectIdFilter): Promise<ExceptionItem[]> {
     // `project: { deletedAt: null }` always applies, portfolio-wide or not — archiving a
     // project soft-deletes the PROJECT ROW ONLY, so without this an archived project's
     // overdue milestones, stale units, draws, leases and cold sales kept firing into the

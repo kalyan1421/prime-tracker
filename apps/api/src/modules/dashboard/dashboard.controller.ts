@@ -25,16 +25,24 @@ export class DashboardController {
 
   @Get('construction')
   @RequirePermissions('unit:view')
-  getConstruction(@CurrentUser('role') role: string, @CurrentUser('sub') userId: string) {
+  getConstruction(
+    @CurrentUser('role') role: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
     if (!['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'PROJECT_MANAGER', 'CONSTRUCTION'].includes(role)) throw new ForbiddenException();
-    return this.service.getConstructionDashboard(role, userId);
+    return this.service.getConstructionDashboard(role, userId, roles);
   }
 
   @Get('sales')
   @RequirePermissions('unit:view')
-  getSales(@CurrentUser('role') role: string, @CurrentUser('sub') userId: string) {
+  getSales(
+    @CurrentUser('role') role: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('roles') roles?: string[],
+  ) {
     if (!['SUPER_ADMIN', 'FOUNDER', 'EXECUTIVE', 'SALES', 'MARKETING'].includes(role)) throw new ForbiddenException();
-    return this.service.getSalesDashboard(role, userId);
+    return this.service.getSalesDashboard(role, userId, roles);
   }
 
   @Get('finance')

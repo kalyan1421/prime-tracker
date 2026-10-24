@@ -16,6 +16,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import { InteriorCostingService, type CostingActor } from './interior-costing.service';
 import { StorageService } from '../../common/storage/storage.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 import { canTransition, getPhaseGate, isSnagOpen } from './interior-state-machine';
 import { AddScopeItemDto, AddInteriorInvoiceDto } from './dto/scope-invoice.dto';
 
@@ -62,6 +63,20 @@ type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildin
 
 const PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'];
 
+/**
+ * A fit-out reaches its project through EITHER anchor, so a project filter has to cover
+ * both paths — a unit-anchored fit-out has no buildingId of its own. Undefined = no filter.
+ */
+function interiorProjectScope(projectId: ProjectIdFilter): Prisma.InteriorProjectWhereInput | undefined {
+  if (projectId === undefined) return undefined;
+  return {
+    OR: [
+      { building: { projectId } },
+      { unit: { building: { projectId } } },
+    ],
+  };
+}
+
 @Injectable()
 export class InteriorService {
   constructor(
@@ -95,19 +110,10 @@ export class InteriorService {
   // ─────── Reads ───────
 
   async findAll(
-    filter: { unitId?: string; buildingId?: string; projectId?: string; status?: InteriorStatus },
+    filter: { unitId?: string; buildingId?: string; projectId?: ProjectIdFilter; status?: InteriorStatus },
     viewerPermissions?: string[],
   ) {
-    // A fit-out reaches its project through EITHER anchor, so a projectId filter has to
-    // cover both paths — a unit-anchored fit-out has no buildingId of its own.
-    const projectScope: Prisma.InteriorProjectWhereInput | undefined = filter.projectId
-      ? {
-          OR: [
-            { building: { projectId: filter.projectId } },
-            { unit: { building: { projectId: filter.projectId } } },
-          ],
-        }
-      : undefined;
+    const projectScope = interiorProjectScope(filter.projectId);
 
     const projects = await this.prisma.interiorProject.findMany({
       where: {
@@ -205,9 +211,9 @@ export class InteriorService {
    * Cross-project portfolio: phase, contract value, spend (sum of invoices), and
    * days-to-handover. Powers the InteriorPortfolioPage.
    */
-  async portfolio(viewerPermissions: string[] = []) {
+  async portfolio(viewerPermissions: string[] = [], projectId?: ProjectIdFilter) {
     const projects = await this.prisma.interiorProject.findMany({
-      where: { deletedAt: null, status: { not: 'CANCELLED' } },
+      where: { deletedAt: null, status: { not: 'CANCELLED' }, ...(interiorProjectScope(projectId) ?? {}) },
       orderBy: { targetEnd: 'asc' },
       include: {
         unit: { select: { id: true, unitNumber: true, building: { select: { id: true, name: true, project: { select: { id: true, name: true } } } } } },
