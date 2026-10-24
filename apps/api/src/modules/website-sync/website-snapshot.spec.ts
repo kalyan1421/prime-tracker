@@ -119,8 +119,8 @@ describe('sign', () => {
   // The same vector is asserted in PrimeDevelopers-web apps/api/test/tracker-sync.test.ts.
   // If either side changes how it signs, one of the two suites fails.
   it('matches the vector shared with the website', () => {
-    expect(sign('test-secret', '1761213600000', '{"version":1}')).toBe(
-      'sha256=70ee07dfaff5ffbde8b592f27b0a965f7f5966bf583395b5004b82ba29da78c3',
+    expect(sign('test-secret', '1761213600000', '/api/integrations/tracker/snapshot?force=true', '{"version":1}')).toBe(
+      'sha256=d802ec60fc1d55f09dc2028a1bfddbf8a9417d69d2d069c843e7b154501f7f1e',
     );
   });
 });

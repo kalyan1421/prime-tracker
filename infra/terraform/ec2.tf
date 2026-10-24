@@ -25,6 +25,17 @@ resource "aws_instance" "api" {
     encrypted   = true
   }
 
+  # IMDSv2 only. With v1 a single server-side request forgery in either API — fetch a
+  # URL the attacker chooses — returns the instance role's credentials, which read
+  # every production secret. v2 needs a PUT with a token first, which such a bug
+  # cannot make. Hop limit 1: nothing in a container needs the metadata service.
+  # Changing this is in place; it does not restart the instance.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
   # Neither of these may silently replace the only production server.
   #
   # `data.aws_ami.ubuntu` is `most_recent = true`, and Canonical publishes a new
