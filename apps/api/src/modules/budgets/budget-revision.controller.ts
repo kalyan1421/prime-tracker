@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { BudgetChangeReason } from '@prisma/client';
 import { BudgetRevisionService } from './budget-revision.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -8,6 +7,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
+import { CreateBudgetRevisionDto } from './dto/create-budget-revision.dto';
 
 @ApiTags('Budget Revisions')
 @ApiBearerAuth()
@@ -48,7 +48,7 @@ export class BudgetRevisionController {
   create(
     @Param('budgetLineId') budgetLineId: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { amount: number; reason: string; changeReason: BudgetChangeReason },
+    @Body() body: CreateBudgetRevisionDto,
   ) {
     return this.revisions.createRevision({
       budgetLineId,

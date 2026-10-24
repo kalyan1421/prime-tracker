@@ -2,7 +2,6 @@ import {
   Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { DrawDocType } from '@prisma/client';
 import { DrawsService } from './draws.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -11,6 +10,9 @@ import { MfaGuard } from '../../common/guards/mfa.guard';
 import { RequireMfa } from '../../common/decorators/index';
 import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
+import {
+  AttachDrawDocumentDto, DrawCommentDto, MarkDrawFundedDto, RejectDrawDto, RenameDrawDocumentDto,
+} from './dto/draw-workflow.dto';
 
 /**
  * Draw workflow API. Owns transitions, approvals, documents, checklist.
@@ -50,14 +52,14 @@ export class DrawsController {
   @Post(':id/submit')
   @RequirePermissions('draw:edit')
   @RequireMfa()
-  submit(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
+  submit(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: DrawCommentDto) {
     return this.draws.submit(id, userId, body?.comment);
   }
 
   @Post(':id/approve-internal')
   @RequirePermissions('draw:approve')
   @RequireMfa()
-  approveInternal(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
+  approveInternal(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: DrawCommentDto) {
     return this.draws.approveInternal(id, userId, body?.comment);
   }
 
@@ -68,7 +70,7 @@ export class DrawsController {
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
     @CurrentUser('permissions') permissions: string[] = [],
-    @Body() body: { comment?: string },
+    @Body() body: DrawCommentDto,
   ) {
     const canViewFinancial = permissions.includes('financial:view') || permissions.includes('loan:view');
     return this.draws.submitToLender(id, userId, canViewFinancial, body?.comment);
@@ -77,7 +79,7 @@ export class DrawsController {
   @Post(':id/return-for-info')
   @RequirePermissions('draw:edit')
   @RequireMfa()
-  returnForInfo(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
+  returnForInfo(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: DrawCommentDto) {
     return this.draws.returnForInfo(id, userId, body?.comment);
   }
 
@@ -87,7 +89,7 @@ export class DrawsController {
   markFunded(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { fundedAt?: string },
+    @Body() body: MarkDrawFundedDto,
   ) {
     return this.draws.markFunded(id, userId, body?.fundedAt ? new Date(body.fundedAt) : undefined);
   }
@@ -98,7 +100,7 @@ export class DrawsController {
   reject(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { reason: string },
+    @Body() body: RejectDrawDto,
   ) {
     return this.draws.reject(id, userId, body.reason);
   }
@@ -106,7 +108,7 @@ export class DrawsController {
   @Post(':id/cancel')
   @RequirePermissions('draw:edit')
   @RequireMfa()
-  cancel(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: { comment?: string }) {
+  cancel(@Param('id') id: string, @CurrentUser('sub') userId: string, @Body() body: DrawCommentDto) {
     return this.draws.cancel(id, userId, body?.comment);
   }
 
@@ -118,19 +120,23 @@ export class DrawsController {
   attachDocument(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { documentType: DrawDocType; storagePath: string; filename: string },
+    @Body() body: AttachDrawDocumentDto,
   ) {
+    // Explicit fields, never a spread: the controller's drawRequestId and uploadedById
+    // must not be overridable from the body.
     return this.draws.attachDocument({
       drawRequestId: id,
       uploadedById: userId,
-      ...body,
+      documentType: body.documentType,
+      storagePath: body.storagePath,
+      filename: body.filename,
     });
   }
 
   @Patch('documents/:documentId')
   @RequirePermissions('draw:edit')
   @RequireMfa()
-  renameDocument(@Param('documentId') documentId: string, @Body() body: { filename: string }) {
+  renameDocument(@Param('documentId') documentId: string, @Body() body: RenameDrawDocumentDto) {
     return this.draws.renameDocument(documentId, body.filename);
   }
 

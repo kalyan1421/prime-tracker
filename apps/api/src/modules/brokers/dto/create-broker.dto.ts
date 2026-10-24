@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsEmail, IsNumber, Min, Max, IsBoolean, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEmail, IsNumber, Min, Max, IsBoolean, MaxLength, IsPositive, IsDateString } from 'class-validator';
 
 export class CreateBrokerDto {
   @IsString() @IsNotEmpty() @MaxLength(200)
@@ -47,4 +47,25 @@ export class UpdateBrokerDto {
 
   @IsOptional() @IsBoolean()
   isActive?: boolean;
+}
+
+/**
+ * Body for POST /brokers/{sales|leases}/:id/commission-installments. Was an inline type
+ * the ValidationPipe skipped, so a non-numeric or negative amount reached the ledger.
+ */
+export class AddCommissionInstallmentDto {
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @IsPositive()
+  amount!: number;
+
+  @IsOptional() @IsDateString()
+  paidAt?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  notes?: string;
+}
+
+/** Body for PATCH /brokers/commission-installments/:installmentId/mark-paid. Optional date. */
+export class MarkInstallmentPaidDto {
+  @IsOptional() @IsDateString()
+  paidAt?: string;
 }

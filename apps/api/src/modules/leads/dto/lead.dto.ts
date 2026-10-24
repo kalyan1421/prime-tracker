@@ -170,3 +170,34 @@ export class LeadCommentDto {
   @IsString() @IsNotEmpty() @MaxLength(4000)
   content!: string;
 }
+
+/** Body for POST /leads/:id/interests — was an inline type the ValidationPipe skipped. */
+export class AddLeadInterestDto {
+  @IsString() @IsNotEmpty() @MaxLength(64)
+  unitId!: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  note?: string;
+}
+
+/**
+ * Body for POST /leads/:id/convert — creates a sale and reserves its unit. Was an inline
+ * type the ValidationPipe skipped, so `salePrice` arrived as whatever the form held,
+ * including NaN from `parseFloat('')`, and went straight into the new sale.
+ */
+export class ConvertLeadDto {
+  @IsString() @IsNotEmpty() @MaxLength(64)
+  unitId!: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(200)
+  buyer!: string;
+
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @Min(0)
+  salePrice!: number;
+
+  @IsOptional() @IsDateString()
+  contractDate?: string;
+
+  @IsOptional() @IsDateString()
+  closingDate?: string;
+}

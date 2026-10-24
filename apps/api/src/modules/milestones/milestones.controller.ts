@@ -13,6 +13,7 @@ import { CreateMilestoneDto } from './dto/create-milestone.dto';
 import { UpdateMilestoneDto } from './dto/update-milestone.dto';
 import { DecideSlipProposalDto } from './dto/slip-proposal.dto';
 import { SignOffPhotoDto, ForceCompleteMilestoneDto } from './dto/photo-signoff.dto';
+import { AttachMilestonePhotoDto, SetMilestoneDependencyDto } from './dto/milestone-photo.dto';
 
 @ApiTags('Milestones')
 @ApiBearerAuth()
@@ -161,7 +162,7 @@ export class MilestonesController {
   @Patch(':id/depends-on')
   @RequirePermissions('milestone:edit')
   @ApiOperation({ summary: 'Set or clear a dependency. Pass dependsOnId=null to clear. Cycles are rejected.' })
-  setDependency(@Param('id') id: string, @Body() body: { dependsOnId: string | null }) {
+  setDependency(@Param('id') id: string, @Body() body: SetMilestoneDependencyDto) {
     return this.deps.setDependency(id, body.dependsOnId);
   }
 
@@ -216,7 +217,7 @@ export class MilestonesController {
   attachPhoto(
     @Param('id') milestoneId: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { storagePath: string; caption?: string },
+    @Body() body: AttachMilestonePhotoDto,
   ) {
     return this.prisma.milestonePhoto.create({
       data: { milestoneId, storagePath: body.storagePath, caption: body.caption, uploadedById: userId },

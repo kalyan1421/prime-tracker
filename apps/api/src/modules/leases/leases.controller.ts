@@ -8,6 +8,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagg
 import { Prisma } from '@prisma/client';
 import { LeasesService } from './leases.service';
 import { LeaseImportService, ImportCommitRowInput } from './lease-import.service';
+import { LeaseImportCommitDto } from './dto/lease-import-commit.dto';
 import type { ConfirmedMapping } from '../../common/utils/xlsx-mapping';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -495,9 +496,8 @@ export class LeasesController {
   @Post('backfill/import/commit')
   @RequirePermissions('unit:history:backfill')
   @ApiOperation({ summary: 'Commit previously-previewed rent-history rows — one backfillTenancy() per row' })
-  commitImport(@Body('rows') rows: ImportCommitRowInput[], @CurrentUser('sub') userId: string) {
-    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('No rows to import');
-    return this.importService.commitImport(rows, userId);
+  commitImport(@Body() body: LeaseImportCommitDto, @CurrentUser('sub') userId: string) {
+    return this.importService.commitImport(body.rows as ImportCommitRowInput[], userId);
   }
 
   // ─────── Generic column-mapping import (R9) ───────

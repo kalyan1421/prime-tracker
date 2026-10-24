@@ -2,7 +2,7 @@ import {
   Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { InteriorContractType, InteriorPhase, InteriorStatus } from '@prisma/client';
+import type { InteriorStatus } from '@prisma/client';
 import { InteriorService } from './interior.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -21,6 +21,7 @@ const actorOf = (userId: string, role: string, roles: string[] | undefined, perm
   ({ userId, role, roles: roles ?? [], permissions: permissions ?? [] });
 import { AddScopeItemDto, AddInteriorInvoiceDto, UpdateInteriorInvoiceDto } from './dto/scope-invoice.dto';
 import { CreateSnagDto, UpdateSnagDto, ResolveSnagDto } from './dto/snag.dto';
+import { AdvanceInteriorPhaseDto, CreateInteriorProjectDto, UpdateInteriorProjectDto } from './dto/interior-project.dto';
 
 @ApiTags('Interior')
 @ApiBearerAuth()
@@ -80,25 +81,7 @@ export class InteriorController {
   @RequirePermissions('interior:edit')
   @ApiOperation({ summary: 'Create an interior project (per-sqft contract; anchor to unit OR building)' })
   create(
-    @Body() body: {
-      unitId?: string;
-      buildingId?: string;
-      saleId?: string;
-      leaseId?: string;
-      name: string;
-      pmId?: string;
-      contractType?: InteriorContractType;
-      ratePerSqft?: number;
-      area?: number;
-      contractValue?: number;
-      startDate?: string;
-      targetEnd?: string;
-      extraUnitIds?: string[];
-      priority?: string | null;
-      plansSubmittedAt?: string | null;
-      tiAllowance?: number | null;
-      poPrefix?: string | null;
-    },
+    @Body() body: CreateInteriorProjectDto,
   ) {
     return this.service.create(body);
   }
@@ -107,22 +90,7 @@ export class InteriorController {
   @RequirePermissions('interior:edit')
   update(
     @Param('id') id: string,
-    @Body() body: {
-      name?: string;
-      status?: InteriorStatus;
-      pmId?: string;
-      contractType?: InteriorContractType;
-      ratePerSqft?: number;
-      area?: number;
-      contractValue?: number;
-      startDate?: string;
-      targetEnd?: string;
-      extraUnitIds?: string[];
-      priority?: string | null;
-      plansSubmittedAt?: string | null;
-      tiAllowance?: number | null;
-      poPrefix?: string | null;
-    },
+    @Body() body: UpdateInteriorProjectDto,
   ) {
     return this.service.update(id, body);
   }
@@ -139,13 +107,7 @@ export class InteriorController {
   advance(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: {
-      target: InteriorPhase;
-      handoverSignedBy?: string;
-      handoverNotes?: string;
-      force?: boolean;
-      forceReason?: string;
-    },
+    @Body() body: AdvanceInteriorPhaseDto,
   ) {
     return this.service.advancePhase(id, body.target, userId, {
       handoverSignedBy: body.handoverSignedBy,

@@ -3,7 +3,8 @@ import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { LeadsService } from './leads.service';
 import {
-  AddLeadActivityDto, CreateLeadDto, LeadCommentDto, UpdateLeadActivityDto, UpdateLeadDto,
+  AddLeadActivityDto, AddLeadInterestDto, ConvertLeadDto, CreateLeadDto, LeadCommentDto, UpdateLeadActivityDto,
+  UpdateLeadDto,
 } from './dto/lead.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -195,7 +196,7 @@ export class LeadsController {
   @Post(':id/interests')
   @RequirePermissions('lead:edit')
   @ApiOperation({ summary: 'Add a unit of interest to a lead' })
-  addInterest(@Param('id') leadId: string, @Body() body: { unitId: string; note?: string }) {
+  addInterest(@Param('id') leadId: string, @Body() body: AddLeadInterestDto) {
     return this.service.addInterest(leadId, body.unitId, body.note);
   }
 
@@ -213,13 +214,7 @@ export class LeadsController {
   @ApiOperation({ summary: 'Convert a lead to a sale' })
   convert(
     @Param('id') leadId: string,
-    @Body() body: {
-      unitId: string;
-      buyer: string;
-      salePrice: number;
-      contractDate?: string;
-      closingDate?: string;
-    },
+    @Body() body: ConvertLeadDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.service.convertToSale(leadId, userId, body);

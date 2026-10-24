@@ -8,6 +8,7 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
 import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
+import { clampLimit } from '../../common/pagination/pagination.dto';
 
 @ApiTags('Comments')
 @ApiBearerAuth()
@@ -37,7 +38,8 @@ export class CommentsController {
   @ApiOperation({ summary: 'Recent comments across all projects (grouped by type)' })
   async findRecent(@CurrentUser() user: ScopedUser, @Query('limit') limit?: string) {
     // "All projects" means all the caller may see — a scoped role's member projects only.
-    return this.service.findRecent(limit ? parseInt(limit) : 20, await this.access.projectIdFilter(user));
+    // Capped: this reads across every project, and `?limit=` used to be unbounded.
+    return this.service.findRecent(clampLimit(limit, 20, 100), await this.access.projectIdFilter(user));
   }
 
   @Post()

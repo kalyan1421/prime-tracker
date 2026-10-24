@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { Prisma, UserRole, SaleBuyerType, SaleCancellationDisposition } from '@prisma/client';
+import { Prisma, Sale, UserRole, SaleBuyerType, SaleCancellationDisposition } from '@prisma/client';
 import { EventBus } from '../../common/events/event-bus.service';
-import { UnitStatusEventService } from '../../common/utils/unit-status-event.service';
+import { UnitStatusEventService, UnitStatusEventSource } from '../../common/utils/unit-status-event.service';
 import { LeasesService, TerminationReason } from '../leases/leases.service';
 import { startOfUtcDay } from '../leases/lease-rent-period.service';
 import { SalePaymentsService } from './sale-payments.service';
@@ -18,6 +18,26 @@ import {
   saleStageLabel,
   transitionSkipsStages,
 } from './sale-document-gates';
+
+/** Everything the closing path needs — see SalesService.closeUnitSaleWithin. */
+interface CloseContext {
+  id: string;
+  unitId: string | null;
+  buildingId: string | null;
+  closingDate: Date | null;
+  dataWithActivity: Prisma.SaleUncheckedUpdateInput;
+  tenancyTransfers: boolean;
+  terminationReason: TerminationReason;
+  updatedById?: string;
+}
+
+interface CloseOutcome {
+  sale: Sale;
+  /** False when a concurrent CLOSE won the optimistic lock and this one changed nothing. */
+  applied: boolean;
+  /** Tenancies the close ended — their events are emitted after the commit. */
+  endedLeases: { id: string; tenantName: string }[];
+}
 
 /** What the caller may say about the money when cancelling a sale. All optional. */
 export interface SaleCancellationInput {
@@ -420,30 +440,24 @@ export class SalesService {
       if (commission != null) (data as any).brokerCommissionAmt = commission;
     }
 
-    // A sale born CLOSED against real space is written UNDER_CONTRACT and then closed
-    // through update(), so it goes through the ONE closing path rather than a partial
-    // copy of it.
+    // A sale born CLOSED against real space goes through the ONE closing path rather than
+    // a partial copy of it — see createClosed().
     //
     // The copy was the bug. create() applied the discount gate and stamped the
     // commission, then emitted `unit.sold` — but never flipped the unit or ended the
     // tenancy, because that work lives in update(). Verified 2026-08-25: a CLOSED sale
     // created on a let unit left the unit unsold and the sitting tenant's lease ACTIVE
     // with no move-out date, still billing, while Finance was told the unit had sold.
-    const closeAfterCreate = createdClosed && !!(data.unitId || data.buildingId);
+    if (createdClosed && (data.unitId || data.buildingId)) {
+      return this.createClosed(data, createdById);
+    }
 
     const created = await this.prisma.sale.create({
       data: {
         ...data,
-        ...(closeAfterCreate ? { status: 'UNDER_CONTRACT' } : {}),
         lastActivityAt: new Date(),
       },
     });
-
-    if (closeAfterCreate) {
-      // update() re-runs the discount gate and re-stamps commission — both idempotent on
-      // the values create() just computed — and then does the half create() never did.
-      return this.update(created.id, { status: 'CLOSED' }, createdById);
-    }
 
     // R7: mirror a commission stamped at creation into the installment table.
     if (createdClosed) {
@@ -457,6 +471,76 @@ export class SalesService {
       this.bus.emit({ type: 'sale.statusChanged', saleId: created.id, from: 'NEW', to: 'CLOSED' });
     }
     return created;
+  }
+
+  /**
+   * A sale born CLOSED against a unit or building, in ONE transaction: the row is inserted
+   * at UNDER_CONTRACT and closed by closeUnitSaleWithin / closeBuildingSaleWithin — the
+   * same code update() runs for a close — before anything commits.
+   *
+   * It used to be create → commit → update(CLOSED) in a second transaction. When the
+   * close then failed (rent already collected past the closing date, a lost optimistic
+   * lock), the request errored but the sale stayed committed at UNDER_CONTRACT: a deal
+   * the user had just been told did not save, sitting in the pipeline anyway, and a retry
+   * created a second one.
+   *
+   * create() has already applied the discount gate and stamped the commission onto
+   * `data`; the one closing check left is update()'s price requirement. Events go out
+   * after the commit, in the same shape update() emits for a close.
+   */
+  private async createClosed(data: Prisma.SaleUncheckedCreateInput, createdById?: string) {
+    if (data.salePrice == null) {
+      throw new BadRequestException('A sale price is required to close a sale');
+    }
+    const tenancyTransfers = this.resolveBuyerType({ buyerType: (data.buyerType as SaleBuyerType | undefined) ?? null }, {}) === 'THIRD_PARTY';
+    const terminationReason: TerminationReason = tenancyTransfers
+      ? 'LEASE_TRANSFERRED_WITH_SALE'
+      : 'TENANT_BOUGHT';
+
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.sale.create({
+        data: { ...data, status: 'UNDER_CONTRACT', lastActivityAt: new Date() },
+      });
+      const ctx: CloseContext = {
+        id: created.id,
+        unitId: created.unitId,
+        buildingId: created.buildingId,
+        closingDate: created.closingDate,
+        dataWithActivity: { status: 'CLOSED', lastActivityAt: new Date() },
+        tenancyTransfers,
+        terminationReason,
+        updatedById: createdById,
+      };
+      return created.unitId ? this.closeUnitSaleWithin(tx, ctx) : this.closeBuildingSaleWithin(tx, ctx);
+    });
+    const sale = outcome.sale;
+
+    // After the commit, never inside it — a notification must not go out for a sale that
+    // rolled back. A brand-new row cannot lose the optimistic lock, so `applied` is true.
+    if (sale.projectId) {
+      for (const lease of outcome.endedLeases) {
+        this.bus.emit({
+          type: 'lease.terminated',
+          leaseId: lease.id,
+          projectId: sale.projectId,
+          tenantName: lease.tenantName,
+          reason: terminationReason,
+        });
+      }
+    }
+    this.bus.emit({ type: 'sale.statusChanged', saleId: sale.id, from: 'NEW', to: 'CLOSED' });
+    if (sale.unitId && sale.projectId) {
+      this.bus.emit({ type: 'unit.sold', unitId: sale.unitId, saleId: sale.id, projectId: sale.projectId });
+    }
+    // R7: mirror the commission create() stamped into the installment table.
+    if (sale.brokerCommissionAmt != null) {
+      await this.commissionInstallments.syncStampedAmount(
+        { saleId: sale.id },
+        sale.brokerId,
+        Number(sale.brokerCommissionAmt),
+      );
+    }
+    return sale;
   }
 
   async update(
@@ -585,132 +669,26 @@ export class SalesService {
     const terminationReason: TerminationReason = tenancyTransfers
       ? 'LEASE_TRANSFERRED_WITH_SALE'
       : 'TENANT_BOUGHT';
+    // Everything the closing path needs, so the SAME code can run inside update()'s own
+    // transaction or inside create()'s (a sale born CLOSED — see create()).
+    const closeCtx: CloseContext = {
+      id,
+      unitId: sale.unitId ?? null,
+      buildingId: sale.buildingId ?? null,
+      closingDate: sale.closingDate ?? null,
+      dataWithActivity,
+      tenancyTransfers,
+      terminationReason,
+      updatedById,
+    };
     if (data.status === 'CLOSED' && sale.unitId) {
-      const unitId = sale.unitId;
       // Atomic + optimistic-locked: only the NOT_CLOSED→CLOSED transition stamps the broker
       // commission and flips the unit. Guarding the write on `status != CLOSED` means a
       // concurrent CLOSE finds 0 rows and skips re-stamping brokerCommissionAmt.
-      const outcome = await this.prisma.$transaction(async (tx) => {
-        const guard = await tx.sale.updateMany({
-          where: { id, status: { not: 'CLOSED' } },
-          data: dataWithActivity,
-        });
-        if (guard.count === 0) {
-          // Lost the race — already CLOSED elsewhere. Return current row, no side effects.
-          return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false };
-        }
-        // Read the prior status inside the transaction so the occupancy event records
-        // what the unit actually moved FROM. Reading it outside would race the very
-        // concurrent close the optimistic lock above exists to defend against.
-        const before = await tx.unit.findUniqueOrThrow({
-          where: { id: unitId },
-          select: { status: true },
-        });
-        await tx.unit.update({
-          where: { id: unitId },
-          // Sale closed → unit becomes SOLD; clear time-on-market. Written BEFORE the
-          // tenancy work below, which is load-bearing for a transfer: endTenancyWithin
-          // refuses LEASE_TRANSFERRED_WITH_SALE unless the unit already reads SOLD, and
-          // that refusal is what stops the ledger-preserving mode being reachable on a
-          // unit Prime still owns and still bills.
-          data: { status: 'SOLD', availableSince: null },
-        });
-
-        // A sale ENDS every tenancy the unit is carrying — unless a THIRD PARTY bought it,
-        // in which case the tenancy goes with the unit (S4/T1). Until the H3 work existed,
-        // closing a sale flipped the unit to SOLD and left the lease ACTIVE — only the
-        // billing cron's sold-unit filter stopped the departed tenant being invoiced, and
-        // the unit read SOLD with a tenancy still running.
-        //
-        // In the SAME transaction on purpose: sold-with-a-live-lease is exactly the
-        // inconsistency both halves exist to prevent, so it must not be reachable by one
-        // half succeeding. If a tenancy cannot be ended — rent collected past the
-        // closing date — the CLOSE fails too, which is the honest outcome: that is a real
-        // conflict a person has to resolve, not something to close around.
-        //
-        // Which of the two happens is DERIVED from Sale.buyerType, never assumed. Before
-        // that field existed this path hard-coded TENANT_BOUGHT, so a third-party sale
-        // deleted the remaining rent periods and voided the future invoices of a tenant
-        // still in occupation and still owing rent.
-        //
-        // findMany, not findFirst: a unit can legitimately hold MORE THAN ONE
-        // non-terminated lease right now. assertNoOverlappingLease permits a lease
-        // starting the day another ends, and the unit state machine allows
-        // LEASED → LEASE_PENDING precisely so a successor can be signed while the sitting
-        // tenant is still in occupation. Ending only the newest row left the older,
-        // still-occupying tenancy ACTIVE on a unit now reading SOLD.
-        const closingDate = this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate);
-        const live = await tx.lease.findMany({
-          where: {
-            unitId,
-            deletedAt: null,
-            terminationDate: null,
-            status: { notIn: ['EXPIRED', 'TERMINATED'] },
-          },
-          orderBy: { leaseStart: 'asc' },
-          select: { id: true, tenantName: true, leaseStart: true },
-        });
-
-        // Only tenancies IN OCCUPATION on the closing date are ended by the sale (spec
-        // R4). A lease drafted to start later has nothing to end — endTenancyWithin
-        // rejects a termination dated before the lease start, so reaching for it would
-        // surface as a baffling "move-out date cannot be before the lease start date".
-        //
-        // Those future leases are deliberately left ALONE here, and the close is never
-        // blocked by one (R4). That is not the end of the story: a lease drafted for a
-        // unit Prime no longer owns is a commitment nobody can honour, and R4 requires the
-        // user be told it exists and asked what to do with it. That question belongs in
-        // the close dialog, which is a later phase — not silently answered by this method.
-        const closingDay = startOfUtcDay(closingDate);
-        const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
-
-        // Only the request that won the lock reaches here, so the event is written
-        // exactly once — same guarantee the `applied` flag gives the emitted events.
-        //
-        // Recorded after the tenancy lookup so its `reason` can say which of the two
-        // stories this sale is (R6). The unit's history has to distinguish "the tenant
-        // bought the place" from "the landlord changed and the tenant stayed" — they have
-        // completely different consequences for whoever reads it later.
-        await this.statusEvents.recordIfChanged(
-          {
-            unitId,
-            fromStatus: before.status,
-            toStatus: 'SOLD',
-            source: 'SALE_CLOSED',
-            saleId: id,
-            effectiveAt: this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate),
-            reason: this.saleClosedReason(tenancyTransfers, occupying.length),
-            recordedById: updatedById,
-          },
-          tx,
-        );
-
-        // ALL of them are acted on, oldest leaseStart first so the outcome does not depend
-        // on row order. `terminationReason` carries the whole branch: TENANT_BOUGHT caps
-        // the schedule and voids the future invoices, LEASE_TRANSFERRED_WITH_SALE does
-        // neither and hands both over intact.
-        endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
-        for (const lease of occupying) {
-          await this.leases.endTenancyWithin(
-            tx,
-            lease.id,
-            {
-              terminationDate: closingDate,
-              terminationReason,
-              terminationNote: tenancyTransfers
-                ? 'Transferred to the buyer when the sale of this unit closed. The tenant ' +
-                  'remains in occupation; Prime no longer manages or bills this tenancy, ' +
-                  'and the rent schedule and invoices are preserved as the new owner\'s record.'
-                : 'Ended automatically when the sale of this unit closed.',
-            },
-            updatedById,
-          );
-        }
-
-        return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
-      });
+      const outcome = await this.prisma.$transaction((tx) => this.closeUnitSaleWithin(tx, closeCtx));
       result = outcome.sale;
       applied = outcome.applied;
+      endedLeases = outcome.endedLeases;
     } else if (data.status === 'CLOSED' && sale.buildingId) {
       // Selling a WHOLE BUILDING did nothing to anything inside it. Verified 2026-08-25:
       // the sale closed, every unit stayed AVAILABLE/LEASED, and their tenancies kept
@@ -720,80 +698,10 @@ export class SalesService {
       // That branch carries the optimistic lock, the buyerType split and the ledger
       // preservation rules, all of it well covered; reshaping it to loop was the larger
       // risk. The rules applied here are the same ones, read from the same buyerType.
-      const outcome = await this.prisma.$transaction(async (tx) => {
-        const guard = await tx.sale.updateMany({
-          where: { id, status: { not: 'CLOSED' } },
-          data: dataWithActivity,
-        });
-        if (guard.count === 0) {
-          return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false };
-        }
-        const closingDate = this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate);
-        const closingDay = startOfUtcDay(closingDate);
-        const buildingId = sale.buildingId!;
-
-        const units = await tx.unit.findMany({
-          where: { buildingId, deletedAt: null },
-          select: { id: true, status: true },
-          orderBy: { unitNumber: 'asc' },
-        });
-        for (const unit of units) {
-          if (unit.status !== 'SOLD') {
-            await tx.unit.update({
-              where: { id: unit.id },
-              data: { status: 'SOLD', availableSince: null },
-            });
-            await this.statusEvents.recordIfChanged(
-              {
-                unitId: unit.id,
-                fromStatus: unit.status,
-                toStatus: 'SOLD',
-                source: 'SALE_CLOSED',
-                saleId: id,
-                effectiveAt: closingDate,
-                reason: this.saleClosedReason(tenancyTransfers, 0),
-                recordedById: updatedById,
-              },
-              tx,
-            );
-          }
-        }
-
-        // Every tenancy the building carries, at either level: the leases of its units
-        // AND any lease of the building as a whole. Both are occupancy the sale ends.
-        const live = await tx.lease.findMany({
-          where: {
-            deletedAt: null,
-            terminationDate: null,
-            status: { notIn: ['EXPIRED', 'TERMINATED'] },
-            OR: [{ buildingId }, { unit: { buildingId, deletedAt: null } }],
-          },
-          orderBy: { leaseStart: 'asc' },
-          select: { id: true, tenantName: true, leaseStart: true },
-        });
-        // Same rule as the unit branch: only tenancies already in occupation on the
-        // closing date are ended. One drafted to start later has nothing to end.
-        const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
-        endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
-        for (const lease of occupying) {
-          await this.leases.endTenancyWithin(
-            tx,
-            lease.id,
-            {
-              terminationDate: closingDate,
-              terminationReason,
-              terminationNote: tenancyTransfers
-                ? 'Transferred to the buyer when the sale of this building closed. The tenant '
-                  + 'remains in occupation; Prime no longer manages or bills this tenancy.'
-                : 'Ended automatically when the sale of this building closed.',
-            },
-            updatedById,
-          );
-        }
-        return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true };
-      });
+      const outcome = await this.prisma.$transaction((tx) => this.closeBuildingSaleWithin(tx, closeCtx));
       result = outcome.sale;
       applied = outcome.applied;
+      endedLeases = outcome.endedLeases;
     } else if (cancelling) {
       // Cancelling a sale must RELEASE the unit it was holding, or the unit stays stuck
       // in UNDER_CONTRACT forever (backend-issue #1). Only flip a unit that was *reserved*
@@ -820,26 +728,13 @@ export class SalesService {
         const updated = await tx.sale.update({ where: { id }, data: dataWithActivity });
         await this.recordCancellation(tx, id, cancellation, updatedById);
         if (reserved && unitId) {
-          const before = await tx.unit.findUniqueOrThrow({
-            where: { id: unitId },
-            select: { status: true },
+          await this.releaseUnitWithin(tx, {
+            unitId,
+            saleId: id,
+            source: 'SALE_CANCELLED',
+            reason: 'Sale cancelled — reserved unit released back to market',
+            userId: updatedById,
           });
-          await tx.unit.update({
-            where: { id: unitId },
-            data: { status: 'AVAILABLE', availableSince: new Date() },
-          });
-          await this.statusEvents.recordIfChanged(
-            {
-              unitId,
-              fromStatus: before.status,
-              toStatus: 'AVAILABLE',
-              source: 'SALE_CANCELLED',
-              saleId: id,
-              reason: 'Sale cancelled — reserved unit released back to market',
-              recordedById: updatedById,
-            },
-            tx,
-          );
         }
         return updated;
       });
@@ -910,6 +805,224 @@ export class SalesService {
     }
 
     return result;
+  }
+
+  /**
+   * The unit-level CLOSE, inside the caller's transaction. Atomic + optimistic-locked: only
+   * the NOT_CLOSED→CLOSED transition stamps the broker commission and flips the unit.
+   * Guarding the write on `status != CLOSED` means a concurrent CLOSE finds 0 rows and
+   * skips re-stamping brokerCommissionAmt.
+   *
+   * Extracted from update() unchanged so create() can run the one closing path in ITS
+   * transaction for a sale born CLOSED, rather than committing the sale first and closing
+   * it in a second transaction that could fail on its own.
+   */
+  private async closeUnitSaleWithin(
+    tx: Prisma.TransactionClient,
+    ctx: CloseContext,
+  ): Promise<CloseOutcome> {
+    const { id, dataWithActivity, tenancyTransfers, terminationReason, updatedById } = ctx;
+    const unitId = ctx.unitId!;
+    const sale = { closingDate: ctx.closingDate };
+    const guard = await tx.sale.updateMany({
+      where: { id, status: { not: 'CLOSED' } },
+      data: dataWithActivity,
+    });
+    if (guard.count === 0) {
+      // Lost the race — already CLOSED elsewhere. Return current row, no side effects.
+      return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false, endedLeases: [] };
+    }
+    // Read the prior status inside the transaction so the occupancy event records
+    // what the unit actually moved FROM. Reading it outside would race the very
+    // concurrent close the optimistic lock above exists to defend against.
+    const before = await tx.unit.findUniqueOrThrow({
+      where: { id: unitId },
+      select: { status: true },
+    });
+    await tx.unit.update({
+      where: { id: unitId },
+      // Sale closed → unit becomes SOLD; clear time-on-market. Written BEFORE the
+      // tenancy work below, which is load-bearing for a transfer: endTenancyWithin
+      // refuses LEASE_TRANSFERRED_WITH_SALE unless the unit already reads SOLD, and
+      // that refusal is what stops the ledger-preserving mode being reachable on a
+      // unit Prime still owns and still bills.
+      data: { status: 'SOLD', availableSince: null },
+    });
+
+    // A sale ENDS every tenancy the unit is carrying — unless a THIRD PARTY bought it,
+    // in which case the tenancy goes with the unit (S4/T1). Until the H3 work existed,
+    // closing a sale flipped the unit to SOLD and left the lease ACTIVE — only the
+    // billing cron's sold-unit filter stopped the departed tenant being invoiced, and
+    // the unit read SOLD with a tenancy still running.
+    //
+    // In the SAME transaction on purpose: sold-with-a-live-lease is exactly the
+    // inconsistency both halves exist to prevent, so it must not be reachable by one
+    // half succeeding. If a tenancy cannot be ended — rent collected past the
+    // closing date — the CLOSE fails too, which is the honest outcome: that is a real
+    // conflict a person has to resolve, not something to close around.
+    //
+    // Which of the two happens is DERIVED from Sale.buyerType, never assumed. Before
+    // that field existed this path hard-coded TENANT_BOUGHT, so a third-party sale
+    // deleted the remaining rent periods and voided the future invoices of a tenant
+    // still in occupation and still owing rent.
+    //
+    // findMany, not findFirst: a unit can legitimately hold MORE THAN ONE
+    // non-terminated lease right now. assertNoOverlappingLease permits a lease
+    // starting the day another ends, and the unit state machine allows
+    // LEASED → LEASE_PENDING precisely so a successor can be signed while the sitting
+    // tenant is still in occupation. Ending only the newest row left the older,
+    // still-occupying tenancy ACTIVE on a unit now reading SOLD.
+    const closingDate = this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate);
+    const live = await tx.lease.findMany({
+      where: {
+        unitId,
+        deletedAt: null,
+        terminationDate: null,
+        status: { notIn: ['EXPIRED', 'TERMINATED'] },
+      },
+      orderBy: { leaseStart: 'asc' },
+      select: { id: true, tenantName: true, leaseStart: true },
+    });
+
+    // Only tenancies IN OCCUPATION on the closing date are ended by the sale (spec
+    // R4). A lease drafted to start later has nothing to end — endTenancyWithin
+    // rejects a termination dated before the lease start, so reaching for it would
+    // surface as a baffling "move-out date cannot be before the lease start date".
+    //
+    // Those future leases are deliberately left ALONE here, and the close is never
+    // blocked by one (R4). That is not the end of the story: a lease drafted for a
+    // unit Prime no longer owns is a commitment nobody can honour, and R4 requires the
+    // user be told it exists and asked what to do with it. That question belongs in
+    // the close dialog, which is a later phase — not silently answered by this method.
+    const closingDay = startOfUtcDay(closingDate);
+    const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
+
+    // Only the request that won the lock reaches here, so the event is written
+    // exactly once — same guarantee the `applied` flag gives the emitted events.
+    //
+    // Recorded after the tenancy lookup so its `reason` can say which of the two
+    // stories this sale is (R6). The unit's history has to distinguish "the tenant
+    // bought the place" from "the landlord changed and the tenant stayed" — they have
+    // completely different consequences for whoever reads it later.
+    await this.statusEvents.recordIfChanged(
+      {
+        unitId,
+        fromStatus: before.status,
+        toStatus: 'SOLD',
+        source: 'SALE_CLOSED',
+        saleId: id,
+        effectiveAt: this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate),
+        reason: this.saleClosedReason(tenancyTransfers, occupying.length),
+        recordedById: updatedById,
+      },
+      tx,
+    );
+
+    // ALL of them are acted on, oldest leaseStart first so the outcome does not depend
+    // on row order. `terminationReason` carries the whole branch: TENANT_BOUGHT caps
+    // the schedule and voids the future invoices, LEASE_TRANSFERRED_WITH_SALE does
+    // neither and hands both over intact.
+    const endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
+    for (const lease of occupying) {
+      await this.leases.endTenancyWithin(
+        tx,
+        lease.id,
+        {
+          terminationDate: closingDate,
+          terminationReason,
+          terminationNote: tenancyTransfers
+            ? 'Transferred to the buyer when the sale of this unit closed. The tenant ' +
+              'remains in occupation; Prime no longer manages or bills this tenancy, ' +
+              'and the rent schedule and invoices are preserved as the new owner\'s record.'
+            : 'Ended automatically when the sale of this unit closed.',
+        },
+        updatedById,
+      );
+    }
+
+    return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true, endedLeases };
+  }
+
+  /**
+   * The building-level CLOSE, inside the caller's transaction — the sibling of
+   * closeUnitSaleWithin, extracted from update() unchanged for the same reason.
+   */
+  private async closeBuildingSaleWithin(
+    tx: Prisma.TransactionClient,
+    ctx: CloseContext,
+  ): Promise<CloseOutcome> {
+    const { id, dataWithActivity, tenancyTransfers, terminationReason, updatedById } = ctx;
+    const sale = { closingDate: ctx.closingDate, buildingId: ctx.buildingId };
+    const guard = await tx.sale.updateMany({
+      where: { id, status: { not: 'CLOSED' } },
+      data: dataWithActivity,
+    });
+    if (guard.count === 0) {
+      return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: false, endedLeases: [] };
+    }
+    const closingDate = this.toDateOrNow(dataWithActivity.closingDate ?? sale.closingDate);
+    const closingDay = startOfUtcDay(closingDate);
+    const buildingId = sale.buildingId!;
+
+    const units = await tx.unit.findMany({
+      where: { buildingId, deletedAt: null },
+      select: { id: true, status: true },
+      orderBy: { unitNumber: 'asc' },
+    });
+    for (const unit of units) {
+      if (unit.status !== 'SOLD') {
+        await tx.unit.update({
+          where: { id: unit.id },
+          data: { status: 'SOLD', availableSince: null },
+        });
+        await this.statusEvents.recordIfChanged(
+          {
+            unitId: unit.id,
+            fromStatus: unit.status,
+            toStatus: 'SOLD',
+            source: 'SALE_CLOSED',
+            saleId: id,
+            effectiveAt: closingDate,
+            reason: this.saleClosedReason(tenancyTransfers, 0),
+            recordedById: updatedById,
+          },
+          tx,
+        );
+      }
+    }
+
+    // Every tenancy the building carries, at either level: the leases of its units
+    // AND any lease of the building as a whole. Both are occupancy the sale ends.
+    const live = await tx.lease.findMany({
+      where: {
+        deletedAt: null,
+        terminationDate: null,
+        status: { notIn: ['EXPIRED', 'TERMINATED'] },
+        OR: [{ buildingId }, { unit: { buildingId, deletedAt: null } }],
+      },
+      orderBy: { leaseStart: 'asc' },
+      select: { id: true, tenantName: true, leaseStart: true },
+    });
+    // Same rule as the unit branch: only tenancies already in occupation on the
+    // closing date are ended. One drafted to start later has nothing to end.
+    const occupying = live.filter((l) => startOfUtcDay(l.leaseStart) <= closingDay);
+    const endedLeases = occupying.map((l) => ({ id: l.id, tenantName: l.tenantName }));
+    for (const lease of occupying) {
+      await this.leases.endTenancyWithin(
+        tx,
+        lease.id,
+        {
+          terminationDate: closingDate,
+          terminationReason,
+          terminationNote: tenancyTransfers
+            ? 'Transferred to the buyer when the sale of this building closed. The tenant '
+              + 'remains in occupation; Prime no longer manages or bills this tenancy.'
+            : 'Ended automatically when the sale of this building closed.',
+        },
+        updatedById,
+      );
+    }
+    return { sale: await tx.sale.findUniqueOrThrow({ where: { id } }), applied: true, endedLeases };
   }
 
   // ─────── Historical backfill (R4) ───────
@@ -1509,17 +1622,16 @@ export class SalesService {
     const sale = await this.findById(id);
     const historical = !!(sale as any).isHistorical;
     let approvalId: string | null = null;
-    let selfApproved = false;
+    let selfApprove = false;
 
+    // Decide BEFORE writing anything: every refusal below must leave every row untouched.
     if (historical) {
       const target = { saleId: id };
       const approved = await this.historicalDeletions.findLatestApproved(target);
       if (approved) {
         approvalId = approved.id;
       } else if (canApproveDeletion) {
-        selfApproved = true;
-        const record = await this.historicalDeletions.selfApprove(target, userId!);
-        approvalId = record.id;
+        selfApprove = true;
       } else {
         const pending = await this.historicalDeletions.findPending(target);
         throw new ForbiddenException(
@@ -1529,24 +1641,114 @@ export class SalesService {
               + 'has to approve it.',
         );
       }
-      await this.historicalDeletions.markCompleted(approvalId!);
     } else if (sale.status === 'CLOSED' && !['FOUNDER', 'SUPER_ADMIN'].includes(userRole)) {
       throw new ForbiddenException('Closed sales can only be deleted by Founder or Super Admin');
     }
 
-    const deleted = await this.prisma.sale.update({ where: { id }, data: { deletedAt: new Date() } });
-    await this.audit.log({
-      userId,
-      action: historical ? 'SALE_HISTORICAL_DELETED' : 'SALE_DELETED',
-      entity: 'Sale',
-      entityId: id,
-      oldValues: {
-        buyer: sale.buyer,
-        isHistorical: historical,
-        ...(historical ? { approvalId, selfApproved } : {}),
-      },
+    // ONE transaction for the approval, the soft delete, the unit release and the audit
+    // row — same reasoning as LeasesService.delete: these were separate writes, so a
+    // failure part-way could burn an approval without deleting, or delete without an audit
+    // row saying who did it.
+    return this.prisma.$transaction(async (tx) => {
+      if (historical) {
+        if (selfApprove) {
+          const record = await this.historicalDeletions.selfApprove({ saleId: id }, userId!, tx);
+          approvalId = record.id;
+        }
+        await this.historicalDeletions.markCompleted(approvalId!, tx);
+      }
+
+      const deleted = await tx.sale.update({ where: { id }, data: { deletedAt: new Date() } });
+
+      // A CLOSED sale is what made its unit SOLD. Deleting the sale used to leave the unit
+      // SOLD with no sale behind it — off the market for good, and invisible to every
+      // vacancy and availability list. It is released through the same path a cancellation
+      // uses (releaseUnitWithin, occupancy event included), but only when this sale is the
+      // reason it is SOLD: another live closed sale on the unit (a resale), or a closed sale
+      // of its whole building, keeps it sold. Deleting a BUILDING-level sale releases
+      // nothing: its units may have been let and handed over with the building, and which
+      // of them belong back on the market is a call for a person, not this method.
+      let unitReleased = false;
+      if (sale.status === 'CLOSED' && sale.unitId) {
+        const unit = await tx.unit.findUnique({
+          where: { id: sale.unitId },
+          select: { status: true, buildingId: true },
+        });
+        if (unit?.status === 'SOLD') {
+          const otherClosed = await tx.sale.count({
+            where: {
+              id: { not: id },
+              deletedAt: null,
+              status: 'CLOSED',
+              OR: [{ unitId: sale.unitId }, { buildingId: unit.buildingId }],
+            },
+          });
+          if (otherClosed === 0) {
+            await this.releaseUnitWithin(tx, {
+              unitId: sale.unitId,
+              saleId: id,
+              source: 'SALE_DELETED',
+              reason: `Sale deleted — ${sale.buyer}`,
+              userId,
+            });
+            unitReleased = true;
+          }
+        }
+      }
+
+      await this.audit.log(
+        {
+          userId,
+          action: historical ? 'SALE_HISTORICAL_DELETED' : 'SALE_DELETED',
+          entity: 'Sale',
+          entityId: id,
+          oldValues: {
+            buyer: sale.buyer,
+            isHistorical: historical,
+            ...(historical ? { approvalId, selfApproved: selfApprove } : {}),
+            ...(unitReleased ? { unitReleased: true } : {}),
+          },
+        },
+        tx,
+      );
+      return deleted;
     });
-    return deleted;
+  }
+
+  /**
+   * Put a unit this sale was holding back on the market, inside the caller's transaction:
+   * AVAILABLE, a fresh time-on-market clock, and an occupancy event saying why. The one
+   * path for a sale letting go of its unit — cancellation of a reserved unit and deletion
+   * of a closed sale both use it; the caller decides WHETHER the unit is this sale's to
+   * release.
+   *
+   * The prior status is read inside the transaction so the event records what the unit
+   * actually moved FROM.
+   */
+  private async releaseUnitWithin(
+    tx: Prisma.TransactionClient,
+    p: { unitId: string; saleId: string; source: UnitStatusEventSource; reason: string; userId?: string },
+  ) {
+    const before = await tx.unit.findUniqueOrThrow({
+      where: { id: p.unitId },
+      select: { status: true },
+    });
+    await tx.unit.update({
+      where: { id: p.unitId },
+      data: { status: 'AVAILABLE', availableSince: new Date() },
+    });
+    await this.statusEvents.recordIfChanged(
+      {
+        unitId: p.unitId,
+        fromStatus: before.status,
+        toStatus: 'AVAILABLE',
+        source: p.source,
+        saleId: p.saleId,
+        reason: p.reason,
+        recordedById: p.userId,
+      },
+      tx,
+    );
   }
 
   /** Ask a Founder to approve deleting a backfilled sale. Reason is mandatory. */

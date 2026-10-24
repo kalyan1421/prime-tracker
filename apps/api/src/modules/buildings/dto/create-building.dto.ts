@@ -3,6 +3,7 @@ import {
   IsOptional, IsNumber, IsPositive, IsInt, Min, Max, IsEnum,
 } from 'class-validator';
 import { BuildingType } from '@prisma/client';
+import { IsStorageKey } from '../../../common/storage/storage-key';
 
 export class CreateBuildingDto {
   @IsString() @IsNotEmpty()
@@ -35,6 +36,7 @@ export class CreateBuildingDto {
   @IsOptional() @IsString()
   phase?: string;
 
-  @IsOptional() @IsString()
+  /** Bucket key from /documents/upload-file — fed to the signer, so it must be one of ours. */
+  @IsOptional() @IsString() @IsStorageKey()
   coverPhotoPath?: string;
 }

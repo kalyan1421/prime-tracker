@@ -9,6 +9,8 @@ const mockPrisma: any = {
     findFirst: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    // delete() asks whether another live lease still holds the unit before releasing it.
+    count: jest.fn().mockResolvedValue(0),
   },
   leaseRentPeriod: {
     findMany: jest.fn().mockResolvedValue([]),
@@ -256,6 +258,83 @@ describe('LeasesService.delete — soft delete (preserves unit history)', () => 
   it('a soft-deleted lease reads back as not-found', async () => {
     mockPrisma.lease.findUnique.mockResolvedValue({ id: 'l1', deletedAt: new Date() });
     await expect(service.findById('l1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/**
+ * Deleting an ACTIVE lease used to leave its unit reading LEASED with no lease behind it,
+ * and the approval, the delete and the audit row were separate writes. Now it is one
+ * transaction, and the unit goes back on the market through the same releaseUnitWithin
+ * path a move-out uses, with its own LEASE_DELETED occupancy event.
+ */
+describe('LeasesService.delete — atomic, and releases the unit an ACTIVE lease held', () => {
+  let service: LeasesService;
+  const ACTIVE = { id: 'l1', unitId: 'u1', tenantName: 'Acme', status: 'ACTIVE', terminationDate: null };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.lease.update.mockResolvedValue({ id: 'l1', deletedAt: new Date() });
+    mockPrisma.lease.count.mockResolvedValue(0);
+    mockPrisma.unit.findUnique.mockResolvedValue({ building: { projectId: 'p1' }, status: 'LEASED' });
+    service = makeService();
+  });
+
+  it('releases a LEASED unit to AVAILABLE and logs a LEASE_DELETED event, inside the transaction', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue(ACTIVE);
+
+    await service.delete('l1', 'user-1');
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { status: 'AVAILABLE', availableSince: expect.any(Date) },
+    });
+    expect(mockStatusEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unitId: 'u1', fromStatus: 'LEASED', toStatus: 'AVAILABLE', source: 'LEASE_DELETED', leaseId: 'l1',
+      }),
+      mockPrisma, // the transaction client
+    );
+    expect(mockAudit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'LEASE_DELETED', oldValues: expect.objectContaining({ unitReleased: true }) }),
+      mockPrisma,
+    );
+  });
+
+  it('leaves the unit alone when another live lease still holds it', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue(ACTIVE);
+    mockPrisma.lease.count.mockResolvedValue(1);
+
+    await service.delete('l1', 'user-1');
+
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+    expect(mockStatusEvents.record).not.toHaveBeenCalled();
+  });
+
+  it('leaves a unit someone has already moved off LEASED/OCCUPIED alone, with no event', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue(ACTIVE);
+    mockPrisma.unit.findUnique.mockResolvedValue({ building: { projectId: 'p1' }, status: 'SOLD' });
+
+    await service.delete('l1', 'user-1');
+
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+    expect(mockStatusEvents.record).not.toHaveBeenCalled();
+  });
+
+  it('does not touch the unit for a lease that already ended', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue({ ...ACTIVE, status: 'EXPIRED' });
+
+    await service.delete('l1', 'user-1');
+
+    expect(mockPrisma.lease.count).not.toHaveBeenCalled();
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+  });
+
+  it('a failed audit write fails the delete instead of being swallowed mid-transaction', async () => {
+    mockPrisma.lease.findUnique.mockResolvedValue(ACTIVE);
+    mockAudit.log.mockRejectedValueOnce(new Error('audit insert failed'));
+
+    await expect(service.delete('l1', 'user-1')).rejects.toThrow('audit insert failed');
   });
 });
 
@@ -2277,10 +2356,12 @@ describe('LeasesService — historical deletion approval', () => {
         }),
       });
       expect(mockPrisma.lease.update).toHaveBeenCalled();
+      // Second argument: the transaction the delete runs in — the audit row commits with it.
       expect(mockAudit.log).toHaveBeenCalledWith(
         expect.objectContaining({
           oldValues: expect.objectContaining({ selfApproved: true }),
         }),
+        expect.anything(),
       );
     });
 
@@ -2325,6 +2406,7 @@ describe('LeasesService — historical deletion approval', () => {
       await service.delete('l2', 'user-1');
       expect(mockAudit.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'LEASE_DELETED' }),
+        expect.anything(),
       );
 
       jest.clearAllMocks();
@@ -2333,6 +2415,7 @@ describe('LeasesService — historical deletion approval', () => {
       await service.delete('l1', 'user-1');
       expect(mockAudit.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'LEASE_HISTORICAL_DELETED' }),
+        expect.anything(),
       );
     });
   });

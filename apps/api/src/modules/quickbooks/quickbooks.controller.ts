@@ -6,6 +6,8 @@ import { QuickbooksService } from './quickbooks.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { clampLimit } from '../../common/pagination/pagination.dto';
+import { UpsertQbMappingDto } from './dto/qb-mapping.dto';
 
 @ApiTags('QuickBooks')
 @Controller('quickbooks')
@@ -73,7 +75,7 @@ export class QuickbooksController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('quickbooks:manage')
   getSyncLogs(@Query('limit') limit?: number) {
-    return this.service.getSyncLogs(limit);
+    return this.service.getSyncLogs(clampLimit(limit, 20, 100));
   }
 
   @Get('mappings')
@@ -88,7 +90,7 @@ export class QuickbooksController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('quickbooks:manage')
-  upsertMapping(@Body() body: { projectId: string; qbClassId?: string; qbClassName?: string; qbLocationId?: string; qbLocationName?: string }) {
+  upsertMapping(@Body() body: UpsertQbMappingDto) {
     return this.service.upsertProjectMapping(body.projectId, body);
   }
 }

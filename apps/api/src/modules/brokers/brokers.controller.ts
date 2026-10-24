@@ -8,7 +8,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
-import { CreateBrokerDto, UpdateBrokerDto } from './dto/create-broker.dto';
+import { CreateBrokerDto, UpdateBrokerDto, AddCommissionInstallmentDto, MarkInstallmentPaidDto } from './dto/create-broker.dto';
 
 /**
  * Brokers themselves are portfolio-wide records with no project of their own, but almost
@@ -134,7 +134,7 @@ export class BrokersController {
   @ApiOperation({ summary: "Record a new commission installment on a sale (e.g. a 2nd payment)" })
   addSaleCommissionInstallment(
     @Param('saleId') saleId: string,
-    @Body() body: { amount: number; paidAt?: string; notes?: string },
+    @Body() body: AddCommissionInstallmentDto,
   ) {
     return this.service.addCommissionInstallment(
       { saleId },
@@ -154,7 +154,7 @@ export class BrokersController {
   @ApiOperation({ summary: "Record a new commission installment on a lease (e.g. a 2nd payment)" })
   addLeaseCommissionInstallment(
     @Param('leaseId') leaseId: string,
-    @Body() body: { amount: number; paidAt?: string; notes?: string },
+    @Body() body: AddCommissionInstallmentDto,
   ) {
     return this.service.addCommissionInstallment(
       { leaseId },
@@ -171,7 +171,7 @@ export class BrokersController {
   @ApiOperation({ summary: 'Mark a single commission installment as paid' })
   markCommissionInstallmentPaid(
     @Param('installmentId') installmentId: string,
-    @Body() body: { paidAt?: string },
+    @Body() body: MarkInstallmentPaidDto,
   ) {
     return this.service.markCommissionInstallmentPaid(
       installmentId,

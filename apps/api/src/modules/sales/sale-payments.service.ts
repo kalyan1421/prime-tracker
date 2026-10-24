@@ -144,7 +144,7 @@ export class SalePaymentsService {
 
   async updatePayment(
     id: string,
-    input: { label?: string; amount?: number; dueDate?: string; milestoneId?: string; sequence?: number; notes?: string },
+    input: { label?: string; amount?: number; dueDate?: string; milestoneId?: string | null; sequence?: number; notes?: string },
   ) {
     const payment = await this.getPayment(id);
     if (input.amount != null) {

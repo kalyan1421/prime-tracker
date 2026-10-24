@@ -28,6 +28,16 @@ export class OverdueDetectionCron {
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, { name: 'milestone-overdue-detection' })
   async run() {
+    // Named and logged rather than left to the scheduler's anonymous error line — see
+    // DrawFundingOverdueCron.run.
+    try {
+      await this.detect();
+    } catch (err) {
+      this.logger.error(`Cron milestone-overdue-detection failed: ${(err as Error).message}`, (err as Error).stack);
+    }
+  }
+
+  async detect() {
     const result = await this.prisma.milestone.updateMany({
       where: {
         status: { in: ['NOT_STARTED', 'IN_PROGRESS'] },

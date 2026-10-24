@@ -28,7 +28,7 @@ export class EventBus {
   }
 
   emit(event: DomainEvent): void {
-    this.logger.debug(`emit ${event.type} ${JSON.stringify(event)}`);
+    this.logger.debug(`emit ${describeEvent(event)}`);
     // Defer to next tick so handlers run AFTER the current write transaction settles.
     // This avoids reading stale Prisma data in event handlers.
     setImmediate(() => {
@@ -52,4 +52,18 @@ export class EventBus {
       }
     });
   }
+}
+
+/**
+ * `sale.statusChanged saleId=… projectId=…` — the event type and its *Id fields only.
+ *
+ * This line used to be the whole event as JSON, and events carry buyer and tenant names,
+ * prices, rents and amounts. Ids are enough to find the record; the rest is personal and
+ * financial data that has no business in a log stream with its own retention and access.
+ */
+export function describeEvent(event: DomainEvent): string {
+  const ids = Object.entries(event as unknown as Record<string, unknown>)
+    .filter(([key, value]) => /Id$/.test(key) && (typeof value === 'string' || typeof value === 'number'))
+    .map(([key, value]) => `${key}=${value}`);
+  return [event.type, ...ids].join(' ');
 }

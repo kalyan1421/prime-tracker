@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
-import { JsonLogger } from './common/logging/json.logger';
+import { JsonLogger, resolveLogLevels } from './common/logging/json.logger';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 
 async function bootstrap() {
@@ -44,8 +44,17 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const isProd = config.get('NODE_ENV') === 'production';
 
-  // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev.
-  app.useLogger(isProd ? new JsonLogger() : ['error', 'warn', 'log', 'debug']);
+  // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev. Both
+  // honour LOG_LEVEL — production defaults to info, so debug lines (which have carried
+  // full domain-event payloads) stay out of CloudWatch unless someone asks for them.
+  const logLevels = resolveLogLevels(config.get<string>('LOG_LEVEL'), isProd);
+  app.useLogger(isProd ? new JsonLogger('', { logLevels }) : logLevels);
+
+  // Run onModuleDestroy / beforeApplicationShutdown on SIGTERM and SIGINT. Without this a
+  // deploy's `pm2 reload` (SIGINT) or a container stop (SIGTERM) killed the process
+  // mid-request: PrismaService.$disconnect never ran, an in-flight cron was cut off
+  // between writes, and the scheduler was not stopped before the pool went away.
+  app.enableShutdownHooks();
 
   // ---- Refuse to run an auth bypass in production ----
   //

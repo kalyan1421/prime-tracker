@@ -5,7 +5,11 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { CurrentUser } from '../../common/decorators/index';
-import { NotificationType } from '@prisma/client';
+import { MarkNotificationsReadDto, SetNotificationPreferenceDto } from './dto/notification.dto';
+import { clampLimit } from '../../common/pagination/pagination.dto';
+
+/** The bell shows 20; the full list page asks for more, but never the whole history. */
+const MAX_NOTIFICATIONS_PAGE = 100;
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
@@ -21,14 +25,15 @@ export class NotificationsController {
     @CurrentUser('sub') userId: string,
     @Query('limit') limit?: string,
   ) {
-    return this.service.findForUser(userId, limit ? parseInt(limit) : 20);
+    // Capped: `?limit=1000000` used to load a user's whole notification history.
+    return this.service.findForUser(userId, clampLimit(limit, 20, MAX_NOTIFICATIONS_PAGE));
   }
 
   @Post('read')
   @ApiOperation({ summary: 'Mark notifications as read' })
   markRead(
     @CurrentUser('sub') userId: string,
-    @Body() body: { ids?: string[] },
+    @Body() body: MarkNotificationsReadDto,
   ) {
     return this.service.markRead(userId, body.ids);
   }
@@ -46,7 +51,7 @@ export class NotificationsController {
     // Both channels optional and independent: the settings page changes one at a time,
     // and emailEnabled:null (clear the override back to the tier default) is distinct
     // from omitting the field.
-    @Body() body: { type: NotificationType; enabled?: boolean; emailEnabled?: boolean | null },
+    @Body() body: SetNotificationPreferenceDto,
   ) {
     return this.service.setPreference(userId, body.type, body.enabled, body.emailEnabled);
   }
