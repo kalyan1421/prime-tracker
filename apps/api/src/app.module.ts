@@ -50,6 +50,7 @@ import { DailyLogsModule } from './modules/daily-logs/daily-logs.module';
 import { BrokersModule } from './modules/brokers/brokers.module';
 import { CustomOptionsModule } from './modules/custom-options/custom-options.module';
 import { HistoricalDeletionsModule } from './modules/historical-deletions/historical-deletions.module';
+import { WebsiteSyncModule } from './modules/website-sync/website-sync.module';
 
 @Module({
   imports: [
@@ -108,6 +109,7 @@ import { HistoricalDeletionsModule } from './modules/historical-deletions/histor
     BrokersModule,
     CustomOptionsModule,
     HistoricalDeletionsModule,
+    WebsiteSyncModule,
   ],
   providers: [
     // Enforces ThrottlerModule limits across every controller.

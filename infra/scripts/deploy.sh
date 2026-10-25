@@ -155,7 +155,8 @@ tar -xzf /tmp/api-dist.tar.gz -C apps/api/
 echo "=== Dist extracted ==="
 
 for P in DATABASE_URL ENCRYPTION_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
-          JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD; do
+          JWT_ACCESS_SECRET JWT_REFRESH_SECRET QB_CLIENT_ID QB_CLIENT_SECRET REDIS_PASSWORD \
+          WEBSITE_SYNC_URL WEBSITE_SYNC_SECRET; do
   V=\$(aws ssm get-parameter --name /prime-tracker/\$P --with-decryption \
         --region ${AWS_REGION} --query Parameter.Value --output text 2>/dev/null || echo "")
   echo "\$P=\$V"
