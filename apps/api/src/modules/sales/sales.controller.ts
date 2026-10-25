@@ -18,11 +18,14 @@ import { UpdateSaleDto } from './dto/update-sale.dto';
 import { BackfillSaleDto } from './dto/backfill-sale.dto';
 import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
 import { TransferSaleUnitDto } from './dto/transfer-sale-unit.dto';
-import { UserRole, SalePaymentTrigger } from '@prisma/client';
-import { SalePaymentsService, PAYMENT_TEMPLATES } from './sale-payments.service';
+import { AddSalePaymentDto, ApplyPaymentTemplateDto, LogSalePaymentDto, UpdateSalePaymentDto } from './dto/sale-payment.dto';
+import { SaleImportCommitDto } from './dto/sale-import-commit.dto';
+import { UserRole } from '@prisma/client';
+import { SalePaymentsService } from './sale-payments.service';
 import { SaleUnitTransferService } from './sale-unit-transfer.service';
 import { SaleImportService, normalizeSaleOverrides } from './sale-import.service';
 import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 
 @ApiTags('Sales')
 @ApiBearerAuth()
@@ -36,40 +39,48 @@ export class SalesController {
     private salePayments: SalePaymentsService,
     private unitTransfers: SaleUnitTransferService,
     private importService: SaleImportService,
+    private access: ProjectAccessService,
   ) {}
 
   /** GET /api/sales/forecast?projectId=:id — probability-weighted pipeline forecast */
   @Get('forecast')
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Probability-weighted pipeline forecast for a project' })
-  getForecast(@Query('projectId') projectId: string) {
-    return this.forecast.forProject(projectId);
+  // projectId is optional on these list/aggregate routes, and ProjectAccessGuard passes a
+  // request that names no project — so without projectIdFilter an omitted projectId was a
+  // portfolio-wide answer for every role, scoped or not.
+  async getForecast(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.forecast.forProject(await this.access.projectIdFilter(user, projectId));
   }
 
   @Get()
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'List sales by project' })
-  findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
+  async findByProject(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
+  }
 
   @Get('pipeline')
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'Sales pipeline grouped by status with velocity metrics' })
-  getPipeline(@Query('projectId') projectId: string) { return this.service.getPipeline(projectId); }
+  async getPipeline(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.getPipeline(await this.access.projectIdFilter(user, projectId));
+  }
 
   /** GET /api/sales/receivables?weeks=4 — upcoming + overdue installments (cashflow inflows). */
   @Get('receivables')
   @RequirePermissions('financial:view')
   @ApiOperation({ summary: 'Upcoming + overdue sale-payment receivables (Finance widget / cashflow inflows)' })
-  receivables(@Query('weeks') weeks?: string) {
-    return this.salePayments.receivables(weeks ? Number(weeks) : 4);
+  async receivables(@CurrentUser() user: ScopedUser, @Query('weeks') weeks?: string) {
+    return this.salePayments.receivables(weeks ? Number(weeks) : 4, await this.access.projectIdFilter(user));
   }
 
   // Above ":id" — Nest matches in declaration order and would read "deal" as a sale id.
   @Get('deal')
   @RequirePermissions('sales:view')
   @ApiOperation({ summary: 'The sales of one multi-unit deal, with its total price and how many have closed' })
-  findDeal(@Query('projectId') projectId: string, @Query('ref') ref: string) {
-    return this.service.findDeal(projectId, ref);
+  async findDeal(@Query('projectId') projectId: string, @Query('ref') ref: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findDeal(await this.access.projectIdFilter(user, projectId), ref);
   }
 
   @Post('deal')
@@ -154,9 +165,8 @@ export class SalesController {
   @Post('backfill/import/commit')
   @RequirePermissions('unit:history:backfill')
   @ApiOperation({ summary: 'Commit previously-previewed sale-history rows — one backfillSale() per row' })
-  commitImport(@Body('rows') rows: any[], @CurrentUser('sub') userId: string) {
-    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('No rows to import');
-    return this.importService.commitImport(rows, userId);
+  commitImport(@Body() body: SaleImportCommitDto, @CurrentUser('sub') userId: string) {
+    return this.importService.commitImport(body.rows as Parameters<SaleImportService['commitImport']>[0], userId);
   }
 
   @Put(':id')
@@ -307,17 +317,7 @@ export class SalesController {
   @ApiOperation({ summary: 'Add an installment (fixed-date or milestone-triggered)' })
   addPayment(
     @Param('saleId') saleId: string,
-    @Body() body: {
-      label: string;
-      amount?: number;
-      percentOfPrice?: number;
-      trigger?: SalePaymentTrigger;
-      dueDate?: string;
-      milestoneId?: string;
-      interiorProjectId?: string;
-      sequence?: number;
-      notes?: string;
-    },
+    @Body() body: AddSalePaymentDto,
   ) {
     return this.salePayments.addPayment(saleId, body);
   }
@@ -327,32 +327,34 @@ export class SalesController {
   @ApiOperation({ summary: 'Seed a schedule from a standard template (e.g. 10-40-50)' })
   applyTemplate(
     @Param('saleId') saleId: string,
-    @Body() body: { template: keyof typeof PAYMENT_TEMPLATES },
+    @Body() body: ApplyPaymentTemplateDto,
   ) {
     return this.salePayments.applyTemplate(saleId, body.template);
   }
 
-  @Patch('payments/:id')
+  // ':paymentId', not ':id' — this controller maps a bare ':id' to a SALE, so an
+  // installment id resolved to nothing and ProjectAccessGuard checked no project.
+  @Patch('payments/:paymentId')
   @RequirePermissions('sales:edit')
   @ApiOperation({ summary: 'Edit an installment' })
   updatePayment(
-    @Param('id') id: string,
-    @Body() body: { label?: string; amount?: number; dueDate?: string; milestoneId?: string; sequence?: number; notes?: string },
+    @Param('paymentId') id: string,
+    @Body() body: UpdateSalePaymentDto,
   ) {
     return this.salePayments.updatePayment(id, body);
   }
 
-  @Post('payments/:id/log')
+  @Post('payments/:paymentId/log')
   @RequirePermissions('payment:log')
   @ApiOperation({ summary: 'Log a (partial) payment against an installment' })
-  logPayment(@Param('id') id: string, @Body() body: { amount: number }) {
+  logPayment(@Param('paymentId') id: string, @Body() body: LogSalePaymentDto) {
     return this.salePayments.logPayment(id, body.amount);
   }
 
-  @Delete('payments/:id')
+  @Delete('payments/:paymentId')
   @RequirePermissions('sales:edit')
   @ApiOperation({ summary: 'Remove an installment' })
-  removePayment(@Param('id') id: string) {
+  removePayment(@Param('paymentId') id: string) {
     return this.salePayments.removePayment(id);
   }
 }

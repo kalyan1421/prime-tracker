@@ -5,8 +5,10 @@ import { ProjectAccessService } from './project-access.service';
  * Enforces project membership for scoped roles. Add AFTER JwtAuthGuard/PermissionsGuard
  * in @UseGuards so req.user is populated. For a scoped user, any project the request
  * resolves to that they're not a member of yields 404 (existence not leaked). Non-scoped
- * roles and requests with no resolvable project context pass through — cross-project list
- * endpoints filter by membership in their service instead.
+ * roles and requests with no resolvable project context pass through — so every list
+ * endpoint whose projectId is optional must narrow its own query with
+ * ProjectAccessService.projectIdFilter (or listProjectScope). Handing an absent projectId
+ * on to Prisma is "no filter", i.e. every project.
  */
 @Injectable()
 export class ProjectAccessGuard implements CanActivate {

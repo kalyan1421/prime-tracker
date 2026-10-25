@@ -2,12 +2,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { resolveProjectScope } from '../../common/utils/resolve-project-scope';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 @Injectable()
 export class CommitmentsService {
   constructor(private prisma: PrismaService) {}
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     return this.prisma.commitment.findMany({ where: { projectId }, orderBy: { vendor: 'asc' } });
   }
 

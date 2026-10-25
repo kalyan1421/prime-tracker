@@ -12,12 +12,21 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
-import { AuthService } from './auth.service';
+import { AuthService, GoogleProfile, LoginContext } from './auth.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { LoginDto } from './dto/login.dto';
+import { LogoutDto, RefreshTokenDto } from './dto/refresh-token.dto';
+import { MfaTokenDto } from './dto/mfa-token.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/index';
 import { ConfigService } from '@nestjs/config';
 import { GoogleAuthGuard } from './google-auth.guard';
+
+/** Request origin for the audit row. Behind the proxy, `trust proxy` makes req.ip the client. */
+function clientOf(req: Request): LoginContext {
+  const ua = req.headers?.['user-agent'];
+  return { ipAddress: req.ip, userAgent: typeof ua === 'string' ? ua.slice(0, 512) : undefined };
+}
 
 /**
  * Rate limits on this controller use the throttler name `medium`, NOT `default`.
@@ -47,8 +56,8 @@ export class AuthController {
   @Throttle({ medium: { limit: 20, ttl: 60000 } })
   @HttpCode(200)
   @ApiOperation({ summary: 'Login with email and password' })
-  async login(@Body() body: { email: string; password: string }) {
-    return this.authService.loginWithPassword(body.email, body.password);
+  async login(@Body() body: LoginDto, @Req() req: Request) {
+    return this.authService.loginWithPassword(body.email, body.password, clientOf(req));
   }
 
   @Get('google')
@@ -64,27 +73,26 @@ export class AuthController {
   @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Google SSO callback' })
   async googleCallback(@Req() req: Request, @Res() res: Response) {
-    const profile = req.user as {
-      id: string;
-      email: string;
-      displayName: string;
-      picture?: string;
-    };
+    const profile = req.user as GoogleProfile;
 
-    const result = await this.authService.validateGoogleUser(profile);
+    const result = await this.authService.validateGoogleUser(profile, clientOf(req));
     const frontendUrl = this.config.get('FRONTEND_URL', 'http://localhost:5173');
 
-    // Redirect to frontend with tokens + user — AuthCallbackPage requires all three
-    // and double-decodes the user param (URLSearchParams decodes once, the page
-    // calls decodeURIComponent again), so encode the JSON here.
-    const params = new URLSearchParams({
+    // Tokens go in the URL FRAGMENT, not the query string.
+    //
+    // A query string is part of the request the browser makes for /auth/callback, so the
+    // access token and the 7-day refresh token were landing in CloudFront/nginx access
+    // logs, in any proxy on the way, and in the browser's history as a plain URL. A
+    // fragment is never sent to a server at all — it exists only in the browser, where
+    // AuthCallbackPage reads it and then wipes it from history.
+    const fragment = new URLSearchParams({
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       expiresIn: result.expiresIn.toString(),
-      user: encodeURIComponent(JSON.stringify(result.user)),
+      user: JSON.stringify(result.user),
     });
 
-    res.redirect(`${frontendUrl}/auth/callback?${params.toString()}`);
+    res.redirect(`${frontendUrl}/auth/callback#${fragment.toString()}`);
   }
 
   @Post('refresh')
@@ -92,8 +100,8 @@ export class AuthController {
   @Throttle({ medium: { limit: 30, ttl: 60000 } })
   @HttpCode(200)
   @ApiOperation({ summary: 'Refresh access token' })
-  async refresh(@Body() body: { refreshToken: string }) {
-    return this.authService.refreshTokens(body.refreshToken);
+  async refresh(@Body() body: RefreshTokenDto, @Req() req: Request) {
+    return this.authService.refreshTokens(body.refreshToken, clientOf(req));
   }
 
   @Post('logout')
@@ -103,7 +111,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Logout and revoke tokens' })
   async logout(
     @CurrentUser('sub') userId: string,
-    @Body() body: { refreshToken?: string },
+    @Body() body: LogoutDto,
   ) {
     await this.authService.logout(userId, body.refreshToken);
     return { success: true };
@@ -125,7 +133,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Enable MFA by verifying TOTP code' })
   async enableMfa(
     @CurrentUser('sub') userId: string,
-    @Body() body: { token: string },
+    @Body() body: MfaTokenDto,
   ) {
     const enabled = await this.authService.enableMfa(userId, body.token);
     return { success: enabled };
@@ -138,7 +146,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Disable MFA by verifying a current TOTP code' })
   async disableMfa(
     @CurrentUser('sub') userId: string,
-    @Body() body: { token: string },
+    @Body() body: MfaTokenDto,
   ) {
     const disabled = await this.authService.disableMfa(userId, body.token);
     return { success: disabled };
@@ -151,7 +159,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify TOTP for step-up auth' })
   async verifyMfa(
     @CurrentUser('sub') userId: string,
-    @Body() body: { token: string },
+    @Body() body: MfaTokenDto,
   ) {
     return this.authService.verifyMfa(userId, body.token);
   }

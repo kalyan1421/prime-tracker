@@ -6,7 +6,9 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { MfaGuard } from '../../common/guards/mfa.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions, RequireMfa } from '../../common/decorators/index';
+import { RequirePermissions, RequireMfa, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
+import { DrawsService } from '../draws/draws.service';
 import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawDto, UpdateDrawStatusDto, UpsertDrawScheduleDto } from './dto/create-loan.dto';
 
 @ApiTags('Loans')
@@ -19,13 +21,20 @@ import { CreateLoanDto, UpdateLoanDto, CreateDrawDto, UpdateDrawDto, UpdateDrawS
 @UseInterceptors(AuditInterceptor)
 @Controller('loans')
 export class LoansController {
-  constructor(private service: LoansService) {}
+  constructor(
+    private service: LoansService,
+    private draws: DrawsService,
+    private access: ProjectAccessService,
+  ) {}
 
+  // The list routes below take projectId as optional. ProjectAccessGuard passes a request
+  // that names no project, so each narrows an omitted one to the caller's member projects
+  // with projectIdFilter — otherwise it meant every project's loans and draws.
   @Get('monthly-payments')
   @RequirePermissions('loan:view')
   @ApiOperation({ summary: 'Get monthly mortgage payments for a project' })
-  getMonthlyPayments(@Query('projectId') projectId: string) {
-    return this.service.getMonthlyPayments(projectId);
+  async getMonthlyPayments(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.getMonthlyPayments(await this.access.projectIdFilter(user, projectId));
   }
 
   /**
@@ -41,12 +50,13 @@ export class LoansController {
   @Get()
   @RequirePermissions('loan:view')
   @ApiOperation({ summary: 'List loans by project, or by building (decrypted)' })
-  findAll(
+  async findAll(
+    @CurrentUser() user: ScopedUser,
     @Query('projectId') projectId?: string,
     @Query('buildingId') buildingId?: string,
   ) {
     if (buildingId) return this.service.findByBuilding(buildingId);
-    return this.service.findByProject(projectId as string);
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
   }
 
   @Post()
@@ -72,12 +82,12 @@ export class LoansController {
   @Get('draws')
   @RequirePermissions('draw:view')
   @ApiOperation({ summary: 'Get all draw requests for a project' })
-  findDrawsByProject(@Query('projectId') projectId: string, @Request() req: any) {
+  async findDrawsByProject(@Query('projectId') projectId: string, @Request() req: any) {
     // Only financial roles get the decrypted loan financials merged into each draw;
     // draw:view-only roles (CONSTRUCTION) get non-financial loan identifiers only.
     const perms: string[] = req.user?.permissions ?? [];
     const canViewFinancial = perms.includes('financial:view') || perms.includes('loan:view');
-    return this.service.findDrawsByProject(projectId, canViewFinancial);
+    return this.service.findDrawsByProject(await this.access.projectIdFilter(req.user, projectId), canViewFinancial);
   }
 
   // Must stay ABOVE @Get(':id') — Express matches in declaration order, so a later
@@ -89,8 +99,8 @@ export class LoansController {
   // it would hand lender names to draw:view-only roles like CONSTRUCTION.
   @RequirePermissions('loan:view', 'draw:view')
   @ApiOperation({ summary: 'Every draw schedule line across a project\'s loans' })
-  findProjectDrawSchedules(@Query('projectId') projectId: string) {
-    return this.service.findProjectDrawSchedules(projectId);
+  async findProjectDrawSchedules(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findProjectDrawSchedules(await this.access.projectIdFilter(user, projectId));
   }
 
   @Get(':id')
@@ -106,31 +116,50 @@ export class LoansController {
     return this.service.createDraw(loanId, body, req.user.sub);
   }
 
-  @Patch('draws/:id')
+  // Draw routes take ':drawId', not ':id'. On this controller a bare ':id' is a LOAN, so a
+  // draw id resolved to nothing and ProjectAccessGuard checked no project; ':drawId' is
+  // resolved to the draw's own project (KEY_ENTITY).
+  @Patch('draws/:drawId')
   @RequirePermissions('draw:edit')
   @RequireMfa()
   @ApiOperation({ summary: 'Edit a DRAFT draw request (amount, requestDate, notes)' })
-  updateDraw(@Param('id') id: string, @Body() body: UpdateDrawDto) {
+  updateDraw(@Param('drawId') id: string, @Body() body: UpdateDrawDto) {
     return this.service.updateDraw(id, body);
   }
 
-  @Patch('draws/:id/status')
+  /**
+   * @deprecated Use the /draws/:id/* workflow routes. Kept for API compatibility, but no
+   * longer writes `status` itself: every target is run through DrawsService.transitionTo,
+   * so APPROVED / FUNDED / REJECTED need draw:approve (as on /draws/:id/*) and every move
+   * obeys the state machine's edges and document gates. draw:edit alone used to be enough
+   * to approve any amount or mark a draft funded.
+   */
+  @Patch('draws/:drawId/status')
   @RequirePermissions('draw:edit')
   @RequireMfa()
   @ApiOperation({ summary: 'Advance draw request status (include approvedAmount on APPROVED, rejectionReason on REJECTED)' })
-  updateDrawStatus(
-    @Param('id') id: string,
+  async updateDrawStatus(
+    @Param('drawId') id: string,
     @Body() body: UpdateDrawStatusDto,
-    @Request() req: any,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('permissions') permissions: string[] = [],
   ) {
-    return this.service.updateDrawStatus(id, body.status, req.user.sub, body.approvedAmount, body.rejectionReason);
+    await this.draws.transitionTo(id, body.status, userId, {
+      canApprove: permissions.includes('draw:approve'),
+      approvedAmount: body.approvedAmount,
+      rejectionReason: body.rejectionReason,
+    });
+    // One response shape whatever the transition: the draw, with loan financials only for
+    // a caller who may see them (draw:edit is held by PROJECT_MANAGER without loan:view).
+    const canViewFinancial = permissions.includes('financial:view') || permissions.includes('loan:view');
+    return this.draws.findById(id, canViewFinancial);
   }
 
-  @Delete('draws/:id')
+  @Delete('draws/:drawId')
   @RequirePermissions('draw:edit')
   @RequireMfa()
   @ApiOperation({ summary: 'Delete a DRAFT draw request' })
-  deleteDraw(@Param('id') id: string) {
+  deleteDraw(@Param('drawId') id: string) {
     return this.service.deleteDraw(id);
   }
 
@@ -154,11 +183,12 @@ export class LoansController {
     return this.service.upsertDrawScheduleLine(loanId, body);
   }
 
-  @Delete('schedule/:id')
+  // ':scheduleId' for the same reason as ':drawId' above — resolved to the line's loan's project.
+  @Delete('schedule/:scheduleId')
   @RequirePermissions('draw:edit')
   @RequireMfa()
   @ApiOperation({ summary: 'Delete a draw schedule line' })
-  deleteDrawScheduleLine(@Param('id') id: string) {
+  deleteDrawScheduleLine(@Param('scheduleId') id: string) {
     return this.service.deleteDrawScheduleLine(id);
   }
 }

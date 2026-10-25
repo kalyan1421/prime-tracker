@@ -7,6 +7,8 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
+import { clampLimit } from '../../common/pagination/pagination.dto';
 
 @ApiTags('Comments')
 @ApiBearerAuth()
@@ -14,7 +16,10 @@ import { CreateCommentDto, UpdateCommentDto } from './dto/create-comment.dto';
 @UseInterceptors(AuditInterceptor)
 @Controller('comments')
 export class CommentsController {
-  constructor(private service: CommentsService) {}
+  constructor(
+    private service: CommentsService,
+    private access: ProjectAccessService,
+  ) {}
 
   @Get()
   @RequirePermissions('comment:view')
@@ -31,8 +36,10 @@ export class CommentsController {
   @Get('recent')
   @RequirePermissions('comment:view')
   @ApiOperation({ summary: 'Recent comments across all projects (grouped by type)' })
-  findRecent(@Query('limit') limit?: string) {
-    return this.service.findRecent(limit ? parseInt(limit) : 20);
+  async findRecent(@CurrentUser() user: ScopedUser, @Query('limit') limit?: string) {
+    // "All projects" means all the caller may see — a scoped role's member projects only.
+    // Capped: this reads across every project, and `?limit=` used to be unbounded.
+    return this.service.findRecent(clampLimit(limit, 20, 100), await this.access.projectIdFilter(user));
   }
 
   @Post()

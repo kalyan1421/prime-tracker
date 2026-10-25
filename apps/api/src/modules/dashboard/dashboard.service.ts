@@ -30,8 +30,9 @@ export class DashboardService {
    * For a scoped viewer, the set of project ids they may see; otherwise undefined
    * (no restriction). Returned as a Prisma id-filter fragment for findMany where-clauses.
    */
-  private async memberScope(role: string, userId?: string): Promise<Prisma.ProjectWhereInput> {
-    if (!userId || !this.access.isScoped(role)) return {};
+  private async memberScope(role: string, userId?: string, roles?: string[]): Promise<Prisma.ProjectWhereInput> {
+    // `roles` when known: a user holding ANY scoped role is scoped, whatever the primary.
+    if (!userId || !this.access.isScoped(role, roles)) return {};
     const ids = await this.access.accessibleProjectIds(userId);
     return { id: { in: ids } };
   }
@@ -259,11 +260,11 @@ export class DashboardService {
   }
 
   // ---- Construction Dashboard ----
-  async getConstructionDashboard(role: string, userId?: string) {
+  async getConstructionDashboard(role: string, userId?: string, roles?: string[]) {
     // Scoped roles (PM/Construction) see only their projects, so the result is
     // per-user — bypass the role-keyed shared cache for them.
-    if (this.access.isScoped(role)) {
-      return this.computeConstructionDashboard(role, userId);
+    if (this.access.isScoped(role, roles)) {
+      return this.computeConstructionDashboard(role, userId, roles);
     }
     return this.cache.wrap(
       `dashboard:construction:${role}`,
@@ -273,12 +274,12 @@ export class DashboardService {
     );
   }
 
-  private async computeConstructionDashboard(role: string, userId?: string) {
+  private async computeConstructionDashboard(role: string, userId?: string, roles?: string[]) {
     const isPM = role === 'PROJECT_MANAGER';
     const canViewFinancials = CONSTRUCTION_FINANCIAL_ROLES.includes(role);
 
     const projects = await this.prisma.project.findMany({
-      where: { status: 'ACTIVE', deletedAt: null, ...(await this.memberScope(role, userId)) },
+      where: { status: 'ACTIVE', deletedAt: null, ...(await this.memberScope(role, userId, roles)) },
       include: {
         budgetLines: { where: { deletedAt: null } },
         // Construction actuals ONLY — interior sub-contractor invoices are mirrored into
@@ -396,10 +397,10 @@ export class DashboardService {
   }
 
   // ---- Sales Dashboard ----
-  async getSalesDashboard(role?: string, userId?: string) {
+  async getSalesDashboard(role?: string, userId?: string, roles?: string[]) {
     // SALES/MARKETING are scoped → per-user project set, bypass the shared cache.
-    if (role && this.access.isScoped(role)) {
-      return this.computeSalesDashboard(role, userId);
+    if (role && this.access.isScoped(role, roles)) {
+      return this.computeSalesDashboard(role, userId, roles);
     }
     return this.cache.wrap(
       'dashboard:sales',
@@ -409,9 +410,9 @@ export class DashboardService {
     );
   }
 
-  private async computeSalesDashboard(role?: string, userId?: string) {
+  private async computeSalesDashboard(role?: string, userId?: string, roles?: string[]) {
     const projects = await this.prisma.project.findMany({
-      where: { status: { not: 'CANCELLED' }, deletedAt: null, ...(await this.memberScope(role ?? '', userId)) },
+      where: { status: { not: 'CANCELLED' }, deletedAt: null, ...(await this.memberScope(role ?? '', userId, roles)) },
       include: {
         sales: { where: { deletedAt: null } },
         buildings: {
@@ -430,7 +431,7 @@ export class DashboardService {
     // `where` at all, so a SALES/MARKETING user's dashboard showed lead activity from
     // every project system-wide instead of just their own. Mirrors LeadsService.findAll.
     const leadScopeIds = await this.access.listProjectScope(
-      userId && role ? { userId, role } : undefined,
+      userId && role ? { userId, role, roles } : undefined,
     );
     const leads = await this.prisma.lead.findMany({
       // project.deletedAt: null on top of the scope filter — an archived project's leads

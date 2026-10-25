@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { SalePaymentTrigger } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * Sale Payment Schedule — milestone-linked installments on a Sale.
@@ -34,10 +35,14 @@ export class SalePaymentsService {
    * Upcoming + overdue receivables within `weeks` weeks. Drives the Finance
    * "receivables next 2/4 weeks" widget and the cashflow inflows.
    */
-  async receivables(weeks = 4) {
+  async receivables(weeks = 4, projectId?: ProjectIdFilter) {
     const horizon = new Date(Date.now() + weeks * 7 * 86_400_000);
     const rows = await this.prisma.salePayment.findMany({
-      where: { status: { in: ['SCHEDULED', 'DUE', 'PARTIALLY_PAID', 'OVERDUE'] } },
+      where: {
+        status: { in: ['SCHEDULED', 'DUE', 'PARTIALLY_PAID', 'OVERDUE'] },
+        // Portfolio-wide by design for Finance; a scoped caller's member projects only.
+        ...(projectId !== undefined && { sale: { projectId } }),
+      },
       include: { sale: { select: { id: true, buyer: true, projectId: true } } },
     });
     return rows
@@ -139,7 +144,7 @@ export class SalePaymentsService {
 
   async updatePayment(
     id: string,
-    input: { label?: string; amount?: number; dueDate?: string; milestoneId?: string; sequence?: number; notes?: string },
+    input: { label?: string; amount?: number; dueDate?: string; milestoneId?: string | null; sequence?: number; notes?: string },
   ) {
     const payment = await this.getPayment(id);
     if (input.amount != null) {

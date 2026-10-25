@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize, ArrayNotEmpty, IsArray, IsDateString, IsNotEmpty, IsOptional, IsString, MaxLength,
 } from 'class-validator';
+import { IsStorageKey } from '../../../common/storage/storage-key';
 
 /**
  * A stage is created from a form that asks for everything up front, so the same fields the
@@ -82,4 +83,16 @@ export class ReorderUnitStagesDto {
   @IsArray() @ArrayNotEmpty() @ArrayMaxSize(500)
   @IsString({ each: true })
   stageIds!: string[];
+}
+
+/**
+ * Body for POST /construction-checklist/stage/:stageId/photos. Was an inline type; the
+ * service checks the key too, this makes the boundary say so with a 400 and a field name.
+ */
+export class AddStagePhotoDto {
+  @IsString() @IsStorageKey()
+  storagePath!: string;
+
+  @IsOptional() @IsString() @MaxLength(300)
+  caption?: string;
 }

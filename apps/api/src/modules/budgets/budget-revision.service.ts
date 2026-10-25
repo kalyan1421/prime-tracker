@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventBus } from '../../common/events/event-bus.service';
 import type { BudgetChangeReason } from '@prisma/client';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * Append-only revision history for budget lines.
@@ -39,7 +40,7 @@ export class BudgetRevisionService {
    * Project-wide budget change log — every revision across every budget line in
    * the project, newest first. Powers the day-wise log in the Budget tab.
    */
-  async listForProject(projectId: string) {
+  async listForProject(projectId: ProjectIdFilter) {
     return this.prisma.budgetRevision.findMany({
       where: { budgetLine: { projectId } },
       orderBy: { createdAt: 'desc' },

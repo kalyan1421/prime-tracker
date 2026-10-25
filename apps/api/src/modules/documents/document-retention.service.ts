@@ -296,7 +296,9 @@ export class DocumentRetentionService {
 
   /**
    * The purge is the one genuinely irreversible step in the whole document flow, so it
-   * leaves a record in the one table nothing ever deletes.
+   * leaves a record in the audit log — as an action AuditRetentionService keeps forever
+   * (AUDIT_RETAINED_ACTIONS), so the record outlives the two-year window the rest of the
+   * log is pruned to.
    *
    * One AuditEvent per DOCUMENT (not per object) so replacing a photo forty times does not
    * produce forty audit rows, and so the event is retrievable by the natural key the audit

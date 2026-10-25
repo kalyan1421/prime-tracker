@@ -11,6 +11,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { PERMISSIONS } from '@prime-tracker/shared';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 
 @ApiTags('Site Visits')
 @ApiBearerAuth()
@@ -21,25 +22,30 @@ export class SiteVisitsController {
   constructor(
     private service: SiteVisitsService,
     private availability: VisitAvailabilityService,
+    private access: ProjectAccessService,
   ) {}
 
+  // This controller has no ProjectAccessGuard, so the list routes narrow a scoped field
+  // role to its member projects themselves (listProjectScope; undefined = unrestricted).
   @Get('attention')
   @RequirePermissions('siteVisit:view')
   @ApiOperation({ summary: 'Dashboard queue — pending decisions for approvers, own outstanding visits for everyone else' })
-  attention(
-    @CurrentUser('sub') userId: string,
+  async attention(
+    @CurrentUser() user: ScopedUser,
     @CurrentUser('permissions') permissions?: string[],
   ) {
     return this.service.attention({
-      userId,
+      userId: user.sub,
       canApprove: (permissions ?? []).includes(PERMISSIONS.SITE_VISIT_APPROVE),
+      projectIds: await this.access.listProjectScope({ userId: user.sub, role: user.role, roles: user.roles }),
     });
   }
 
   @Get()
   @RequirePermissions('siteVisit:view')
   @ApiOperation({ summary: 'List site visits' })
-  findAll(
+  async findAll(
+    @CurrentUser() user: ScopedUser,
     @Query('status') status?: string,
     @Query('hostId') hostId?: string,
     @Query('leadId') leadId?: string,
@@ -47,7 +53,11 @@ export class SiteVisitsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.service.findAll({ status, hostId, leadId, requestedById, from, to });
+    const projectIds = await this.access.listProjectScope({ userId: user.sub, role: user.role, roles: user.roles });
+    return this.service.findAll({
+      status, hostId, leadId, requestedById, from, to,
+      scope: projectIds && { projectIds, userId: user.sub },
+    });
   }
 
   @Get(':id')

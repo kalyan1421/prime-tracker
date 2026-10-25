@@ -8,6 +8,9 @@ const mockPrisma: any = {
   sale: {
     findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUniqueOrThrow: jest.fn(),
     create: jest.fn(),
+    // Deleting a CLOSED sale asks whether another live closed sale still holds the unit.
+    // Defaults to "none", so the unit is this sale's to release.
+    count: jest.fn().mockResolvedValue(0),
     // backfillSale checks for an identical sale before writing. Defaults to "nothing like
     // this is stored", which is what every existing backfill case assumes; the duplicate
     // suite overrides it.
@@ -795,6 +798,77 @@ describe('SalesService.delete — soft delete (preserves unit history)', () => {
   });
 });
 
+/**
+ * Deleting a CLOSED sale used to leave its unit SOLD with no sale behind it — off the
+ * market for good. It now releases the unit through releaseUnitWithin (the cancellation
+ * path) in the same transaction as the soft delete and the audit row.
+ */
+describe('SalesService.delete — atomic, and releases the unit a CLOSED sale sold', () => {
+  let service: SalesService;
+  const CLOSED = { id: 's1', status: 'CLOSED', unitId: 'u1', buyer: 'Acme', unit: {} };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.sale.update.mockResolvedValue({ id: 's1', deletedAt: new Date() });
+    mockPrisma.sale.count.mockResolvedValue(0);
+    mockPrisma.unit.findUnique.mockResolvedValue({ status: 'SOLD', buildingId: 'b1' });
+    mockPrisma.unit.findUniqueOrThrow.mockResolvedValue({ status: 'SOLD' });
+    mockPrisma.unit.update.mockResolvedValue({});
+    service = makeService();
+  });
+
+  it('puts the SOLD unit back on the market with a SALE_DELETED event, in one transaction', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(CLOSED);
+
+    await service.delete('s1', 'user-1', 'FOUNDER' as any);
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.unit.update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { status: 'AVAILABLE', availableSince: expect.any(Date) },
+    });
+    expect(mockStatusEvents.recordIfChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ unitId: 'u1', fromStatus: 'SOLD', toStatus: 'AVAILABLE', source: 'SALE_DELETED', saleId: 's1' }),
+      mockPrisma,
+    );
+    expect(mockAudit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'SALE_DELETED', oldValues: expect.objectContaining({ unitReleased: true }) }),
+      mockPrisma,
+    );
+  });
+
+  it('keeps the unit SOLD when another live closed sale (a resale, or the whole building) holds it', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue(CLOSED);
+    mockPrisma.sale.count.mockResolvedValue(1);
+
+    await service.delete('s1', 'user-1', 'FOUNDER' as any);
+
+    expect(mockPrisma.sale.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: { not: 's1' }, deletedAt: null, status: 'CLOSED',
+        OR: [{ unitId: 'u1' }, { buildingId: 'b1' }],
+      }),
+    });
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+  });
+
+  it('does not touch the unit when deleting a sale that never closed', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ ...CLOSED, status: 'PROSPECT' });
+
+    await service.delete('s1', 'user-1', 'FOUNDER' as any);
+
+    expect(mockPrisma.unit.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.unit.update).not.toHaveBeenCalled();
+  });
+
+  it('a failed audit write fails the delete instead of being swallowed mid-transaction', async () => {
+    mockPrisma.sale.findUnique.mockResolvedValue({ ...CLOSED, status: 'PROSPECT' });
+    mockAudit.log.mockRejectedValueOnce(new Error('audit insert failed'));
+
+    await expect(service.delete('s1', 'user-1', 'FOUNDER' as any)).rejects.toThrow('audit insert failed');
+  });
+});
+
 // R6 — the same Founder-approval gate a backfilled lease already has (R27), generalized
 // to sales. Mirrors leases.service.spec.ts's "historical deletion approval" suite.
 describe('SalesService — historical deletion approval (R6)', () => {
@@ -840,8 +914,10 @@ describe('SalesService — historical deletion approval (R6)', () => {
     expect(mockPrisma.historicalRecordDeletion.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ saleId: 's1', status: 'APPROVED', requestedById: 'founder-1', decidedById: 'founder-1' }),
     });
+    // Second argument: the transaction the delete runs in — the audit row commits with it.
     expect(mockAudit.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'SALE_HISTORICAL_DELETED', oldValues: expect.objectContaining({ selfApproved: true }) }),
+      expect.anything(),
     );
   });
 

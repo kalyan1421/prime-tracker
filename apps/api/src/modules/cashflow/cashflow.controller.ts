@@ -6,6 +6,8 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
+import { CreateCashFlowEntryDto, UpdateCashFlowEntryDto } from './dto/cashflow-entry.dto';
 
 @ApiTags('CashFlow')
 @ApiBearerAuth()
@@ -13,20 +15,32 @@ import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 @UseInterceptors(AuditInterceptor)
 @Controller('cashflow')
 export class CashFlowController {
-  constructor(private service: CashFlowService) {}
+  constructor(
+    private service: CashFlowService,
+    private access: ProjectAccessService,
+  ) {}
 
   @Get()
   @RequirePermissions('financial:view')
   @ApiOperation({ summary: 'List cash flow entries for a project' })
-  findByProject(@Query('projectId') projectId: string) {
-    return this.service.findByProject(projectId);
+  async findByProject(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
   }
 
   @Get('forecast')
   @RequirePermissions('financial:view')
   @ApiOperation({ summary: 'Unified cash flow forecast for one project (all sources, monthly)' })
-  getForecast(@Query('projectId') projectId: string, @Query('months') months?: string) {
-    return this.service.getForecast(projectId, months ? parseInt(months, 10) : undefined);
+  getForecast(
+    @Query('projectId') projectId: string,
+    @CurrentUser() user: ScopedUser,
+    @Query('months') months?: string,
+  ) {
+    const horizon = months ? parseInt(months, 10) : undefined;
+    // With no projectId the engine spans every project — which is the portfolio forecast,
+    // so it goes through the path that already narrows a scoped role to its projects.
+    return projectId
+      ? this.service.getForecast(projectId, horizon)
+      : this.service.getPortfolioForecast({ userId: user.sub, role: user.role, roles: user.roles }, horizon);
   }
 
   @Get('portfolio')
@@ -57,14 +71,14 @@ export class CashFlowController {
   @Post()
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Create cash flow entry' })
-  create(@Body() body: any, @Request() req: any) {
+  create(@Body() body: CreateCashFlowEntryDto, @Request() req: any) {
     return this.service.create(body, req.user.sub);
   }
 
   @Put(':id')
   @RequirePermissions('financial:edit')
   @ApiOperation({ summary: 'Update cash flow entry' })
-  update(@Param('id') id: string, @Body() body: any) {
+  update(@Param('id') id: string, @Body() body: UpdateCashFlowEntryDto) {
     return this.service.update(id, body);
   }
 

@@ -9,6 +9,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { UpdateOrgSettingsDto } from './dto/update-org-settings.dto';
+import { AddOrganizationMemberDto, CreateOrganizationDto, UpdateOrganizationDto } from './dto/organization.dto';
 
 @ApiTags('Organizations')
 @ApiBearerAuth()
@@ -22,7 +23,7 @@ export class OrganizationsController {
   @RequirePermissions('org:manage')
   @ApiOperation({ summary: 'Create a new organization' })
   create(
-    @Body() body: { name: string; entityType?: string; description?: string },
+    @Body() body: CreateOrganizationDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.orgService.create(body, userId);
@@ -47,7 +48,7 @@ export class OrganizationsController {
   @ApiOperation({ summary: 'Update organization details' })
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; entityType?: string; description?: string },
+    @Body() body: UpdateOrganizationDto,
     @CurrentUser('sub') userId: string,
   ) {
     return this.orgService.update(id, body, userId);
@@ -68,7 +69,7 @@ export class OrganizationsController {
   @ApiOperation({ summary: 'Add a member to an organization' })
   addMember(
     @Param('id') orgId: string,
-    @Body() body: { userId: string; orgRole: string },
+    @Body() body: AddOrganizationMemberDto,
     @CurrentUser('sub') actorId: string,
   ) {
     return this.orgService.addMember(orgId, body.userId, body.orgRole, actorId);

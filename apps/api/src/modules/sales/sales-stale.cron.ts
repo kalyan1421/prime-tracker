@@ -20,6 +20,16 @@ export class SalesStaleCron {
 
   @Cron(CronExpression.EVERY_DAY_AT_8AM, { name: 'sales-stale' })
   async run() {
+    // Named and logged rather than left to the scheduler's anonymous error line — see
+    // DrawFundingOverdueCron.run.
+    try {
+      await this.check();
+    } catch (err) {
+      this.logger.error(`Cron sales-stale failed: ${(err as Error).message}`, (err as Error).stack);
+    }
+  }
+
+  async check() {
     const droughtDays = 14;
     const stageAgeDays = 30;
     const droughtCutoff  = new Date(Date.now() - droughtDays * 24 * 60 * 60 * 1000);

@@ -95,6 +95,170 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "website" {
   }
 }
 
+# The bucket holds uploads under media/ beside the deployed site, and the site deploy
+# syncs with --delete. Versioning means a wrong delete or overwrite of a photograph can
+# be undone; the lifecycle keeps that from growing for ever. Build output is replaced
+# on every deploy, so its old versions are dropped quickly.
+resource "aws_s3_bucket_versioning" "website" {
+  count  = var.enable_website ? 1 : 0
+  bucket = aws_s3_bucket.website[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "website" {
+  count      = var.enable_website ? 1 : 0
+  bucket     = aws_s3_bucket.website[0].id
+  depends_on = [aws_s3_bucket_versioning.website]
+
+  rule {
+    id     = "media-old-versions"
+    status = "Enabled"
+    filter {
+      prefix = "media/"
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+  }
+
+  rule {
+    id     = "site-old-versions"
+    status = "Enabled"
+    filter {
+      prefix = "assets/"
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+  }
+
+  rule {
+    id     = "expired-delete-markers"
+    status = "Enabled"
+    filter {}
+    expiration {
+      expired_object_delete_marker = true
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 2
+    }
+  }
+}
+
+# Sent by CloudFront on every request to the website API, and required by nginx
+# (PrimeDevelopers-web scripts/aws/02-deploy-api.sh), so the API answers CloudFront
+# and nothing else. Created by that repo's scripts/aws/01-database.sh; read here so
+# the value lives in one place. It does land in state — keep the state in the S3
+# backend (versions.tf), which is encrypted and private.
+data "aws_ssm_parameter" "website_origin_secret" {
+  count           = var.enable_website ? 1 : 0
+  name            = "/${var.project}/website/ORIGIN_SECRET"
+  with_decryption = true
+}
+
+# The SPA fallback firebase.json's "**" -> /index.html rewrite provided: a request for
+# an app route (no file extension) gets the app shell; a file keeps its own path and,
+# if missing, its real 403/404. Only the site's default behaviour runs this — /api/*
+# never does, so API status codes reach the browser unchanged.
+resource "aws_cloudfront_function" "website_spa" {
+  count   = var.enable_website ? 1 : 0
+  name    = "${local.name}-website-spa"
+  runtime = "cloudfront-js-2.0"
+  comment = "App routes to /index.html"
+  publish = true
+  code    = <<-JS
+    function handler(event) {
+      var request = event.request;
+      var last = request.uri.split('/').pop();
+      if (last.indexOf('.') === -1) {
+        request.uri = '/index.html';
+      }
+      return request;
+    }
+  JS
+}
+
+locals {
+  # The two inline <script>s in PrimeDevelopers-web's apps/web/index.html, as built for
+  # AWS: `node scripts/csp-hashes.mjs apps/web/dist/index.html` prints these. Editing
+  # either script changes its hash; scripts/deploy-web-aws.sh warns when a build's
+  # hashes are missing here.
+  website_inline_script_hashes = [
+    "'sha256-MWOenPb/0DJ7K6cRoF3wv9jbY4E3DDKYpTbC86DJapI='", # content prefetch + hero preload
+    "'sha256-uAzqyD1wWKUpp5mDstOH3HMDtTK+v/nBvnZ9EOL2fvo='", # theme before first paint
+  ]
+
+  # What the site loads, and from where:
+  # - 'wasm-unsafe-eval' and blob: workers: the Draco and Meshopt decoders of the 3D
+  #   floor plans compile WebAssembly, Draco inside a worker built from a blob.
+  # - style 'unsafe-inline': React style attributes and the animation libraries.
+  # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
+  # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
+  # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
+  website_csp = join("; ", [
+    "default-src 'self'",
+    "script-src 'self' ${join(" ", local.website_inline_script_hashes)} 'wasm-unsafe-eval'",
+    "worker-src 'self' blob:",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://storage.googleapis.com",
+    "font-src 'self' data:",
+    "connect-src 'self' https://cdn.jsdelivr.net",
+    "media-src 'self' blob:",
+    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+    "report-uri /api/csp-report",
+  ])
+}
+
+# The site's own pages: the AWS-managed SecurityHeadersPolicy's headers, unchanged,
+# plus a Content-Security-Policy that is report-only for now. Nothing is blocked;
+# each violation a visitor's browser sees is posted to /api/csp-report and lands as a
+# `[CSP]` line in the website API's log group. When a week of those shows only
+# expected noise, rename the header to Content-Security-Policy to enforce it.
+# Only the default behaviour uses this — /api/* answers JSON, which a CSP does not
+# govern.
+resource "aws_cloudfront_response_headers_policy" "website_site" {
+  count   = var.enable_website ? 1 : 0
+  name    = "${local.name}-website-site"
+  comment = "Security headers + report-only CSP for the website's pages"
+
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      override                   = false
+    }
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "SAMEORIGIN"
+      override     = false
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = false
+    }
+    xss_protection {
+      protection = true
+      mode_block = true
+      override   = false
+    }
+  }
+
+  custom_headers_config {
+    items {
+      header   = "Content-Security-Policy-Report-Only"
+      value    = local.website_csp
+      override = true
+    }
+  }
+}
+
 # Its own OAC rather than cloudfront.tf's: that one exists only with enable_dns, and
 # the preview has to work before the domain does.
 resource "aws_cloudfront_origin_access_control" "website" {
@@ -125,6 +289,10 @@ resource "aws_cloudfront_distribution" "website" {
     domain_name = local.website_api_origin
     origin_id   = "website-api"
     origin_path = "/website-api"
+    custom_header {
+      name  = "X-Origin-Verify"
+      value = data.aws_ssm_parameter.website_origin_secret[0].value
+    }
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -136,52 +304,51 @@ resource "aws_cloudfront_distribution" "website" {
   }
 
   ordered_cache_behavior {
-    path_pattern           = "/api/img/*"
-    target_origin_id       = "website-api"
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD"]
-    cached_methods         = ["GET", "HEAD"]
-    cache_policy_id        = aws_cloudfront_cache_policy.website_images[0].id
-    compress               = false # already WebP
+    path_pattern               = "/api/img/*"
+    target_origin_id           = "website-api"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    cache_policy_id            = aws_cloudfront_cache_policy.website_images[0].id
+    response_headers_policy_id = local.cf_security_headers
+    compress                   = false # already WebP
   }
 
   # Everything else under /api: never cached here (admin responses are per-user, and
   # the public ones carry their own short Cache-Control for browsers), every method,
   # every header but Host — nginx needs its own name for SNI and server_name.
   ordered_cache_behavior {
-    path_pattern             = "/api/*"
-    target_origin_id         = "website-api"
-    viewer_protocol_policy   = "redirect-to-https"
-    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
-    cached_methods           = ["GET", "HEAD"]
-    cache_policy_id          = local.cf_caching_disabled
-    origin_request_policy_id = local.cf_all_viewer_except_host
-    compress                 = true
+    path_pattern               = "/api/*"
+    target_origin_id           = "website-api"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods             = ["GET", "HEAD"]
+    cache_policy_id            = local.cf_caching_disabled
+    origin_request_policy_id   = local.cf_all_viewer_except_host
+    response_headers_policy_id = local.cf_security_headers
+    compress                   = true
   }
 
+  # Client-side routing (/properties/centro-plaza) is a viewer-request rewrite on the
+  # site's own behaviour only — see aws_cloudfront_function.website_spa. It used to be
+  # distribution-wide custom_error_response 403/404 → /index.html 200, which also
+  # rewrote every API 403 and 404 into a 200 HTML page: a missing property, a refused
+  # origin, a tracker push to an unknown project all "succeeded".
   default_cache_behavior {
     target_origin_id           = "website-s3"
     viewer_protocol_policy     = "redirect-to-https"
     allowed_methods            = ["GET", "HEAD", "OPTIONS"]
     cached_methods             = ["GET", "HEAD"]
     cache_policy_id            = local.cf_caching_optimized
-    response_headers_policy_id = local.cf_security_headers
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.website_site[0].id
     compress                   = true
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.website_spa[0].arn
+    }
   }
 
-  # Client-side routing (/properties/centro-plaza): S3 has no such key, so it answers
-  # 403 through OAC. Serve the app shell and let the router take the path — the same
-  # thing firebase.json's "**" -> /index.html rewrite did.
-  custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
-  custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
+  web_acl_id = aws_wafv2_web_acl.website[0].arn
 
   restrictions {
     geo_restriction {

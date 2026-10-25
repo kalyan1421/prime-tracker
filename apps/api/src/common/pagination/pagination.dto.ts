@@ -56,3 +56,17 @@ export function paginate<T>(data: T[], total: number, p: PaginationDto): Paginat
     totalPages: Math.max(1, Math.ceil(total / p.limit)),
   };
 }
+
+/**
+ * Parse a raw `?limit=` into a page size between 1 and `max`, falling back to
+ * `fallback` when it is absent or not a number.
+ *
+ * For the older list routes that take a bare `@Query('limit')` rather than a
+ * PaginationDto. Several passed the value straight to Prisma's `take` with no ceiling, so
+ * `?limit=1000000` read an entire table into memory in one request.
+ */
+export function clampLimit(raw: unknown, fallback: number, max: number): number {
+  const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(n) || n < 1) return Math.min(fallback, max);
+  return Math.min(Math.floor(n), max);
+}

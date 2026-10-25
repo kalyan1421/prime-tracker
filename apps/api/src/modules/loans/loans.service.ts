@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
-import { EventBus } from '../../common/events/event-bus.service';
 import { Prisma, DrawStatus } from '@prisma/client';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 /**
  * The Loan columns held only inside `encryptedFields`. Any read path that surfaces
@@ -16,10 +16,9 @@ export class LoansService {
   constructor(
     private prisma: PrismaService,
     private encryption: EncryptionService,
-    private bus: EventBus,
   ) {}
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     // Sprint 1: loans can be attached at either project- or building-level (per
     // Centro Plaza's per-building construction loans). Surface both under the
     // project view via OR(projectId match, building.projectId match).
@@ -155,7 +154,7 @@ export class LoansService {
     return this.prisma.loan.update({ where: { id }, data });
   }
 
-  async getMonthlyPayments(projectId: string) {
+  async getMonthlyPayments(projectId: ProjectIdFilter) {
     const loans = await this.prisma.loan.findMany({
       where: { projectId, deletedAt: null },
       include: {
@@ -181,7 +180,7 @@ export class LoansService {
 
   // ---- Draw Management ----
 
-  async findDrawsByProject(projectId: string, canViewFinancial: boolean) {
+  async findDrawsByProject(projectId: ProjectIdFilter, canViewFinancial: boolean) {
     const draws = await this.prisma.drawRequest.findMany({
       where: { projectId },
       include: {
@@ -239,57 +238,6 @@ export class LoansService {
     });
   }
 
-  /**
-   * @deprecated Workflow transitions live in DrawsService (state machine in
-   * draws/draw-state-machine.ts). This method is kept ONLY for backwards
-   * compatibility with the legacy /loans/draws/:id/status endpoint while UIs
-   * migrate to the new /draws/:id/* routes (submit, approve-internal, mark-funded, etc.).
-   *
-   * Validation here is intentionally minimal — the new state machine enforces
-   * required-document gates, fires events, and writes the audit trail. Don't
-   * extend this method; deprecate it instead.
-   */
-  async updateDrawStatus(
-    id: string,
-    status: DrawStatus,
-    userId: string,
-    approvedAmount?: number,
-    rejectionReason?: string,
-  ) {
-    const draw = await this.prisma.drawRequest.findUnique({ where: { id } });
-    if (!draw) throw new NotFoundException('Draw request not found');
-
-    if (status === DrawStatus.REJECTED && !rejectionReason) {
-      throw new BadRequestException('rejectionReason is required when rejecting a draw');
-    }
-
-    const updateData: any = { status };
-    if (status === DrawStatus.APPROVED) {
-      updateData.approvedDate = new Date();
-      updateData.approvedById = userId;
-      if (approvedAmount !== undefined) updateData.approvedAmount = approvedAmount;
-    }
-    if (status === DrawStatus.FUNDED) updateData.fundedAt = new Date();
-    if (status === DrawStatus.REJECTED) updateData.rejectionReason = rejectionReason;
-
-    const updated = await this.prisma.drawRequest.update({ where: { id }, data: updateData });
-
-    // Split-brain fix: the new state machine (DrawsService.markFunded) emits this so
-    // the funded handler posts a budget Actual + invalidates dashboards. This legacy
-    // path must do the same, else draws funded via the table silently skip actuals/variance.
-    if (status === DrawStatus.FUNDED) {
-      this.bus.emit({
-        type: 'drawRequest.funded',
-        drawId: id,
-        loanId: draw.loanId,
-        projectId: draw.projectId ?? '',
-        amount: Number(draw.approvedAmount ?? draw.amount),
-      });
-    }
-
-    return updated;
-  }
-
   async updateDraw(id: string, data: { amount?: number; requestedAmount?: number; requestDate?: string; expectedFundingDate?: string; notes?: string }) {
     const draw = await this.prisma.drawRequest.findUnique({ where: { id } });
     if (!draw) throw new NotFoundException('Draw request not found');
@@ -343,7 +291,7 @@ export class LoansService {
    * The loan label is joined here so the caller does not need the separate /loans read
    * either.
    */
-  async findProjectDrawSchedules(projectId: string) {
+  async findProjectDrawSchedules(projectId: ProjectIdFilter) {
     const lines = await this.prisma.drawSchedule.findMany({
       where: {
         // Mirrors findByProject exactly, and must keep mirroring it. Loans attach at

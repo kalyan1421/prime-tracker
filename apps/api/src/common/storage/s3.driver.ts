@@ -1,4 +1,4 @@
-import { InternalServerErrorException, Logger } from '@nestjs/common';
+import { InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
@@ -7,6 +7,7 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Readable } from 'stream';
 import { StorageDriver } from './storage.driver';
 
 /**
@@ -68,10 +69,22 @@ export class S3StorageDriver implements StorageDriver {
     }
   }
 
-  async signedUrl(storagePath: string, expiresInSeconds: number): Promise<string> {
+  async signedUrl(
+    storagePath: string,
+    expiresInSeconds: number,
+    response: { contentType?: string; contentDisposition?: string } = {},
+  ): Promise<string> {
+    // response-content-type / response-content-disposition are query parameters S3
+    // applies to THIS response only. They are what make a stored object download rather
+    // than render, whatever ContentType it was originally written with.
     return getSignedUrl(
       this.client,
-      new GetObjectCommand({ Bucket: this.bucket, Key: storagePath }),
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: storagePath,
+        ...(response.contentType ? { ResponseContentType: response.contentType } : {}),
+        ...(response.contentDisposition ? { ResponseContentDisposition: response.contentDisposition } : {}),
+      }),
       { expiresIn: expiresInSeconds },
     );
   }
@@ -79,13 +92,41 @@ export class S3StorageDriver implements StorageDriver {
   async createPresignedUpload(
     storagePath: string,
     mimeType: string,
+    contentLength: number,
   ): Promise<{ uploadUrl: string; token: string }> {
     const uploadUrl = await getSignedUrl(
       this.client,
-      new PutObjectCommand({ Bucket: this.bucket, Key: storagePath, ContentType: mimeType }),
-      { expiresIn: 900 },
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: storagePath,
+        ContentType: mimeType,
+        ContentLength: contentLength,
+      }),
+      {
+        expiresIn: 900,
+        // The S3 presigner leaves Content-Type OUT of the signature by default, so a URL
+        // issued for a PDF would happily accept an HTML body. Signing both headers is what
+        // binds the PUT to the type and exact size the API approved — S3 answers anything
+        // else with SignatureDoesNotMatch. (A presigned POST policy could express a size
+        // RANGE instead, but needs a new dependency; an exact length is stricter anyway.)
+        signableHeaders: new Set(['content-type', 'content-length']),
+      },
     );
     // S3 presigned PUT needs no separate token; the browser PUTs directly to uploadUrl.
     return { uploadUrl, token: '' };
+  }
+
+  async getObject(storagePath: string): Promise<{ body: Readable; contentLength?: number }> {
+    try {
+      const out = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: storagePath }));
+      return { body: out.Body as Readable, contentLength: out.ContentLength };
+    } catch (err) {
+      const name = (err as { name?: string }).name;
+      if (name === 'NoSuchKey' || name === 'NotFound') {
+        throw new NotFoundException('File is no longer available');
+      }
+      this.logger.error(`S3 read failed for ${storagePath}: ${(err as Error).message}`);
+      throw new InternalServerErrorException('File download failed');
+    }
   }
 }

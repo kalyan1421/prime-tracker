@@ -260,3 +260,22 @@ describe('SalePaymentsService', () => {
     });
   });
 });
+
+// GET /sales/receivables is Finance's portfolio-wide widget; a scoped caller (a multi-role
+// user holding financial:view) is narrowed to installments on their member projects.
+describe('SalePaymentsService.receivables — member-project scope', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.salePayment.findMany.mockResolvedValue([]);
+  });
+
+  it('filters by the sale\'s project when scoped', async () => {
+    await makeService().receivables(4, { in: ['p1'] });
+    expect(mockPrisma.salePayment.findMany.mock.calls[0][0].where.sale).toEqual({ projectId: { in: ['p1'] } });
+  });
+
+  it('adds no project condition when unscoped', async () => {
+    await makeService().receivables(4);
+    expect(mockPrisma.salePayment.findMany.mock.calls[0][0].where.sale).toBeUndefined();
+  });
+});

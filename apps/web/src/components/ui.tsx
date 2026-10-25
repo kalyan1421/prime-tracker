@@ -84,6 +84,7 @@ export const STATUS_COLORS: Record<string, 'success' | 'primary' | 'warning' | '
   CRITICAL: 'danger', HIGH: 'warning', MEDIUM: 'warning', LOW: 'primary',
   CREATE: 'success', UPDATE: 'primary', DELETE: 'danger', LOGIN: 'success',
   LOGOUT: 'default', MFA_VERIFY: 'secondary', QB_SYNC: 'primary', ROLE_CHANGE: 'warning',
+  LOGIN_FAILED: 'danger', REFRESH_TOKEN_REUSE: 'danger',
   RESIDENTIAL: 'primary', COMMERCIAL: 'success', MIXED_USE: 'secondary', INDUSTRIAL: 'warning',
   RETAIL: 'primary', MEDICAL: 'success', FLEX: 'secondary', RESIDENTIAL_LOT: 'primary',
   OFFICE: 'default', RESTAURANT: 'warning', EVENT_CENTER: 'secondary',

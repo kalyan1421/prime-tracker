@@ -2,12 +2,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { resolveProjectScope } from '../../common/utils/resolve-project-scope';
+import type { ProjectIdFilter } from '../../common/access/project-access.service';
 
 @Injectable()
 export class ActualsService {
   constructor(private prisma: PrismaService) {}
 
-  async findByProject(projectId: string) {
+  async findByProject(projectId: ProjectIdFilter) {
     // Interior/TI actuals are reported in the interior module, not the project cost list.
     return this.prisma.actual.findMany({
       where: { projectId, interiorProjectId: null },

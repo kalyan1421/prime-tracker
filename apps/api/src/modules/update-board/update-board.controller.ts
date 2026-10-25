@@ -8,6 +8,9 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { ApiOperation } from '@nestjs/swagger';
+import {
+    AddUpdateBoardAttachmentDto, CommentContentDto, CreateUpdateBoardPostDto, UpdateUpdateBoardPostDto,
+} from './dto/update-board.dto';
 
 // Deliberately NOT project-scoped: no ProjectAccessGuard here. The board is org-wide by
 // design — every internal role sees every post regardless of project membership or
@@ -66,7 +69,7 @@ export class UpdateBoardController {
     @Post()
     @RequirePermissions('updateBoard:create')
     create(
-        @Body() body: any,
+        @Body() body: CreateUpdateBoardPostDto,
         @CurrentUser('sub') userId: string,
         @CurrentUser('role') role: string,
     ) {
@@ -77,7 +80,7 @@ export class UpdateBoardController {
     @RequirePermissions('updateBoard:view')
     update(
         @Param('id') id: string,
-        @Body() body: any,
+        @Body() body: UpdateUpdateBoardPostDto,
         @CurrentUser('sub') userId: string,
         @CurrentUser('role') role: string,
     ) {
@@ -110,12 +113,12 @@ export class UpdateBoardController {
     @RequirePermissions('updateBoard:create')
     addComment(
         @Param('id') id: string,
-        @Body('content') content: string,
+        @Body() body: CommentContentDto,
         @CurrentUser('sub') userId: string,
         @CurrentUser('role') role: string,
     ) {
-        if (!content?.trim()) throw new BadRequestException('Comment content is required');
-        return this.updateBoardService.addComment(id, userId, role, content.trim());
+        if (!body.content.trim()) throw new BadRequestException('Comment content is required');
+        return this.updateBoardService.addComment(id, userId, role, body.content.trim());
     }
 
     @Delete(':id/comments/:commentId')
@@ -137,7 +140,7 @@ export class UpdateBoardController {
     @ApiOperation({ summary: 'Attach a document/image (upload via /documents/upload-file first)' })
     addAttachment(
         @Param('id') postId: string,
-        @Body() body: { storagePath: string; fileName: string; mimeType?: string },
+        @Body() body: AddUpdateBoardAttachmentDto,
         @CurrentUser('sub') userId: string,
         @CurrentUser('role') role: string,
     ) {

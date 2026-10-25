@@ -12,10 +12,11 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
-import { RequirePermissions } from '../../common/decorators/index';
+import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
-import { PresignedUploadDto } from './dto/presigned-upload.dto';
+import { PresignedUploadDto, ReplaceDocumentDto, UploadFileDto } from './dto/presigned-upload.dto';
 import { Response } from 'express';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -30,6 +31,7 @@ export class DocumentsController {
     private service: DocumentsService,
     private storage: StorageService,
     private retention: DocumentRetentionService,
+    private access: ProjectAccessService,
   ) {}
 
   /**
@@ -42,11 +44,11 @@ export class DocumentsController {
   @RequirePermissions('document:upload')
   @ApiOperation({ summary: 'Issue a presigned S3 upload URL for client-direct upload' })
   presignedUpload(@Body() body: PresignedUploadDto) {
-    return this.storage.createPresignedUpload(body.filename, {
-      projectId: body.projectId,
-      projectName: body.projectName,
-      category: body.category,
-    });
+    return this.storage.createPresignedUpload(
+      body.filename,
+      { projectId: body.projectId, projectName: body.projectName, category: body.category },
+      { contentType: body.contentType, size: body.size },
+    );
   }
 
   /**
@@ -73,13 +75,14 @@ export class DocumentsController {
   @ApiOperation({
     summary: 'List documents by projectId, buildingId, unitId, saleId, leadId, or interiorProjectId',
   })
-  find(
+  async find(
     @Query('projectId') projectId: string,
     @Query('unitId') unitId: string,
     @Query('buildingId') buildingId?: string,
     @Query('saleId') saleId?: string,
     @Query('leadId') leadId?: string,
     @Query('interiorProjectId') interiorProjectId?: string,
+    @CurrentUser() user?: ScopedUser,
   ) {
     if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId);
     // Before unitId: a sale-scoped read must not widen to the unit's whole file. The stage
@@ -92,7 +95,8 @@ export class DocumentsController {
     if (leadId) return this.service.findByLead(leadId);
     if (unitId) return this.service.findByUnit(unitId);
     if (buildingId) return this.service.findByBuilding(buildingId);
-    return this.service.findByProject(projectId);
+    // No filter at all used to mean every project's documents, each with a signed URL.
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
   }
 
   /**
@@ -118,7 +122,7 @@ export class DocumentsController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } }))
   async uploadFile(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { projectId?: string; projectName?: string; category?: string },
+    @Body() body: UploadFileDto,
   ) {
     if (!file) throw new BadRequestException('No file was received');
     const { storagePath, publicUrl } = await this.storage.upload(
@@ -140,6 +144,7 @@ export class DocumentsController {
     @Body() body: UploadDocumentDto,
     @Request() req: any,
   ) {
+    if (!file) throw new BadRequestException('No file was received');
     return this.service.create(file, body, req.user.sub);
   }
 
@@ -166,8 +171,9 @@ export class DocumentsController {
   replace(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { fileName?: string },
+    @Body() body: ReplaceDocumentDto,
   ) {
+    if (!file) throw new BadRequestException('No file was received');
     return this.service.replaceFile(id, file, body.fileName);
   }
 

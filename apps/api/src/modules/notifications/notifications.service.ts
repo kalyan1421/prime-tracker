@@ -423,13 +423,22 @@ export class NotificationsService {
     const enabledUserIds = userIds.filter((id) => prefByUser.get(id)?.enabled !== false);
     if (enabledUserIds.length === 0) return;
 
-    const targetUserIds = await this.suppressAlreadyPending(enabledUserIds, type, dedupeKey);
-    if (targetUserIds.length === 0) return;
+    const pendingFiltered = await this.suppressAlreadyPending(enabledUserIds, type, dedupeKey);
+    if (pendingFiltered.length === 0) return;
 
-    // Create in-app notifications
-    await this.prisma.notification.createMany({
-      data: targetUserIds.map((userId) => ({ userId, type, title, body, link, dedupeKey })),
+    // Only a RECURRING alert stores its key. An event is never a duplicate (see
+    // RECURRING_TYPES), and a key stored on one would put it under the pending-alert
+    // unique index, where a second identical event would be refused as "already sent".
+    // An empty key is no key — it would otherwise put every keyless send of a type under
+    // the index together.
+    const storedKey = RECURRING_TYPES[type as keyof typeof RECURRING_TYPES] && dedupeKey ? dedupeKey : undefined;
+
+    // Create in-app notifications. `targetUserIds` is who actually got a NEW row — the
+    // push and the email below go to them and nobody else.
+    const targetUserIds = await this.insertNotifications(pendingFiltered, {
+      type, title, body, link, dedupeKey: storedKey,
     });
+    if (targetUserIds.length === 0) return;
 
     // Push real-time to connected clients
     for (const uid of targetUserIds) {
@@ -448,7 +457,7 @@ export class NotificationsService {
 
     const users = await this.prisma.user.findMany({
       where: { id: { in: emailUserIds }, isActive: true },
-      select: { email: true, name: true },
+      select: { id: true, email: true, name: true },
     });
 
     const from = this.config.get('SMTP_FROM', 'PrimeTracker <noreply@primedevelopers.com>');
@@ -463,9 +472,57 @@ export class NotificationsService {
           html: this.buildEmailHtml({ name: user.name, title, body, link, baseUrl }),
         });
       } catch (err) {
-        this.logger.warn(`Failed to send email to ${user.email}: ${err}`);
+        // The user id, not the address: the id finds the person, and an email address in
+        // a log line is personal data copied into a store with its own retention.
+        this.logger.warn(`Failed to send ${type} email to user ${user.id}: ${err}`);
       }
     }
+  }
+
+  /**
+   * Insert one row per recipient; returns the recipients that actually got one.
+   *
+   * suppressAlreadyPending() is a read, and the insert is a separate write, so two runs at
+   * once (a second API instance, or a cron overlapping a manual trigger) could both read
+   * "nothing pending" and both insert — the duplicate alert and duplicate email the
+   * dedupe exists to prevent. The partial unique index `notifications_pending_dedupe_key`
+   * (one UNREAD row per user + type + dedupeKey, migration 20261024010000) makes the
+   * database the arbiter: the loser's insert fails with P2002, and that is read as what it
+   * means — this alert is already pending for that person — not as an error.
+   *
+   * createMany is one INSERT statement, so a violation on any row writes none of them. Only
+   * then does it fall back to one insert per recipient, keeping the ones that succeed;
+   * the common path stays a single statement.
+   */
+  private async insertNotifications(
+    userIds: string[],
+    row: { type: NotificationType; title: string; body: string; link?: string; dedupeKey?: string },
+  ): Promise<string[]> {
+    try {
+      await this.prisma.notification.createMany({
+        data: userIds.map((userId) => ({ userId, ...row })),
+      });
+      return userIds;
+    } catch (err) {
+      if (!row.dedupeKey || !isUniqueViolation(err)) throw err;
+    }
+
+    const delivered: string[] = [];
+    for (const userId of userIds) {
+      try {
+        await this.prisma.notification.create({ data: { userId, ...row } });
+        delivered.push(userId);
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        // Already pending for this user — written by the run that won. Nothing to send.
+      }
+    }
+    if (delivered.length < userIds.length) {
+      this.logger.log(
+        `${row.type} ${row.dedupeKey}: ${userIds.length - delivered.length} recipient(s) already had it pending (concurrent run)`,
+      );
+    }
+    return delivered;
   }
 
   /**
@@ -1717,4 +1774,9 @@ export class NotificationsService {
 </body>
 </html>`;
   }
+}
+
+/** Prisma's unique-constraint violation (P2002), from either createMany or create. */
+function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === 'P2002';
 }

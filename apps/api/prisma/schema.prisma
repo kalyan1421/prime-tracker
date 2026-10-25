@@ -31,6 +31,14 @@ model User {
   passwordHash String?
   mfaEnabled   Boolean    @default(false)
   mfaSecret    String? // encrypted TOTP secret
+  // The 30-second TOTP time-step of the last code accepted. A code is valid for its whole
+  // window (±1 step), so without this the same six digits could be replayed — by a
+  // shoulder-surfer or a logged request — for up to 90 seconds after the owner used them.
+  mfaLastUsedStep  Int?
+  // Per-account lockout. In the database, not memory, so a restart or a second API
+  // process does not hand an attacker a fresh set of guesses.
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?
   lastLoginAt  DateTime?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -133,7 +141,11 @@ model User {
 
 model RefreshToken {
   id        String    @id @default(cuid())
-  token     String    @unique
+  // SHA-256 (hex) of the token handed to the client — never the token itself, so a read
+  // of this table (a backup, a leaked DB credential) yields nothing that can be replayed
+  // against /auth/refresh. The token is 64 random bytes, so an unsalted fast hash is
+  // enough: there is no dictionary to attack.
+  tokenHash String    @unique
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
@@ -472,6 +484,8 @@ model Unit {
   saleTransfersIn      SaleUnitTransfer[]      @relation("SaleUnitTransferTo")
   // Optional tag only — see UpdateBoardPost. Does not scope who can see the board.
   updateBoardPosts     UpdateBoardPost[]
+  // Which stale-vacancy alert this unit has already raised — see UnitVacancyAlert.
+  vacancyAlert         UnitVacancyAlert?
 
   // Uniqueness of (buildingId, unitNumber) is enforced by a partial unique index
   // (WHERE "deletedAt" IS NULL) added in migration 20260703000000_units_partial_unique_active —
@@ -489,6 +503,23 @@ model Unit {
   @@index([templateId])
   @@index([trackedWithId])
   @@map("units")
+}
+
+/// Dedupe record for the stale-vacancy alert (StaleUnitsCron). One row per unit: the
+/// vacancy it was raised for and the highest day bucket (90/120/180/365) already
+/// alerted. The cron used to alert only in the exact 24-hour window after a bucket, so a
+/// missed run lost that alert for good; with this it alerts on any bucket crossed since
+/// the last one it recorded. A new vacancy (different start) starts the buckets over.
+model UnitVacancyAlert {
+  unitId       String   @id
+  unit         Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  /// The vacancy start the alert belongs to (latest event landing on AVAILABLE).
+  vacancyStart DateTime
+  /// Highest bucket alerted for that vacancy.
+  days         Int
+  alertedAt    DateTime
+
+  @@map("unit_vacancy_alerts")
 }
 
 // ============================================================================
@@ -559,8 +590,8 @@ model UnitStatusEvent {
   /// When the row was written. Differs from effectiveAt for backfilled history.
   recordedAt   DateTime    @default(now())
   /// MANUAL | LEASE_ACTIVATED | LEASE_ENDED | SALE_CLOSED | SALE_CANCELLED
-  /// | SALE_TRANSFERRED_OUT | SALE_TRANSFERRED_IN | UNIT_CREATED | UNIT_COMBINED
-  /// | BACKFILL | SYSTEM
+  /// | SALE_TRANSFERRED_OUT | SALE_TRANSFERRED_IN | LEASE_DELETED | SALE_DELETED
+  /// | UNIT_CREATED | UNIT_COMBINED | BACKFILL | SYSTEM
   source       String
   /// Provenance — which lease/sale drove this, when one did.
   leaseId      String?
@@ -2288,7 +2319,18 @@ model Notification {
 
   @@index([userId, readAt])
   @@index([createdAt])
+  // The bell: WHERE userId = … ORDER BY createdAt DESC LIMIT n (findForUser).
+  @@index([userId, createdAt])
   // Serves the suppression lookup: userId IN (…) AND type = … AND dedupeKey = …
+  //
+  // Uniqueness is enforced separately by a PARTIAL unique index,
+  // "notifications_pending_dedupe_key" ON (userId, type, dedupeKey)
+  // WHERE dedupeKey IS NOT NULL AND readAt IS NULL — migration 20261024010000. At most one
+  // UNREAD copy of a recurring alert per person, so two concurrent runs cannot both insert
+  // it (NotificationsService.insertNotifications treats the loser's P2002 as "already
+  // sent"). Read rows are outside it on purpose: a standing condition re-raises after the
+  // cooldown, which is a second row with the same key. Prisma's schema language can't
+  // express a partial index, so it isn't declared here; this plain one stays for queries.
   @@index([userId, type, dedupeKey])
   @@map("notifications")
 }
@@ -2643,12 +2685,15 @@ model AuditEvent {
   metadata  Json?
   createdAt DateTime @default(now())
 
-  // No updatedAt — immutable by design
-  // No delete cascade — audit events are never deleted
+  // No updatedAt — immutable by design. Rows are never edited; they are removed only by
+  // the retention job once older than AUDIT_RETENTION_DAYS (AuditRetentionService), never
+  // by a cascade.
 
   @@index([userId])
   @@index([entity, entityId])
   @@index([createdAt])
+  // The activity feed: WHERE entity IN (…) ORDER BY createdAt DESC, plus its count().
+  @@index([entity, createdAt])
   @@map("audit_events")
 }
 
@@ -2979,6 +3024,10 @@ model TaskAttachment {
   task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   fileName     String
   fileUrl      String
+  /// Bucket key, set for every attachment uploaded since 2026-10-24 (StorageService — S3).
+  /// Null on older rows, whose bytes are still on the API host's disk under
+  /// uploads/tasks/<basename of fileUrl>; the download route falls back to that.
+  storagePath  String?
   fileSize     Int?
   mimeType     String?
   uploadedById String
@@ -3565,6 +3614,8 @@ model SalePayment {
   @@index([saleId, sequence])
   @@index([milestoneId])
   @@index([status, effectiveDueDate])
+  // SalePaymentsService.applyInteriorHandover finds a fit-out's installments by this column.
+  @@index([interiorProjectId])
   @@map("sale_payments")
 }
 

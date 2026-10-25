@@ -8,6 +8,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagg
 import { Prisma } from '@prisma/client';
 import { LeasesService } from './leases.service';
 import { LeaseImportService, ImportCommitRowInput } from './lease-import.service';
+import { LeaseImportCommitDto } from './dto/lease-import-commit.dto';
 import type { ConfirmedMapping } from '../../common/utils/xlsx-mapping';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
@@ -21,6 +22,7 @@ import { CreateDealLeaseDto } from './dto/create-deal-lease.dto';
 import { AssignTenantDto } from './dto/assign-tenant.dto';
 import { BackfillTenancyDto } from './dto/backfill-tenancy.dto';
 import { RequestHistoricalDeletionDto } from '../../common/dto/historical-deletion.dto';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 import { LeaseRentPeriodService } from './lease-rent-period.service';
 import { LeaseObligationService } from './lease-obligation.service';
 import { LeaseRentInvoiceService } from './lease-rent-invoice.service';
@@ -76,17 +78,24 @@ export class LeasesController {
     private obligations: LeaseObligationService,
     private rentInvoices: LeaseRentInvoiceService,
     private importService: LeaseImportService,
+    private access: ProjectAccessService,
   ) {}
 
+  // projectId is optional here and the guard passes a request that names no project, so
+  // an omitted one must still be narrowed to the caller's member projects (projectIdFilter).
   @Get()
   @RequirePermissions('lease:view')
   @ApiOperation({ summary: 'List leases by project' })
-  findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
+  async findByProject(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
+  }
 
   @Get('rent-roll')
   @RequirePermissions('lease:view')
   @ApiOperation({ summary: 'Active leases rent roll with total monthly rent' })
-  getRentRoll(@Query('projectId') projectId: string) { return this.service.getRentRoll(projectId); }
+  async getRentRoll(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.getRentRoll(await this.access.projectIdFilter(user, projectId));
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Obligation ledger — deposits + TI allowances.
@@ -233,8 +242,9 @@ export class LeasesController {
     @Query('projectId') projectId: string,
     @Query('ref') ref: string,
     @Query('terminationDate') terminationDate?: string,
+    @CurrentUser() user?: ScopedUser,
   ) {
-    const leases = await this.service.resolveDealGroup(projectId, ref);
+    const leases = await this.service.resolveDealGroup(await this.access.projectIdFilter(user, projectId), ref);
     const date = terminationDate ? new Date(terminationDate) : new Date();
     const blockers = leases.length
       ? await this.service.assertGroupCanEnd(leases as any, date)
@@ -486,9 +496,8 @@ export class LeasesController {
   @Post('backfill/import/commit')
   @RequirePermissions('unit:history:backfill')
   @ApiOperation({ summary: 'Commit previously-previewed rent-history rows — one backfillTenancy() per row' })
-  commitImport(@Body('rows') rows: ImportCommitRowInput[], @CurrentUser('sub') userId: string) {
-    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('No rows to import');
-    return this.importService.commitImport(rows, userId);
+  commitImport(@Body() body: LeaseImportCommitDto, @CurrentUser('sub') userId: string) {
+    return this.importService.commitImport(body.rows as ImportCommitRowInput[], userId);
   }
 
   // ─────── Generic column-mapping import (R9) ───────

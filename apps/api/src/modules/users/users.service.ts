@@ -465,7 +465,12 @@ export class UsersService {
 
     const passwordHash = await bcrypt.hash(newPassword, 12);
     const [, revoked] = await this.prisma.$transaction([
-      this.prisma.user.update({ where: { id: targetId }, data: { passwordHash } }),
+      // Also lifts a login lockout (AuthService.recordFailedLogin): the lockout message
+      // tells a locked-out user to ask an admin for a reset, so a reset has to work at once.
+      this.prisma.user.update({
+        where: { id: targetId },
+        data: { passwordHash, failedLoginCount: 0, lockedUntil: null },
+      }),
       this.prisma.refreshToken.updateMany({
         where: { userId: targetId, revokedAt: null },
         data: { revokedAt: new Date() },

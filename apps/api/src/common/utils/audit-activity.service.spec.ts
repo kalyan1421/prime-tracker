@@ -303,3 +303,87 @@ describe('AuditService.activityFeed — naming the record', () => {
     }
   });
 });
+
+// ─────── Project scoping (audit, 24 Oct 2026) ───────
+//
+// Permission filtering alone showed a PM/Construction/Sales/Marketing user every project's
+// activity — lead, buyer and tenant names included. For those roles the feed is now cut
+// down to records on their member projects (plus org-wide ones like the update board).
+describe('AuditService.activityFeed — project-scoped viewer', () => {
+  const SALES = ['updateBoard:view', 'unit:view', 'sales:view', 'lead:view', 'campaign:view'];
+  const scoped = (projectIds: string[]) => ({ permissions: SALES, projectIds });
+  const unitIn = (id: string, projectId: string) => ({
+    id, unitNumber: id.toUpperCase(), building: { name: 'B', project: { id: projectId, name: projectId } },
+  });
+
+  beforeEach(() => {
+    mockPrisma.auditEvent.findMany.mockResolvedValue([
+      event({ id: 'mine', entityId: 'u1' }),
+      event({ id: 'theirs', entityId: 'u2' }),
+      event({ id: 'board', entity: 'UpdateBoard', entityId: 'post-1' }),
+      event({ id: 'gone', entity: 'Sale', entityId: 's-deleted' }),
+      event({ id: 'lead-elsewhere', entity: 'Leads', entityId: 'lead-9' }),
+      event({ id: 'list-op', entity: 'Sales', entityId: null }),
+    ]);
+    mockPrisma.unit.findMany.mockResolvedValue([unitIn('u1', 'p1'), unitIn('u2', 'p9')]);
+    mockPrisma.lead.findMany.mockResolvedValue([{ id: 'lead-9', name: 'R. Kiran', projectId: 'p9' }]);
+    mockPrisma.sale.findMany.mockResolvedValue([]); // since deleted — no longer resolves
+  });
+
+  it('keeps member-project and org-wide events, and drops everything it cannot show is theirs', async () => {
+    const out = await make().activityFeed({}, scoped(['p1']));
+    expect(out.events.map((e: any) => e.id)).toEqual(['mine', 'board']);
+    expect(out.total).toBe(2);
+  });
+
+  it('reads a bounded window newest-first instead of paging in SQL', async () => {
+    await make().activityFeed({ page: 3, limit: 10 }, scoped(['p1']));
+    const args = argsOf();
+    expect(args.take).toBe(1000);
+    expect(args.skip).toBeUndefined();
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    // Still the permission-filtered query, and still never the value payloads.
+    expect(args.where.entity.in).toEqual(expect.arrayContaining(['Units', 'Leads']));
+    expect(args.select.oldValues).toBeUndefined();
+    expect(mockPrisma.auditEvent.count).not.toHaveBeenCalled();
+  });
+
+  it('pages over what survives the filter', async () => {
+    const out = await make().activityFeed({ page: 2, limit: 1 }, scoped(['p1']));
+    expect(out.events.map((e: any) => e.id)).toEqual(['board']);
+    expect(out.total).toBe(2);
+  });
+
+  it('shows a campaign only when every project it spans is the viewer\'s; a portfolio-wide one to all', async () => {
+    mockPrisma.auditEvent.findMany.mockResolvedValue([
+      event({ id: 'spans-other', entity: 'Campaigns', entityId: 'c-multi' }),
+      event({ id: 'portfolio', entity: 'Campaigns', entityId: 'c-all' }),
+      event({ id: 'own', entity: 'Campaigns', entityId: 'c-own' }),
+    ]);
+    mockPrisma.campaign.findMany.mockResolvedValue([
+      { id: 'c-multi', name: 'Multi', channel: 'META', projects: [{ projectId: 'p1' }, { projectId: 'p9' }] },
+      { id: 'c-all', name: 'Brand', channel: 'META', projects: [] },
+      { id: 'c-own', name: 'Launch', channel: 'META', projects: [{ projectId: 'p1' }] },
+    ]);
+    const out = await make().activityFeed({}, scoped(['p1']));
+    expect(out.events.map((e: any) => e.id)).toEqual(['portfolio', 'own']);
+  });
+
+  it('a scoped role with no projects sees only org-wide activity', async () => {
+    const out = await make().activityFeed({}, scoped([]));
+    expect(out.events.map((e: any) => e.id)).toEqual(['board']);
+  });
+
+  it('lists only the people who appear in that scoped feed', async () => {
+    mockPrisma.auditEvent.findMany.mockResolvedValue([
+      event({ id: 'mine', entityId: 'u1', user: { id: 'asha', name: 'Asha', email: 'a@x' } }),
+      event({ id: 'mine-2', entityId: 'u1', user: { id: 'asha', name: 'Asha', email: 'a@x' } }),
+      event({ id: 'theirs', entityId: 'u2', user: { id: 'ravi', name: 'Ravi', email: 'r@x' } }),
+    ]);
+    mockPrisma.user.findMany.mockResolvedValue([{ id: 'asha', name: 'Asha', email: 'a@x' }]);
+    const actors = await make().activityActors(scoped(['p1']));
+    expect(actors).toEqual([{ value: 'asha', label: 'Asha', count: 2 }]);
+    expect(mockPrisma.auditEvent.groupBy).not.toHaveBeenCalled();
+    expect(mockPrisma.user.findMany.mock.calls[0][0].where.id.in).toEqual(['asha']);
+  });
+});

@@ -208,6 +208,7 @@ export class ConstructionChecklistService {
     opts: { buildingId?: string; projectId?: string },
     userId?: string,
     role?: string,
+    roles?: string[],
   ) {
     // Same archived-project gap as getProjectRollup — deletedAt: null on both the
     // building and its project, not just the unit.
@@ -216,7 +217,8 @@ export class ConstructionChecklistService {
       project: { deletedAt: null },
       ...(opts.projectId ? { projectId: opts.projectId } : {}),
     };
-    if (!opts.projectId && userId && this.access.isScoped(role)) {
+    // Every role the user holds, not the primary alone — any scoped role scopes them.
+    if (!opts.projectId && userId && this.access.isScoped(role, roles)) {
       const ids = await this.access.accessibleProjectIds(userId);
       projectFilter = { ...projectFilter, projectId: { in: ids } };
     }
@@ -527,7 +529,7 @@ export class ConstructionChecklistService {
    * buildings whose templates differ in length or labels — nothing here assumes a shared
    * column set.
    */
-  async getProjectRollup(projectId?: string, userId?: string, role?: string) {
+  async getProjectRollup(projectId?: string, userId?: string, role?: string, roles?: string[]) {
     // No projectId means "every project I can see" — for a scoped role (Construction/PM)
     // that's their membership set, resolved the same way DashboardService.memberScope does
     // for its own cross-project aggregates; unscoped roles get no filter at all.
@@ -542,7 +544,7 @@ export class ConstructionChecklistService {
       project: { deletedAt: null },
       ...(projectId ? { projectId } : {}),
     };
-    if (!projectId && userId && this.access.isScoped(role)) {
+    if (!projectId && userId && this.access.isScoped(role, roles)) {
       const ids = await this.access.accessibleProjectIds(userId);
       projectFilter = { ...projectFilter, projectId: { in: ids } };
     }

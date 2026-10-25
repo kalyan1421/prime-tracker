@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
-import { JsonLogger } from './common/logging/json.logger';
+import { JsonLogger, resolveLogLevels } from './common/logging/json.logger';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 
 async function bootstrap() {
@@ -44,8 +44,17 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const isProd = config.get('NODE_ENV') === 'production';
 
-  // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev.
-  app.useLogger(isProd ? new JsonLogger() : ['error', 'warn', 'log', 'debug']);
+  // Structured JSON logs in production (CloudWatch-queryable); pretty logs in dev. Both
+  // honour LOG_LEVEL — production defaults to info, so debug lines (which have carried
+  // full domain-event payloads) stay out of CloudWatch unless someone asks for them.
+  const logLevels = resolveLogLevels(config.get<string>('LOG_LEVEL'), isProd);
+  app.useLogger(isProd ? new JsonLogger('', { logLevels }) : logLevels);
+
+  // Run onModuleDestroy / beforeApplicationShutdown on SIGTERM and SIGINT. Without this a
+  // deploy's `pm2 reload` (SIGINT) or a container stop (SIGTERM) killed the process
+  // mid-request: PrismaService.$disconnect never ran, an in-flight cron was cut off
+  // between writes, and the scheduler was not stopped before the pool went away.
+  app.enableShutdownHooks();
 
   // ---- Refuse to run an auth bypass in production ----
   //
@@ -74,6 +83,18 @@ async function bootstrap() {
       '=========================================================================\n',
     );
     process.exit(1);
+  }
+
+  // Outside production the guard itself now refuses demo tokens unless NODE_ENV is
+  // exactly 'development' (isDemoModeActive in jwt-auth.guard.ts). Say so at boot, so a
+  // developer whose Dev Quick Login stopped working finds the reason in the first screen
+  // of logs rather than in a 401.
+  if (config.get('DEMO_MODE') === 'true' && config.get('NODE_ENV') !== 'development') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `DEMO_MODE=true is IGNORED: demo tokens are honoured only with NODE_ENV=development ` +
+      `(NODE_ENV is ${JSON.stringify(config.get('NODE_ENV') ?? null)}).`,
+    );
   }
 
   const port = Number(config.get('PORT') ?? config.get('API_PORT', 3001));

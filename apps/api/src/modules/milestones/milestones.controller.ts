@@ -8,10 +8,12 @@ import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 import { CreateMilestoneDto } from './dto/create-milestone.dto';
 import { UpdateMilestoneDto } from './dto/update-milestone.dto';
 import { DecideSlipProposalDto } from './dto/slip-proposal.dto';
 import { SignOffPhotoDto, ForceCompleteMilestoneDto } from './dto/photo-signoff.dto';
+import { AttachMilestonePhotoDto, SetMilestoneDependencyDto } from './dto/milestone-photo.dto';
 
 @ApiTags('Milestones')
 @ApiBearerAuth()
@@ -23,12 +25,17 @@ export class MilestonesController {
     private service: MilestonesService,
     private deps: MilestoneDepsService,
     private prisma: PrismaService,
+    private access: ProjectAccessService,
   ) {}
 
+  // projectId is optional on both list routes; an omitted one is narrowed to the caller's
+  // member projects (the guard passes a request that names no project).
   @Get()
   @RequirePermissions('milestone:view')
   @ApiOperation({ summary: 'List milestones by project (includes owner)' })
-  findByProject(@Query('projectId') projectId: string) { return this.service.findByProject(projectId); }
+  async findByProject(@Query('projectId') projectId: string, @CurrentUser() user: ScopedUser) {
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
+  }
 
   // ─────── C3/C4: slip proposals ───────
   //
@@ -47,11 +54,12 @@ export class MilestonesController {
       'Defaults to PENDING. Pass ?status=APPROVED|REJECTED|SUPERSEDED|STALE for decided '
       + 'ones, and ?projectId= to scope to one project.',
   })
-  listSlipProposals(
+  async listSlipProposals(
+    @CurrentUser() user: ScopedUser,
     @Query('projectId') projectId?: string,
     @Query('status') status?: string,
   ) {
-    return this.deps.listProposals({ projectId, status });
+    return this.deps.listProposals({ projectId: await this.access.projectIdFilter(user, projectId), status });
   }
 
   @Get('slip-proposals/:proposalId')
@@ -154,7 +162,7 @@ export class MilestonesController {
   @Patch(':id/depends-on')
   @RequirePermissions('milestone:edit')
   @ApiOperation({ summary: 'Set or clear a dependency. Pass dependsOnId=null to clear. Cycles are rejected.' })
-  setDependency(@Param('id') id: string, @Body() body: { dependsOnId: string | null }) {
+  setDependency(@Param('id') id: string, @Body() body: SetMilestoneDependencyDto) {
     return this.deps.setDependency(id, body.dependsOnId);
   }
 
@@ -209,7 +217,7 @@ export class MilestonesController {
   attachPhoto(
     @Param('id') milestoneId: string,
     @CurrentUser('sub') userId: string,
-    @Body() body: { storagePath: string; caption?: string },
+    @Body() body: AttachMilestonePhotoDto,
   ) {
     return this.prisma.milestonePhoto.create({
       data: { milestoneId, storagePath: body.storagePath, caption: body.caption, uploadedById: userId },

@@ -570,3 +570,31 @@ describe('InteriorService', () => {
     });
   });
 });
+
+// GET /interior/portfolio and GET /interior with no filter listed every fit-out in the
+// portfolio for any role. A fit-out reaches its project through its building OR its unit.
+describe('InteriorService — member-project scope', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.interiorProject.findMany.mockResolvedValue([]);
+  });
+
+  const viaEitherAnchor = (projectId: unknown) => ({
+    OR: [{ building: { projectId } }, { unit: { building: { projectId } } }],
+  });
+
+  it('narrows the portfolio through either anchor', async () => {
+    await makeService().portfolio([], { in: ['p1'] });
+    expect(mockPrisma.interiorProject.findMany.mock.calls[0][0].where).toMatchObject(viaEitherAnchor({ in: ['p1'] }));
+  });
+
+  it('leaves the portfolio whole for an unscoped caller', async () => {
+    await makeService().portfolio([]);
+    expect(mockPrisma.interiorProject.findMany.mock.calls[0][0].where.OR).toBeUndefined();
+  });
+
+  it('narrows the unfiltered list the same way', async () => {
+    await makeService().findAll({ projectId: { in: ['p1'] } });
+    expect(mockPrisma.interiorProject.findMany.mock.calls[0][0].where).toMatchObject(viaEitherAnchor({ in: ['p1'] }));
+  });
+});

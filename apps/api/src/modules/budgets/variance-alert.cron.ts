@@ -26,6 +26,16 @@ export class VarianceAlertCron {
 
   @Cron(CronExpression.EVERY_DAY_AT_8AM, { name: 'budget-variance-alerts' })
   async run() {
+    // Named and logged rather than left to the scheduler's anonymous error line — see
+    // DrawFundingOverdueCron.run.
+    try {
+      await this.checkAll();
+    } catch (err) {
+      this.logger.error(`Cron budget-variance-alerts failed: ${(err as Error).message}`, (err as Error).stack);
+    }
+  }
+
+  async checkAll() {
     // Pull configurable threshold from each project's org settings (fallback 10%).
     // For now: single global default to keep the query simple. Per-org overrides
     // can be a follow-up once we have multi-org users.

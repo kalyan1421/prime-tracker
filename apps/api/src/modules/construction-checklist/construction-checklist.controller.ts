@@ -8,7 +8,7 @@ import { AuditInterceptor } from '../../common/interceptors/audit.interceptor';
 import { RequirePermissions, CurrentUser } from '../../common/decorators/index';
 import { AddTemplateItemDto } from './dto/template-item.dto';
 import {
-  AddUnitStageDto, AddUnitStagesDto, ReorderUnitStagesDto, UpdateUnitStageDto,
+  AddStagePhotoDto, AddUnitStageDto, AddUnitStagesDto, ReorderUnitStagesDto, UpdateUnitStageDto,
 } from './dto/unit-stage.dto';
 
 @ApiTags('Construction Checklist')
@@ -93,8 +93,9 @@ export class ConstructionChecklistController {
     @Query('projectId') projectId: string | undefined,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.getAdHocStages({ buildingId, projectId }, userId, role);
+    return this.service.getAdHocStages({ buildingId, projectId }, userId, role, roles);
   }
 
   // One request, not a loop of the route above: the 10 req/sec throttle silently truncates
@@ -139,7 +140,7 @@ export class ConstructionChecklistController {
   @ApiOperation({ summary: 'Attach a photo to a checklist stage' })
   addStagePhoto(
     @Param('stageId') stageId: string,
-    @Body() body: { storagePath: string; caption?: string },
+    @Body() body: AddStagePhotoDto,
     @CurrentUser('sub') userId?: string,
   ) {
     return this.service.addStagePhoto(stageId, body.storagePath, body.caption, userId);
@@ -193,7 +194,8 @@ export class ConstructionChecklistController {
     @Query('projectId') projectId: string | undefined,
     @CurrentUser('sub') userId: string,
     @CurrentUser('role') role: string,
+    @CurrentUser('roles') roles?: string[],
   ) {
-    return this.service.getProjectRollup(projectId, userId, role);
+    return this.service.getProjectRollup(projectId, userId, role, roles);
   }
 }

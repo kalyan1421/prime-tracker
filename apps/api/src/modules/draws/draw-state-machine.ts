@@ -75,3 +75,28 @@ export function getTransition(from: DrawStatus, action: DrawAction): Transition 
 export function canTransition(from: DrawStatus, action: DrawAction): boolean {
   return getTransition(from, action) != null;
 }
+
+/**
+ * The approval-step actions — the ones DrawsController gates on draw:approve rather than
+ * draw:edit. Kept beside the machine so a route that reaches them some other way (the
+ * legacy PATCH /loans/draws/:id/status) checks this list instead of keeping its own copy.
+ */
+export const APPROVAL_ACTIONS: ReadonlySet<DrawAction> = new Set<DrawAction>([
+  'approveInternal',
+  'markFunded',
+  'reject',
+]);
+
+/**
+ * The action that moves a draw from `from` to `to`, or null when the machine has no such
+ * edge. Each (from, to) pair is reached by at most one action in DRAW_TRANSITIONS, so this
+ * is unambiguous — which is what lets a route that speaks in target statuses be driven
+ * through the machine instead of writing the status column directly.
+ */
+export function actionReaching(from: DrawStatus, to: DrawStatus): DrawAction | null {
+  const edges = DRAW_TRANSITIONS[from] ?? {};
+  for (const [action, t] of Object.entries(edges)) {
+    if (t?.to === to) return action as DrawAction;
+  }
+  return null;
+}

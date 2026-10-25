@@ -21,7 +21,7 @@ Package manager: **pnpm**. Node **>=20**.
 ```bash
 pnpm run docker:up      # 1. start Postgres + Redis
 pnpm install            # 2. install dependencies (first time only)
-pnpm run db:seed        # 3. seed demo data + users (only if DB is empty)
+ALLOW_DEMO_SEED=true pnpm run db:seed   # 3. seed demo data + users (local DB only, if empty)
 pnpm run dev            # 4. run API + Web together
 ```
 
@@ -65,7 +65,7 @@ pnpm --filter @prime-tracker/web dev      # Vite → http://localhost:5173
 | `pnpm run docker:up` | Start Postgres + Redis containers |
 | `pnpm run docker:down` | Stop containers |
 | `pnpm run db:migrate` | `prisma migrate dev` |
-| `pnpm run db:seed` | Seed data + demo users + financials |
+| `pnpm run db:seed` | Seed data + demo users + financials. The demo-user step refuses to run without `ALLOW_DEMO_SEED=true` on the command line, and always under `NODE_ENV=production` |
 | `pnpm run db:studio` | Open Prisma Studio (DB GUI) |
 | `pnpm run build` | Build all packages |
 | `pnpm run lint` | Lint all packages |

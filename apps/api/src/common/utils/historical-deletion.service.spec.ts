@@ -156,3 +156,29 @@ describe('HistoricalDeletionService', () => {
     });
   });
 });
+
+// The queue is opened by unit:history:backfill, which SALES holds — a scoped role. With
+// no ProjectAccessGuard on the controller, the list itself narrows to member projects.
+describe('HistoricalDeletionService.list — member-project scope', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.historicalRecordDeletion.findMany.mockResolvedValue([]);
+  });
+
+  it('reaches a sale by its projectId and a lease through its unit OR its building', async () => {
+    await makeService().list('PENDING', ['p1']);
+    const scope = { projectId: { in: ['p1'] } };
+    expect(mockPrisma.historicalRecordDeletion.findMany.mock.calls[0][0].where).toEqual({
+      status: 'PENDING',
+      OR: [
+        { sale: scope },
+        { lease: { OR: [{ unit: { building: scope } }, { building: scope }] } },
+      ],
+    });
+  });
+
+  it('is the whole queue for an unscoped caller', async () => {
+    await makeService().list('APPROVED');
+    expect(mockPrisma.historicalRecordDeletion.findMany.mock.calls[0][0].where).toEqual({ status: 'APPROVED' });
+  });
+});

@@ -593,24 +593,51 @@ export class TasksService {
 
     // ---- Attachments ----
 
-    async addAttachment(taskId: string, userId: string, fileData: {
-        fileName: string;
-        fileUrl: string;
-        fileSize?: number;
-        mimeType?: string;
+    /**
+     * Store an uploaded attachment through StorageService and record it.
+     *
+     * Attachments used to be written to the API host's own disk by multer diskStorage —
+     * the one upload in the app that bypassed the storage driver. That meant no upload
+     * allowlist, no backups beyond the box's, and files that only one instance could see
+     * (the audit's multi-instance finding). They now take the same path as every other
+     * upload: the policy check, a derived content type, and the bucket. Rows written
+     * before the move keep `storagePath: null` and are still served from disk — see
+     * TasksController.downloadAttachment.
+     *
+     * The task is resolved FIRST, so a bad task id is a 404 before any bytes are stored.
+     */
+    async uploadAttachment(taskId: string, userId: string, file: {
+        buffer: Buffer;
+        originalname: string;
+        mimetype: string;
+        size: number;
     }) {
-        await this.findById(taskId);
+        const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { projectId: true } });
+        if (!task) throw new NotFoundException('Task not found');
+
+        const { storagePath, publicUrl, contentType } = await this.storage.upload(
+            file.buffer,
+            file.mimetype,
+            file.originalname,
+            { projectId: task.projectId, category: 'task-attachments' },
+        );
         return this.prisma.taskAttachment.create({
             data: {
                 taskId,
                 uploadedById: userId,
-                fileName: fileData.fileName,
-                fileUrl: fileData.fileUrl,
-                fileSize: fileData.fileSize,
-                mimeType: fileData.mimeType,
+                fileName: file.originalname,
+                fileUrl: publicUrl,
+                storagePath,
+                fileSize: file.size,
+                mimeType: contentType,
             },
             include: { uploadedBy: { select: { id: true, name: true } } },
         });
+    }
+
+    /** Open a stored attachment's bytes, with the headers it must be served with. */
+    openStoredAttachment(storagePath: string, fileName: string) {
+        return this.storage.download(storagePath, fileName);
     }
 
     /** One attachment row, for the authenticated download route. */

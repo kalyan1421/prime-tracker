@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { RequirePermissions, CurrentUser } from '../../common/decorators';
+import { ProjectAccessService, ScopedUser } from '../../common/access/project-access.service';
 
 /**
  * GET /api/exceptions          → portfolio-wide exception feed
@@ -22,16 +23,24 @@ import { RequirePermissions, CurrentUser } from '../../common/decorators';
 @UseGuards(JwtAuthGuard, PermissionsGuard, ProjectAccessGuard)
 @Controller('exceptions')
 export class ExceptionsController {
-  constructor(private exceptions: ExceptionsService) {}
+  constructor(
+    private exceptions: ExceptionsService,
+    private access: ProjectAccessService,
+  ) {}
 
   @Get()
   @RequirePermissions('project:view')
-  list(
+  async list(
     @CurrentUser('permissions') perms: string[],
+    @CurrentUser() user: ScopedUser,
     @Query('projectId') projectId?: string,
   ) {
-    return projectId
-      ? this.exceptions.forProject(projectId, perms ?? [])
+    if (projectId) return this.exceptions.forProject(projectId, perms ?? []);
+    // "Portfolio" for a scoped field role is its member projects, not the whole book —
+    // the feed names buyers, tenants and lenders.
+    const scope = await this.access.listProjectScope({ userId: user.sub, role: user.role, roles: user.roles });
+    return scope
+      ? this.exceptions.forProjects(scope, perms ?? [])
       : this.exceptions.forPortfolio(perms ?? []);
   }
 }

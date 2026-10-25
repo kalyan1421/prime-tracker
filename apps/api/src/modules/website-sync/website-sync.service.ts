@@ -127,7 +127,7 @@ export class WebsiteSyncService {
       headers: {
         'Content-Type': 'application/json',
         [TIMESTAMP_HEADER]: timestamp,
-        [SIGNATURE_HEADER]: sign(target.secret, timestamp, body),
+        [SIGNATURE_HEADER]: sign(target.secret, timestamp, `${url.pathname}${url.search}`, body),
       },
       body,
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
