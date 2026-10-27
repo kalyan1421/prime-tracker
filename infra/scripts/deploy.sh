@@ -141,9 +141,25 @@ deploy_api() {
   local _tmpscript="$STAGE/prime-deploy-api-$$.sh"
   cat > "$_tmpscript" << ENDSCRIPT
 #!/bin/bash
-export HOME=/home/ubuntu
+# SSM runs this as root, and root does only what needs root. Everything that writes
+# under /home/ubuntu runs as ubuntu, the user the CI deploy (infra/terraform/
+# github-deploy.tf) runs as. This script used to do it all as root with
+# HOME=/home/ubuntu, and the files it left — root's, and uid 501's from tar keeping the
+# Mac build's owner — made the next CI deploy fail at "tar: Cannot open: File exists".
+set -eo pipefail
+
+# Give back whatever an earlier root deploy left, or ubuntu's run below fails the same way.
+for d in /home/ubuntu/prime-tracker /home/ubuntu/.local/share/pnpm /home/ubuntu/.cache /home/ubuntu/.pm2; do
+  if [ -e "\$d" ]; then chown -R ubuntu:ubuntu "\$d"; fi
+done
+
+# The ubuntu part is staged in a file rather than fed to bash on stdin, where pnpm, git or
+# prisma could read the rest of the script as their own input.
+STEP=\$(mktemp)
+trap 'rm -f "\$STEP"' EXIT
+cat > "\$STEP" << 'AS_UBUNTU'
 export NVM_DIR=/home/ubuntu/.nvm
-source "\$NVM_DIR/nvm.sh" 2>/dev/null || source /root/.nvm/nvm.sh 2>/dev/null || true
+source "\$NVM_DIR/nvm.sh" 2>/dev/null || true
 export PATH=\$PATH:/home/ubuntu/.local/share/pnpm:/usr/local/bin
 
 # SSM gives the remote script no TTY. When pnpm decides it needs to remove node_modules
@@ -156,7 +172,6 @@ export CI=true
 set -eo pipefail
 cd /home/ubuntu/prime-tracker
 
-git config --global --add safe.directory /home/ubuntu/prime-tracker 2>/dev/null || true
 git fetch --depth=1 origin ${GIT_SHA}
 git reset --hard FETCH_HEAD
 echo "=== Checked out: \$(git log --oneline -1) ==="
@@ -172,8 +187,13 @@ pnpm install --frozen-lockfile 2>&1 | tail -5
 pnpm --filter @prime-tracker/shared build 2>&1 | tail -3
 echo "=== shared rebuilt ==="
 
-aws s3 cp s3://${DEPLOY_BUCKET}/deploy/api-dist.tar.gz /tmp/api-dist.tar.gz --region ${AWS_REGION}
-tar -xzf /tmp/api-dist.tar.gz -C apps/api/
+# A fresh temp file: a /tmp/api-dist.tar.gz left by an earlier root deploy is root's, and
+# /tmp's sticky bit stops ubuntu replacing it. --no-same-owner keeps the archive's owner
+# (the Mac's uid 501) out of the tree, whoever runs this.
+ARCHIVE=\$(mktemp)
+trap 'rm -f "\$ARCHIVE"' EXIT
+aws s3 cp s3://${DEPLOY_BUCKET}/deploy/api-dist.tar.gz "\$ARCHIVE" --region ${AWS_REGION}
+tar -xzf "\$ARCHIVE" --no-same-owner -C apps/api/
 echo "=== Dist extracted ==="
 
 # The same script the CI deploy runs, so the two can never write different files. It
@@ -205,15 +225,13 @@ pnpm --filter @prime-tracker/api exec prisma generate 2>&1 | tail -8
 # \`process.env.NODE_ENV\` before Nest boots, in a library or a future edit, should see the
 # truth. \`--update-env\` makes pm2 re-read it on a restart rather than reusing the
 # environment the process was first started with.
-if sudo -u ubuntu HOME=/home/ubuntu pm2 describe prime-api >/dev/null 2>&1; then
-  sudo -u ubuntu HOME=/home/ubuntu NODE_ENV=production pm2 restart prime-api --update-env 2>&1
+if pm2 describe prime-api >/dev/null 2>&1; then
+  NODE_ENV=production pm2 restart prime-api --update-env 2>&1
 else
   echo "=== prime-api not registered yet — first-time pm2 start ==="
-  sudo -u ubuntu HOME=/home/ubuntu NODE_ENV=production pm2 start dist/main.js --name prime-api \\
+  NODE_ENV=production pm2 start dist/main.js --name prime-api \\
     --cwd /home/ubuntu/prime-tracker/apps/api --update-env 2>&1
-  sudo -u ubuntu HOME=/home/ubuntu pm2 save 2>&1 | tail -1
-  # survive a reboot
-  env PATH=\$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu >/dev/null 2>&1 || true
+  pm2 save 2>&1 | tail -1
 fi
 
 # Nest boots in well over 6s on a t3.micro once the module graph and Prisma client
@@ -228,6 +246,14 @@ done
 echo "=== API_FAILED ==="
 pm2 logs prime-api --lines 20 --nostream
 exit 1
+AS_UBUNTU
+chmod 644 "\$STEP"
+sudo -u ubuntu -H bash "\$STEP" < /dev/null
+
+# Survive a reboot. Only root can install pm2's systemd unit; once it exists this is a no-op.
+if [ ! -f /etc/systemd/system/pm2-ubuntu.service ]; then
+  env PATH=\$PATH:/usr/local/bin:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu >/dev/null 2>&1 || true
+fi
 ENDSCRIPT
 
   ssm_script "prime-deploy-api" "$(cat "$_tmpscript")"
