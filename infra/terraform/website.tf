@@ -197,6 +197,9 @@ locals {
   # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
   # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
   # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
+  # - www.instagram.com in frame-src: the About section's video can be an Instagram
+  #   reel or post, embedded as `https://www.instagram.com/<reel|p|tv>/<id>/embed/`
+  #   (apps/web/src/lib/video.js, About.jsx). Answers 200 there, no redirect.
   # - www.google.com in frame-src: the Google Maps embeds on /contact and each
   #   property page (`https://www.google.com/maps?q=…&output=embed`, which redirects
   #   to www.google.com/maps/embed — same host, so maps.google.com isn't needed).
@@ -225,7 +228,7 @@ locals {
     "font-src 'self' data:",
     "connect-src 'self' blob: https://cdn.jsdelivr.net ${join(" ", local.website_analytics_hosts)}",
     "media-src 'self' blob:",
-    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com",
+    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.instagram.com https://www.google.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
