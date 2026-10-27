@@ -435,7 +435,8 @@ export class SaleImportService {
 
       if (r.closingDate) {
         const closingDate = new Date(r.closingDate);
-        if (closingDate > today) errors.push('Closing Date is in the future — this sale has not closed yet.');
+        // Advisory only: a future-dated sale is saved with the date as given.
+        if (closingDate > today) warnings.push('Closing Date is in the future — this sale has not closed yet. It will be saved with that date.');
       }
 
       const payments: { label: string; amount: number; paidAt?: string }[] = [];

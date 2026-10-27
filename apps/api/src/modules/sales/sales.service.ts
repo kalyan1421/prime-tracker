@@ -1091,17 +1091,10 @@ export class SalesService {
     }
 
     const closingDate = startOfUtcDay(new Date(input.closingDate));
-    const today = startOfUtcDay(new Date());
     if (Number.isNaN(closingDate.getTime())) {
       throw new BadRequestException('Closing date must be a valid date');
     }
-    // The whole point is that this is history — exactly backfillTenancy's guard.
-    if (closingDate > today) {
-      throw new BadRequestException(
-        'This sale has not closed yet. Add it as a normal sale instead — backfill is for '
-        + 'deals that already closed.',
-      );
-    }
+    // A future closing date is allowed and saved as given — the importer only warns.
     const contractDate = input.contractDate ? startOfUtcDay(new Date(input.contractDate)) : null;
 
     let projectId: string;
