@@ -117,3 +117,15 @@ body {
 .recharts-legend-item-text {
   color: var(--color-gray-700, #364153) !important;
 }
+
+/* ── Select / dropdown text is never cut off ────────────────────────────────
+   HeroUI sizes a Select's popover to its trigger and truncates both the option
+   title and the selected value. In a narrow field (a table cell, a bulk-fix bar)
+   that turns "RRC Phase 2 - Building 7" into "RRC Phase 2 - Bu…" — and every
+   building looks identical. The popover now grows to fit its longest option (capped
+   to the viewport) and option text wraps instead of clipping. The selected value in
+   the trigger wraps too, so what was picked is always fully readable. */
+[data-slot="listbox"] { min-width: max-content; max-width: min(28rem, calc(100vw - 2rem)); }
+[data-slot="listbox"] [data-slot="title"],
+[data-slot="listbox"] [data-slot="description"] { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+[data-slot="trigger"] [data-slot="value"] { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.25; }
