@@ -120,6 +120,27 @@ describe('reportIssues', () => {
     });
   });
 
+  it('does not count tracker buildings with no units', () => {
+    expect(
+      reportIssues({
+        report: {
+          unmatchedTrackerBuildings: [{ name: 'Building 5', units: 0, rows: [] }],
+          counts: { removed: 0, unmatchedTrackerBuildings: 1, unmatchedUnits: 0, untouched: 1 },
+          refusals: [],
+          refused: null,
+        },
+      }),
+    ).toEqual({});
+    expect(
+      reportIssues({
+        report: {
+          unmatchedTrackerBuildings: [{ name: 'Building 5', units: 0 }, { name: 'Building 11', units: 4 }],
+          counts: { unmatchedTrackerBuildings: 2, unmatchedUnits: 4 },
+        },
+      }),
+    ).toEqual({ unmatchedTrackerBuildings: 1, unmatchedUnits: 4 });
+  });
+
   it('flags a dry run that would be refused', () => {
     expect(reportIssues({ dryRun: true, report: { counts: {}, refusals: ['would empty Building 9'], refused: 'would empty Building 9; resend with force to apply' } })).toEqual({
       refusals: 1,

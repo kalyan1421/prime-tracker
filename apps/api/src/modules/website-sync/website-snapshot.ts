@@ -13,7 +13,9 @@ import { UnitStatus } from '@prisma/client';
  *
  * Version 2 only adds fields. Asking rent and asking price are list prices for a
  * unit on the market, sent only while it is on the market, so neither can be
- * read as what a tenant or buyer agreed to pay.
+ * read as what a tenant or buyer agreed to pay. The website accepts both and, for
+ * now, stores neither: it serves `detail` publicly as stored, so they wait for
+ * the client's approval and the website's phase 2 filtering of tracker data.
  */
 export interface WebsiteSnapshotUnit {
   id: string;

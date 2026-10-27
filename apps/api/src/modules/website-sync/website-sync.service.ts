@@ -30,8 +30,9 @@ export interface PushResult {
  * tracker buildings with no website building (and their units), website
  * buildings whose stored link matched nothing, units whose status the website
  * does not know, and anything it refused or was forced past. Null when the body
- * is not a report. Website buildings the tracker simply has no building for are
- * left out — they are expected, and would otherwise warn on every hourly push.
+ * is not a report. Left out, because they are expected and would otherwise warn
+ * on every hourly push: website buildings the tracker simply has no building
+ * for, and tracker buildings with no units, which can lose nothing.
  *
  * Reads both report shapes, so it keeps working against a website deployed
  * before `counts` existed.
@@ -44,9 +45,13 @@ export function reportIssues(body: unknown): Record<string, number> | null {
     const n = Number(counts[key] ?? (Array.isArray(fallback) ? fallback.length : fallback));
     return Number.isFinite(n) ? n : 0;
   };
+  // The website's own count includes buildings with no units; its list says
+  // how many each has. The older report lists bare names, so all of them count.
+  const unmatched: unknown[] = Array.isArray(report.unmatchedTrackerBuildings) ? report.unmatchedTrackerBuildings : [];
+  const withUnits = unmatched.filter((b) => typeof b !== 'object' || b === null || Number((b as { units?: unknown }).units) > 0);
   const issues = {
     removed: count('removed', report.removedRows ?? 0),
-    unmatchedTrackerBuildings: count('unmatchedTrackerBuildings', report.unmatchedTrackerBuildings ?? []),
+    unmatchedTrackerBuildings: unmatched.length ? withUnits.length : count('unmatchedTrackerBuildings', 0),
     unmatchedUnits: count('unmatchedUnits', 0),
     staleLinks: count('staleLinks', report.staleLinks ?? []),
     unknownStatuses: count('unknownStatuses', 0),
