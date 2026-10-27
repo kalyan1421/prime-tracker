@@ -1774,12 +1774,12 @@ describe('SalesService.backfillSale', () => {
     mockLeases.endTenancyWithin.mockResolvedValue({});
   });
 
-  it('refuses a closing date in the future', async () => {
+  it('saves a future closing date as given', async () => {
     const future = new Date();
     future.setFullYear(future.getFullYear() + 1);
-    await expect(
-      service.backfillSale({ ...PAST_SALE, closingDate: future.toISOString() } as any, 'user-1'),
-    ).rejects.toThrow(/has not closed yet/);
+    await service.backfillSale({ ...PAST_SALE, closingDate: future.toISOString() } as any, 'user-1');
+    const data = mockPrisma.sale.create.mock.calls[0][0].data;
+    expect(data.closingDate.toISOString().slice(0, 10)).toBe(future.toISOString().slice(0, 10));
   });
 
   // Unlike a lease, a sale carries no date range, so there is no exclusion constraint in

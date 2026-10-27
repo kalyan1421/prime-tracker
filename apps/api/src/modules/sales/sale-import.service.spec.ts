@@ -113,15 +113,15 @@ describe('SaleImportService.previewImport', () => {
     expect(preview.sales[0].errors[0]).not.toMatch(/was not found in this project/);
   });
 
-  it('refuses a future closing date', async () => {
+  it('warns on, but does not block, a future closing date', async () => {
     const future = new Date();
     future.setFullYear(future.getFullYear() + 1);
     const file = await buildFile({
       sales: [{ 'Unit Number': '300', Buyer: 'Buyer', 'Purchase Price': 1000, 'Closing Date': future }],
     });
     const preview = await service.previewImport(file, 'p1');
-    expect(preview.sales[0].status).toBe('error');
-    expect(preview.sales[0].errors.join(' ')).toMatch(/has not closed yet/);
+    expect(preview.sales[0].errors.join(' ')).not.toMatch(/has not closed yet/);
+    expect(preview.sales[0].warnings.join(' ')).toMatch(/has not closed yet/);
   });
 
   it('requires Buyer, Purchase Price, and Closing Date', async () => {
@@ -216,8 +216,8 @@ describe('SaleImportService.previewImport — per-row corrections (R11)', () => 
     });
     const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
     const preview = await service.previewImport(file, 'p1', { 2: { closingDate: future } });
-    expect(preview.sales[0].status).toBe('error');
-    expect(preview.sales[0].errors.join(' ')).toContain('has not closed yet');
+    expect(preview.sales[0].errors.join(' ')).not.toContain('has not closed yet');
+    expect(preview.sales[0].warnings.join(' ')).toContain('has not closed yet');
   });
 
   it('reports an unparseable typed-in value instead of treating it as blank', async () => {
