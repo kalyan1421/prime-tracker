@@ -26,6 +26,41 @@ export interface PushResult {
 }
 
 /**
+ * The parts of the website's merge report a person should see: rows removed,
+ * tracker buildings with no website building (and their units), website
+ * buildings whose stored link matched nothing, units whose status the website
+ * does not know, and anything it refused or was forced past. Null when the body
+ * is not a report. Left out, because they are expected and would otherwise warn
+ * on every hourly push: website buildings the tracker simply has no building
+ * for, and tracker buildings with no units, which can lose nothing.
+ *
+ * Reads both report shapes, so it keeps working against a website deployed
+ * before `counts` existed.
+ */
+export function reportIssues(body: unknown): Record<string, number> | null {
+  const report = (body as { report?: Record<string, any> } | null)?.report;
+  if (!report || typeof report !== 'object') return null;
+  const counts = (report.counts ?? {}) as Record<string, unknown>;
+  const count = (key: string, fallback: unknown) => {
+    const n = Number(counts[key] ?? (Array.isArray(fallback) ? fallback.length : fallback));
+    return Number.isFinite(n) ? n : 0;
+  };
+  // The website's own count includes buildings with no units; its list says
+  // how many each has. The older report lists bare names, so all of them count.
+  const unmatched: unknown[] = Array.isArray(report.unmatchedTrackerBuildings) ? report.unmatchedTrackerBuildings : [];
+  const withUnits = unmatched.filter((b) => typeof b !== 'object' || b === null || Number((b as { units?: unknown }).units) > 0);
+  const issues = {
+    removed: count('removed', report.removedRows ?? 0),
+    unmatchedTrackerBuildings: unmatched.length ? withUnits.length : count('unmatchedTrackerBuildings', 0),
+    unmatchedUnits: count('unmatchedUnits', 0),
+    staleLinks: count('staleLinks', report.staleLinks ?? []),
+    unknownStatuses: count('unknownStatuses', 0),
+    refusals: Array.isArray(report.refusals) ? report.refusals.length : report.refused ? 1 : 0,
+  };
+  return Object.fromEntries(Object.entries(issues).filter(([, n]) => n > 0));
+}
+
+/**
  * Mirrors published projects' unit inventory onto the public website.
  *
  * Pushes rather than letting the website read: the website stays up when the tracker
@@ -76,6 +111,8 @@ export class WebsiteSyncService {
           select: {
             id: true,
             name: true,
+            totalSqft: true,
+            stories: true,
             units: {
               // A unit merged into another is soft-deleted with it; the survivor carries on.
               where: { deletedAt: null, mergedIntoId: null },
@@ -84,6 +121,13 @@ export class WebsiteSyncService {
                 unitNumber: true,
                 status: true,
                 sqft: true,
+                unitType: true,
+                // Sent only while the unit is on the market — see buildSnapshot().
+                askingRent: true,
+                askingPrice: true,
+                availableSince: true,
+                // The archived units a combine was made from, and theirs in turn.
+                mergedFrom: { select: { id: true, mergedFrom: { select: { id: true } } } },
                 leases: {
                   where: { deletedAt: null, status: 'ACTIVE', terminationDate: null },
                   orderBy: { leaseStart: 'desc' },
@@ -139,7 +183,29 @@ export class WebsiteSyncService {
     } catch {
       // Not JSON (a proxy's error page, say) — keep the text for the log.
     }
-    return { status: res.status, ok: res.ok, body: parsed };
+    const result = { status: res.status, ok: res.ok, body: parsed };
+    this.warnOnIssues(snapshot.project.websiteSlug, result, options);
+    return result;
+  }
+
+  /**
+   * A 200 is not "nothing to see": the website applies a push and reports rows it
+   * removed, buildings it could not match and statuses it does not know. Those go
+   * to the log as a warning, with the counts, on every push that has any — the
+   * cron, a manual push and a dry run alike. A refusal (409) is logged by the
+   * caller.
+   */
+  private warnOnIssues(websiteSlug: string, result: PushResult, options: PushOptions) {
+    if (!result.ok) return;
+    const issues = reportIssues(result.body);
+    if (!issues || !Object.keys(issues).length) return;
+    const mode = options.dryRun || (result.body as { dryRun?: boolean })?.dryRun ? 'dry run' : 'push';
+    const refused = (result.body as { report?: { refused?: string | null } })?.report?.refused;
+    this.logger.warn(
+      `Website ${mode} for ${websiteSlug} reported ${Object.entries(issues)
+        .map(([key, n]) => `${key}=${n}`)
+        .join(', ')}${refused ? ` — would refuse: ${refused}` : ''}`,
+    );
   }
 
   async pushProject(projectId: string, options: PushOptions = {}): Promise<PushResult> {

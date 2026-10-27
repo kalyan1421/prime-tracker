@@ -1,4 +1,4 @@
-import { FULL_PUSH_INTERVAL_MS, WebsiteSyncService } from './website-sync.service';
+import { FULL_PUSH_INTERVAL_MS, WebsiteSyncService, reportIssues } from './website-sync.service';
 
 /**
  * The cron's push decisions: push what changed, push everything hourly, stop
@@ -70,11 +70,85 @@ describe('WebsiteSyncService.syncPublished', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('warns with the counts when an applied push reports removed or unmatched items', async () => {
+    const { service } = setup();
+    const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+    global.fetch = respond(200, {
+      property: 'centro-plaza',
+      applied: true,
+      dryRun: false,
+      report: {
+        removedRows: 2,
+        unmatchedTrackerBuildings: [{ name: 'Building 11', units: 4 }],
+        counts: { removed: 2, unmatchedTrackerBuildings: 1, unmatchedUnits: 4, staleLinks: 0, unknownStatuses: 1, untouched: 1 },
+        refusals: ['tracker buildings with no website building: Building 11 (4 units)'],
+        refused: null,
+      },
+    });
+    await service.syncPublished(FULL_PUSH_INTERVAL_MS);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toBe(
+      'Website push for centro-plaza reported removed=2, unmatchedTrackerBuildings=1, unmatchedUnits=4, unknownStatuses=1, refusals=1',
+    );
+  });
+
+  it('stays quiet on a clean report', async () => {
+    const { service } = setup();
+    const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+    global.fetch = respond(200, {
+      applied: true,
+      report: { removedRows: 0, counts: { removed: 0, untouched: 1, added: 3 }, refusals: [], refused: null },
+    });
+    await service.syncPublished(FULL_PUSH_INTERVAL_MS);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('does not resend a refused snapshot every tick', async () => {
     const { service } = setup();
     global.fetch = respond(409, { report: { refused: 'would remove 19 of 20 unit rows' } });
     await service.syncPublished(FULL_PUSH_INTERVAL_MS);
     await service.syncPublished(FULL_PUSH_INTERVAL_MS + 5 * 60_000);
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reportIssues', () => {
+  it('reads the report from before `counts` existed', () => {
+    expect(reportIssues({ report: { removedRows: 3, unmatchedTrackerBuildings: ['Building 5'], untouched: ['Building 10'], refused: null } })).toEqual({
+      removed: 3,
+      unmatchedTrackerBuildings: 1,
+    });
+  });
+
+  it('does not count tracker buildings with no units', () => {
+    expect(
+      reportIssues({
+        report: {
+          unmatchedTrackerBuildings: [{ name: 'Building 5', units: 0, rows: [] }],
+          counts: { removed: 0, unmatchedTrackerBuildings: 1, unmatchedUnits: 0, untouched: 1 },
+          refusals: [],
+          refused: null,
+        },
+      }),
+    ).toEqual({});
+    expect(
+      reportIssues({
+        report: {
+          unmatchedTrackerBuildings: [{ name: 'Building 5', units: 0 }, { name: 'Building 11', units: 4 }],
+          counts: { unmatchedTrackerBuildings: 2, unmatchedUnits: 4 },
+        },
+      }),
+    ).toEqual({ unmatchedTrackerBuildings: 1, unmatchedUnits: 4 });
+  });
+
+  it('flags a dry run that would be refused', () => {
+    expect(reportIssues({ dryRun: true, report: { counts: {}, refusals: ['would empty Building 9'], refused: 'would empty Building 9; resend with force to apply' } })).toEqual({
+      refusals: 1,
+    });
+  });
+
+  it('is null for a body that is not a report', () => {
+    expect(reportIssues('<html>Bad gateway</html>')).toBeNull();
+    expect(reportIssues({ message: 'Property "x" already mirrors tracker project y' })).toBeNull();
   });
 });
