@@ -3515,6 +3515,24 @@ export function useApplyPaymentTemplate() {
   });
 }
 
+export function useSeedEqualPayments() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId, count }: { saleId: string; count: number }) =>
+      api.post(`/sales/${saleId}/payments/equal`, { count }).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
+  });
+}
+
+export function useClearSalePayments() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ saleId }: { saleId: string }) =>
+      api.delete(`/sales/${saleId}/payments`).then((r) => r.data),
+    onSuccess: (_d, v) => invalidatePayments(qc, v.saleId),
+  });
+}
+
 export function useUpdateSalePayment() {
   const qc = useQueryClient();
   return useMutation({

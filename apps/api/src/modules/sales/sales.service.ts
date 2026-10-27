@@ -228,13 +228,18 @@ export class SalesService {
 
     // Sales velocity: avg days from creation to close for CLOSED sales
     const closed = sales.filter((s) => s.status === 'CLOSED' && s.closingDate);
-    const avgDaysToClose = closed.length > 0
+    // Velocity only means something for deals that ran through the app: a backfilled sale's
+    // createdAt is the day somebody typed it in, which put closing dates before creation
+    // and produced an "Avg Days to Close" of -1077d.
+    const timed = closed.filter((s) => !(s as any).isHistorical
+      && new Date(s.closingDate!).getTime() >= new Date(s.createdAt).getTime());
+    const avgDaysToClose = timed.length > 0
       ? Math.round(
-          closed.reduce((sum, s) => {
+          timed.reduce((sum, s) => {
             const days = (new Date(s.closingDate!).getTime() - new Date(s.createdAt).getTime())
               / (1000 * 60 * 60 * 24);
             return sum + days;
-          }, 0) / closed.length,
+          }, 0) / timed.length,
         )
       : null;
 
@@ -356,7 +361,11 @@ export class SalesService {
     return { combinedDealRef: ref, sales: created };
   }
 
-  async create(data: Prisma.SaleUncheckedCreateInput, createdById?: string) {
+  async create(
+    data: Prisma.SaleUncheckedCreateInput,
+    createdById?: string,
+    opts?: { skipClosedPaperwork?: boolean },
+  ) {
     // Sprint 1: Sales can attach to either a Unit (typical) or a Building (e.g.
     // Leander Bldg 1 sold as one asset). Exactly one of (unitId, buildingId)
     // must be set, and the chosen asset must live under data.projectId.
@@ -411,7 +420,7 @@ export class SalesService {
       // nothing to attach paperwork TO until the sale is created, so a closed-on-arrival
       // sale with documents outstanding is not a thing that can exist.
       // 'PROSPECT' is the column default, so it is the rung every new sale starts on.
-      const required = requiredDocsForTransition(SALE_STAGE_ORDER[0], 'CLOSED');
+      const required = opts?.skipClosedPaperwork ? [] : requiredDocsForTransition(SALE_STAGE_ORDER[0], 'CLOSED');
       if (required.length > 0) {
         const names = required.map(docCategoryLabel);
         const list = names.length === 1
@@ -553,6 +562,7 @@ export class SalesService {
      * CANCELLED; omitted entirely means DECIDE_LATER, which is the client-locked default.
      */
     cancellation?: SaleCancellationInput,
+    opts?: { skipClosedPaperwork?: boolean },
   ) {
     const sale = await this.findById(id);
     for (const field of ['loiDate', 'contractDate', 'closingDate'] as const) {
@@ -583,7 +593,10 @@ export class SalesService {
     // request actually changes the status; an edit that leaves the stage alone, a move
     // backwards, and a cancellation are all ungated (see requiredDocsForTransition).
     if (typeof data.status === 'string' && data.status !== sale.status) {
-      await this.assertStageDocumentsAttached(sale, data.status);
+      // "Close without paperwork" waives the documents for the move INTO Closed only.
+      if (!(opts?.skipClosedPaperwork && data.status === 'CLOSED')) {
+        await this.assertStageDocumentsAttached(sale, data.status);
+      }
     }
 
     // Discount-approval gate: COMMITTING a sale with an over-threshold discount requires

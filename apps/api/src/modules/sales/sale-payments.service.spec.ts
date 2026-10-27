@@ -5,6 +5,7 @@ import { SalePaymentsService } from './sale-payments.service';
 const mockPrisma: any = {
   sale: { findFirst: jest.fn() },
   salePayment: {
+    deleteMany: jest.fn(),
     findMany: jest.fn(),
     findFirst: jest.fn(),
     findUnique: jest.fn(),
@@ -33,6 +34,48 @@ describe('SalePaymentsService', () => {
     service = makeService();
   });
 
+  describe('seedEqualInstallments', () => {
+    beforeEach(() => {
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 1000 });
+      mockPrisma.salePayment.count.mockResolvedValue(0);
+      mockPrisma.salePayment.create.mockImplementation((a: any) => Promise.resolve(a.data));
+    });
+
+    it('splits the price into N undated parts that sum to it exactly', async () => {
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 100 });
+      const rows: any[] = await service.seedEqualInstallments('s1', 3);
+      expect(rows.map((r) => r.amount)).toEqual([33.33, 33.33, 33.34]);
+      expect(rows.reduce((s, r) => s + r.amount, 0)).toBeCloseTo(100, 2);
+      expect(rows.every((r) => r.trigger === 'FIXED_DATE' && r.dueDate === undefined)).toBe(true);
+    });
+
+    it('refuses a count outside 1-60, a missing price, and an existing schedule', async () => {
+      await expect(service.seedEqualInstallments('s1', 0)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.seedEqualInstallments('s1', 61)).rejects.toBeInstanceOf(BadRequestException);
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: null });
+      await expect(service.seedEqualInstallments('s1', 2)).rejects.toBeInstanceOf(BadRequestException);
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 1000 });
+      mockPrisma.salePayment.count.mockResolvedValue(2);
+      await expect(service.seedEqualInstallments('s1', 2)).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('clearSchedule', () => {
+    beforeEach(() => mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 1000 }));
+
+    it('removes every installment when nothing has been collected', async () => {
+      mockPrisma.salePayment.count.mockResolvedValue(0);
+      mockPrisma.salePayment.deleteMany.mockResolvedValue({ count: 3 });
+      await expect(service.clearSchedule('s1')).resolves.toEqual({ removed: 3 });
+    });
+
+    it('refuses once money is logged against any installment', async () => {
+      mockPrisma.salePayment.count.mockResolvedValue(1);
+      await expect(service.clearSchedule('s1')).rejects.toThrow(/money logged/);
+      expect(mockPrisma.salePayment.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('addPayment', () => {
     it('throws when the sale does not exist', async () => {
       mockPrisma.sale.findFirst.mockResolvedValue(null);
@@ -48,11 +91,14 @@ describe('SalePaymentsService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('requires a dueDate for FIXED_DATE installments', async () => {
+    it('accepts a FIXED_DATE installment with no dueDate (stored undated)', async () => {
       mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 1000 });
-      await expect(
-        service.addPayment('s1', { label: 'Slab', amount: 100, trigger: 'FIXED_DATE' }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      mockPrisma.salePayment.findFirst.mockResolvedValue(null);
+      mockPrisma.salePayment.create.mockResolvedValue({ id: 'p1' });
+      await service.addPayment('s1', { label: 'Slab', amount: 100, trigger: 'FIXED_DATE' });
+      expect(mockPrisma.salePayment.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ dueDate: null }) }),
+      );
     });
 
     it('computes amount from percentOfPrice when no explicit amount is given', async () => {

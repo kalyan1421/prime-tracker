@@ -450,6 +450,23 @@ describe('SalesService — stage document gate (S6/D1)', () => {
     expect(mockPrisma.sale.updateMany).not.toHaveBeenCalled();
   });
 
+  it('closes WITHOUT the paperwork when the user confirmed (advisory gate, 2026-10-27)', async () => {
+    saleIn('UNDER_CONTRACT');
+    attached(); // nothing on file
+
+    await service.update('s1', { status: 'CLOSED' } as any, undefined, undefined, { skipClosedPaperwork: true });
+    expect(mockPrisma.sale.updateMany).toHaveBeenCalled();
+  });
+
+  it('the paperwork waiver covers Closed only — Under Contract still needs its Booking Agreement', async () => {
+    saleIn('LOI_SIGNED');
+    attached();
+
+    await expect(
+      service.update('s1', { status: 'UNDER_CONTRACT' } as any, undefined, undefined, { skipClosedPaperwork: true }),
+    ).rejects.toThrow(/cannot move to Under Contract/);
+  });
+
   it('allows Closed once all three closing documents are attached', async () => {
     saleIn('UNDER_CONTRACT');
     attached('DEED', 'NOC', 'POSSESSION_CERTIFICATE');
@@ -573,6 +590,15 @@ describe('SalesService.create — a sale born CLOSED (2026-08-25)', () => {
       service.create({ projectId: 'pr1', unitId: 'u1', buyer: 'B', salePrice: 100, status: 'CLOSED' } as any),
     ).rejects.toThrow(/cannot be created already closed: LOI, Booking Agreement, Deed, NOC and Possession Certificate/);
     expect(mockPrisma.sale.create).not.toHaveBeenCalled();
+  });
+
+  it('can be created already closed when the paperwork is waived', async () => {
+    const created: any = await service.create(
+      { projectId: 'pr1', unitId: 'u1', buyer: 'B', salePrice: 100, status: 'CLOSED' } as any,
+      undefined,
+      { skipClosedPaperwork: true },
+    );
+    expect(created.status).toBe('CLOSED');
   });
 
   it('says how to actually get there', async () => {

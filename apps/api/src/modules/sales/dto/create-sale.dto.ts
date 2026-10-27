@@ -1,10 +1,41 @@
 import {
-  IsString, IsNotEmpty, IsOptional,
+  IsArray, IsBoolean, IsString, IsNotEmpty, IsOptional,
   IsNumber, IsPositive, IsDateString, MaxLength, IsEnum, Min, Max,
 } from 'class-validator';
+import { ArrayMaxSize, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { LostReason, SaleBuyerType } from '@prisma/client';
 
+export class CreateSaleInstallmentDto {
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  label!: string;
+
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @IsPositive()
+  amount!: number;
+
+  @IsOptional() @IsDateString()
+  dueDate?: string;
+}
+
 export class CreateSaleDto {
+  /**
+   * The payment schedule entered with the sale: label, amount and an optional due date per
+   * installment. Not a column — the controller writes them as SalePayment rows after the
+   * sale exists, and refuses up front if they do not add up to the price.
+   */
+  @IsOptional() @IsArray() @ArrayMaxSize(60) @ValidateNested({ each: true }) @Type(() => CreateSaleInstallmentDto)
+  payments?: CreateSaleInstallmentDto[];
+
+  /**
+   * Close without the closing paperwork on file (client decision 2026-10-27: the Closed
+   * paperwork is advisory, not a blocker). Honoured ONLY when the target stage is CLOSED —
+   * LOI Signed and Under Contract still require their own documents. The request body is
+   * recorded by the audit interceptor, so the override is on the record. Not a column on
+   * Sale; the controller strips it before Prisma sees it.
+   */
+  @IsOptional() @IsBoolean()
+  closeWithoutPaperwork?: boolean;
+
   @IsString() @IsNotEmpty()
   projectId!: string;
 

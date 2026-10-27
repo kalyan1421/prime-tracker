@@ -3,6 +3,7 @@ import { SaleImportService, normalizeSaleOverrides } from './sale-import.service
 
 const mockPrisma: any = {
   unit: { findMany: jest.fn() },
+  building: { findMany: jest.fn().mockResolvedValue([]) },
   broker: { findMany: jest.fn() },
   sale: { findMany: jest.fn() },
 };
@@ -426,6 +427,48 @@ describe('SaleImportService.previewImport — already-imported rows', () => {
     'Unit Number': '300', Buyer: 'Reig Venture LLC', 'Purchase Price': 1908450,
     'Closing Date': new Date('2024-01-07'),
   };
+
+  describe('whole-building rows ("Entire Building")', () => {
+    const WB = { ...ROW, 'Unit Number': 'Entire Building', Building: 'Building 7', Buyer: 'Texas Hazelwood OP 2 LLC' };
+
+    beforeEach(() => {
+      mockPrisma.building.findMany.mockResolvedValue([{ id: 'b7', name: 'Building 7' }]);
+    });
+
+    it('resolves to the building, with no unit and no unit-not-found error', async () => {
+      const preview = await service.previewImport(await buildFile({ sales: [WB] }), 'p1');
+      expect(preview.sales[0].status).toBe('ready');
+      expect(preview.sales[0].data.buildingId).toBe('b7');
+      expect(preview.sales[0].data.unitId).toBeNull();
+    });
+
+    it('errors, rather than guessing, when no building is named', async () => {
+      const preview = await service.previewImport(await buildFile({ sales: [{ ...WB, Building: undefined }] }), 'p1');
+      expect(preview.sales[0].status).toBe('error');
+      expect(preview.sales[0].errors.join(' ')).toMatch(/name the building/i);
+    });
+
+    it('marks a building sale already stored as duplicate', async () => {
+      mockPrisma.sale.findMany.mockResolvedValue([
+        { unitId: null, buildingId: 'b7', buyer: 'texas hazelwood op 2 llc', salePrice: 1908450, closingDate: new Date('2024-01-07') },
+      ]);
+      const preview = await service.previewImport(await buildFile({ sales: [WB] }), 'p1');
+      expect(preview.sales[0].status).toBe('duplicate');
+    });
+
+    it('commits through backfillSale with the buildingId and no unitId', async () => {
+      mockSales.findDuplicateHistoricalSale.mockResolvedValue(null);
+      mockSales.backfillSale.mockResolvedValue({ id: 'sale1' });
+      const result = await service.commitImport(
+        [{ unitId: null, buildingId: 'b7', buyer: 'A', salePrice: 5, closingDate: '2022-01-01' } as any],
+        'user-1',
+      );
+      expect(result.imported).toBe(1);
+      expect(mockSales.backfillSale).toHaveBeenCalledWith(
+        expect.objectContaining({ buildingId: 'b7', unitId: undefined }), 'user-1',
+      );
+    });
+  });
 
   it('marks a sale already on the unit as duplicate, not ready', async () => {
     mockPrisma.sale.findMany.mockResolvedValue([
