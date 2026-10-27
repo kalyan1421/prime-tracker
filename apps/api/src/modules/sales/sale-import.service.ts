@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { apportion } from '../leases/rent-apportionment';
 import { SalesService, BackfillSaleInput } from './sales.service';
 import {
-  addColumnarSheet, assertHeaderMatches, cellText, cellDateIso, cellNumber, resolveUnit, resolveBroker, joinKey,
+  addColumnarSheet, assertHeaderMatches, cellText, cellDateIso, cellNumber, resolveUnit, resolveBroker, joinKey, looksLikeWholeBuildingRef, resolveBuilding,
   parseMultiUnitRef,
 } from '../../common/utils/xlsx-import';
 
@@ -148,7 +148,7 @@ export interface SalePreviewRow {
    * rather than from the file — the UI marks them so nobody mistakes a hand-entered
    * closing date for one the spreadsheet actually contained. */
   edited: SaleOverrideField[];
-  data: BackfillSaleInput & { unitId: string | null };
+  data: BackfillSaleInput & { unitId: string | null; buildingId?: string | null };
 }
 
 export interface OrphanedCommissionRow {
@@ -366,6 +366,10 @@ export class SaleImportService {
     // "201+203") just as often as they do a letting. Runs AFTER the units are loaded so a
     // unit whose real name contains a separator is never split, and after the overrides so
     // a corrected Unit Number is what gets expanded.
+    const buildings = await this.prisma.building.findMany({
+      where: { projectId, deletedAt: null },
+      select: { id: true, name: true },
+    });
     raw = expandMultiUnitSaleRows(raw, new Set(units.map((u) => u.unitNumber.trim().toLowerCase())), units);
 
     const brokers = await this.prisma.broker.findMany({
@@ -381,17 +385,20 @@ export class SaleImportService {
     const existingSales = await this.prisma.sale.findMany({
       where: {
         deletedAt: null,
-        unitId: { not: null },
-        unit: { deletedAt: null, building: { projectId, deletedAt: null } },
+        OR: [
+          { unitId: { not: null }, unit: { deletedAt: null, building: { projectId, deletedAt: null } } },
+          { buildingId: { not: null }, building: { deletedAt: null, projectId } },
+        ],
       },
-      select: { unitId: true, buyer: true, salePrice: true, closingDate: true },
+      select: { unitId: true, buildingId: true, buyer: true, salePrice: true, closingDate: true },
     });
     const existingByUnit = new Map<string, typeof existingSales>();
     for (const s of existingSales) {
-      if (!s.unitId) continue;
-      const list = existingByUnit.get(s.unitId) ?? [];
+      const target = s.unitId ?? s.buildingId;
+      if (!target) continue;
+      const list = existingByUnit.get(target) ?? [];
       list.push(s);
-      existingByUnit.set(s.unitId, list);
+      existingByUnit.set(target, list);
     }
 
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
@@ -410,9 +417,17 @@ export class SaleImportService {
       if (r.purchasePrice == null) errors.push('Purchase Price is required.');
       if (!r.closingDate) errors.push('Closing Date is required and must be a valid date.');
 
-      const unitResolved = resolveUnit(units, r.unitNumber, r.building);
+      // A whole-building row resolves to a Building, never a Unit — creating a unit called
+      // "Entire Building" would be fake inventory. The sale attaches to the building itself.
+      const wholeBuilding = looksLikeWholeBuildingRef(r.unitNumber);
+      const buildingResolved = wholeBuilding ? resolveBuilding(buildings, r.unitNumber, r.building) : null;
+      if (buildingResolved?.error) errors.push(buildingResolved.error);
+      const unitResolved = wholeBuilding ? { unitId: null } as { unitId: string | null; error?: string } : resolveUnit(units, r.unitNumber, r.building);
       if (unitResolved.error) errors.push(unitResolved.error);
       const unitId = unitResolved.unitId;
+      const buildingId = buildingResolved?.buildingId ?? null;
+      // One identity for duplicate checks, whichever asset the sale sits on.
+      const targetId = unitId ?? buildingId;
 
       const brokerResolved = resolveBroker(brokers, r.brokerName);
       if (brokerResolved.error) errors.push(brokerResolved.error);
@@ -432,8 +447,8 @@ export class SaleImportService {
       // the write. Matching the two keeps the preview honest: what it calls a duplicate is
       // exactly what the commit would decline, not a near-miss heuristic of its own.
       let duplicateOfExisting = false;
-      if (unitId && r.closingDate && r.buyer) {
-        const key = `${unitId}|${r.buyer.trim().toLowerCase()}|${r.closingDate}`;
+      if (targetId && r.closingDate && r.buyer) {
+        const key = `${targetId}|${r.buyer.trim().toLowerCase()}|${r.closingDate}`;
         const firstSeenAt = seenInFile.get(key);
         if (firstSeenAt != null) {
           errors.push(`Same sale as row ${firstSeenAt} in this file — remove one of them.`);
@@ -442,7 +457,7 @@ export class SaleImportService {
         }
 
         const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
-        const match = (existingByUnit.get(unitId) ?? []).find(
+        const match = (existingByUnit.get(targetId) ?? []).find(
           (s) => day(s.closingDate) === r.closingDate
             && !!s.buyer && s.buyer.trim().toLowerCase() === r.buyer.trim().toLowerCase(),
         );
@@ -475,6 +490,7 @@ export class SaleImportService {
         edited: r.edited,
         data: {
           unitId,
+          buildingId,
           seller: r.seller || undefined,
           buyer: r.buyer,
           salePrice: r.purchasePrice ?? 0,
@@ -567,12 +583,14 @@ export class SaleImportService {
    * can be made. A skip is a no-op, so it is reported apart from real failures rather than
    * as an error somebody has to go and investigate.
    */
-  async commitImport(rows: (BackfillSaleInput & { unitId: string | null })[], userId?: string): Promise<SaleImportCommitResult> {
+  async commitImport(rows: (BackfillSaleInput & { unitId: string | null; buildingId?: string | null })[], userId?: string): Promise<SaleImportCommitResult> {
     const results: SaleImportCommitResult['results'] = [];
     for (const row of rows) {
-      if (!row.unitId || !row.buyer || !row.closingDate || row.salePrice == null) {
+      const unitId = row.unitId ?? null;
+      const buildingId = unitId ? null : (row.buildingId ?? null);
+      if ((!unitId && !buildingId) || !row.buyer || !row.closingDate || row.salePrice == null) {
         results.push({
-          buyer: row.buyer, unitId: row.unitId ?? null, success: false,
+          buyer: row.buyer, unitId, success: false,
           error: 'Row is missing required fields — it must be re-previewed before committing.',
         });
         continue;
@@ -580,11 +598,11 @@ export class SaleImportService {
       const closingDate = new Date(row.closingDate);
       if (!Number.isNaN(closingDate.getTime())) {
         const existing = await this.sales.findDuplicateHistoricalSale({
-          unitId: row.unitId, buildingId: null, buyer: row.buyer, closingDate,
+          unitId, buildingId, buyer: row.buyer, closingDate,
         });
         if (existing) {
           results.push({
-            buyer: row.buyer, unitId: row.unitId, success: false, skipped: true,
+            buyer: row.buyer, unitId, success: false, skipped: true,
             saleId: existing.id,
             error: 'Already recorded on this unit — skipped.',
           });
@@ -592,10 +610,10 @@ export class SaleImportService {
         }
       }
       try {
-        const sale = await this.sales.backfillSale({ ...row, unitId: row.unitId }, userId);
-        results.push({ buyer: row.buyer, unitId: row.unitId, success: true, saleId: sale.id });
+        const sale = await this.sales.backfillSale({ ...row, unitId: unitId ?? undefined, buildingId: buildingId ?? undefined }, userId);
+        results.push({ buyer: row.buyer, unitId, success: true, saleId: sale.id });
       } catch (e: any) {
-        results.push({ buyer: row.buyer, unitId: row.unitId, success: false, error: e?.message ?? 'Unknown error' });
+        results.push({ buyer: row.buyer, unitId, success: false, error: e?.message ?? 'Unknown error' });
       }
     }
     return {

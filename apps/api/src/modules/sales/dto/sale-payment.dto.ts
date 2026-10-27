@@ -72,3 +72,8 @@ export class LogSalePaymentDto {
   @IsNumber(MONEY) @IsPositive()
   amount!: number;
 }
+
+export class SeedEqualPaymentsDto {
+  @IsInt() @Min(1) @Max(60)
+  count!: number;
+}

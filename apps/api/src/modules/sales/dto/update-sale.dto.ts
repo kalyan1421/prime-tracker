@@ -1,5 +1,5 @@
 import {
-  IsString, IsOptional,
+  IsBoolean, IsString, IsOptional,
   IsNumber, IsPositive, IsDateString, MaxLength, IsEnum, Min, Max,
 } from 'class-validator';
 import { LostReason, SaleBuyerType } from '@prisma/client';
@@ -13,6 +13,16 @@ import { SaleCancellationFieldsDto } from './sale-cancellation.dto';
 // group that also has to be strippable from the body before it reaches Prisma (none of
 // them is a column on Sale), and the controller does that by name from one place.
 export class UpdateSaleDto extends SaleCancellationFieldsDto {
+  /**
+   * Close without the closing paperwork on file (client decision 2026-10-27: the Closed
+   * paperwork is advisory, not a blocker). Honoured ONLY when the target stage is CLOSED —
+   * LOI Signed and Under Contract still require their own documents. The request body is
+   * recorded by the audit interceptor, so the override is on the record. Not a column on
+   * Sale; the controller strips it before Prisma sees it.
+   */
+  @IsOptional() @IsBoolean()
+  closeWithoutPaperwork?: boolean;
+
   @IsOptional() @IsString() @MaxLength(200)
   buyer?: string;
 

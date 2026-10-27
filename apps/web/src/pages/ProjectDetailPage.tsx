@@ -13,6 +13,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
 import { FiArrowLeft, FiMapPin, FiCalendar, FiPlus, FiEdit2, FiTrash2, FiMessageSquare, FiSend, FiTarget, FiPhone, FiMail, FiUpload, FiDownload, FiFile, FiImage, FiFileText, FiCheck, FiX, FiChevronDown, FiChevronUp, FiChevronRight, FiChevronLeft, FiDollarSign, FiSearch, FiUsers, FiAlertTriangle, FiLock, FiHome, FiFlag, FiKey, FiLayers, FiBarChart2, FiActivity, FiCheckSquare, FiMove, FiColumns } from 'react-icons/fi';
+import { SalesTable } from '../components/SalesTable';
 import { SalePaymentPanel } from '../components/SalePaymentPanel';
 import { ConstructionChecklistRollup } from '../components/ConstructionChecklistRollup';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
@@ -4556,6 +4557,8 @@ const EMPTY_SALE = {
   loiDate: '', contractDate: '', closingDate: '', notes: '',
   lostReason: '', lostReasonNote: '', expectedCloseDate: '',
   brokerId: '', brokerCommissionPct: '',
+  // PSF is a two-way helper for salePrice (never sent); paymentCount seeds equal installments on create.
+  salePsf: '', paymentCount: '',
 };
 
 const LOST_REASONS = [
@@ -4567,6 +4570,30 @@ const LOST_REASONS = [
   { key: 'OTHER', label: 'Other' },
 ];
 
+/** One row of the payment schedule being entered with a new sale. Strings, like every form field. */
+type SaleInstallmentRow = { label: string; amount: string; dueDate: string; edited?: boolean };
+
+/**
+ * N equal installments of `price`, the last absorbing the cent remainder. Labels, dates and
+ * hand-edited amounts from `prev` survive a change of count or price, so typing a date and
+ * then bumping the count does not wipe it.
+ */
+function splitInstallments(price: number, count: number, prev: SaleInstallmentRow[]): SaleInstallmentRow[] {
+  const n = Math.max(0, Math.min(60, Math.floor(count) || 0));
+  const cents = Math.round((price > 0 ? price : 0) * 100);
+  const base = n ? Math.floor(cents / n) : 0;
+  return Array.from({ length: n }, (_, i) => {
+    const old = prev[i];
+    const auto = ((i === n - 1 ? cents - base * (n - 1) : base) / 100).toFixed(2);
+    return {
+      label: old?.label ?? `Payment ${i + 1} of ${n}`,
+      amount: old?.edited ? old.amount : auto,
+      dueDate: old?.dueDate ?? '',
+      edited: old?.edited,
+    };
+  });
+}
+
 // `mode` matters: projectId/unitId are create-only. A sale's project and asset link are
 // fixed once it exists, so UpdateSaleDto rejects them outright — sending them on edit
 // failed every save with "property projectId should not exist".
@@ -4574,6 +4601,8 @@ function buildSalePayload(
   form: Record<string, string>,
   projectId: string,
   mode: 'create' | 'update' = 'create',
+  skipPaperwork = false,
+  installments: SaleInstallmentRow[] = [],
 ): Record<string, unknown> {
   return {
     ...(mode === 'create'
@@ -4598,6 +4627,16 @@ function buildSalePayload(
     lostReasonNote: form.status === 'CANCELLED' ? (form.lostReasonNote || undefined) : undefined,
     brokerId: form.brokerId || undefined,
     brokerCommissionPct: form.brokerCommissionPct ? parseFloat(form.brokerCommissionPct) : undefined,
+    ...(mode === 'create' && installments.length
+      ? {
+          payments: installments.map((r) => ({
+            label: r.label.trim() || 'Payment',
+            amount: parseFloat(r.amount),
+            ...(r.dueDate ? { dueDate: toApiDate(r.dueDate) } : {}),
+          })),
+        }
+      : {}),
+    ...(skipPaperwork ? { closeWithoutPaperwork: true } : {}),
   };
 }
 
@@ -4607,7 +4646,7 @@ function buildSalePayload(
  */
 function SaleFormFields({
   form, setForm, unitOptions, buildingOptions, formError = null, lockUnit = false,
-  lockAsset = false,
+  lockAsset = false, showPaymentCount = false, installments = [], setInstallments,
 }: {
   form: Record<string, string>;
   setForm: React.Dispatch<React.SetStateAction<Record<string, string>>>;
@@ -4621,6 +4660,10 @@ function SaleFormFields({
    *  buildingId outright — so the pickers are read-only rather than controls whose
    *  only possible outcome is a rejected save. */
   lockAsset?: boolean;
+  /** Create only: offer "No. of payments" (seeds equal installments after the sale is saved). */
+  showPaymentCount?: boolean;
+  installments?: SaleInstallmentRow[];
+  setInstallments?: React.Dispatch<React.SetStateAction<SaleInstallmentRow[]>>;
 }) {
   const buildings: any[] = buildingOptions || [];
   const isBuildingSale = form.assetType === 'BUILDING';
@@ -4632,6 +4675,17 @@ function SaleFormFields({
   const brokers = (brokersData as any[]) || [];
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
+  // Price per sqft ⇄ sale price, against the sqft of whatever is being sold. PSF is a
+  // helper, never stored: the price is the source of truth and PSF is derived from it
+  // (the importer treats the sheet's PSF the same way).
+  const assetSqft = Number(
+    (isBuildingSale
+      ? buildings.find((b: any) => b.id === form.buildingId)?.totalSqft
+      : unitOptions.find((u: any) => u.id === form.unitId)?.sqft) ?? 0,
+  );
+  const derivedPsf = assetSqft > 0 && Number(form.salePrice) > 0
+    ? (Number(form.salePrice) / assetSqft).toFixed(2) : '';
+  const psfValue = form.salePsf !== '' ? form.salePsf : derivedPsf;
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {canPickAsset && (
@@ -4694,8 +4748,36 @@ function SaleFormFields({
         </Select>
       )}
       <Input size="sm" label="Buyer" value={form.buyer} onChange={set('buyer')} />
-      <Input size="sm" label="Sale Price ($)" type="number" value={form.salePrice} onChange={set('salePrice')} />
+      <Input size="sm" label="Sale Price ($)" type="number" value={form.salePrice}
+        onChange={(e) => {
+          const v = e.target.value;
+          setForm((f) => ({ ...f, salePrice: v, salePsf: '' }));
+          setInstallments?.((rows) => splitInstallments(Number(v), rows.length, rows));
+        }} />
+      <Input
+        size="sm" label="Price PSF ($/sqft)" type="number" value={psfValue}
+        isDisabled={assetSqft <= 0}
+        description={assetSqft > 0
+          ? `Based on ${assetSqft.toLocaleString('en-US')} sqft — editing it updates the sale price`
+          : 'Pick an asset with a recorded sqft to use this'}
+        onChange={(e) => {
+          const v = e.target.value;
+          const nextPrice = v !== '' && assetSqft > 0 ? Math.round(Number(v) * assetSqft * 100) / 100 : Number(form.salePrice);
+          setForm((f) => ({ ...f, salePsf: v, salePrice: v !== '' && assetSqft > 0 ? String(nextPrice) : f.salePrice }));
+          setInstallments?.((rows) => splitInstallments(nextPrice, rows.length, rows));
+        }}
+      />
       <Input size="sm" label="Deposit Amount ($)" type="number" value={form.depositAmt} onChange={set('depositAmt')} />
+      {showPaymentCount && (
+        <Input size="sm" label="No. of payments (optional)" type="number" min={1} max={60}
+          value={form.paymentCount}
+          onChange={(e) => {
+            const v = e.target.value;
+            setForm((f) => ({ ...f, paymentCount: v }));
+            setInstallments?.((rows) => splitInstallments(Number(form.salePrice), Number(v), rows));
+          }}
+          description="Fill in each payment below — leave dates blank if not agreed yet" />
+      )}
       <Select
         size="sm"
         label="Status"
@@ -4759,6 +4841,31 @@ function SaleFormFields({
         </>
       )}
 
+      {showPaymentCount && installments.length > 0 && setInstallments && (
+        <div className="sm:col-span-2 space-y-2 rounded-lg border border-gray-200 p-3">
+          <p className="text-sm font-semibold text-gray-700">Payment schedule</p>
+          {installments.map((r, i) => (
+            <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-[1.4fr_1fr_1fr]">
+              <Input size="sm" label={`Payment ${i + 1}`} value={r.label}
+                onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, label: v } : x)))} />
+              <Input size="sm" type="number" label="Amount ($)" value={r.amount}
+                onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, amount: v, edited: true } : x)))} />
+              <Input size="sm" type="date" label="Due date (optional)" value={r.dueDate}
+                onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, dueDate: v } : x)))} />
+            </div>
+          ))}
+          {(() => {
+            const total = installments.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+            const diff = Math.round((total - Number(form.salePrice || 0)) * 100) / 100;
+            return (
+              <p className={`text-xs ${diff === 0 ? 'text-gray-600' : 'text-red-700'}`}>
+                Total {fmt(total)}{diff === 0 ? ' — matches the sale price' : ` — ${diff > 0 ? 'over' : 'under'} the sale price by ${fmt(Math.abs(diff))}`}
+              </p>
+            );
+          })()}
+        </div>
+      )}
+
       <div className="sm:col-span-2">
         <Input size="sm" label="Notes" value={form.notes} onChange={set('notes')} />
       </div>
@@ -4778,6 +4885,15 @@ function SalesTab({ projectId }: { projectId: string }) {
   const updateSale = useUpdateSale();
   const deleteSale = useDeleteSale();
   const approveDiscount = useApproveSaleDiscount();
+  const { data: brokersData } = useBrokers();
+  // Board vs sheet. Remembered per browser; a blocked/empty store just means the default.
+  const [salesView, setSalesViewState] = useState<'board' | 'table'>(() => {
+    try { return localStorage.getItem('sales-view') === 'table' ? 'table' : 'board'; } catch { return 'board'; }
+  });
+  const setSalesView = (v: 'board' | 'table') => {
+    setSalesViewState(v);
+    try { localStorage.setItem('sales-view', v); } catch { /* per-viewer convenience only */ }
+  };
 
   const { isOpen: isFormOpen, onOpen: onFormOpen, onClose: onFormClose } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
@@ -4786,6 +4902,10 @@ function SalesTab({ projectId }: { projectId: string }) {
 
   const [form, setForm] = useState<Record<string, string>>(EMPTY_SALE);
   const [saleFormError, setSaleFormError] = useState<string | null>(null);
+  // Set to the server's explanation when a Closed save is refused for missing paperwork.
+  const [paperworkPrompt, setPaperworkPrompt] = useState<string | null>(null);
+  // The payment schedule typed into Add Sale (create only); empty = no schedule.
+  const [installments, setInstallments] = useState<SaleInstallmentRow[]>([]);
   const handleSaleFormClose = () => { setSaleFormError(null); onFormClose(); };
   const [editId, setEditId] = useState<string | null>(null);
   // The stage the sale is ALREADY in, kept apart from form.status (the target being
@@ -4811,11 +4931,13 @@ function SalesTab({ projectId }: { projectId: string }) {
   const openCreate = () => {
     setEditId(null);
     setEditStatus('PROSPECT');
+    setInstallments([]);
     setForm({ ...EMPTY_SALE, unitId: units[0]?.id || '' });
     setSaleFormError(null);
     onFormOpen();
   };
   const openEdit = (s: any) => {
+    setInstallments([]);
     setEditId(s.id);
     setEditStatus(s.status || 'PROSPECT');
     setForm({
@@ -4865,8 +4987,23 @@ function SalesTab({ projectId }: { projectId: string }) {
       setSaleFormError('Closing date must be after contract date');
       return;
     }
+    await save(false);
+  };
+
+  // The closing paperwork is advisory: the API still refuses a Closed save that lacks it,
+  // and that refusal is turned into a "close anyway?" confirmation instead of a dead end.
+  const save = async (skipPaperwork: boolean) => {
     try {
-      const payload = buildSalePayload(form, projectId, editId ? 'update' : 'create');
+      if (!editId && installments.length) {
+        const bad = installments.findIndex((r) => !(parseFloat(r.amount) > 0));
+        if (bad >= 0) { setSaleFormError(`Payment ${bad + 1} needs an amount above zero`); return; }
+        const total = Math.round(installments.reduce((sum, r) => sum + parseFloat(r.amount), 0) * 100);
+        if (total !== Math.round(Number(form.salePrice || 0) * 100)) {
+          setSaleFormError('The payments must add up to the sale price');
+          return;
+        }
+      }
+      const payload = buildSalePayload(form, projectId, editId ? 'update' : 'create', skipPaperwork, installments);
       if (editId) {
         await updateSale.mutateAsync({ id: editId, data: payload });
         addToast({ title: 'Sale updated', color: 'success' });
@@ -4874,9 +5011,16 @@ function SalesTab({ projectId }: { projectId: string }) {
         await createSale.mutateAsync(payload);
         addToast({ title: 'Sale created', color: 'success' });
       }
+      setPaperworkPrompt(null);
       handleSaleFormClose();
     } catch (e) {
       const msg = errMsg(e, 'Failed to save sale');
+      if (!skipPaperwork && form.status === 'CLOSED'
+        && /cannot move to Closed|cannot be created already closed/i.test(msg)) {
+        setPaperworkPrompt(msg);
+        return;
+      }
+      setPaperworkPrompt(null);
       setSaleFormError(msg);
       addToast({ title: msg, color: 'danger' });
     }
@@ -4937,6 +5081,14 @@ function SalesTab({ projectId }: { projectId: string }) {
       <div className="flex justify-between items-center mb-4">
         <p className="font-semibold text-sm text-gray-600">{allSales.length} sales</p>
         <div className="flex gap-2">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5" role="group" aria-label="Sales view">
+            {(['board', 'table'] as const).map((v) => (
+              <button key={v} type="button" aria-pressed={salesView === v} onClick={() => setSalesView(v)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize ${salesView === v ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-gray-50'}`}>
+                {v}
+              </button>
+            ))}
+          </div>
           {/* Same deliberate visual-weight gap from "Add Sale" as the rent-history
               importer has from "Add Lease" — this one writes a whole closed deal. */}
           {canImportHistory && (
@@ -4952,6 +5104,15 @@ function SalesTab({ projectId }: { projectId: string }) {
 
       {!allSales.length ? (
         <EmptyState title="No sales activity" />
+      ) : salesView === 'table' ? (
+        <SalesTable
+          sales={allSales}
+          brokers={(brokersData as any[]) || []}
+          onPayments={(sale) => { setPaySale(sale); onPayOpen(); }}
+          onEdit={openEdit}
+          onCancel={(sale) => { setCancelSale(sale); onCancelOpen(); }}
+          onDelete={openDelete}
+        />
       ) : (
         /* Kanban board \u2014 horizontal scroll keeps the funnel intact at any width;
            columns collapse to a slim rail, cards expand inline for full detail + actions. */
@@ -5127,6 +5288,9 @@ function SalesTab({ projectId }: { projectId: string }) {
               unitOptions={units}
               buildingOptions={buildings}
               lockAsset={!!editId}
+              showPaymentCount={!editId}
+              installments={installments}
+              setInstallments={setInstallments}
               formError={saleFormError}
             />
             {/* The gate's paperwork, where the refusal is read. Renders only when the
@@ -5141,6 +5305,25 @@ function SalesTab({ projectId }: { projectId: string }) {
             <Button size="sm" variant="light" onPress={handleSaleFormClose}>Cancel</Button>
             <Button size="sm" color="primary" onPress={handleSave} isLoading={createSale.isPending || updateSale.isPending}>
               {editId ? 'Save Changes' : 'Add Sale'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* Close without paperwork — advisory gate */}
+      <Modal isOpen={paperworkPrompt !== null} onClose={() => setPaperworkPrompt(null)} size="md">
+        <ModalContent>
+          <ModalHeader>Close without the paperwork?</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-gray-700">{paperworkPrompt}</p>
+            <p className="text-sm text-gray-700">
+              You can close it now and upload the documents later. The override is recorded in the audit log.
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button size="sm" variant="light" onPress={() => setPaperworkPrompt(null)}>Go back</Button>
+            <Button size="sm" color="primary" onPress={() => save(true)} isLoading={createSale.isPending || updateSale.isPending}>
+              Close anyway
             </Button>
           </ModalFooter>
         </ModalContent>

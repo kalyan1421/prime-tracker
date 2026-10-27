@@ -51,12 +51,14 @@ const FIXABLE_FIELDS: {
   {
     key: 'unitNumber', label: 'Unit Number', type: 'text',
     matches: (e) => e.startsWith('Unit Number is required')
-      || e.includes('was not found in this project')
+      || (e.includes('was not found in this project') && !e.startsWith('Building "'))
       || e.includes('exists in more than one building'),
   },
   {
     key: 'building', label: 'Building', type: 'building',
-    matches: (e) => e.includes('exists in more than one building') || e.includes('— not "'),
+    matches: (e) => e.includes('exists in more than one building') || e.includes('— not "')
+      // Whole-building ("Entire Building") rows: the sheet didn't name, or misnamed, the building.
+      || e.startsWith('Whole-building sale') || e.startsWith('Building "'),
   },
   { key: 'buyer', label: 'Buyer', type: 'text', matches: (e) => e.startsWith('Buyer is required') },
   {
@@ -156,7 +158,7 @@ export default function SaleHistoryImportPage() {
   // building-label mismatch — resolveUnit gives that its own, more specific error, and a
   // mismatched label is a data-entry fix, not a "create a building" situation).
   const unresolvedRows = preview
-    ? preview.sales.filter((s: any) => !s.data.unitId && s.errors.some((e: string) => e.includes('was not found in this project')))
+    ? preview.sales.filter((s: any) => !s.data.unitId && !s.data.buildingId && s.errors.some((e: string) => e.includes('was not found in this project') && !e.startsWith('Building "')))
     : [];
 
   // Distinct building names those rows reference that don't already exist in this
@@ -177,7 +179,6 @@ export default function SaleHistoryImportPage() {
     (n) => !looksLikeCombinedUnitRef(n) && !looksLikeWholeBuildingRef(n) && !looksLikeNonUnitRef(n),
   );
   const combinedUnitNumbers = missingUnitNumbers.filter(looksLikeCombinedUnitRef);
-  const wholeBuildingUnitNumbers = missingUnitNumbers.filter(looksLikeWholeBuildingRef);
   const nonUnitRefs = missingUnitNumbers.filter(looksLikeNonUnitRef);
 
   const applyTypeToAllBuildings = (buildingType: string) => {
@@ -600,17 +601,15 @@ export default function SaleHistoryImportPage() {
               </table>
             </div>
 
-            {wholeBuildingUnitNumbers.length > 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-xs font-semibold text-amber-800 mb-1">
-                  {preview.sales.filter((s: any) => wholeBuildingUnitNumbers.includes(s.unitNumber)).length} row(s)
-                  are whole-building sales, not unit sales, and can't go through this tool:
+            {preview.sales.some((s: any) => s.data.buildingId) && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <p className="text-xs font-semibold text-blue-800 mb-1">
+                  {preview.sales.filter((s: any) => s.data.buildingId).length} row(s) are whole-building sales
                 </p>
-                <p className="text-xs text-amber-700">
-                  A row whose Unit Number says "Entire Building" means the sale was for the whole building, not
-                  one unit in it. This importer only ever resolves to a Unit. Once the building itself exists
-                  (create it above if it's listed as missing), add these sales by hand from the project's
-                  Revenue tab — Add Sale supports attaching to a Building directly.
+                <p className="text-xs text-blue-700">
+                  A Unit Number of "Entire Building" is recorded as a sale of the building itself, not of a unit.
+                  The building comes from the row's Building column; if it's missing or misspelled, fix it in the
+                  row below.
                 </p>
               </div>
             )}

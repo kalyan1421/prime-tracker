@@ -18,7 +18,7 @@ import { UpdateSaleDto } from './dto/update-sale.dto';
 import { BackfillSaleDto } from './dto/backfill-sale.dto';
 import { SettleSaleCancellationDto } from './dto/sale-cancellation.dto';
 import { TransferSaleUnitDto } from './dto/transfer-sale-unit.dto';
-import { AddSalePaymentDto, ApplyPaymentTemplateDto, LogSalePaymentDto, UpdateSalePaymentDto } from './dto/sale-payment.dto';
+import { AddSalePaymentDto, ApplyPaymentTemplateDto, LogSalePaymentDto, SeedEqualPaymentsDto, UpdateSalePaymentDto } from './dto/sale-payment.dto';
 import { SaleImportCommitDto } from './dto/sale-import-commit.dto';
 import { UserRole } from '@prisma/client';
 import { SalePaymentsService } from './sale-payments.service';
@@ -106,8 +106,15 @@ export class SalesController {
   @ApiOperation({ summary: 'Create sale (validates unit belongs to project)' })
   // The user id is threaded through so a sale created already-CLOSED stamps its
   // occupancy event with who did it, exactly as closing one through update() does.
-  create(@Body() body: CreateSaleDto, @CurrentUser('sub') userId: string) {
-    return this.service.create(body as any, userId);
+  async create(@Body() body: CreateSaleDto, @CurrentUser('sub') userId: string) {
+    const { closeWithoutPaperwork, payments, ...saleFields } = body;
+    if (payments?.length) {
+      // Checked before the write so a schedule that does not add up leaves no sale behind.
+      this.salePayments.assertScheduleMatchesPrice(payments, saleFields.salePrice);
+    }
+    const sale = await this.service.create(saleFields as any, userId, { skipClosedPaperwork: closeWithoutPaperwork });
+    if (payments?.length) await this.salePayments.seedCustomInstallments(sale.id, payments);
+    return sale;
   }
 
   /**
@@ -192,6 +199,7 @@ export class SalesController {
       refundPaidAt,
       refundReference,
       cancellationNote,
+      closeWithoutPaperwork,
       ...saleFields
     } = body;
     return this.service.update(id, saleFields as any, userId, {
@@ -201,7 +209,7 @@ export class SalesController {
       refundPaidAt,
       refundReference,
       note: cancellationNote,
-    });
+    }, { skipClosedPaperwork: closeWithoutPaperwork });
   }
 
   /** GET /api/sales/:id/cancellation — what became of the money on a cancelled sale. */
@@ -330,6 +338,20 @@ export class SalesController {
     @Body() body: ApplyPaymentTemplateDto,
   ) {
     return this.salePayments.applyTemplate(saleId, body.template);
+  }
+
+  @Post(':saleId/payments/equal')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({ summary: 'Split the sale price into N equal, undated installments' })
+  seedEqual(@Param('saleId') saleId: string, @Body() body: SeedEqualPaymentsDto) {
+    return this.salePayments.seedEqualInstallments(saleId, body.count);
+  }
+
+  @Delete(':saleId/payments')
+  @RequirePermissions('sales:edit')
+  @ApiOperation({ summary: 'Clear the whole installment schedule (refused if any money is logged)' })
+  clearPayments(@Param('saleId') saleId: string) {
+    return this.salePayments.clearSchedule(saleId);
   }
 
   // ':paymentId', not ':id' — this controller maps a bare ':id' to a SALE, so an

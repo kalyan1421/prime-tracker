@@ -5,7 +5,7 @@ import {
 } from '@heroui/react';
 import { FiDollarSign, FiEdit2 } from 'react-icons/fi';
 import {
-  useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment,
+  useSalePayments, useApplyPaymentTemplate, useAddSalePayment, useLogPayment, useDeleteSalePayment, useClearSalePayments, useSeedEqualPayments,
   useUpdateSalePayment,
 } from '../hooks/useApi';
 import { fmt, fmtDate, errMsg } from '../utils/fmt';
@@ -29,6 +29,10 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
   const addPayment = useAddSalePayment();
   const logPayment = useLogPayment();
   const del = useDeleteSalePayment();
+  const clearAll = useClearSalePayments();
+  const seedEqual = useSeedEqualPayments();
+  const [equalCount, setEqualCount] = useState('');
+  const [confirmClear, setConfirmClear] = useState(false);
   // Editing an installment instead of deleting and re-adding it. PATCH /sales/payments/:id
   // existed and nothing reached it, so correcting an amount meant removing the row — which
   // takes its logged payments with it.
@@ -81,6 +85,33 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
       addToast({ title: `Applied ${template} schedule`, color: 'success' });
     } catch (e) {
       addToast({ title: errMsg(e, 'Failed to apply template'), color: 'danger' });
+    }
+  };
+
+  const submitEqual = async () => {
+    const n = Number(equalCount);
+    if (!Number.isInteger(n) || n < 1 || n > 60) {
+      setAddErr('Enter a whole number of payments from 1 to 60');
+      return;
+    }
+    setAddErr(null);
+    try {
+      await seedEqual.mutateAsync({ saleId, count: n });
+      setEqualCount('');
+      addToast({ title: `Split into ${n} equal payment${n === 1 ? '' : 's'}`, color: 'success' });
+    } catch (e) {
+      setAddErr(errMsg(e, 'Could not split the price'));
+    }
+  };
+
+  const submitClear = async () => {
+    try {
+      const r = await clearAll.mutateAsync({ saleId });
+      addToast({ title: `Cleared ${r?.removed ?? 0} installment${r?.removed === 1 ? '' : 's'}`, color: 'success' });
+    } catch (e) {
+      addToast({ title: errMsg(e, 'Could not clear the schedule'), color: 'danger' });
+    } finally {
+      setConfirmClear(false);
     }
   };
 
@@ -140,9 +171,20 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-gray-700">Payment schedule</p>
-        <AddButton onPress={() => { setAdding((v) => !v); setAddErr(null); }}>
-          Add installment
-        </AddButton>
+        <div className="flex items-center gap-2">
+          {payments.length > 0 && (confirmClear ? (
+            <>
+              <span className="text-xs text-red-700">Remove all {payments.length}?</span>
+              <Button size="sm" color="danger" onPress={submitClear} isLoading={clearAll.isPending}>Yes, clear</Button>
+              <Button size="sm" variant="light" onPress={() => setConfirmClear(false)}>Keep</Button>
+            </>
+          ) : (
+            <Button size="sm" variant="light" color="danger" onPress={() => setConfirmClear(true)}>Clear schedule</Button>
+          ))}
+          <AddButton onPress={() => { setAdding((v) => !v); setAddErr(null); }}>
+            Add installment
+          </AddButton>
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
@@ -158,6 +200,12 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
             <Button size="sm" variant="flat" color="primary" onPress={() => seed('30-40-30')} isLoading={applyTemplate.isPending}>
               30 / 40 / 30
             </Button>
+          </div>
+          <p className="text-sm text-gray-500">or split the price into equal payments:</p>
+          <div className="flex justify-center items-end gap-2">
+            <Input size="sm" type="number" label="No. of payments" value={equalCount}
+              onChange={(e) => setEqualCount(e.target.value)} className="max-w-[10rem]" />
+            <Button size="sm" variant="flat" color="primary" onPress={submitEqual} isLoading={seedEqual.isPending}>Split</Button>
           </div>
         </div>
       )}
@@ -260,7 +308,7 @@ export function SalePaymentPanel({ saleId, salePrice }: { saleId: string; salePr
               {TRIGGERS.map((t) => <SelectItem key={t}>{t}</SelectItem>)}
             </Select>
             {form.trigger === 'FIXED_DATE' && (
-              <Input size="sm" type="date" label="Due date" value={form.dueDate} onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))} className="flex-1" />
+              <Input size="sm" type="date" label="Due date (optional)" value={form.dueDate} onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))} className="flex-1" />
             )}
             <Button size="sm" color="primary" onPress={submitAdd} isLoading={addPayment.isPending}>Add</Button>
           </div>

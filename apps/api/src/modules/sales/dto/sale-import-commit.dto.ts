@@ -32,6 +32,10 @@ export class SaleImportRowDto {
   @IsOptional() @IsString() @MaxLength(64)
   unitId?: string | null;
 
+  /** Set instead of unitId for a whole-building sale ("Entire Building" rows). */
+  @IsOptional() @IsString() @MaxLength(64)
+  buildingId?: string | null;
+
   @IsOptional() @IsString() @MaxLength(200)
   seller?: string;
 

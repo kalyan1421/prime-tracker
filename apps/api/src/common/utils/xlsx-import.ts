@@ -97,6 +97,43 @@ export function rowGetter(row: ExcelJS.Row, columns: ReadonlyArray<{ key: string
   return (key: string) => row.getCell(columns.findIndex((c) => c.key === key) + 1);
 }
 
+/**
+ * Server mirror of web/src/utils/import-helpers.ts looksLikeWholeBuildingRef — same two
+ * spellings ("Entire Building" on the sale sheets, "Building 6 (whole)" on the lease
+ * workbook). apps/web does not depend on the API, so the rule is duplicated, not shared;
+ * amend both together.
+ */
+export function looksLikeWholeBuildingRef(unitNumber: string): boolean {
+  const v = (unitNumber ?? '').trim();
+  return /^entire\s+building$/i.test(v) || /^building\b.*\(\s*whole\s*\)$/i.test(v);
+}
+
+/**
+ * Resolves the building a whole-building row names: the row's Building cell, else the
+ * building embedded in "Building 7 (whole)". Never guesses — "Entire Building" with no
+ * Building cell is an error, because picking one would book a multi-million-dollar sale
+ * against the wrong asset.
+ */
+export function resolveBuilding(
+  buildings: { id: string; name: string }[],
+  unitNumber: string,
+  building: string,
+): { buildingId: string | null; error?: string } {
+  const embedded = /^(building\b.*?)\s*\(\s*whole\s*\)$/i.exec(unitNumber.trim())?.[1];
+  const label = (building || embedded || '').trim();
+  if (!label) {
+    return { buildingId: null, error: 'Whole-building sale: name the building in the Building column.' };
+  }
+  const key = label.toLowerCase();
+  const exact = buildings.filter((b) => b.name.trim().toLowerCase() === key);
+  // Sheets write "Reagan Ranch Commercial (RRC) - Building 7" for what the app calls
+  // "Building 7"; accept a label that ENDS with the building's name, but only if unique.
+  const matches = exact.length ? exact : buildings.filter((b) => key.endsWith(b.name.trim().toLowerCase()));
+  if (matches.length === 0) return { buildingId: null, error: `Building "${label}" was not found in this project.` };
+  if (matches.length > 1) return { buildingId: null, error: `Building "${label}" matches more than one building — be more specific.` };
+  return { buildingId: matches[0].id };
+}
+
 export interface UnitCandidate {
   id: string;
   unitNumber: string;

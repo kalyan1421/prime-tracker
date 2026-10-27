@@ -82,12 +82,12 @@ export class SalePaymentsService {
     const sale = await this.getSale(saleId);
     const trigger = input.trigger ?? 'FIXED_DATE';
 
-    // A milestone-triggered payment needs a milestone; a fixed-date one needs a date.
+    // A milestone-triggered payment needs a milestone. A fixed-date one does NOT need a
+    // date: the schedule is often agreed before the dates are (client request 2026-10-27).
+    // An undated installment has no due date, so the forecast, overdue alerts and the
+    // due-soon list all skip it until a date is set — they already tolerate a null.
     if (trigger === 'ON_MILESTONE' && !input.milestoneId) {
       throw new BadRequestException('ON_MILESTONE payments require a milestoneId');
-    }
-    if (trigger === 'FIXED_DATE' && !input.dueDate) {
-      throw new BadRequestException('FIXED_DATE payments require a dueDate');
     }
 
     const amount = this.resolveAmount(input.amount, input.percentOfPrice, sale.salePrice);
@@ -140,6 +140,92 @@ export class SalePaymentsService {
         }),
       ),
     );
+  }
+
+  /**
+   * Seed N equal, undated installments ("Payment 1 of N"…). The last absorbs the cent
+   * remainder so the schedule sums to the sale price exactly. Undated because the dates
+   * are usually agreed later; each can be dated afterwards. Refuses on a sale that
+   * already has a schedule, like applyTemplate.
+   */
+  async seedEqualInstallments(saleId: string, count: number) {
+    if (!Number.isInteger(count) || count < 1 || count > 60) {
+      throw new BadRequestException('Number of payments must be a whole number from 1 to 60');
+    }
+    const sale = await this.getSale(saleId);
+    if (sale.salePrice == null || !(Number(sale.salePrice) > 0)) {
+      throw new BadRequestException('Set a sale price before splitting it into payments');
+    }
+    if ((await this.prisma.salePayment.count({ where: { saleId } })) > 0) {
+      throw new BadRequestException('Sale already has a payment schedule; clear it first');
+    }
+    const cents = Math.round(Number(sale.salePrice) * 100);
+    const base = Math.floor(cents / count);
+    const last = cents - base * (count - 1);
+    return this.prisma.$transaction(
+      Array.from({ length: count }, (_, i) =>
+        this.prisma.salePayment.create({
+          data: {
+            saleId,
+            label: `Payment ${i + 1} of ${count}`,
+            sequence: i,
+            trigger: 'FIXED_DATE',
+            amount: (i === count - 1 ? last : base) / 100,
+            percentOfPrice: Math.round((((i === count - 1 ? last : base) / cents) * 100) * 100) / 100,
+          },
+        }),
+      ),
+    );
+  }
+
+  /** Throws unless the rows add up to the sale price (to the cent). Used before a sale is written. */
+  assertScheduleMatchesPrice(rows: { amount: number }[], salePrice: number | null | undefined) {
+    const total = Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100);
+    const price = Math.round(Number(salePrice ?? 0) * 100);
+    if (!(price > 0)) throw new BadRequestException('Enter a sale price before adding a payment schedule');
+    if (total !== price) {
+      throw new BadRequestException(
+        `The installments add up to ${(total / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}, `
+        + `but the sale price is ${(price / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}.`,
+      );
+    }
+  }
+
+  /** Write an entered schedule (label, amount, optional date) against an existing sale. */
+  async seedCustomInstallments(saleId: string, rows: { label: string; amount: number; dueDate?: string }[]) {
+    await this.getSale(saleId);
+    if ((await this.prisma.salePayment.count({ where: { saleId } })) > 0) {
+      throw new BadRequestException('Sale already has a payment schedule; clear it first');
+    }
+    return this.prisma.$transaction(
+      rows.map((r, i) =>
+        this.prisma.salePayment.create({
+          data: {
+            saleId, label: r.label, sequence: i, trigger: 'FIXED_DATE', amount: r.amount,
+            dueDate: r.dueDate ? new Date(r.dueDate) : null,
+          },
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Remove the whole schedule in one go. Refused if any money has been collected against
+   * it — paidAmount is a record of what a buyer handed over, and deleting the row it hangs
+   * on destroys that record. Single installments are removed one at a time (removePayment).
+   */
+  async clearSchedule(saleId: string) {
+    await this.getSale(saleId);
+    const paid = await this.prisma.salePayment.count({
+      where: { saleId, OR: [{ paidAmount: { gt: 0 } }, { status: 'PAID' }] },
+    });
+    if (paid > 0) {
+      throw new ConflictException(
+        'Some installments already have money logged against them, so the schedule cannot be cleared. Remove the unpaid ones individually.',
+      );
+    }
+    const { count } = await this.prisma.salePayment.deleteMany({ where: { saleId } });
+    return { removed: count };
   }
 
   async updatePayment(
