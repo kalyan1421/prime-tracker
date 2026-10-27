@@ -53,17 +53,20 @@ describe('buildSnapshot', () => {
         id: 'a',
         unitNumber: '205',
         status: 'SOLD',
+        // An asking price on a sold unit would read as what the buyer paid.
+        askingPrice: 412001,
         sales: [{ status: 'CLOSED', combinedDealRef: 'BLDG2-SUITE', buyer: 'Sai Reddy', salePrice: 412000 } as any],
       }),
       unit({
         id: 'b',
         unitNumber: '202',
         status: 'LEASED',
+        askingRent: 3685,
         leases: [{ combinedDealRef: null, tenantBrand: 'Devi Liquors', tenantName: 'x', monthlyRent: 3684, tenantEmail: 'a@b.c' } as any],
       }),
     ]);
     const json = JSON.stringify(buildSnapshot(source, NOW));
-    for (const leaked of ['Sai Reddy', '412000', '3684', 'a@b.c', 'buyer', 'salePrice', 'monthlyRent', 'tenantEmail']) {
+    for (const leaked of ['Sai Reddy', '412000', '412001', '3684', '3685', 'a@b.c', 'buyer', 'salePrice', 'monthlyRent', 'tenantEmail']) {
       expect(json).not.toContain(leaked);
     }
   });
@@ -88,6 +91,95 @@ describe('buildSnapshot', () => {
       NOW,
     );
     expect(snap.buildings[0].units.map((u) => u.dealRef)).toEqual(['LEASE:JB', 'SALE:PRODIGY', null]);
+  });
+
+  it('sends version 2: unit type, availability date, building size and stories', () => {
+    const snap = buildSnapshot(
+      {
+        ...project([]),
+        buildings: [
+          {
+            id: 'b7',
+            name: 'Building 7',
+            totalSqft: 9800,
+            stories: 1,
+            units: [
+              unit({ id: 'a', unitNumber: '701', status: 'AVAILABLE', unitType: ' RETAIL ', availableSince: new Date('2026-09-16T00:00:00.000Z') }),
+            ],
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(snap.version).toBe(2);
+    expect(snap.buildings[0]).toMatchObject({ id: 'b7', totalSqft: 9800, stories: 1 });
+    expect(snap.buildings[0].units[0]).toMatchObject({
+      unitType: 'RETAIL',
+      availableSince: '2026-09-16T00:00:00.000Z',
+      dealUnitIds: [],
+      mergedFromIds: [],
+    });
+  });
+
+  it('sends asking figures only while a unit is on the market, as plain numbers', () => {
+    const decimal = (value: string) => ({ toString: () => value });
+    const asking = { askingRent: decimal('24.50'), askingPrice: decimal('650000.00') };
+    const snap = buildSnapshot(
+      project([
+        unit({ id: 'a', unitNumber: '701', status: 'AVAILABLE', ...asking }),
+        unit({ id: 'b', unitNumber: '702', status: 'UNDER_CONSTRUCTION', ...asking }),
+        unit({ id: 'c', unitNumber: '703', status: 'LEASED', ...asking }),
+        unit({ id: 'd', unitNumber: '704', status: 'LEASE_PENDING', ...asking }),
+        unit({ id: 'e', unitNumber: '705', status: 'UNDER_CONTRACT', ...asking }),
+        unit({ id: 'f', unitNumber: '706', status: 'SOLD', ...asking }),
+      ]),
+      NOW,
+    );
+    expect(snap.buildings[0].units.map((u) => [u.unitNumber, u.askingRent, u.askingPrice])).toEqual([
+      ['701', 24.5, 650000],
+      ['702', 24.5, 650000],
+      ['703', null, null],
+      ['704', null, null],
+      ['705', null, null],
+      ['706', null, null],
+    ]);
+  });
+
+  it('names every unit in a deal, whatever its status — a SOLD unit and its UNDER_CONTRACT partner stay one deal', () => {
+    const snap = buildSnapshot(
+      project([
+        unit({ id: 'u402', unitNumber: '402', status: 'SOLD', sales: [{ status: 'CLOSED', combinedDealRef: 'PRODIGY' }] }),
+        unit({ id: 'u404', unitNumber: '404', status: 'UNDER_CONTRACT', sales: [{ status: 'UNDER_CONTRACT', combinedDealRef: 'PRODIGY' }] }),
+        unit({ id: 'u405', unitNumber: '405', status: 'AVAILABLE', sales: [{ status: 'CANCELLED', combinedDealRef: 'PRODIGY' }] }),
+        unit({ id: 'u203', unitNumber: '203', status: 'LEASED', leases: [{ combinedDealRef: 'JB', tenantBrand: 'JB', tenantName: 'JB' }] }),
+        unit({ id: 'u204', unitNumber: '204', status: 'LEASED', leases: [{ combinedDealRef: 'JB', tenantBrand: 'JB', tenantName: 'JB' }] }),
+        unit({ id: 'u406', unitNumber: '406', status: 'AVAILABLE' }),
+      ]),
+      NOW,
+    );
+    const byNumber = Object.fromEntries(snap.buildings[0].units.map((u) => [u.unitNumber, u]));
+    expect(byNumber['402'].dealUnitIds).toEqual(['u402', 'u404']);
+    expect(byNumber['404'].dealUnitIds).toEqual(['u402', 'u404']);
+    // The website still groups as the tracker UI does: 404's deal ref is unchanged.
+    expect([byNumber['402'].dealRef, byNumber['404'].dealRef]).toEqual(['SALE:PRODIGY', null]);
+    expect(byNumber['405'].dealUnitIds).toEqual([]);
+    expect(byNumber['203'].dealUnitIds).toEqual(['u203', 'u204']);
+    expect(byNumber['406'].dealUnitIds).toEqual([]);
+  });
+
+  it('sends the ids a combined unit was made from, two combines deep', () => {
+    const snap = buildSnapshot(
+      project([
+        unit({
+          id: 'c2',
+          unitNumber: '701+702+703',
+          status: 'AVAILABLE',
+          mergedFrom: [{ id: 'c1', mergedFrom: [{ id: 'u702' }, { id: 'u701' }] }, { id: 'u703', mergedFrom: [] }],
+        }),
+      ]),
+      NOW,
+    );
+    expect(snap.buildings[0].units[0].mergedFromIds).toEqual(['c1', 'u701', 'u702', 'u703']);
   });
 
   it('orders units by number, not by string', () => {
