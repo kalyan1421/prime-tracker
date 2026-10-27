@@ -109,8 +109,8 @@ export class SalesController {
   async create(@Body() body: CreateSaleDto, @CurrentUser('sub') userId: string) {
     const { closeWithoutPaperwork, payments, ...saleFields } = body;
     if (payments?.length) {
-      // Checked before the write so a schedule that does not add up leaves no sale behind.
-      this.salePayments.assertScheduleMatchesPrice(payments, saleFields.salePrice);
+      // Checked before the write so a schedule over the price leaves no sale behind.
+      this.salePayments.assertScheduleFitsPrice(payments, saleFields.salePrice);
     }
     const sale = await this.service.create(saleFields as any, userId, { skipClosedPaperwork: closeWithoutPaperwork });
     if (payments?.length) await this.salePayments.seedCustomInstallments(sale.id, payments);
