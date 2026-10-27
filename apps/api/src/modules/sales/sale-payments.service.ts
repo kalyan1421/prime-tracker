@@ -178,35 +178,49 @@ export class SalePaymentsService {
     );
   }
 
-  /** Throws unless the rows add up to the sale price (to the cent). Used before a sale is written. */
-  assertScheduleMatchesPrice(rows: { amount: number }[], salePrice: number | null | undefined) {
+  /**
+   * Throws if the entered installments EXCEED the sale price. Falling short is fine and
+   * expected — a deal is often entered with the total and only its first payment (half, 40%…);
+   * seedCustomInstallments records the remainder as a pending "Balance" installment.
+   */
+  assertScheduleFitsPrice(rows: { amount: number }[], salePrice: number | null | undefined) {
     const total = Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100);
     const price = Math.round(Number(salePrice ?? 0) * 100);
     if (!(price > 0)) throw new BadRequestException('Enter a sale price before adding a payment schedule');
-    if (total !== price) {
-      throw new BadRequestException(
-        `The installments add up to ${(total / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}, `
-        + `but the sale price is ${(price / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}.`,
-      );
+    if (total > price) {
+      const usd = (c: number) => (c / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+      throw new BadRequestException(`The installments add up to ${usd(total)}, which is more than the sale price of ${usd(price)}.`);
     }
   }
 
-  /** Write an entered schedule (label, amount, optional date) against an existing sale. */
-  async seedCustomInstallments(saleId: string, rows: { label: string; amount: number; dueDate?: string }[]) {
-    await this.getSale(saleId);
+  /**
+   * Write an entered schedule against an existing sale. Rows marked `received` are stored
+   * as already collected. Whatever part of the price the rows do not cover becomes one
+   * undated, still-pending "Balance" installment, so the money owed is never silently lost.
+   */
+  async seedCustomInstallments(
+    saleId: string,
+    rows: { label: string; amount: number; dueDate?: string; received?: boolean }[],
+  ) {
+    const sale = await this.getSale(saleId);
     if ((await this.prisma.salePayment.count({ where: { saleId } })) > 0) {
       throw new BadRequestException('Sale already has a payment schedule; clear it first');
     }
-    return this.prisma.$transaction(
-      rows.map((r, i) =>
-        this.prisma.salePayment.create({
-          data: {
-            saleId, label: r.label, sequence: i, trigger: 'FIXED_DATE', amount: r.amount,
-            dueDate: r.dueDate ? new Date(r.dueDate) : null,
-          },
-        }),
-      ),
-    );
+    const now = new Date();
+    const data = rows.map((r, i) => ({
+      saleId, label: r.label, sequence: i, trigger: 'FIXED_DATE' as SalePaymentTrigger, amount: r.amount,
+      dueDate: r.dueDate ? new Date(r.dueDate) : null,
+      ...(r.received ? { paidAmount: r.amount, paidAt: now, status: 'PAID' as const } : {}),
+    }));
+    const covered = Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100);
+    const remainder = Math.round(Number(sale.salePrice ?? 0) * 100) - covered;
+    if (remainder > 0) {
+      data.push({
+        saleId, label: 'Balance', sequence: rows.length, trigger: 'FIXED_DATE' as SalePaymentTrigger,
+        amount: remainder / 100, dueDate: null,
+      } as (typeof data)[number]);
+    }
+    return this.prisma.$transaction(data.map((d) => this.prisma.salePayment.create({ data: d })));
   }
 
   /**

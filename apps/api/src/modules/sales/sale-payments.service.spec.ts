@@ -60,6 +60,32 @@ describe('SalePaymentsService', () => {
     });
   });
 
+  describe('seedCustomInstallments — partial schedule', () => {
+    beforeEach(() => {
+      mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 1000 });
+      mockPrisma.salePayment.count.mockResolvedValue(0);
+      mockPrisma.salePayment.create.mockImplementation((a: any) => Promise.resolve(a.data));
+    });
+
+    it('keeps the uncovered remainder as a pending, undated Balance installment', async () => {
+      const rows: any[] = await service.seedCustomInstallments('s1', [{ label: 'First', amount: 400, received: true }]);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual(expect.objectContaining({ amount: 400, paidAmount: 400, status: 'PAID' }));
+      expect(rows[1]).toEqual(expect.objectContaining({ label: 'Balance', amount: 600, dueDate: null }));
+      expect(rows[1].status).toBeUndefined(); // column default SCHEDULED
+    });
+
+    it('adds no Balance row when the schedule covers the price', async () => {
+      const rows: any[] = await service.seedCustomInstallments('s1', [{ label: 'All', amount: 1000 }]);
+      expect(rows).toHaveLength(1);
+    });
+
+    it('refuses a schedule over the price, but not one under it', () => {
+      expect(() => service.assertScheduleFitsPrice([{ amount: 1001 }], 1000)).toThrow(/more than the sale price/);
+      expect(() => service.assertScheduleFitsPrice([{ amount: 400 }], 1000)).not.toThrow();
+    });
+  });
+
   describe('clearSchedule', () => {
     beforeEach(() => mockPrisma.sale.findFirst.mockResolvedValue({ id: 's1', salePrice: 1000 }));
 

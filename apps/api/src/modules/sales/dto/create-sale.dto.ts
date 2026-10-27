@@ -15,6 +15,10 @@ export class CreateSaleInstallmentDto {
 
   @IsOptional() @IsDateString()
   dueDate?: string;
+
+  /** Already collected: stored as fully paid (paidAmount = amount) rather than scheduled. */
+  @IsOptional() @IsBoolean()
+  received?: boolean;
 }
 
 export class CreateSaleDto {

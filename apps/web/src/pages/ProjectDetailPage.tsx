@@ -4571,7 +4571,7 @@ const LOST_REASONS = [
 ];
 
 /** One row of the payment schedule being entered with a new sale. Strings, like every form field. */
-type SaleInstallmentRow = { label: string; amount: string; dueDate: string; edited?: boolean };
+type SaleInstallmentRow = { label: string; amount: string; dueDate: string; edited?: boolean; received?: boolean };
 
 /**
  * N equal installments of `price`, the last absorbing the cent remainder. Labels, dates and
@@ -4590,6 +4590,7 @@ function splitInstallments(price: number, count: number, prev: SaleInstallmentRo
       amount: old?.edited ? old.amount : auto,
       dueDate: old?.dueDate ?? '',
       edited: old?.edited,
+      received: old?.received,
     };
   });
 }
@@ -4633,6 +4634,7 @@ function buildSalePayload(
             label: r.label.trim() || 'Payment',
             amount: parseFloat(r.amount),
             ...(r.dueDate ? { dueDate: toApiDate(r.dueDate) } : {}),
+            ...(r.received ? { received: true } : {}),
           })),
         }
       : {}),
@@ -4776,7 +4778,7 @@ function SaleFormFields({
             setForm((f) => ({ ...f, paymentCount: v }));
             setInstallments?.((rows) => splitInstallments(Number(form.salePrice), Number(v), rows));
           }}
-          description="Fill in each payment below — leave dates blank if not agreed yet" />
+          description="Enter the payments you know (e.g. 1 for a 40% first payment) — any remainder is kept as a pending Balance" />
       )}
       <Select
         size="sm"
@@ -4845,21 +4847,29 @@ function SaleFormFields({
         <div className="sm:col-span-2 space-y-2 rounded-lg border border-gray-200 p-3">
           <p className="text-sm font-semibold text-gray-700">Payment schedule</p>
           {installments.map((r, i) => (
-            <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-[1.4fr_1fr_1fr]">
+            <div key={i} className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1.3fr_1fr_1fr_auto]">
               <Input size="sm" label={`Payment ${i + 1}`} value={r.label}
                 onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, label: v } : x)))} />
               <Input size="sm" type="number" label="Amount ($)" value={r.amount}
                 onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, amount: v, edited: true } : x)))} />
               <Input size="sm" type="date" label="Due date (optional)" value={r.dueDate}
                 onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, dueDate: v } : x)))} />
+              <Switch size="sm" isSelected={!!r.received}
+                onValueChange={(v) => setInstallments((rows) => rows.map((x, j) => (j === i ? { ...x, received: v } : x)))}>
+                Received
+              </Switch>
             </div>
           ))}
           {(() => {
             const total = installments.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-            const diff = Math.round((total - Number(form.salePrice || 0)) * 100) / 100;
+            const remainder = Math.round((Number(form.salePrice || 0) - total) * 100) / 100;
             return (
-              <p className={`text-xs ${diff === 0 ? 'text-gray-600' : 'text-red-700'}`}>
-                Total {fmt(total)}{diff === 0 ? ' — matches the sale price' : ` — ${diff > 0 ? 'over' : 'under'} the sale price by ${fmt(Math.abs(diff))}`}
+              <p className={`text-xs ${remainder < 0 ? 'text-red-700' : 'text-gray-600'}`}>
+                {remainder < 0
+                  ? `Payments are ${fmt(-remainder)} over the sale price`
+                  : remainder === 0
+                    ? `Total ${fmt(total)} — covers the sale price`
+                    : `Entered ${fmt(total)} — ${fmt(remainder)} stays pending as a "Balance" payment`}
               </p>
             );
           })()}
@@ -4998,8 +5008,8 @@ function SalesTab({ projectId }: { projectId: string }) {
         const bad = installments.findIndex((r) => !(parseFloat(r.amount) > 0));
         if (bad >= 0) { setSaleFormError(`Payment ${bad + 1} needs an amount above zero`); return; }
         const total = Math.round(installments.reduce((sum, r) => sum + parseFloat(r.amount), 0) * 100);
-        if (total !== Math.round(Number(form.salePrice || 0) * 100)) {
-          setSaleFormError('The payments must add up to the sale price');
+        if (total > Math.round(Number(form.salePrice || 0) * 100)) {
+          setSaleFormError('The payments add up to more than the sale price');
           return;
         }
       }
