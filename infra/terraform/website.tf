@@ -197,6 +197,11 @@ locals {
   # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
   # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
   # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
+  # - www.google.com in frame-src: the Google Maps embeds on /contact and each
+  #   property page (`https://www.google.com/maps?q=…&output=embed`, which redirects
+  #   to www.google.com/maps/embed — same host, so maps.google.com isn't needed).
+  # - blob: in connect-src: three's GLTFLoader fetches a .glb's embedded textures
+  #   through blob: URLs. Without it the 3D site model logs violations on every open.
   # - Google Analytics / Firebase: the site's visitor analytics and performance
   #   monitoring (apps/web/src/lib/firebase.js) — gtag from googletagmanager, hits to
   #   google-analytics, and the Firebase config, installations, remote-config and
@@ -218,9 +223,9 @@ locals {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://storage.googleapis.com https://*.google-analytics.com https://*.googletagmanager.com",
     "font-src 'self' data:",
-    "connect-src 'self' https://cdn.jsdelivr.net ${join(" ", local.website_analytics_hosts)}",
+    "connect-src 'self' blob: https://cdn.jsdelivr.net ${join(" ", local.website_analytics_hosts)}",
     "media-src 'self' blob:",
-    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com",
+    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
