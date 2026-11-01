@@ -29,8 +29,11 @@ export interface PushResult {
  * The parts of the website's merge report a person should see: rows removed,
  * tracker buildings with no website building (and their units), website
  * buildings whose stored link matched nothing, units whose status the website
- * does not know, and anything it refused or was forced past. Null when the body
- * is not a report. Left out, because they are expected and would otherwise warn
+ * does not know, 3D shapes it left for re-tagging, and anything it refused or was
+ * forced past. Stranded shapes are ones it left on a split row's old label, or
+ * whose unit tag it dropped because the unit moved to another building; they
+ * show as their building on the site until someone re-tags them in the website
+ * admin. Null when the body is not a report. Left out, because they are expected and would otherwise warn
  * on every hourly push: website buildings the tracker simply has no building
  * for, and tracker buildings with no units, which can lose nothing.
  *
@@ -55,6 +58,7 @@ export function reportIssues(body: unknown): Record<string, number> | null {
     unmatchedUnits: count('unmatchedUnits', 0),
     staleLinks: count('staleLinks', report.staleLinks ?? []),
     unknownStatuses: count('unknownStatuses', 0),
+    stranded: count('stranded', report.stranded ?? []),
     refusals: Array.isArray(report.refusals) ? report.refusals.length : report.refused ? 1 : 0,
   };
   return Object.fromEntries(Object.entries(issues).filter(([, n]) => n > 0));
