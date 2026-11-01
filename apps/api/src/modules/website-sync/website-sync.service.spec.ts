@@ -147,6 +147,13 @@ describe('reportIssues', () => {
     });
   });
 
+  it('flags 3D shapes the website left for re-tagging', () => {
+    const shape = { mesh: 'm1', model: 'centro', from: 'Building 5', into: ['Building 5A'], reason: 'split' };
+    expect(reportIssues({ report: { counts: { stranded: 2 } } })).toEqual({ stranded: 2 });
+    expect(reportIssues({ report: { stranded: [shape] } })).toEqual({ stranded: 1 });
+    expect(reportIssues({ report: { counts: {} } })).toEqual({});
+  });
+
   it('is null for a body that is not a report', () => {
     expect(reportIssues('<html>Bad gateway</html>')).toBeNull();
     expect(reportIssues({ message: 'Property "x" already mirrors tracker project y' })).toBeNull();
