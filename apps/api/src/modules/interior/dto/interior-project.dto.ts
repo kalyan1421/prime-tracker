@@ -1,5 +1,5 @@
 import {
-  ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min,
+  ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsString, MaxLength, Min,
 } from 'class-validator';
 import { InteriorContractType, InteriorPhase, InteriorStatus } from '@prisma/client';
 
@@ -66,6 +66,13 @@ export class CreateInteriorProjectDto {
 
   @IsOptional() @IsString() @MaxLength(20)
   poPrefix?: string | null;
+
+  /**
+   * The approved total budget for the whole fit-out, entered when it is started. Money, so
+   * the controller only accepts it from interior:finance. `null` clears it (update only).
+   */
+  @IsOptional() @IsNumber(NUMBER) @IsPositive()
+  totalBudget?: number | null;
 }
 
 export class UpdateInteriorProjectDto {
@@ -112,6 +119,13 @@ export class UpdateInteriorProjectDto {
 
   @IsOptional() @IsString() @MaxLength(20)
   poPrefix?: string | null;
+
+  /**
+   * The approved total budget for the whole fit-out, entered when it is started. Money, so
+   * the controller only accepts it from interior:finance. `null` clears it (update only).
+   */
+  @IsOptional() @IsNumber(NUMBER) @IsPositive()
+  totalBudget?: number | null;
 }
 
 export class AdvanceInteriorPhaseDto {

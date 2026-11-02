@@ -18,6 +18,7 @@ import { INTERIOR_PHASES } from '../constants/interior';
 import { FormError } from './FormError';
 import { AddButton } from './ui';
 import { BUDGET_BASIS_LABEL } from './InteriorCostingParts';
+import { TotalBudgetBanner, parseBudget } from './InteriorTotalBudget';
 
 export { INTERIOR_PHASES };
 
@@ -87,6 +88,9 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
   const create = useCreateInterior();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const canEditInterior = useAuthStore((s) => s.hasPermission('interior:edit'));
+  // The total budget is Finance's figure: the field only exists for them, and everyone else
+  // sees the "no budget" banner on the new fit-out instead.
+  const canSetBudget = useAuthStore((s) => s.hasPermission('interior:finance'));
   const [interiorErr, setInteriorErr] = useState<string | null>(null);
 
   const projects: any[] = Array.isArray(data) ? data : [];
@@ -102,6 +106,7 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
 
   const defaultForm = (): Record<string, string> => ({
     name: unitNumber ? `Unit ${unitNumber} fit-out` : buildingName ? `${buildingName} fit-out` : '',
+    totalBudget: '',
     contractType: 'PER_SQFT',
     ratePerSqft: '',
     area: unitSqft != null ? String(unitSqft) : '',
@@ -118,12 +123,17 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
 
   const submit = async () => {
     if (!form.name.trim()) { setInteriorErr('Name is required'); return; }
+    if (canSetBudget && form.totalBudget.trim() && parseBudget(form.totalBudget) === null) {
+      setInteriorErr('Total budget must be greater than zero'); return;
+    }
     setInteriorErr(null);
     try {
       await create.mutateAsync({
         // Exactly one of these — the API rejects both or neither.
         ...(unitId ? { unitId } : { buildingId }),
         name: form.name.trim(),
+        // Optional here — left blank, the fit-out shows an "add budget" banner until it is set.
+        ...(canSetBudget && form.totalBudget.trim() ? { totalBudget: parseBudget(form.totalBudget) } : {}),
         contractType: form.contractType || 'PER_SQFT',
         ratePerSqft: form.ratePerSqft ? Number(form.ratePerSqft) : undefined,
         area: form.area ? Number(form.area) : undefined,
@@ -206,6 +216,27 @@ export function InteriorPanel({ unitId, buildingId, unitNumber, buildingName, un
               errorMessage="Required"
             />
 
+            {/* Total budget — asked for up front, because everything after is tracked against it. */}
+            {canSetBudget && (
+              <div className="space-y-1">
+                <Input
+                  size="sm" label="Total budget ($)" inputMode="decimal" value={form.totalBudget}
+                  onChange={set('totalBudget')}
+                  description="The approved budget for the whole fit-out. You can add it later — a banner will remind you."
+                />
+                {form.contractType === 'PER_SQFT' && form.ratePerSqft && form.area
+                  && parseBudget(form.totalBudget) !== Number(form.ratePerSqft) * Number(form.area) && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, totalBudget: String(Number(f.ratePerSqft) * Number(f.area)) }))}
+                    className="text-xs font-medium text-blue-700 hover:underline"
+                  >
+                    Use rate × area, {fmt(Number(form.ratePerSqft) * Number(form.area))}
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Contract */}
             <div className="grid grid-cols-3 gap-2">
               <Select
@@ -267,6 +298,7 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
   const approve = useApproveInterior();
   const update = useUpdateInterior();
   const canEdit = useAuthStore((s) => s.hasPermission('interior:edit'));
+  const canSetBudget = useAuthStore((s) => s.hasPermission('interior:finance'));
   const idx = INTERIOR_PHASES.indexOf(project.phase);
   const next = idx >= 0 && idx < INTERIOR_PHASES.length - 1 ? INTERIOR_PHASES[idx + 1] : null;
 
@@ -278,6 +310,7 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
     ratePerSqft: project.ratePerSqft != null ? String(project.ratePerSqft) : '',
     area: project.area != null ? String(project.area) : '',
     contractValue: project.contractValue != null ? String(project.contractValue) : '',
+    totalBudget: project.totalBudget != null ? String(Number(project.totalBudget)) : '',
     pmId: project.pm?.id ?? '',
     startDate: project.startDate ? String(project.startDate).slice(0, 10) : '',
     targetEnd: project.targetEnd ? String(project.targetEnd).slice(0, 10) : '',
@@ -292,6 +325,7 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
       ratePerSqft: project.ratePerSqft != null ? String(project.ratePerSqft) : '',
       area: project.area != null ? String(project.area) : '',
       contractValue: project.contractValue != null ? String(project.contractValue) : '',
+      totalBudget: project.totalBudget != null ? String(Number(project.totalBudget)) : '',
       pmId: project.pm?.id ?? '',
       startDate: project.startDate ? String(project.startDate).slice(0, 10) : '',
       targetEnd: project.targetEnd ? String(project.targetEnd).slice(0, 10) : '',
@@ -302,11 +336,18 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
 
   const saveEdit = async () => {
     if (!editForm.name.trim()) { setEditErr('Name is required'); return; }
+    if (canSetBudget && editForm.totalBudget.trim() && parseBudget(editForm.totalBudget) === null) {
+      setEditErr('Total budget must be greater than zero'); return;
+    }
     setEditErr(null);
+    // Only when it changed — see the same rule on the full workspace's edit form.
+    const budgetBefore = project.totalBudget != null ? String(Number(project.totalBudget)) : '';
+    const budgetChanged = canSetBudget && editForm.totalBudget.trim() !== budgetBefore;
     try {
       await update.mutateAsync({
         id: project.id,
         data: {
+          ...(budgetChanged ? { totalBudget: parseBudget(editForm.totalBudget) } : {}),
           name: editForm.name.trim(),
           contractType: editForm.contractType || undefined,
           ratePerSqft: editForm.ratePerSqft ? Number(editForm.ratePerSqft) : undefined,
@@ -361,6 +402,14 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
           onChange={(e) => { setEditForm((f) => ({ ...f, name: e.target.value })); setEditErr(null); }}
           isInvalid={!!editErr && editErr.includes('Name')}
         />
+
+        {canSetBudget && (
+          <Input
+            size="sm" label="Total budget ($)" inputMode="decimal" value={editForm.totalBudget}
+            onChange={setEdit('totalBudget')}
+            description="The approved budget for the whole fit-out. Blank removes it."
+          />
+        )}
 
         <div className="grid grid-cols-3 gap-2">
           <Select
@@ -460,6 +509,8 @@ function InteriorProjectCard({ project, users }: { project: any; users: any[] })
           )}
         </div>
       </div>
+
+      <TotalBudgetBanner project={project} compact />
 
       <PhaseStepper current={project.phase} />
 

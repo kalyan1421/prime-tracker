@@ -3,7 +3,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { computeBudget, codesOverBudget, fitOutBudget, leftOnCode, lineValue, type BudgetInput } from './interior-budget';
+import { computeBudget, codesOverBudget, fitOutBudget, leftOnCode, lineValue, totalBudgetPosition, type BudgetInput } from './interior-budget';
 
 /**
  * Interiors costing (client, 2026-10-17) — the estimate, its lock, the job-costing budget,
@@ -260,11 +260,16 @@ export class InteriorCostingService {
       approveBill: finance && this.hasRole(actor, settings.billApproverRoles),
       payBill: finance,
       markWorkComplete: actor.permissions.includes('interior:view'),
+      // Setting the total budget is a Finance act on an editable fit-out (the PATCH route
+      // needs interior:edit, and the controller adds interior:finance on top).
+      setTotalBudget: finance && actor.permissions.includes('interior:edit') && p.status !== 'CANCELLED' && p.status !== 'COMPLETED',
     };
 
     const base = {
       id: p.id, name: p.name, area: num(p.area), units, poPrefix: prefix, priority: p.priority,
       estimateStatus: p.estimateStatus, settings: { coLimit: settings.coLimit }, can,
+      // Not money: whether a total budget exists. The banner needs it for every viewer.
+      hasTotalBudget: p.totalBudget !== null,
     };
     if (!finance) return { ...base, purchaseOrders: purchaseOrdersWork, activity: [] as unknown[] };
 
@@ -275,6 +280,8 @@ export class InteriorCostingService {
 
     return {
       ...base,
+      // The approved total and where the estimate, purchase orders and bills stand against it.
+      totalBudget: totalBudgetPosition(p.totalBudget, budget.totals),
       estimate: {
         status: p.estimateStatus,
         submittedAt: p.estimateSubmittedAt, submittedBy: p.estimateSubmittedBy,
@@ -354,7 +361,7 @@ export class InteriorCostingService {
       where: { id: { in: ids } },
       select: {
         id: true, estimateStatus: true, status: true,
-        contractType: true, ratePerSqft: true, area: true, contractValue: true,
+        contractType: true, ratePerSqft: true, area: true, contractValue: true, totalBudget: true,
         scopeItems: { select: { costCodeId: true, paidBy: true, quantity: true, unitPrice: true, total: true } },
         budgetSnapshot: { select: { costCodeId: true, paidBy: true, amount: true } },
         changeOrders: { select: { costCodeId: true, paidBy: true, amount: true, status: true } },
@@ -372,8 +379,13 @@ export class InteriorCostingService {
         status: p.status, estimateStatus: p.estimateStatus, revised: totals.revised,
         estimateTotal: p.scopeItems.reduce((t, l) => t + lineValue(l), 0),
         contractType: p.contractType, ratePerSqft: p.ratePerSqft, area: p.area, contractValue: p.contractValue,
+        totalBudget: p.totalBudget,
       });
-      out.set(p.id, { ...totals, estimateStatus: p.estimateStatus, budget: fb.amount, budgetBasis: fb.basis });
+      out.set(p.id, {
+        ...totals, estimateStatus: p.estimateStatus, budget: fb.amount, budgetBasis: fb.basis,
+        // Lets the board flag a fit-out whose estimate or spend has passed its total budget.
+        budgetAlerts: totalBudgetPosition(p.totalBudget, totals).alerts,
+      });
     }
     return out;
   }

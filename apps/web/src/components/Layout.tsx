@@ -28,7 +28,7 @@ const BASE_NAV_ITEMS = [
   { label: 'Updates', icon: FiRss, path: '/updates', permission: 'updateBoard:view' },
   { label: 'Site Tracker', icon: FiColumns, path: '/site-tracker', permission: 'siteTracker:view' },
   { label: 'Inventory', icon: FiPackage, path: '/inventory' },
-  { label: 'Interior', icon: FiGrid, path: '/interior', permission: 'interior:view' },
+  { label: 'Fit-Out & Payments', icon: FiGrid, path: '/interior', permission: 'interior:view' },
   { label: 'Cash Flow', icon: FiTrendingUp, path: '/cashflow', permission: 'financial:view' },
   { label: 'Receivables', icon: FiTrendingDown, path: '/receivables', permission: 'financial:view' },
   { label: 'Tasks', icon: FiCheckSquare, path: '/tasks', permission: 'task:view' },

@@ -12,6 +12,7 @@ import { useDebounced } from '../hooks/useDebounced';
 import { useCollapsibleGroups } from '../hooks/useCollapsibleGroups';
 import { groupColor } from '../components/BoardCells';
 import { BudgetFigure, fitOutBudgetOf, money, StatusTag } from '../components/InteriorCostingParts';
+import { BudgetStatusChip } from '../components/InteriorTotalBudget';
 
 const PHASE_LABEL: Record<string, string> = {
   DESIGN: 'Design', CLIENT_APPROVAL: 'Client Approval', CITY_APPROVAL: 'City Approval',
@@ -166,7 +167,7 @@ export default function InteriorPortfolioPage() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <FiHome className="text-2xl text-amber-600" />
-          <h1 className="text-2xl font-bold">Interior / Fit-Out Portfolio</h1>
+          <h1 className="text-2xl font-bold">Fit-Out & Payments</h1>
         </div>
         <Button size="sm" variant="flat" startContent={<FiSettings />} onPress={() => navigate('/interior/settings')}>
           Cost codes & approvals
@@ -298,7 +299,10 @@ export default function InteriorPortfolioPage() {
                                 className="cursor-pointer border-t border-gray-100 hover:bg-gray-50"
                                 onClick={() => navigate(`/interior/${r.id}`)}
                               >
-                                <td className="px-3 py-2 font-medium text-blue-600">{r.name}</td>
+                                <td className="px-3 py-2 font-medium text-blue-600">
+                                  {r.name}
+                                  <div className="mt-1"><BudgetStatusChip row={r} /></div>
+                                </td>
                                 <td className="px-3 py-2 text-gray-700">{unitsOf(r)}</td>
                                 <td className="px-3 py-2 text-gray-700">{r.pm?.name ?? '—'}</td>
                                 <td className="p-0 text-center">

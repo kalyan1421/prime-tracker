@@ -35,6 +35,9 @@ const AFTER_PHOTO_REQUIRED =
  */
 const SHELL_COMPLETE_PHASES: string[] = ['LEASE_UP', 'STABILIZED', 'SOLD_REFI'];
 
+/** "$1,250,000" / "$1,250,000.50" — for the activity log lines. */
+const usd = (n: number) => `$${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+
 interface CreateInteriorInput {
   unitId?: string;
   buildingId?: string;
@@ -55,6 +58,8 @@ interface CreateInteriorInput {
   /** What Prime contributes. Null = take it from the linked lease. */
   tiAllowance?: number | null;
   poPrefix?: string | null;
+  /** The approved total budget (interior:finance only — the controller enforces that). */
+  totalBudget?: number | null;
 }
 
 type UpdateInteriorInput = Partial<Omit<CreateInteriorInput, 'unitId' | 'buildingId'>> & {
@@ -141,8 +146,13 @@ export class InteriorService {
     // portfolio, just easy to miss here since nothing in the `include` block hints
     // that money is riding along. Omitting `viewerPermissions` (internal calls) stays
     // full trust, matching findById's convention.
-    if (!viewerPermissions || viewerPermissions.includes('interior:finance')) return projects;
-    return projects.map((p) => ({ ...p, contractValue: null, ratePerSqft: null, tiAllowance: null }));
+    // `hasTotalBudget` is not money — the "add a budget" banner needs it for every viewer.
+    if (!viewerPermissions || viewerPermissions.includes('interior:finance')) {
+      return projects.map((p) => ({ ...p, hasTotalBudget: p.totalBudget !== null }));
+    }
+    return projects.map((p) => ({
+      ...p, contractValue: null, ratePerSqft: null, tiAllowance: null, totalBudget: null, hasTotalBudget: p.totalBudget !== null,
+    }));
   }
 
   async findById(id: string, viewerPermissions?: string[]) {
@@ -194,11 +204,14 @@ export class InteriorService {
     //
     // Omitting `viewerPermissions` (internal calls like advancePhase, which only needs
     // `phase`/`snags`) means full trust — the same convention ProjectsService uses.
-    if (!viewerPermissions || viewerPermissions.includes('interior:finance')) return project;
+    const hasTotalBudget = project.totalBudget !== null;
+    if (!viewerPermissions || viewerPermissions.includes('interior:finance')) return { ...project, hasTotalBudget };
     return {
       ...project,
       contractValue: null,
       ratePerSqft: null,
+      totalBudget: null,
+      hasTotalBudget,
       // The TI allowance is money too, on the fit-out and on the lease it may come from.
       tiAllowance: null,
       lease: project.lease ? { ...project.lease, tiAllowance: null } : null,
@@ -237,6 +250,8 @@ export class InteriorService {
         ...rest,
         tiAllowance: canViewFinance && p.tiAllowance !== null ? Number(p.tiAllowance) : null,
         contractValue: canViewFinance && p.contractValue ? Number(p.contractValue) : null,
+        totalBudget: canViewFinance && p.totalBudget !== null ? Number(p.totalBudget) : null,
+        hasTotalBudget: p.totalBudget !== null,
         spend: canViewFinance ? spend : null,
         daysToHandover,
       };
@@ -245,7 +260,7 @@ export class InteriorService {
 
   // ─────── Create / Update / Delete ───────
 
-  async create(input: CreateInteriorInput) {
+  async create(input: CreateInteriorInput, actorId?: string | null) {
     this.assertExactlyOneAnchor(input.unitId, input.buildingId);
     if (!input.name?.trim()) throw new BadRequestException('name is required');
     this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
@@ -292,8 +307,15 @@ export class InteriorService {
           plansSubmittedAt: input.plansSubmittedAt ? new Date(input.plansSubmittedAt) : null,
           tiAllowance: input.tiAllowance ?? null,
           poPrefix: input.poPrefix?.trim().toUpperCase() || null,
+          totalBudget: input.totalBudget ?? null,
+          totalBudgetSetAt: input.totalBudget != null ? new Date() : null,
         },
       });
+      if (input.totalBudget != null) {
+        await tx.interiorActivity.create({
+          data: { interiorProjectId: project.id, actorId: actorId ?? null, text: `Total budget set to ${usd(input.totalBudget)}.` },
+        });
+      }
       if (extra.ids.length) {
         await tx.interiorProjectUnit.createMany({ data: extra.ids.map((unitId) => ({ interiorProjectId: project.id, unitId })) });
       }
@@ -301,7 +323,7 @@ export class InteriorService {
     });
   }
 
-  async update(id: string, input: UpdateInteriorInput) {
+  async update(id: string, input: UpdateInteriorInput, actorId?: string | null) {
     const project = await this.findById(id);
     this.assertNonNegativeMoney(input.ratePerSqft, input.area, input.contractValue);
     // COMPLETED is reached only by advancing to HANDOVER, never set directly here.
@@ -331,6 +353,9 @@ export class InteriorService {
       ...(input.plansSubmittedAt !== undefined ? { plansSubmittedAt: input.plansSubmittedAt ? new Date(input.plansSubmittedAt) : null } : {}),
       ...(input.tiAllowance !== undefined ? { tiAllowance: input.tiAllowance } : {}),
       ...(input.poPrefix !== undefined ? { poPrefix: input.poPrefix?.trim().toUpperCase() || null } : {}),
+      ...(input.totalBudget !== undefined
+        ? { totalBudget: input.totalBudget, totalBudgetSetAt: input.totalBudget === null ? null : new Date() }
+        : {}),
     };
     if (input.extraUnitIds !== undefined) {
       const extra = await this.checkExtraUnits(project.unitId, input.extraUnitIds);
@@ -343,6 +368,20 @@ export class InteriorService {
       data.pm = input.pmId ? { connect: { id: input.pmId } } : { disconnect: true };
     }
     const updated = await this.prisma.interiorProject.update({ where: { id }, data });
+    // A change to the total budget goes on the activity log — it re-bases every figure on
+    // the fit-out, so who moved it, from what and to what should be findable.
+    if (input.totalBudget !== undefined) {
+      const before = project.totalBudget === null ? null : Number(project.totalBudget);
+      const after = input.totalBudget;
+      if (before !== after) {
+        const text = after === null
+          ? `Total budget cleared (was ${usd(before ?? 0)}).`
+          : before === null
+            ? `Total budget set to ${usd(after)}.`
+            : `Total budget changed from ${usd(before)} to ${usd(after)}.`;
+        await this.costing.logActivity(id, actorId ?? null, text);
+      }
+    }
     // Cancelling via update() must also revert any unpaid TI installment made due by a
     // (now-undone) handover — mirror remove(), otherwise a cancelled fit-out leaves money "due".
     if (input.status === 'CANCELLED' && project.status !== 'CANCELLED') {

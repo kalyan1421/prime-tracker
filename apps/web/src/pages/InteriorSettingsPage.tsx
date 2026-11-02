@@ -69,7 +69,7 @@ export default function InteriorSettingsPage() {
   return (
     <div className="space-y-4">
       <Link to="/interior" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline">
-        <FiArrowLeft /> Interior Portfolio
+        <FiArrowLeft /> Fit-Out & Payments
       </Link>
       <h1 className="text-2xl font-bold">Interiors — cost codes & approvals</h1>
 

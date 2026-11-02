@@ -19,6 +19,7 @@ import { useAuthStore } from '../store/authStore';
 import { fmt, fmtDate } from '../utils/fmt';
 import { LoadingState, EmptyState, Pagination } from './ui';
 import { BudgetFigure } from './InteriorCostingParts';
+import { BudgetStatusChip } from './InteriorTotalBudget';
 import { usePagination } from '../hooks/usePagination';
 import { INTERIOR_PHASES } from '../constants/interior';
 
@@ -99,6 +100,7 @@ export function ProjectInteriorTab({ projectId }: { projectId: string }) {
                       <Link to={`/interior/${r.id}`} className="font-medium text-blue-600 hover:underline">
                         {r.name}
                       </Link>
+                      <div className="mt-1"><BudgetStatusChip row={r} /></div>
                     </td>
                     <td className="px-4 py-3 text-gray-500">
                       {r.unit?.id ? (
