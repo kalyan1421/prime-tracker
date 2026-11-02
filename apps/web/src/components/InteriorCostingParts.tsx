@@ -26,6 +26,27 @@ export interface CostCode {
   sortOrder: number; active: boolean;
 }
 
+/**
+ * Estimate lines in cost-code order, lines with NO cost code last (client, 2026-11-02).
+ *
+ * "Cost-code order" is the codes' own `sortOrder` — the order the dropdown and the Budget
+ * tab already use — so 01.25 comes before 02.20 and all three screens agree. A line keeps
+ * its place among lines on the same code (the sort is stable, so that is creation order).
+ * A code this list does not know yet (still loading, or removed) sorts after the known ones
+ * but before the uncoded lines.
+ */
+export function sortEstimateLines<T extends { costCodeId: string | null }>(
+  lines: T[], codes: { id: string; sortOrder: number }[],
+): T[] {
+  const order = new Map(codes.map((c) => [c.id, c.sortOrder]));
+  const UNKNOWN = 1_000_000_000;
+  const rank = (l: T) => (l.costCodeId == null ? Number.MAX_SAFE_INTEGER : order.get(l.costCodeId) ?? UNKNOWN);
+  return [...lines].sort((a, b) => {
+    const ra = rank(a); const rb = rank(b);
+    return ra === rb ? 0 : ra < rb ? -1 : 1;
+  });
+}
+
 export const codeLabel = (c?: { code: string | null; name: string } | null) =>
   !c ? 'No cost code' : c.code ? `${c.code} - ${c.name}` : c.name;
 
@@ -58,12 +79,14 @@ export function CostCodeSelect({ value, onChange, codes, label, disabled, allowN
       aria-label={label} disabled={disabled} value={value ?? ''}
       onChange={(e) => onChange(e.target.value || null)} className={FIELD}
     >
-      {allowNone && <option value="">No cost code</option>}
       {groupCodes(shown).map((g) => (
         <optgroup key={g.key} label={g.label}>
           {g.codes.map((c) => <option key={c.id} value={c.id}>{codeLabel(c)}{c.active ? '' : ' (off)'}</option>)}
         </optgroup>
       ))}
+      {/* Last, not first (client, 2026-11-02): the real codes are what people pick, and a
+          line with no code still SHOWS this option while it is selected, wherever it sits. */}
+      {allowNone && <option value="">No cost code</option>}
     </select>
   );
 }
@@ -176,6 +199,7 @@ export const roleList = (roles: string[]) =>
  * a contract value is never mistaken for an approved budget.
  */
 export const BUDGET_BASIS_LABEL: Record<string, string> = {
+  TOTAL_BUDGET: 'total budget',
   LOCKED_ESTIMATE: 'locked estimate',
   PER_SQFT: 'contract · per SF',
   CONTRACT_VALUE: 'contract',

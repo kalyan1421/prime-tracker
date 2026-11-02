@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards, UseInterceptors,
+  Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Put, Query, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { InteriorStatus } from '@prisma/client';
@@ -82,8 +82,11 @@ export class InteriorController {
   @ApiOperation({ summary: 'Create an interior project (per-sqft contract; anchor to unit OR building)' })
   create(
     @Body() body: CreateInteriorProjectDto,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.create(body);
+    this.assertMayEditTotalBudget(body.totalBudget, permissions);
+    return this.service.create(body, userId);
   }
 
   @Patch(':id')
@@ -91,8 +94,23 @@ export class InteriorController {
   update(
     @Param('id') id: string,
     @Body() body: UpdateInteriorProjectDto,
+    @CurrentUser('sub') userId?: string,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    return this.service.update(id, body);
+    this.assertMayEditTotalBudget(body.totalBudget, permissions);
+    return this.service.update(id, body, userId);
+  }
+
+  /**
+   * The total budget is money: interior:edit alone (the route's gate) is not enough to set
+   * or clear it. Only a body that actually carries the field is checked, so an edit of the
+   * name or dates by a non-finance editor is unaffected.
+   */
+  private assertMayEditTotalBudget(totalBudget: number | null | undefined, permissions?: string[]) {
+    if (totalBudget === undefined) return;
+    if (!(permissions ?? []).includes('interior:finance')) {
+      throw new ForbiddenException('Setting the total budget needs Finance access');
+    }
   }
 
   @Post(':id/advance')

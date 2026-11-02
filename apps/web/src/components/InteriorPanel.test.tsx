@@ -200,3 +200,100 @@ describe('InteriorPanel — handover has one entry point', () => {
     expect(screen.queryByRole('link', { name: /Complete handover/ })).toBeNull();
   });
 });
+
+describe('InteriorPanel — total budget', () => {
+  const asFinance = () => { state.permissions = ['interior:view', 'interior:edit', 'interior:finance']; };
+
+  it('asks for it when starting a fit-out, and sends it', async () => {
+    asFinance();
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Start fit-out/ }));
+    await screen.findByText('Start interior fit-out');
+    fireEvent.change(screen.getByLabelText('Total budget ($)'), { target: { value: '250000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(created.length).toBe(1));
+    expect(created[0].totalBudget).toBe(250000);
+  });
+
+  it('leaves it out when blank — the fit-out is created and the banner takes over', async () => {
+    asFinance();
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Start fit-out/ }));
+    await screen.findByText('Start interior fit-out');
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(created.length).toBe(1));
+    expect('totalBudget' in created[0]).toBe(false);
+  });
+
+  it('does not offer the field, or send it, to someone without finance', async () => {
+    state.permissions = ['interior:view', 'interior:edit'];
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Start fit-out/ }));
+    await screen.findByText('Start interior fit-out');
+    expect(screen.queryByLabelText('Total budget ($)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(created.length).toBe(1));
+    expect('totalBudget' in created[0]).toBe(false);
+  });
+
+  it('refuses a zero budget on create and sends nothing', async () => {
+    asFinance();
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Start fit-out/ }));
+    await screen.findByText('Start interior fit-out');
+    fireEvent.change(screen.getByLabelText('Total budget ($)'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(await screen.findByText(/greater than zero/)).toBeTruthy();
+    expect(created.length).toBe(0);
+  });
+
+  it('fills the field from rate × area in one click', async () => {
+    asFinance();
+    renderPanel(); // unitSqft 1200 prefills the area
+    fireEvent.click(screen.getByRole('button', { name: /Start fit-out/ }));
+    await screen.findByText('Start interior fit-out');
+    fireEvent.change(screen.getByLabelText(/Rate \/ sqft/), { target: { value: '50' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Use rate × area, \$60,000/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(created.length).toBe(1));
+    expect(created[0].totalBudget).toBe(60000);
+  });
+
+  it('shows the banner on a fit-out with no budget, and not on one that has it', () => {
+    asFinance();
+    state.projects = [project({ hasTotalBudget: false })];
+    const a = renderPanel();
+    expect(screen.getByRole('alert').textContent).toMatch(/No total budget set/);
+    a.unmount();
+    state.projects = [project({ hasTotalBudget: true, totalBudget: '250000.00' })];
+    renderPanel();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an unrelated edit does not re-send an unchanged budget', async () => {
+    asFinance();
+    state.projects = [project({ hasTotalBudget: true, totalBudget: '250000.00' })];
+    renderPanel();
+    expect('totalBudget' in (await editAndSave())).toBe(false);
+  });
+
+  it('editing the budget sends the new figure, and blank sends null to remove it', async () => {
+    asFinance();
+    state.projects = [project({ hasTotalBudget: true, totalBudget: '250000.00' })];
+    const { unmount } = renderPanel();
+    fireEvent.click(screen.getByLabelText('Edit fit-out'));
+    fireEvent.change(await screen.findByLabelText('Total budget ($)'), { target: { value: '300000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(updated.length).toBe(1));
+    expect(updated[0].data.totalBudget).toBe(300000);
+    unmount();
+
+    updated.length = 0;
+    renderPanel();
+    fireEvent.click(screen.getByLabelText('Edit fit-out'));
+    fireEvent.change(await screen.findByLabelText('Total budget ($)'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(updated.length).toBe(1));
+    expect(updated[0].data.totalBudget).toBeNull();
+  });
+});

@@ -144,6 +144,95 @@ describe('InteriorService', () => {
     });
   });
 
+  describe('total budget — set at the start, banner until it is', () => {
+    it('create stores the total budget, stamps when it was set, and logs it', async () => {
+      mockPrisma.interiorProject.create.mockResolvedValue({ id: 'ip1' });
+      await service.create({ name: 'Fit-out', unitId: 'u1', totalBudget: 250_000 }, 'user-1');
+      expect(mockPrisma.interiorProject.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ totalBudget: 250_000, totalBudgetSetAt: expect.any(Date) }) }),
+      );
+      expect(mockPrisma.interiorActivity.create).toHaveBeenCalledWith({
+        data: { interiorProjectId: 'ip1', actorId: 'user-1', text: 'Total budget set to $250,000.' },
+      });
+    });
+
+    it('create without one leaves it null and logs nothing — the banner picks it up', async () => {
+      mockPrisma.interiorProject.create.mockResolvedValue({ id: 'ip1' });
+      await service.create({ name: 'Fit-out', unitId: 'u1' });
+      expect(mockPrisma.interiorProject.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ totalBudget: null, totalBudgetSetAt: null }) }),
+      );
+      expect(mockPrisma.interiorActivity.create).not.toHaveBeenCalled();
+    });
+
+    it('update sets a missing budget and logs who set it', async () => {
+      stubProject({ totalBudget: null });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1' });
+      await service.update('ip1', { totalBudget: 400_000 }, 'user-2');
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ totalBudget: 400_000, totalBudgetSetAt: expect.any(Date) }) }),
+      );
+      expect(mockCosting.logActivity).toHaveBeenCalledWith('ip1', 'user-2', 'Total budget set to $400,000.');
+    });
+
+    it('update records from-and-to when the budget moves', async () => {
+      stubProject({ totalBudget: '400000.00' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1' });
+      await service.update('ip1', { totalBudget: 450_000.5 }, 'user-2');
+      expect(mockCosting.logActivity).toHaveBeenCalledWith('ip1', 'user-2', 'Total budget changed from $400,000 to $450,000.5.');
+    });
+
+    it('update can clear it with null, which clears the stamp too', async () => {
+      stubProject({ totalBudget: '400000.00' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1' });
+      await service.update('ip1', { totalBudget: null }, 'user-2');
+      expect(mockPrisma.interiorProject.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ totalBudget: null, totalBudgetSetAt: null }) }),
+      );
+      expect(mockCosting.logActivity).toHaveBeenCalledWith('ip1', 'user-2', 'Total budget cleared (was $400,000).');
+    });
+
+    it('re-saving the same figure is not a change, so nothing is logged', async () => {
+      stubProject({ totalBudget: '400000.00' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1' });
+      await service.update('ip1', { totalBudget: 400_000 }, 'user-2');
+      expect(mockCosting.logActivity).not.toHaveBeenCalled();
+    });
+
+    it('an update that does not mention the budget leaves it alone', async () => {
+      stubProject({ totalBudget: '400000.00' });
+      mockPrisma.interiorProject.update.mockResolvedValue({ id: 'ip1' });
+      await service.update('ip1', { name: 'Renamed' });
+      const data = mockPrisma.interiorProject.update.mock.calls[0][0].data;
+      expect(data).not.toHaveProperty('totalBudget');
+      expect(data).not.toHaveProperty('totalBudgetSetAt');
+    });
+
+    it('findById hides the amount from a non-finance viewer but still says whether it exists', async () => {
+      stubProject({ totalBudget: '400000.00', contractValue: '1', scopeItems: [], invoices: [], lease: null });
+      const viewer = await service.findById('ip1', ['interior:view']);
+      expect(viewer).toMatchObject({ totalBudget: null, hasTotalBudget: true });
+      const finance = await service.findById('ip1', ['interior:view', 'interior:finance']);
+      expect(finance).toMatchObject({ totalBudget: '400000.00', hasTotalBudget: true });
+    });
+
+    it('findById reports hasTotalBudget false when none is set', async () => {
+      stubProject({ totalBudget: null, scopeItems: [], invoices: [], lease: null });
+      expect(await service.findById('ip1', ['interior:view'])).toMatchObject({ hasTotalBudget: false });
+    });
+
+    it('findAll hides the amount from a non-finance viewer but keeps the flag', async () => {
+      mockPrisma.interiorProject.findMany.mockResolvedValue([
+        { id: 'a', totalBudget: '1000.00', contractValue: '5', ratePerSqft: '1', tiAllowance: '2' },
+        { id: 'b', totalBudget: null, contractValue: null, ratePerSqft: null, tiAllowance: null },
+      ]);
+      const rows: any[] = await service.findAll({}, ['interior:view']);
+      expect(rows.map((r) => [r.id, r.totalBudget, r.hasTotalBudget])).toEqual([['a', null, true], ['b', null, false]]);
+      const full: any[] = await service.findAll({}, ['interior:view', 'interior:finance']);
+      expect(full.map((r) => [r.totalBudget, r.hasTotalBudget])).toEqual([['1000.00', true], [null, false]]);
+    });
+  });
+
   describe('advancePhase — linear order', () => {
     it('rejects skipping a phase (DESIGN → CITY_APPROVAL)', async () => {
       stubProject({ phase: 'DESIGN' });

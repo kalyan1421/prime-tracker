@@ -25,6 +25,7 @@ import {
 } from '../components/InteriorPurchasingPanels';
 import { DocumentGateBanner, INTERIOR_PHASE_DOCS } from '../components/DocumentGateChip';
 import { useAuthStore } from '../store/authStore';
+import { TotalBudgetBanner, parseBudget } from '../components/InteriorTotalBudget';
 
 const PHASE_ORDER = [
   'DESIGN', 'CLIENT_APPROVAL', 'CITY_APPROVAL', 'PROCUREMENT', 'EXECUTION', 'SNAGGING', 'HANDOVER',
@@ -192,7 +193,7 @@ export default function InteriorProjectDetailPage() {
     <div className="space-y-4">
       {/* Back link */}
       <Link to="/interior" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline">
-        <FiArrowLeft /> Interior Portfolio
+        <FiArrowLeft /> Fit-Out & Payments
       </Link>
 
       {/* ─── Header card ─── */}
@@ -325,6 +326,9 @@ export default function InteriorProjectDetailPage() {
           </div>
         </CardBody>
       </Card>
+
+      {/* No total budget yet: every viewer sees the reminder, Finance gets the button. */}
+      <TotalBudgetBanner project={p} />
 
       {/* ─── Job costing summary (finance only) ─── */}
       {money && <InteriorCostingSummary costing={c} canEdit={canEdit} />}
@@ -558,6 +562,7 @@ function EditInteriorModal({ project, onClose, update, canFinance, hasPurchaseOr
     priority: project.priority ?? '',
     plansSubmittedAt: project.plansSubmittedAt ? String(project.plansSubmittedAt).slice(0, 10) : '',
     tiAllowance: project.tiAllowance != null ? String(project.tiAllowance) : '',
+    totalBudget: project.totalBudget != null ? String(Number(project.totalBudget)) : '',
     poPrefix: project.poPrefix ?? '',
   });
   const [extraIds, setExtraIds] = useState<string[]>(() => (project.extraUnits ?? []).map((x: any) => x.unit?.id).filter(Boolean));
@@ -577,6 +582,13 @@ function EditInteriorModal({ project, onClose, update, canFinance, hasPurchaseOr
     if (form.tiAllowance && !(Number(form.tiAllowance) >= 0)) {
       return addToast({ title: 'TI allowance must be zero or more', color: 'warning' });
     }
+    if (canFinance && form.totalBudget && parseBudget(form.totalBudget) === null) {
+      return addToast({ title: 'Total budget must be greater than zero', color: 'warning' });
+    }
+    // Sent only when it changed: it is a Finance-only field, and re-sending an unchanged
+    // figure would stamp a new "set" time on every unrelated edit.
+    const budgetBefore = project.totalBudget != null ? String(Number(project.totalBudget)) : '';
+    const budgetChanged = canFinance && form.totalBudget.trim() !== budgetBefore;
     try {
       await update.mutateAsync({
         id: project.id,
@@ -585,6 +597,7 @@ function EditInteriorModal({ project, onClose, update, canFinance, hasPurchaseOr
           contractType: form.contractType || undefined,
           ratePerSqft: form.ratePerSqft ? Number(form.ratePerSqft) : undefined,
           area: form.area ? Number(form.area) : undefined,
+          ...(budgetChanged ? { totalBudget: parseBudget(form.totalBudget) } : {}),
           // Only for the types with no formula — see derivesOwnValue.
           contractValue: derived ? undefined : form.contractValue ? Number(form.contractValue) : undefined,
           targetEnd: form.targetEnd || undefined,
@@ -657,6 +670,12 @@ function EditInteriorModal({ project, onClose, update, canFinance, hasPurchaseOr
                 </SelectItem>
               ))}
             </Select>
+          )}
+          {canFinance && (
+            <Input
+              type="number" label="Total budget ($)" value={form.totalBudget} onChange={set('totalBudget')}
+              description="The approved budget for the whole fit-out. Blank removes it."
+            />
           )}
           {canFinance && (
             <Input

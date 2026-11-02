@@ -3298,6 +3298,12 @@ model InteriorProject {
   poPrefix              String?
   // What PRIME contributes to the tenant's fit-out. Null = take it from the linked lease.
   tiAllowance           Decimal?                 @db.Decimal(14, 2)
+  // The approved TOTAL budget for the whole fit-out, set when the work is started (client,
+  // 2026-11-02). Null = not set yet, and the UI shows a banner until it is. When set it is
+  // THE budget figure (fitOutBudget) and the estimate, purchase orders and bills are
+  // measured against it.
+  totalBudget           Decimal?                 @db.Decimal(14, 2)
+  totalBudgetSetAt      DateTime?
   priority              String? // HIGH | MEDIUM | LOW
   plansSubmittedAt      DateTime?
   createdAt             DateTime                 @default(now())

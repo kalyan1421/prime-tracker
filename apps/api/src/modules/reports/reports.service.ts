@@ -21,7 +21,7 @@ const INTERIOR_PHASES = [
 
 /** Where an interior project's committed value came from — so Finance can judge the number. */
 // SCOPE_ITEMS is the draft estimate's live total (scope items ARE the estimate lines).
-type CommitmentBasis = 'LOCKED_ESTIMATE' | 'PER_SQFT' | 'CONTRACT_VALUE' | 'SCOPE_ITEMS' | 'NONE';
+type CommitmentBasis = 'TOTAL_BUDGET' | 'LOCKED_ESTIMATE' | 'PER_SQFT' | 'CONTRACT_VALUE' | 'SCOPE_ITEMS' | 'NONE';
 
 @Injectable()
 export class ReportsService {
@@ -881,6 +881,7 @@ export class ReportsService {
     ratePerSqft: unknown;
     area: unknown;
     contractValue: unknown;
+    totalBudget?: unknown;
     scopeItems: Array<{ total: unknown; quantity?: unknown; unitPrice?: unknown }>;
     budgetSnapshot?: Array<{ amount: unknown }>;
     changeOrders?: Array<{ amount: unknown }>;
@@ -892,6 +893,7 @@ export class ReportsService {
       status: ip.status, estimateStatus: ip.estimateStatus, revised,
       estimateTotal: ip.scopeItems.reduce((t, l) => t + lineValue(l), 0),
       contractType: ip.contractType, ratePerSqft: ip.ratePerSqft, area: ip.area, contractValue: ip.contractValue,
+      totalBudget: ip.totalBudget,
     });
     return { committed: amount, basis: basis === 'ESTIMATE' ? 'SCOPE_ITEMS' : basis };
   }

@@ -184,12 +184,15 @@ export function codesOverBudget(
   return over;
 }
 
-export type FitOutBudgetBasis = 'LOCKED_ESTIMATE' | 'PER_SQFT' | 'CONTRACT_VALUE' | 'ESTIMATE' | 'NONE';
+export type FitOutBudgetBasis = 'TOTAL_BUDGET' | 'LOCKED_ESTIMATE' | 'PER_SQFT' | 'CONTRACT_VALUE' | 'ESTIMATE' | 'NONE';
 
 /**
  * THE budget figure for a fit-out, wherever one number has to stand for it (report,
  * portfolio, project tab, unit card). One rule so those screens cannot disagree:
  *
+ *   0. a TOTAL BUDGET   -> the approved figure entered when the fit-out was started
+ *                          (client, 2026-11-02). It outranks everything below, which then
+ *                          become what is measured AGAINST it (see totalBudgetPosition).
  *   1. estimate LOCKED  -> the revised budget (locked estimate + approved change orders)
  *   2. a contract figure -> PER_SQFT rate x area, else the flat contractValue
  *   3. a draft estimate  -> its live total
@@ -207,8 +210,10 @@ export function fitOutBudget(f: {
   ratePerSqft?: unknown;
   area?: unknown;
   contractValue?: unknown;
+  totalBudget?: unknown;
 }): { amount: number; basis: FitOutBudgetBasis } {
   if (f.status === 'CANCELLED') return { amount: 0, basis: 'NONE' };
+  if (f.totalBudget !== null && f.totalBudget !== undefined) return { amount: r2(toNum(f.totalBudget)), basis: 'TOTAL_BUDGET' };
   if (f.estimateStatus === 'LOCKED') return { amount: r2(f.revised), basis: 'LOCKED_ESTIMATE' };
   const rate = f.ratePerSqft === null || f.ratePerSqft === undefined ? null : Number(f.ratePerSqft);
   const area = f.area === null || f.area === undefined ? null : Number(f.area);
@@ -216,4 +221,61 @@ export function fitOutBudget(f: {
   if (f.contractValue !== null && f.contractValue !== undefined) return { amount: r2(toNum(f.contractValue)), basis: 'CONTRACT_VALUE' };
   if (f.estimateTotal > 0) return { amount: r2(f.estimateTotal), basis: 'ESTIMATE' };
   return { amount: 0, basis: 'NONE' };
+}
+
+export type BudgetAlertKind = 'ESTIMATE_OVER' | 'COMMITTED_OVER' | 'ACTUAL_OVER';
+
+export interface TotalBudgetPosition {
+  /** False while no total budget has been entered — the UI shows the "add budget" banner. */
+  set: boolean;
+  total: number | null;
+  /** The estimate as it stands (revised budget): what has been planned against the total. */
+  estimate: number;
+  committed: number;
+  pending: number;
+  actual: number;
+  /** total − estimate. Negative = the estimate alone is already past the total budget. */
+  unallocated: number | null;
+  /** total − committed − pending. What a NEW purchase order may still take. */
+  leftToCommit: number | null;
+  /** total − actual. What has not been billed yet. */
+  leftToSpend: number | null;
+  /** Share of the total already billed, 0..1+ (above 1 means overspent). */
+  spentShare: number | null;
+  alerts: BudgetAlertKind[];
+}
+
+/**
+ * Where a fit-out stands against its TOTAL budget — the connection between the one figure
+ * Finance approved and everything that spends it (estimate, change orders, purchase orders,
+ * bills). Pure, so the thresholds are tested rather than re-derived on each screen.
+ *
+ * The three alerts are advisory, never blocks: a PO that takes the job over its total is
+ * allowed to proceed (the cost-code check and the variance approver already govern that);
+ * it is flagged so the overrun is seen the day it happens.
+ */
+export function totalBudgetPosition(
+  totalBudget: unknown,
+  t: { revised: number; committed: number; pending: number; actual: number },
+): TotalBudgetPosition {
+  const base = {
+    estimate: r2(t.revised), committed: r2(t.committed), pending: r2(t.pending), actual: r2(t.actual),
+  };
+  if (totalBudget === null || totalBudget === undefined) {
+    return { set: false, total: null, ...base, unallocated: null, leftToCommit: null, leftToSpend: null, spentShare: null, alerts: [] };
+  }
+  const total = r2(toNum(totalBudget));
+  const alerts: BudgetAlertKind[] = [];
+  // Half a cent of slack, as leftOnCode() has: rounding must not raise an alert.
+  if (t.revised > total + 0.005) alerts.push('ESTIMATE_OVER');
+  if (t.committed > total + 0.005) alerts.push('COMMITTED_OVER');
+  if (t.actual > total + 0.005) alerts.push('ACTUAL_OVER');
+  return {
+    set: true, total, ...base,
+    unallocated: r2(total - t.revised),
+    leftToCommit: r2(total - t.committed - t.pending),
+    leftToSpend: r2(total - t.actual),
+    spentShare: total > 0 ? Math.round((t.actual / total) * 10000) / 10000 : null,
+    alerts,
+  };
 }

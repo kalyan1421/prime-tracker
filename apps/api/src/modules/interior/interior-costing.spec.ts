@@ -4,7 +4,7 @@
  * (805–815): original $342,250, committed $318,007.06, projected $452,186.71.
  */
 import { ConflictException, ForbiddenException } from '@nestjs/common';
-import { computeBudget, codesOverBudget, fitOutBudget, leftOnCode, type BudgetInput } from './interior-budget';
+import { computeBudget, codesOverBudget, fitOutBudget, leftOnCode, totalBudgetPosition, type BudgetInput } from './interior-budget';
 import { InteriorCostingService, derivePoPrefix, codeLabel, DEFAULT_SETTINGS } from './interior-costing.service';
 
 // ── Luxyn, as BuilderTrend had it ────────────────────────────────────────────
@@ -128,6 +128,57 @@ describe('fitOutBudget — the one budget figure every screen shows', () => {
   it('nothing to go on is NONE, and a cancelled fit-out commits nothing', () => {
     expect(fitOutBudget({ revised: 0, estimateTotal: 0, contractType: 'COST_PLUS' })).toEqual({ amount: 0, basis: 'NONE' });
     expect(fitOutBudget({ ...base, status: 'CANCELLED', estimateStatus: 'LOCKED' })).toEqual({ amount: 0, basis: 'NONE' });
+  });
+
+  describe('the total budget (client, 2026-11-02)', () => {
+    it('outranks a locked estimate, a contract figure and a draft estimate', () => {
+      expect(fitOutBudget({ ...base, estimateStatus: 'LOCKED', totalBudget: '500000.00' })).toEqual({ amount: 500_000, basis: 'TOTAL_BUDGET' });
+      expect(fitOutBudget({ ...base, estimateStatus: 'DRAFT', totalBudget: 500_000 })).toEqual({ amount: 500_000, basis: 'TOTAL_BUDGET' });
+    });
+    it('null / undefined means not set, so the old rule still decides', () => {
+      expect(fitOutBudget({ ...base, estimateStatus: 'LOCKED', totalBudget: null })).toEqual({ amount: 226_860, basis: 'LOCKED_ESTIMATE' });
+      expect(fitOutBudget({ ...base, estimateStatus: 'DRAFT' })).toEqual({ amount: 180_000, basis: 'PER_SQFT' });
+    });
+    it('a cancelled fit-out still commits nothing, whatever its budget', () => {
+      expect(fitOutBudget({ ...base, status: 'CANCELLED', totalBudget: 500_000 })).toEqual({ amount: 0, basis: 'NONE' });
+    });
+  });
+});
+
+describe('totalBudgetPosition — what the estimate, POs and bills do to the total budget', () => {
+  const totals = { revised: 226_860, committed: 150_000, pending: 10_000, actual: 90_000 };
+
+  it('is "not set" with no alerts and no derived figures when there is no total budget', () => {
+    const r = totalBudgetPosition(null, totals);
+    expect(r).toMatchObject({ set: false, total: null, unallocated: null, leftToCommit: null, leftToSpend: null, spentShare: null, alerts: [] });
+    expect(r.estimate).toBe(226_860); // the raw figures are still reported
+  });
+
+  it('measures every figure against the total', () => {
+    const r = totalBudgetPosition('300000.00', totals);
+    expect(r).toMatchObject({
+      set: true, total: 300_000, unallocated: 73_140, leftToCommit: 140_000, leftToSpend: 210_000, spentShare: 0.3, alerts: [],
+    });
+  });
+
+  it('flags an estimate that is already past the total', () => {
+    expect(totalBudgetPosition(200_000, totals)).toMatchObject({ unallocated: -26_860, alerts: ['ESTIMATE_OVER'] });
+  });
+
+  it('flags committed and actual overruns separately, in order', () => {
+    const r = totalBudgetPosition(100_000, { revised: 90_000, committed: 120_000, pending: 0, actual: 105_000 });
+    expect(r.alerts).toEqual(['COMMITTED_OVER', 'ACTUAL_OVER']);
+    expect(r.leftToCommit).toBe(-20_000);
+  });
+
+  it('counts pending POs against what is left to commit, but never as an overrun on their own', () => {
+    const r = totalBudgetPosition(100_000, { revised: 50_000, committed: 60_000, pending: 50_000, actual: 0 });
+    expect(r.leftToCommit).toBe(-10_000);
+    expect(r.alerts).toEqual([]);
+  });
+
+  it('half a cent of rounding is not an overrun', () => {
+    expect(totalBudgetPosition(100_000, { revised: 100_000.004, committed: 0, pending: 0, actual: 0 }).alerts).toEqual([]);
   });
 });
 

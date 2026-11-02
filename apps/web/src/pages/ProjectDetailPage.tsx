@@ -185,7 +185,7 @@ const TAB_TITLE_MAP: Record<string, string> = {
   units: 'Units',
   // Fit-outs belonging to this project. Sits next to Units because that is what a
   // fit-out is usually anchored to, and it is where someone goes looking for one.
-  interior: 'Interior',
+  interior: 'Fit-Out & Payments',
   milestones: 'Milestones',
   leads: 'Leads',
   draws: 'Draws',

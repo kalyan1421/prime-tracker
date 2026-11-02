@@ -15,7 +15,7 @@ import {
 import { errMsg } from '../utils/fmt';
 import {
   COST_TYPES, CostCodeSelect, Note, PayerToggle, PlainSelect, SectionCard, StatusTag, TD, TH, NUM,
-  fmtDay, money, roleList, type CostCode, type Payer,
+  fmtDay, money, roleList, sortEstimateLines, type CostCode, type Payer,
 } from './InteriorCostingParts';
 
 const INPUT = 'h-8 w-full rounded border border-gray-200 bg-white px-2 text-xs text-gray-900 outline-none focus:border-blue-500';
@@ -42,7 +42,10 @@ export function InteriorEstimatePanel({ costing }: { costing: any }) {
   const [unlocking, setUnlocking] = useState(false);
   const [reason, setReason] = useState('');
 
-  const lines: any[] = est?.lines ?? [];
+  // Server order is creation order. Shown in cost-code order with uncoded lines last; the
+  // new-line row below still copies the code of the most recently ADDED line.
+  const createdOrder: any[] = est?.lines ?? [];
+  const lines = useMemo(() => sortEstimateLines(createdOrder, codes), [createdOrder, codes]);
   const edit = !!can.editEstimate;
   const totals = useMemo(() => {
     let prime = 0; let tenant = 0;
@@ -167,7 +170,7 @@ export function InteriorEstimatePanel({ costing }: { costing: any }) {
                   }}
                 />
               ))}
-              {edit && <NewLineRow costingId={costing.id} codes={codes} lastCodeId={lines[lines.length - 1]?.costCodeId ?? null} />}
+              {edit && <NewLineRow costingId={costing.id} codes={codes} lastCodeId={createdOrder[createdOrder.length - 1]?.costCodeId ?? null} />}
               {!lines.length && !edit && (
                 <tr><td colSpan={10} className="px-4 py-8 text-center text-sm text-gray-500">No estimate lines yet.</td></tr>
               )}

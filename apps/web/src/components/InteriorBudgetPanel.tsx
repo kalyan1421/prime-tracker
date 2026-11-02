@@ -10,6 +10,7 @@ import { FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import { useUpdateInterior } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
 import { money, PayerTag, SectionCard, StatusTag, TD, TH, NUM, Note } from './InteriorCostingParts';
+import { TotalBudgetCard } from './InteriorTotalBudget';
 
 const COLS: { key: string; label: string; hint?: string }[] = [
   { key: 'original', label: 'Original', hint: 'The estimate as it was locked' },
@@ -43,6 +44,8 @@ export function InteriorCostingSummary({ costing, canEdit }: { costing: any; can
   ];
   return (
     <div className="space-y-3">
+      {/* The approved total first: everything below is measured against it. */}
+      <TotalBudgetCard costing={costing} />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
         {tiles.map((x) => (
           <div key={x.k} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5">
