@@ -8325,6 +8325,9 @@ const DOC_CATEGORIES = [
   'BROCHURE', 'LOI', 'DEED', 'BOOKING_AGREEMENT', 'RECEIPT', 'NOC',
   'POSSESSION_CERTIFICATE', 'CITY_APPROVAL', 'HANDOVER_CERTIFICATE',
 ];
+// INVOICE is the one enum value NOT offered for upload here: an invoice is always attached
+// to a fit-out bill (Purchase orders / Bills tab), and the API refuses one without a bill.
+// It still lists and filters here, for the people allowed to see bills.
 const DOC_CATEGORY_COLORS: Record<string, string> = {
   GENERAL: 'bg-gray-100 text-gray-600',
   PERMIT: 'bg-yellow-100 text-yellow-700',
@@ -8342,6 +8345,7 @@ const DOC_CATEGORY_COLORS: Record<string, string> = {
   POSSESSION_CERTIFICATE: 'bg-emerald-100 text-emerald-700',
   CITY_APPROVAL: 'bg-sky-100 text-sky-700',
   HANDOVER_CERTIFICATE: 'bg-violet-100 text-violet-700',
+  INVOICE: 'bg-emerald-100 text-emerald-700',
 };
 
 function docIcon(mime: string) {
@@ -8437,7 +8441,7 @@ function DocumentsTab({ projectId }: { projectId: string }) {
 
       <div className="flex items-center justify-between">
         <div className="flex gap-2 flex-wrap">
-          {['ALL', ...DOC_CATEGORIES].map((cat) => (
+          {['ALL', ...DOC_CATEGORIES, ...((docs as any[]).some((d) => d.category === 'INVOICE') ? ['INVOICE'] : [])].map((cat) => (
             <button
               key={cat}
               onClick={() => setFilterCat(cat)}
