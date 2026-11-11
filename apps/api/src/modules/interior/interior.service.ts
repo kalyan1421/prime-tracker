@@ -217,6 +217,8 @@ export class InteriorService {
       lease: project.lease ? { ...project.lease, tiAllowance: null } : null,
       scopeItems: project.scopeItems.map((s) => ({ ...s, unitPrice: null, total: null })),
       invoices: [],
+      // A bill's invoice file carries the same figures as the bill.
+      documents: project.documents?.filter((d) => d.category !== 'INVOICE'),
     };
   }
 
@@ -700,6 +702,13 @@ export class InteriorService {
         // path) must not block voiding the invoice that points at it.
         await tx.actual.deleteMany({ where: { id: inv.actualId } });
       }
+      // The bill's invoice file(s) go with it. A soft delete, like every document delete
+      // (DocumentsService.delete): the bytes stay for the retention window. Without this the
+      // FK's SetNull would leave an INVOICE in the Documents tab pointing at no bill.
+      await tx.document.updateMany({
+        where: { interiorInvoiceId: invoiceId, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
       return tx.interiorInvoice.delete({ where: { id: invoiceId } });
     });
   }

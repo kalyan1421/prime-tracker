@@ -29,7 +29,8 @@ type InteriorDocCategory =
   | 'HANDOVER_CERTIFICATE'
   | 'CONTRACT'
   | 'PHOTO'
-  | 'GENERAL';
+  | 'GENERAL'
+  | 'INVOICE';
 
 const CAT_META: Record<InteriorDocCategory, { label: string; color: string; required?: boolean }> = {
   DRAWING:              { label: 'Design Drawing',        color: 'bg-purple-100 text-purple-700' },
@@ -38,9 +39,16 @@ const CAT_META: Record<InteriorDocCategory, { label: string; color: string; requ
   CONTRACT:             { label: 'Contract',              color: 'bg-amber-100 text-amber-700' },
   PHOTO:                { label: 'Site Photo',            color: 'bg-pink-100 text-pink-700' },
   GENERAL:              { label: 'General',               color: 'bg-gray-100 text-gray-600' },
+  INVOICE:              { label: 'Invoice',               color: 'bg-emerald-100 text-emerald-700' },
 };
 
 const ALL_CATS = Object.keys(CAT_META) as InteriorDocCategory[];
+/**
+ * Everything but INVOICE can be uploaded from here. An invoice is always attached to a bill —
+ * from the Purchase orders or Bills tab — and the API refuses one without a bill. Invoices
+ * still list and filter here, for the people allowed to see bills.
+ */
+const UPLOAD_CATS = ALL_CATS.filter((c) => c !== 'INVOICE');
 
 /**
  * Which documents the NEXT phase needs.
@@ -74,10 +82,13 @@ export function InteriorDocumentsPanel({
   interiorProjectId,
   currentPhase,
   projectId,
+  invoiceLabels,
 }: {
   interiorProjectId: string;
   currentPhase?: string;
   projectId?: string;
+  /** Bill id → "Bill BSM-1042 · FIT-0001", shown on each invoice file. */
+  invoiceLabels?: Record<string, string>;
 }) {
   const { data, isLoading } = useInteriorDocuments(interiorProjectId);
   const upload  = useUploadDocument();
@@ -210,7 +221,7 @@ export function InteriorDocumentsPanel({
             onSelectionChange={(k) => setUploadCat(Array.from(k)[0] as InteriorDocCategory)}
             className="w-40"
           >
-            {ALL_CATS.map((c) => <SelectItem key={c}>{CAT_META[c].label}</SelectItem>)}
+            {UPLOAD_CATS.map((c) => <SelectItem key={c}>{CAT_META[c].label}</SelectItem>)}
           </Select>
           <Button
             size="sm" color="primary" startContent={<FiUpload size={13} />}
@@ -235,13 +246,17 @@ export function InteriorDocumentsPanel({
           <p className="text-sm text-gray-500">
             {filterCat === 'ALL' ? 'No documents uploaded yet.' : `No ${CAT_META[filterCat as InteriorDocCategory]?.label} documents.`}
           </p>
-          <Button
-            size="sm" variant="flat" color="primary" className="mt-3"
-            startContent={<FiUpload size={12} />}
-            onPress={() => triggerUpload(filterCat === 'ALL' ? 'GENERAL' : (filterCat as InteriorDocCategory))}
-          >
-            Upload first document
-          </Button>
+          {filterCat === 'INVOICE' ? (
+            <p className="mt-1 text-xs text-gray-500">Invoices are attached to a bill on the Purchase orders or Bills tab.</p>
+          ) : (
+            <Button
+              size="sm" variant="flat" color="primary" className="mt-3"
+              startContent={<FiUpload size={12} />}
+              onPress={() => triggerUpload(filterCat === 'ALL' ? 'GENERAL' : (filterCat as InteriorDocCategory))}
+            >
+              Upload first document
+            </Button>
+          )}
         </div>
       )}
 
@@ -266,6 +281,9 @@ export function InteriorDocumentsPanel({
                       </span>
                     )}
                   </div>
+                  {doc.category === 'INVOICE' && doc.interiorInvoiceId && invoiceLabels?.[doc.interiorInvoiceId] && (
+                    <p className="text-[11px] font-medium text-gray-700 mt-1">{invoiceLabels[doc.interiorInvoiceId]}</p>
+                  )}
                   <p className="text-[11px] text-gray-500 mt-1">
                     {doc.uploadedBy?.name} · {fmtDate(doc.createdAt)}
                   </p>

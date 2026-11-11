@@ -1,6 +1,6 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DocCategory } from '@prisma/client';
-import { DocumentsService, EXPIRY_TRACKED_CATEGORIES, EXPIRY_SOON_DAYS } from './documents.service';
+import { DocumentsService, EXPIRY_TRACKED_CATEGORIES, EXPIRY_SOON_DAYS, INVOICE_VIEW_PERMISSION } from './documents.service';
 import {
   DocumentRetentionService,
   PURGEABLE_CATEGORIES,
@@ -228,6 +228,7 @@ function matchesWhere(row: any, where: any = {}): boolean {
     if (cond && typeof cond === 'object' && !(cond instanceof Date)) {
       if ('in' in cond && !cond.in.includes(value)) return false;
       if ('not' in cond && cond.not === null && value === null) return false;
+      if ('not' in cond && cond.not !== null && value === cond.not) return false;
       if ('lte' in cond && !(value !== null && value <= cond.lte)) return false;
       return true;
     }
@@ -1062,5 +1063,173 @@ describe('DocumentsService.create — attaching to a sale', () => {
     // A unit that sold twice must not let the first deal's Deed answer for the second.
     await service.findBySale('s1');
     expect(prisma.document.findMany.mock.calls[0][0].where).toEqual({ saleId: 's1', deletedAt: null });
+  });
+});
+
+// ============================================================================
+// Invoice files on fit-out bills (client, 2026-11-11)
+// ============================================================================
+//
+// "Invoices can be uploaded to the linked purchase order." A bill already belongs to its PO,
+// so the file hangs off the bill (interiorInvoiceId) with category INVOICE. Two rules carry
+// the weight: INVOICE is never filed without a bill, and only people who can see bills
+// (interior:finance) can attach or see one — document:view is far wider than that.
+
+const FINANCE = ['document:view', 'document:upload', INVOICE_VIEW_PERMISSION];
+const CONSTRUCTION = ['document:view', 'document:upload', 'interior:view'];
+
+describe('DocumentsService.create — an invoice attached to a fit-out bill', () => {
+  let service: DocumentsService;
+  let prisma: any;
+  let storage: any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma = {
+      project: { findUnique: jest.fn().mockResolvedValue({ name: 'Centro' }) },
+      interiorInvoice: { findUnique: jest.fn().mockResolvedValue({ interiorProjectId: 'ip-from-bill' }) },
+      interiorProject: {
+        findUnique: jest.fn().mockResolvedValue({
+          unitId: 'u1', buildingId: null, building: null, unit: { building: { projectId: 'pr-from-fitout' } },
+        }),
+      },
+      document: { create: jest.fn((args: any) => Promise.resolve({ id: 'd1', ...args.data })) },
+    };
+    storage = { upload: jest.fn().mockResolvedValue({ storagePath: 'p/inv.pdf', publicUrl: 'https://s3/inv.pdf' }) };
+    service = new DocumentsService(prisma, storage);
+  });
+
+  it('files it against the bill, its fit-out and project — as an INVOICE, and not on the unit', async () => {
+    await service.create(file({ originalname: 'BSM-1042.pdf' }), { interiorInvoiceId: 'bill-1' }, 'user-1', FINANCE);
+
+    const data = prisma.document.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      interiorInvoiceId: 'bill-1',
+      interiorProjectId: 'ip-from-bill',
+      projectId: 'pr-from-fitout',
+      category: DocCategory.INVOICE,
+      unitId: null,
+      buildingId: null,
+    });
+    // The fit-out is looked up from the BILL, not from anything the caller sent.
+    expect(prisma.interiorProject.findUnique.mock.calls[0][0].where).toEqual({ id: 'ip-from-bill' });
+  });
+
+  it('forces the category to INVOICE whatever the caller sent', async () => {
+    await service.create(file(), { interiorInvoiceId: 'bill-1', category: 'PHOTO' }, 'user-1', FINANCE);
+    expect(prisma.document.create.mock.calls[0][0].data.category).toBe(DocCategory.INVOICE);
+  });
+
+  it('refuses an uploader who cannot see bills, before anything reaches storage', async () => {
+    await expect(
+      service.create(file(), { interiorInvoiceId: 'bill-1' }, 'user-1', CONSTRUCTION),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an INVOICE with no bill — so "is an invoice" always means "is on a bill"', async () => {
+    await expect(
+      service.create(file(), { interiorProjectId: 'ip-from-bill', category: 'INVOICE' }, 'user-1', FINANCE),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bill from a different fit-out', async () => {
+    await expect(
+      service.create(file(), { interiorInvoiceId: 'bill-1', interiorProjectId: 'some-other-fitout' }, 'user-1', FINANCE),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
+  it('404s a bill that does not exist (or was voided)', async () => {
+    prisma.interiorInvoice.findUnique.mockResolvedValue(null);
+    await expect(
+      service.create(file(), { interiorInvoiceId: 'gone' }, 'user-1', FINANCE),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
+  it.each(['unitId', 'buildingId', 'saleId', 'leadId'])('refuses an invoice that also names a %s', async (key) => {
+    await expect(
+      service.create(file(), { interiorInvoiceId: 'bill-1', [key]: 'x' }, 'user-1', FINANCE),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
+  it('still files ordinary fit-out documents on the unit, as before', async () => {
+    await service.create(file(), { interiorProjectId: 'ip-1', category: 'DRAWING' }, 'user-1', CONSTRUCTION);
+    expect(prisma.document.create.mock.calls[0][0].data).toMatchObject({
+      interiorProjectId: 'ip-1', unitId: 'u1', projectId: 'pr-from-fitout', category: 'DRAWING', interiorInvoiceId: null,
+    });
+  });
+});
+
+describe('DocumentsService — invoices are only visible to people who can see bills', () => {
+  let service: DocumentsService;
+  let prisma: any;
+  let rows: any[];
+
+  function seed(over: Record<string, any>) {
+    const row = {
+      id: `d${rows.length + 1}`, fileName: 'f.pdf', fileUrl: 'https://s3/raw', storagePath: 'p/f.pdf',
+      category: DocCategory.DRAWING, expiresAt: null, projectId: 'pr1', unitId: null, buildingId: null,
+      interiorProjectId: 'ip1', interiorInvoiceId: null, saleId: null, leadId: null, deletedAt: null,
+      ...over,
+    };
+    rows.push(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    rows = [];
+    prisma = {
+      document: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(rows.filter((r) => matchesWhere(r, where)))),
+        findFirst: jest.fn(({ where }: any) => Promise.resolve(rows.find((r) => matchesWhere(r, where)) ?? null)),
+        update: jest.fn(({ where, data }: any) => Promise.resolve(Object.assign(rows.find((r) => r.id === where.id), data))),
+      },
+    };
+    const storage = { signedUrl: jest.fn().mockResolvedValue('https://s3/signed') };
+    service = new DocumentsService(prisma, storage as any);
+  });
+
+  it.each([
+    ['findByInteriorProject', 'ip1'],
+    ['findByProject', 'pr1'],
+  ])('%s leaves invoices out for a viewer without interior:finance', async (method, anchor) => {
+    const drawing = seed({});
+    const invoice = seed({ category: DocCategory.INVOICE, interiorInvoiceId: 'bill-1' });
+
+    const construction = await (service as any)[method](anchor, CONSTRUCTION);
+    expect(construction.map((d: any) => d.id)).toEqual([drawing.id]);
+
+    const finance = await (service as any)[method](anchor, FINANCE);
+    expect(finance.map((d: any) => d.id)).toEqual([drawing.id, invoice.id]);
+  });
+
+  it('an internal caller (no permissions passed) still sees everything', async () => {
+    seed({});
+    seed({ category: DocCategory.INVOICE, interiorInvoiceId: 'bill-1' });
+    expect(await service.findByInteriorProject('ip1')).toHaveLength(2);
+  });
+
+  it('a by-id read of an invoice 404s for someone who cannot see bills — download, rename, delete', async () => {
+    // 404, not 403: a 403 would confirm the id is a real invoice.
+    const invoice = seed({ category: DocCategory.INVOICE, interiorInvoiceId: 'bill-1' });
+
+    await expect(service.getDownloadUrl(invoice.id, CONSTRUCTION)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.update(invoice.id, { fileName: 'x.pdf' }, CONSTRUCTION)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.delete(invoice.id, CONSTRUCTION)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.listVersions(invoice.id, CONSTRUCTION)).rejects.toBeInstanceOf(NotFoundException);
+    expect(rows[0].deletedAt).toBeNull();
+
+    await expect(service.getDownloadUrl(invoice.id, FINANCE)).resolves.toMatchObject({ url: 'https://s3/signed' });
+  });
+
+  it('other documents are unaffected for the same viewer', async () => {
+    const drawing = seed({});
+    await expect(service.getDownloadUrl(drawing.id, CONSTRUCTION)).resolves.toMatchObject({ url: 'https://s3/signed' });
   });
 });

@@ -3313,6 +3313,8 @@ export function useVoidInteriorInvoice() {
       // The void deletes a paired Actual, so anything reading project spend is now stale.
       qc.invalidateQueries({ queryKey: ['actuals'] });
       qc.invalidateQueries({ queryKey: ['report-interior'] });
+      // ...and removes the bill's invoice file(s), so every Documents list is stale too.
+      qc.invalidateQueries({ queryKey: ['documents'] });
     },
   });
 }
