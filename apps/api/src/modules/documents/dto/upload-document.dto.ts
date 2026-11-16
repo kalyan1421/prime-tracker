@@ -67,6 +67,15 @@ export class UploadDocumentDto {
   @IsOptional() @IsString()
   interiorProjectId?: string;
 
+  /**
+   * Attach this file to a fit-out BILL as its invoice (client, 2026-11-11: invoices are
+   * uploaded to the purchase order the bill belongs to). The fit-out and project are derived
+   * from the bill, the category is forced to INVOICE, and the uploader needs
+   * `interior:finance` — the same gate as the bill itself. See DocumentsService.create.
+   */
+  @IsOptional() @IsString()
+  interiorInvoiceId?: string;
+
   @IsOptional() @IsEnum(DocCategory)
   category?: DocCategory;
 

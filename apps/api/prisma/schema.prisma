@@ -16,21 +16,21 @@ datasource db {
 // ---- Auth & RBAC ----
 
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
-  name         String
-  avatarUrl    String?
-  googleId     String?    @unique
+  id               String     @id @default(cuid())
+  email            String     @unique
+  name             String
+  avatarUrl        String?
+  googleId         String?    @unique
   // Directory fields — self-editable, and editable by an admin on someone else.
   // Never authorization-relevant, unlike role/roles/isActive.
-  phone        String?
-  jobTitle     String?
-  role         UserRole   @default(VIEWER)
-  roles        UserRole[] @default([])
-  isActive     Boolean    @default(true)
-  passwordHash String?
-  mfaEnabled   Boolean    @default(false)
-  mfaSecret    String? // encrypted TOTP secret
+  phone            String?
+  jobTitle         String?
+  role             UserRole   @default(VIEWER)
+  roles            UserRole[] @default([])
+  isActive         Boolean    @default(true)
+  passwordHash     String?
+  mfaEnabled       Boolean    @default(false)
+  mfaSecret        String? // encrypted TOTP secret
   // The 30-second TOTP time-step of the last code accepted. A code is valid for its whole
   // window (±1 step), so without this the same six digits could be replayed — by a
   // shoulder-surfer or a logged request — for up to 90 seconds after the owner used them.
@@ -39,9 +39,9 @@ model User {
   // process does not hand an attacker a fresh set of guesses.
   failedLoginCount Int        @default(0)
   lockedUntil      DateTime?
-  lastLoginAt  DateTime?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  lastLoginAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
   // tenantId   String?   // future multi-tenant
 
   milestones                        Milestone[]                     @relation("MilestoneOwner")
@@ -2472,6 +2472,9 @@ enum DocCategory {
   // Interior / fit-out phase gates
   CITY_APPROVAL
   HANDOVER_CERTIFICATE
+  // A supplier's invoice file. Always attached to a fit-out bill (Document.interiorInvoiceId),
+  // and only visible to people who can see that bill's amount (interior:finance).
+  INVOICE
 }
 
 model Document {
@@ -2489,6 +2492,11 @@ model Document {
   // Interior fit-out attachment (city-approval doc, handover certificate, etc.)
   interiorProjectId String?
   interiorProject   InteriorProject?        @relation(fields: [interiorProjectId], references: [id], onDelete: Cascade)
+  // The fit-out bill this file is the invoice for (2026-11-11). The bill already belongs to a
+  // purchase order, so this is how an invoice is "uploaded to the PO". Voiding the bill
+  // soft-deletes its files first; SetNull is only the safety net for a hard delete.
+  interiorInvoiceId String?
+  interiorInvoice   InteriorInvoice?        @relation(fields: [interiorInvoiceId], references: [id], onDelete: SetNull)
   // Current-version metadata. On replace, the prior values are copied into a DocumentVersion row.
   fileName          String
   fileUrl           String
@@ -2526,6 +2534,7 @@ model Document {
   @@index([saleId])
   @@index([leadId])
   @@index([interiorProjectId])
+  @@index([interiorInvoiceId])
   @@index([category, deletedAt])
   @@index([isClientVisible, deletedAt])
   @@index([deletedAt])
@@ -3407,6 +3416,8 @@ model InteriorInvoice {
   // The bill's purchase order (2026-10-17). Null for bills logged before POs existed.
   purchaseOrderId   String?
   purchaseOrder     InteriorPurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  // The invoice file(s) for this bill — see Document.interiorInvoiceId.
+  documents         Document[]
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
 

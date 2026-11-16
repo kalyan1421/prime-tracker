@@ -12,15 +12,16 @@
  * Every rule is enforced by the API; the screens show the same checks up front so nobody
  * fills in a form only to be refused.
  */
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, addToast } from '@heroui/react';
-import { FiCheck, FiChevronDown, FiChevronRight, FiPlus, FiRotateCcw, FiTrash2, FiX } from 'react-icons/fi';
+import { FiCheck, FiChevronDown, FiChevronRight, FiPaperclip, FiPlus, FiRotateCcw, FiTrash2, FiUpload, FiX } from 'react-icons/fi';
 import {
   useAddInteriorInvoice, useCreateInteriorChangeOrder, useCreateInteriorPurchaseOrder, useDecideInteriorChangeOrder,
-  useInteriorCostCodes, useInteriorCostingSettings, useInteriorPurchaseOrderAction, useUpdateInteriorInvoice,
-  useVendors, useVoidInteriorInvoice,
+  useInteriorCostCodes, useInteriorCostingSettings, useInteriorDocuments, useInteriorPurchaseOrderAction,
+  useUpdateInteriorInvoice, useUploadDocument, useVendors, useVoidInteriorInvoice,
 } from '../hooks/useApi';
 import { errMsg } from '../utils/fmt';
+import { apiAssetUrl } from '../lib/api';
 import {
   CO_REASONS, CostCodeSelect, Note, PayerTag, PayerToggle, SectionCard, StatusTag, Tag, TD, TH, NUM,
   codeLabel, fmtDay, money, roleList, type CostCode, type Payer,
@@ -201,7 +202,7 @@ export function InteriorChangeOrdersPanel({ costing }: { costing: any }) {
 const PO_STATUS = { DRAFT: 'Draft', PENDING: 'Waiting', APPROVED: 'Approved', VOID: 'Void' };
 const blankLine = (costCodeId: string | null = null) => ({ costCodeId, description: '', amount: '', paidBy: 'PRIME' as Payer });
 
-export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: any; onAddBill?: (poId: string) => void }) {
+export function InteriorPurchaseOrdersPanel({ costing }: { costing: any }) {
   const can = costing.can ?? {};
   const seeMoney = !!can.seeMoney;
   const pos: any[] = costing.purchaseOrders ?? [];
@@ -209,6 +210,10 @@ export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: a
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [voiding, setVoiding] = useState<any | null>(null);
+  // The PO a bill (and its invoice file) is being added to — opened here rather than on the
+  // Bills tab, so invoices go in from the purchase order (client, 2026-11-11).
+  const [billPo, setBillPo] = useState<any | null>(null);
+  const filesByBill = useBillFiles(costing.id);
   const { data: settings } = useInteriorCostingSettings();
   const varianceBy = settings?.varianceRoles ? roleList(settings.varianceRoles) : 'a Founder or PM';
   const approvers = settings?.poApproverRoles ? roleList(settings.poApproverRoles) : 'a Founder or PM';
@@ -266,6 +271,9 @@ export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: a
                   const waiting = p.status === 'PENDING' || p.status === 'DRAFT';
                   const mayApprove = can.approvePurchaseOrder && (!p.variance || can.approveVariance);
                   const left = seeMoney ? r2(p.cost - p.billed) : 0;
+                  const poBills = seeMoney ? (costing.bills ?? []).filter((b: any) => b.purchaseOrderId === p.id) : [];
+                  const poFiles = poBills.reduce((n: number, b: any) => n + (filesByBill[b.id]?.length ?? 0), 0);
+                  const mayBill = seeMoney && p.status === 'APPROVED' && can.addBill && left > 0.005;
                   return (
                     <Fragment key={p.id}>
                       <tr className="border-t border-gray-100">
@@ -279,6 +287,9 @@ export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: a
                           <div className="mt-0.5 flex flex-wrap gap-1">
                             {p.variance && <Tag tone="red">Variance</Tag>}
                             {p.materialsOnly && <Tag>Materials only</Tag>}
+                            {poFiles > 0 && (
+                              <Tag tone="blue"><FiPaperclip className="mr-0.5 h-3 w-3" />{poFiles} invoice{poFiles > 1 ? 's' : ''}</Tag>
+                            )}
                           </div>
                         </td>
                         <td className={`${TD} min-w-[150px]`}>{p.vendor?.name ?? '—'}</td>
@@ -309,8 +320,8 @@ export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: a
                             {p.status === 'APPROVED' && can.markWorkComplete && (p.workCompletedAt
                               ? <Button size="sm" variant="light" startContent={<FiRotateCcw className="h-3.5 w-3.5" />} isLoading={action.isPending} onPress={() => run(p.id, 'complete', `${p.number} reopened`, false)}>Reopen</Button>
                               : <Button size="sm" variant="flat" color="success" startContent={<FiCheck className="h-3.5 w-3.5" />} isLoading={action.isPending} onPress={() => run(p.id, 'complete', `${p.number} work marked complete`, true)}>Work complete</Button>)}
-                            {seeMoney && p.status === 'APPROVED' && can.addBill && left > 0.005 && onAddBill && (
-                              <Button size="sm" variant="flat" startContent={<FiPlus className="h-3.5 w-3.5" />} onPress={() => onAddBill(p.id)}>Bill</Button>
+                            {mayBill && (
+                              <Button size="sm" variant="flat" startContent={<FiPlus className="h-3.5 w-3.5" />} onPress={() => setBillPo(p)}>Bill</Button>
                             )}
                             {seeMoney && p.status !== 'VOID' && can.createPurchaseOrder && !p.billed && (
                               <Button size="sm" variant="light" color="danger" isIconOnly aria-label={`Void ${p.number}`} onPress={() => setVoiding(p)}>
@@ -350,15 +361,25 @@ export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: a
                               )}
                               {seeMoney && (
                                 <div>
-                                  <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Bills</h4>
-                                  {(costing.bills ?? []).filter((b: any) => b.purchaseOrderId === p.id).map((b: any) => (
-                                    <div key={b.id} className="flex items-baseline gap-1.5 text-xs text-gray-800">
-                                      <span>{b.invoiceNo || 'Bill'}</span><StatusTag status={b.status} labels={{ PENDING: 'Received' }} />
-                                      <span className="ml-auto tabular-nums">{money(b.amount)}</span>
-                                    </div>
-                                  ))}
-                                  {!(costing.bills ?? []).some((b: any) => b.purchaseOrderId === p.id) && <p className="text-xs text-gray-500">None yet.</p>}
+                                  <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Bills &amp; invoices</h4>
+                                  <div className="space-y-2">
+                                    {poBills.map((b: any) => (
+                                      <div key={b.id}>
+                                        <div className="flex items-baseline gap-1.5 text-xs text-gray-800">
+                                          <span>{b.invoiceNo || 'Bill'}</span><StatusTag status={b.status} labels={{ PENDING: 'Received' }} />
+                                          <span className="ml-auto tabular-nums">{money(b.amount)}</span>
+                                        </div>
+                                        <BillFiles interiorProjectId={costing.id} billId={b.id} files={filesByBill[b.id] ?? []} canAttach={!!can.addBill} />
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {!poBills.length && <p className="text-xs text-gray-500">None yet.</p>}
                                   <p className="mt-1 text-[11px] text-gray-500">{money(left)} not yet billed</p>
+                                  {mayBill && (
+                                    <Button size="sm" variant="flat" className="mt-2" startContent={<FiPlus className="h-3.5 w-3.5" />} onPress={() => setBillPo(p)}>
+                                      Add bill with invoice
+                                    </Button>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -373,6 +394,15 @@ export function InteriorPurchaseOrdersPanel({ costing, onAddBill }: { costing: a
           </div>
         )}
       </SectionCard>
+
+      <Modal isOpen={!!billPo} onClose={() => setBillPo(null)} size="lg" scrollBehavior="inside">
+        <ModalContent>
+          <ModalHeader className="text-base">Add a bill to {billPo?.number}</ModalHeader>
+          <ModalBody className="p-0">
+            {billPo && <AddBillForm costing={costing} presetPoId={billPo.id} onDone={() => setBillPo(null)} />}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
 
       <Modal isOpen={!!voiding} onClose={() => setVoiding(null)} size="sm">
         <ModalContent>
@@ -541,21 +571,108 @@ function NewPurchaseOrder({ costing, onClose, varianceBy }: { costing: any; onCl
 
 // ───────────────────────────── bills ─────────────────────────────
 
+
+// ───────────────────────────── invoice files ─────────────────────────────
+//
+// A bill is the supplier's invoice as numbers; these are the invoice FILES (client,
+// 2026-11-11: "invoices can be uploaded to the linked purchase order"). A file is a Document
+// with category INVOICE and `interiorInvoiceId` set to its bill — the bill already belongs to
+// its PO, so the PO shows its invoices through its bills. The API derives the fit-out and
+// project from the bill and only lets `interior:finance` attach or see them — the same people
+// who see the bill amounts.
+
+/** PDFs and photos, so a phone offers its camera. The API's upload policy is the real check. */
+const INVOICE_ACCEPT = 'application/pdf,image/*,.pdf,.heic';
+
+/** This fit-out's invoice files, grouped by the bill they are attached to. */
+function useBillFiles(interiorProjectId: string) {
+  const { data } = useInteriorDocuments(interiorProjectId);
+  return useMemo(() => {
+    const byBill: Record<string, any[]> = {};
+    for (const d of Array.isArray(data) ? data : []) {
+      if (d.category === 'INVOICE' && d.interiorInvoiceId) (byBill[d.interiorInvoiceId] ??= []).push(d);
+    }
+    return byBill;
+  }, [data]);
+}
+
+function useAttachInvoice(interiorProjectId: string) {
+  const upload = useUploadDocument();
+  return (billId: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('interiorInvoiceId', billId);
+    // Sent so the API can refuse a bill from another fit-out; it derives this anyway.
+    fd.append('interiorProjectId', interiorProjectId);
+    return upload.mutateAsync(fd);
+  };
+}
+
+/** A bill's invoice files as links, plus an attach control for people who can add bills. */
+function BillFiles({ interiorProjectId, billId, files, canAttach }: {
+  interiorProjectId: string; billId: string; files: any[]; canAttach: boolean;
+}) {
+  const attach = useAttachInvoice(interiorProjectId);
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    try {
+      await attach(billId, file);
+      addToast({ title: 'Invoice attached', color: 'success' });
+    } catch (err) {
+      addToast({ title: errMsg(err, 'Could not attach the invoice'), color: 'danger' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      {files.map((d) => (
+        <a
+          key={d.id} href={apiAssetUrl(d.fileUrl)} target="_blank" rel="noreferrer" title={d.fileName}
+          className="inline-flex max-w-[180px] items-center gap-1 text-xs font-medium text-blue-700 hover:underline"
+        >
+          <FiPaperclip className="h-3 w-3 shrink-0" /><span className="truncate">{d.fileName}</span>
+        </a>
+      ))}
+      {canAttach && (
+        <>
+          <input ref={input} type="file" accept={INVOICE_ACCEPT} className="hidden" onChange={onPick} aria-label={`Invoice file for bill ${billId}`} />
+          <Button
+            size="sm" variant="light" className="h-6 min-w-0 px-1.5 text-[11px]"
+            startContent={busy ? undefined : <FiUpload className="h-3 w-3" />} isLoading={busy}
+            onPress={() => input.current?.click()}
+          >
+            {files.length ? 'Add file' : 'Attach invoice'}
+          </Button>
+        </>
+      )}
+      {!files.length && !canAttach && <span className="text-[11px] text-gray-500">No file</span>}
+    </div>
+  );
+}
+
+// ───────────────────────────── bills ─────────────────────────────
+
 const today = () => new Date().toISOString().slice(0, 10);
 
-/** `presetPoId` opens the form on that PO; the page remounts this panel (key) to apply a new one. */
-export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; presetPoId?: string | null }) {
-  const can = costing.can ?? {};
-  const bills: any[] = costing.bills ?? [];
+/**
+ * The add-a-bill form, with the invoice file. Shared by the Bills tab and the purchase-order
+ * row, so a bill and its invoice can be entered from either without changing tabs.
+ */
+function AddBillForm({ costing, presetPoId, onDone }: { costing: any; presetPoId?: string; onDone: () => void }) {
   const billable = (costing.purchaseOrders ?? []).filter((p: any) => p.status === 'APPROVED' && p.cost - p.billed > 0.005);
   const add = useAddInteriorInvoice();
-  const update = useUpdateInteriorInvoice();
-  const voidBill = useVoidInteriorInvoice();
-  const { data: settings } = useInteriorCostingSettings();
-  const approvers = settings?.billApproverRoles ? roleList(settings.billApproverRoles) : 'a Founder or PM';
-  const [open, setOpen] = useState(!!presetPoId);
+  const attach = useAttachInvoice(costing.id);
   const [f, setF] = useState({ poId: presetPoId ?? billable[0]?.id ?? '', invoiceNo: '', invoiceDate: today(), amount: '' });
-  const [voiding, setVoiding] = useState<any | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const po = billable.find((p: any) => p.id === f.poId);
   const room = po ? r2(po.cost - po.billed) : 0;
@@ -566,18 +683,97 @@ export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; pres
     if (!po) return addToast({ title: 'Pick the purchase order this bill is for', color: 'warning' });
     if (!(amt > 0)) return addToast({ title: 'Enter the bill amount', color: 'warning' });
     if (tooMuch) return addToast({ title: `More than is left on ${po.number}`, color: 'warning' });
+    setSaving(true);
+    let bill: any;
     try {
-      await add.mutateAsync({
+      bill = await add.mutateAsync({
         id: costing.id,
         data: { purchaseOrderId: po.id, amount: r2(amt), invoiceNo: f.invoiceNo.trim() || undefined, invoiceDate: f.invoiceDate || undefined },
       });
-      addToast({ title: 'Bill added', color: 'success' });
-      setOpen(false);
-      setF({ poId: '', invoiceNo: '', invoiceDate: today(), amount: '' });
     } catch (e) {
       addToast({ title: errMsg(e, 'Could not add the bill'), color: 'danger' });
+      setSaving(false);
+      return;
     }
+    // Two requests, bill first: the file needs the bill's id. If the file fails the bill
+    // still stands, so say so plainly and point at where to retry.
+    if (file && bill?.id) {
+      try {
+        await attach(bill.id, file);
+        addToast({ title: 'Bill added with its invoice', color: 'success' });
+      } catch (e) {
+        addToast({
+          title: `Bill added, but the invoice file did not upload: ${errMsg(e, 'please try again')}. Use "Attach invoice" on the bill.`,
+          color: 'warning',
+        });
+      }
+    } else {
+      addToast({ title: 'Bill added', color: 'success' });
+    }
+    setSaving(false);
+    onDone();
   };
+
+  return (
+    <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
+      <div className="sm:col-span-2">
+        <span className={LABEL}>Against purchase order</span>
+        <select aria-label="Purchase order" value={f.poId} onChange={(e) => setF((s) => ({ ...s, poId: e.target.value }))} className={INPUT}>
+          <option value="">Pick a purchase order…</option>
+          {billable.map((p: any) => (
+            <option key={p.id} value={p.id}>{p.number} · {p.title} · {p.vendor?.name} · {money(r2(p.cost - p.billed))} not yet billed</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <span className={LABEL}>Bill / invoice #</span>
+        <input aria-label="Invoice number" placeholder="Supplier's invoice number" value={f.invoiceNo} onChange={(e) => setF((s) => ({ ...s, invoiceNo: e.target.value }))} className={INPUT} />
+      </div>
+      <div>
+        <span className={LABEL}>Bill date</span>
+        <input aria-label="Bill date" type="date" value={f.invoiceDate} onChange={(e) => setF((s) => ({ ...s, invoiceDate: e.target.value }))} className={INPUT} />
+      </div>
+      <div>
+        <span className={LABEL}>Amount</span>
+        <input aria-label="Bill amount" inputMode="decimal" placeholder="0" value={f.amount} onChange={(e) => setF((s) => ({ ...s, amount: e.target.value }))} className={`${INPUT} tabular-nums`} />
+      </div>
+      <div className="sm:col-span-2">
+        <span className={LABEL}>Invoice file</span>
+        <input
+          aria-label="Invoice file" type="file" accept={INVOICE_ACCEPT}
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          className="block w-full text-sm text-gray-700 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+        />
+        <p className="mt-1 text-[11px] text-gray-500">The supplier's invoice as a PDF or photo. Optional — you can attach it to the bill later.</p>
+      </div>
+      {po && (
+        <div className="sm:col-span-2">
+          <Note tone={tooMuch ? 'bad' : 'info'}>
+            {tooMuch
+              ? <><strong>More than is left on {po.number}.</strong> {money(room)} has not been billed yet. The extra needs a change order and a new PO.</>
+              : <>{money(room)} of {po.number} has not been billed yet.</>}
+          </Note>
+        </div>
+      )}
+      <div className="flex justify-end gap-2 sm:col-span-2">
+        <Button size="sm" variant="light" onPress={onDone}>Cancel</Button>
+        <Button size="sm" color="primary" isLoading={saving} isDisabled={!po || tooMuch} onPress={submit}>Add bill</Button>
+      </div>
+    </div>
+  );
+}
+
+export function InteriorBillsPanel({ costing }: { costing: any }) {
+  const can = costing.can ?? {};
+  const bills: any[] = costing.bills ?? [];
+  const billable = (costing.purchaseOrders ?? []).filter((p: any) => p.status === 'APPROVED' && p.cost - p.billed > 0.005);
+  const update = useUpdateInteriorInvoice();
+  const voidBill = useVoidInteriorInvoice();
+  const filesByBill = useBillFiles(costing.id);
+  const { data: settings } = useInteriorCostingSettings();
+  const approvers = settings?.billApproverRoles ? roleList(settings.billApproverRoles) : 'a Founder or PM';
+  const [open, setOpen] = useState(false);
+  const [voiding, setVoiding] = useState<any | null>(null);
 
   const move = async (b: any, status: string, done: string) => {
     try {
@@ -588,46 +784,13 @@ export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; pres
     }
   };
 
+  const voidingFiles = voiding ? (filesByBill[voiding.id] ?? []).length : 0;
+
   return (
     <div className="space-y-3">
       {open && (
         <SectionCard title="Add a bill" hint={`Accounts enters bills; ${approvers} approves; Accounts marks them paid.`}>
-          <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <span className={LABEL}>Against purchase order</span>
-              <select aria-label="Purchase order" value={f.poId} onChange={(e) => setF((s) => ({ ...s, poId: e.target.value }))} className={INPUT}>
-                <option value="">Pick a purchase order…</option>
-                {billable.map((p: any) => (
-                  <option key={p.id} value={p.id}>{p.number} · {p.title} · {p.vendor?.name} · {money(r2(p.cost - p.billed))} not yet billed</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <span className={LABEL}>Bill / invoice #</span>
-              <input aria-label="Invoice number" placeholder="Supplier's invoice number" value={f.invoiceNo} onChange={(e) => setF((s) => ({ ...s, invoiceNo: e.target.value }))} className={INPUT} />
-            </div>
-            <div>
-              <span className={LABEL}>Bill date</span>
-              <input aria-label="Bill date" type="date" value={f.invoiceDate} onChange={(e) => setF((s) => ({ ...s, invoiceDate: e.target.value }))} className={INPUT} />
-            </div>
-            <div>
-              <span className={LABEL}>Amount</span>
-              <input aria-label="Bill amount" inputMode="decimal" placeholder="0" value={f.amount} onChange={(e) => setF((s) => ({ ...s, amount: e.target.value }))} className={`${INPUT} tabular-nums`} />
-            </div>
-            {po && (
-              <div className="sm:col-span-2">
-                <Note tone={tooMuch ? 'bad' : 'info'}>
-                  {tooMuch
-                    ? <><strong>More than is left on {po.number}.</strong> {money(room)} has not been billed yet. The extra needs a change order and a new PO.</>
-                    : <>{money(room)} of {po.number} has not been billed yet.</>}
-                </Note>
-              </div>
-            )}
-            <div className="flex justify-end gap-2 sm:col-span-2">
-              <Button size="sm" variant="light" onPress={() => setOpen(false)}>Cancel</Button>
-              <Button size="sm" color="primary" isLoading={add.isPending} isDisabled={!po || tooMuch} onPress={submit}>Add bill</Button>
-            </div>
-          </div>
+          <AddBillForm costing={costing} onDone={() => setOpen(false)} />
         </SectionCard>
       )}
 
@@ -635,14 +798,14 @@ export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; pres
         title="Bills"
         hint="Approved and paid bills are the actual cost."
         right={can.addBill && !open && (billable.length
-          ? <Button size="sm" color="primary" startContent={<FiPlus className="h-3.5 w-3.5" />} onPress={() => { setF((s) => ({ ...s, poId: s.poId || billable[0].id })); setOpen(true); }}>Add bill</Button>
+          ? <Button size="sm" color="primary" startContent={<FiPlus className="h-3.5 w-3.5" />} onPress={() => setOpen(true)}>Add bill</Button>
           : <span className="text-[11px] text-gray-500">Bills go against an approved purchase order.</span>)}
       >
         {!bills.length ? (
           <p className="px-4 py-8 text-center text-sm text-gray-500">No bills yet.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[880px] border-collapse">
+            <table className="w-full min-w-[1060px] border-collapse">
               <thead className="bg-gray-50">
                 <tr>
                   <th className={`${TH} text-left`}>Bill #</th>
@@ -651,6 +814,7 @@ export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; pres
                   <th className={`${TH} text-left`}>Date</th>
                   <th className={`${TH} text-right`}>Amount</th>
                   <th className={`${TH} text-left`}>Status</th>
+                  <th className={`${TH} text-left`}>Invoice</th>
                   <th className={TH} />
                 </tr>
               </thead>
@@ -665,6 +829,9 @@ export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; pres
                     <td className={TD}>
                       <StatusTag status={b.status} labels={{ PENDING: 'Received' }} />
                       {b.paidAt && <div className="text-[11px] text-gray-500">paid {fmtDay(b.paidAt)}</div>}
+                    </td>
+                    <td className={`${TD} min-w-[170px]`}>
+                      <BillFiles interiorProjectId={costing.id} billId={b.id} files={filesByBill[b.id] ?? []} canAttach={!!can.addBill} />
                     </td>
                     <td className={`${TD} text-right`}>
                       <div className="flex flex-wrap justify-end gap-1.5">
@@ -701,7 +868,10 @@ export function InteriorBillsPanel({ costing, presetPoId }: { costing: any; pres
             <p className="text-sm text-gray-700">
               {voiding?.vendor?.name ?? 'Supplier'}{voiding?.invoiceNo ? ` · #${voiding.invoiceNo}` : ''} · <strong>{money(voiding?.amount)}</strong>
             </p>
-            <p className="text-sm text-gray-700">This deletes the bill and reverses the actual cost it recorded.</p>
+            <p className="text-sm text-gray-700">
+              This deletes the bill and reverses the actual cost it recorded
+              {voidingFiles ? `, and removes its invoice file${voidingFiles > 1 ? 's' : ''}` : ''}.
+            </p>
           </ModalBody>
           <ModalFooter>
             <Button size="sm" variant="light" onPress={() => setVoiding(null)}>Cancel</Button>

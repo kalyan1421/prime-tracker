@@ -283,6 +283,8 @@ const KEY_ENTITY: Record<string, string> = {
   saleIds: 'sale',
   taskId: 'task',
   interiorProjectId: 'interior',
+  // An invoice upload names only its bill (POST /documents { interiorInvoiceId }).
+  interiorInvoiceId: 'interiorInvoice',
   commitmentId: 'commitment',
   actualId: 'actual',
   budgetLineId: 'budgetLine',

@@ -83,20 +83,25 @@ export class DocumentsController {
     @Query('leadId') leadId?: string,
     @Query('interiorProjectId') interiorProjectId?: string,
     @CurrentUser() user?: ScopedUser,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
-    if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId);
+    // Every list drops INVOICE documents for a caller who cannot see bills
+    // (DocumentsService.invoiceVisibility). `?? []` and never undefined: undefined is the
+    // service's "internal caller, full trust" signal.
+    const perms = permissions ?? [];
+    if (interiorProjectId) return this.service.findByInteriorProject(interiorProjectId, perms);
     // Before unitId: a sale-scoped read must not widen to the unit's whole file. The stage
     // gate asks what is on THIS sale, and a unit that sold twice would otherwise let the
     // first deal's Deed answer for the second.
-    if (saleId) return this.service.findBySale(saleId);
+    if (saleId) return this.service.findBySale(saleId, perms);
     // Same rule for a lead: one unit can carry many enquiries, and each asks only for its
     // own. ProjectAccessGuard already resolves `leadId` to its project (KEY_ENTITY), so a
     // scoped role reading someone else's lead 404s before this runs.
-    if (leadId) return this.service.findByLead(leadId);
-    if (unitId) return this.service.findByUnit(unitId);
-    if (buildingId) return this.service.findByBuilding(buildingId);
+    if (leadId) return this.service.findByLead(leadId, perms);
+    if (unitId) return this.service.findByUnit(unitId, perms);
+    if (buildingId) return this.service.findByBuilding(buildingId, perms);
     // No filter at all used to mean every project's documents, each with a signed URL.
-    return this.service.findByProject(await this.access.projectIdFilter(user, projectId));
+    return this.service.findByProject(await this.access.projectIdFilter(user, projectId), perms);
   }
 
   /**
@@ -143,9 +148,10 @@ export class DocumentsController {
     @UploadedFile() file: Express.Multer.File,
     @Body() body: UploadDocumentDto,
     @Request() req: any,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
     if (!file) throw new BadRequestException('No file was received');
-    return this.service.create(file, body, req.user.sub);
+    return this.service.create(file, body, req.user.sub, permissions ?? []);
   }
 
   /**
@@ -159,8 +165,12 @@ export class DocumentsController {
   @Patch(':id')
   @RequirePermissions('document:upload')
   @ApiOperation({ summary: 'Rename a document and/or set its expiry date' })
-  update(@Param('id') id: string, @Body() body: UpdateDocumentDto) {
-    return this.service.update(id, body);
+  update(
+    @Param('id') id: string,
+    @Body() body: UpdateDocumentDto,
+    @CurrentUser('permissions') permissions?: string[],
+  ) {
+    return this.service.update(id, body, permissions ?? []);
   }
 
   @Post(':id/replace')
@@ -172,9 +182,10 @@ export class DocumentsController {
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
     @Body() body: ReplaceDocumentDto,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
     if (!file) throw new BadRequestException('No file was received');
-    return this.service.replaceFile(id, file, body.fileName);
+    return this.service.replaceFile(id, file, body.fileName, permissions ?? []);
   }
 
   /**
@@ -190,8 +201,8 @@ export class DocumentsController {
   @Delete(':id')
   @RequirePermissions('document:delete')
   @ApiOperation({ summary: 'Delete a document (soft — the stored object survives)' })
-  delete(@Param('id') id: string) {
-    return this.service.delete(id);
+  delete(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.service.delete(id, permissions ?? []);
   }
 
   /**
@@ -202,15 +213,19 @@ export class DocumentsController {
   @Get(':id/versions')
   @RequirePermissions('document:view')
   @ApiOperation({ summary: 'List archived prior versions of a document' })
-  versions(@Param('id') id: string) {
-    return this.service.listVersions(id);
+  versions(@Param('id') id: string, @CurrentUser('permissions') permissions?: string[]) {
+    return this.service.listVersions(id, permissions ?? []);
   }
 
   @Get(':id/download')
   @RequirePermissions('document:view')
   @ApiOperation({ summary: 'Get a signed download URL for a document' })
-  async download(@Param('id') id: string, @Res() res: Response) {
-    const { url } = await this.service.getDownloadUrl(id);
+  async download(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @CurrentUser('permissions') permissions?: string[],
+  ) {
+    const { url } = await this.service.getDownloadUrl(id, permissions ?? []);
     res.redirect(url);
   }
 }

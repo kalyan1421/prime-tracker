@@ -9,6 +9,7 @@ import {
 } from '@prime-tracker/shared';
 import { ProjectAccessService } from '../../common/access/project-access.service';
 import { EncryptionService } from '../../common/encryption/encryption.service';
+import { invoiceVisibility } from '../documents/documents.service';
 
 /**
  * Lead statuses that are NOT "open". Mirrors LeadsService's own definition
@@ -786,8 +787,9 @@ export class ProjectsService {
       members,
     ] = await Promise.all([
       // Documents attached to the project
+      // Invoice files only for viewers who can see the bills they belong to.
       this.prisma.document.findMany({
-        where: { projectId, deletedAt: null },
+        where: { projectId, deletedAt: null, ...invoiceVisibility(viewerPermissions) },
         select: { id: true, fileName: true, category: true, createdAt: true, uploadedBy: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'desc' },
         take: TAKE,

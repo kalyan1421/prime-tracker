@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { DocCategory } from '@prisma/client';
@@ -25,6 +25,28 @@ export const EXPIRY_TRACKED_CATEGORIES: readonly DocCategory[] = [
 export const EXPIRY_SOON_DAYS = 60;
 
 export type DocumentExpiryStatus = 'VALID' | 'EXPIRING_SOON' | 'EXPIRED';
+
+/**
+ * Who may see an INVOICE document: exactly who may see the bill it is attached to.
+ *
+ * An invoice file shows the same money the bill row does (amount, supplier, line prices), and
+ * the bill is `interior:finance`. `document:view` is far wider — Construction, Sales,
+ * Marketing and Legal all hold it — so without this an invoice PDF would hand those roles
+ * the figures the Bills tab hides from them.
+ */
+export const INVOICE_VIEW_PERMISSION = 'interior:finance';
+
+/**
+ * `undefined` means an internal caller and full trust — the same convention ProjectsService
+ * and InteriorService use for `viewerPermissions`. Every controller path passes the caller's
+ * real permissions.
+ */
+export const canSeeInvoices = (viewerPermissions?: string[]) =>
+  !viewerPermissions || viewerPermissions.includes(INVOICE_VIEW_PERMISSION);
+
+/** Spread into a document `where` to drop invoices for a viewer who cannot see bills. */
+export const invoiceVisibility = (viewerPermissions?: string[]) =>
+  canSeeInvoices(viewerPermissions) ? {} : { category: { not: DocCategory.INVOICE } };
 
 @Injectable()
 export class DocumentsService {
@@ -114,24 +136,28 @@ export class DocumentsService {
    * on every by-id path: a soft-deleted document must 404 rather than be renamed, re-filed,
    * or — the one that actually leaks — handed back as a signed download URL.
    */
-  private async findLive(id: string) {
+  private async findLive(id: string, viewerPermissions?: string[]) {
     const doc = await this.prisma.document.findFirst({ where: { id, ...DocumentsService.LIVE } });
-    if (!doc) throw new NotFoundException('Document not found');
+    // An invoice the caller may not see reads as missing, not forbidden: a 403 would confirm
+    // the id is a real invoice.
+    if (!doc || (doc.category === DocCategory.INVOICE && !canSeeInvoices(viewerPermissions))) {
+      throw new NotFoundException('Document not found');
+    }
     return doc;
   }
 
-  async findByProject(projectId: ProjectIdFilter) {
+  async findByProject(projectId: ProjectIdFilter, viewerPermissions?: string[]) {
     const docs = await this.prisma.document.findMany({
-      where: { projectId, ...DocumentsService.LIVE },
+      where: { projectId, ...DocumentsService.LIVE, ...invoiceVisibility(viewerPermissions) },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
     return this.withSignedUrls(docs);
   }
 
-  async findByUnit(unitId: string) {
+  async findByUnit(unitId: string, viewerPermissions?: string[]) {
     const docs = await this.prisma.document.findMany({
-      where: { unitId, ...DocumentsService.LIVE },
+      where: { unitId, ...DocumentsService.LIVE, ...invoiceVisibility(viewerPermissions) },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -140,9 +166,9 @@ export class DocumentsService {
 
   /** Sprint B: docs attached directly to a Building (whole-building leases, building-level
    *  contracts). Doc Vault Phase 1 already added documents.buildingId. */
-  async findByBuilding(buildingId: string) {
+  async findByBuilding(buildingId: string, viewerPermissions?: string[]) {
     const docs = await this.prisma.document.findMany({
-      where: { buildingId, ...DocumentsService.LIVE },
+      where: { buildingId, ...DocumentsService.LIVE, ...invoiceVisibility(viewerPermissions) },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -156,9 +182,9 @@ export class DocumentsService {
    * the unit. The gate asks "what is on THIS sale", and a unit with two sales against it
    * over the years must not let the first deal's Deed satisfy the second's.
    */
-  async findBySale(saleId: string) {
+  async findBySale(saleId: string, viewerPermissions?: string[]) {
     const docs = await this.prisma.document.findMany({
-      where: { saleId, ...DocumentsService.LIVE },
+      where: { saleId, ...DocumentsService.LIVE, ...invoiceVisibility(viewerPermissions) },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -170,18 +196,18 @@ export class DocumentsService {
    * question is "what came in on THIS enquiry", and a unit with six leads against it must
    * not show all six sets of paperwork under each one.
    */
-  async findByLead(leadId: string) {
+  async findByLead(leadId: string, viewerPermissions?: string[]) {
     const docs = await this.prisma.document.findMany({
-      where: { leadId, ...DocumentsService.LIVE },
+      where: { leadId, ...DocumentsService.LIVE, ...invoiceVisibility(viewerPermissions) },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
     return this.withSignedUrls(docs);
   }
 
-  async findByInteriorProject(interiorProjectId: string) {
+  async findByInteriorProject(interiorProjectId: string, viewerPermissions?: string[]) {
     const docs = await this.prisma.document.findMany({
-      where: { interiorProjectId, ...DocumentsService.LIVE },
+      where: { interiorProjectId, ...DocumentsService.LIVE, ...invoiceVisibility(viewerPermissions) },
       include: { uploadedBy: { select: { id: true, name: true, avatarUrl: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -197,16 +223,62 @@ export class DocumentsService {
       saleId?: string;
       leadId?: string;
       interiorProjectId?: string;
+      /** The fit-out bill this file is the invoice for. See the invoice block below. */
+      interiorInvoiceId?: string;
       category?: string;
       displayName?: string;
       /** D2 — ISO 8601 validity end. Omitted / empty means "no expiry", which is silent. */
       expiresAt?: string | Date | null;
     },
     userId: string,
+    /** The uploader's permissions. Omitted = internal caller, full trust (see canSeeInvoices). */
+    uploaderPermissions?: string[],
   ) {
     // Parsed before the S3 upload so a malformed date fails the request rather than
     // orphaning an object in the bucket with no Document row pointing at it.
     const expiresAt = this.parseExpiry(metadata.expiresAt);
+
+    let category = (metadata.category as DocCategory | undefined) || DocCategory.GENERAL;
+    let interiorProjectId = metadata.interiorProjectId;
+
+    /**
+     * An INVOICE is a fit-out bill's supplier invoice (client, 2026-11-11: "invoices can be
+     * uploaded to the linked purchase order"). The bill already belongs to its PO, so the
+     * file hangs off the bill and the PO shows it through the bill.
+     *
+     * - The fit-out comes from the bill, never from the caller.
+     * - The category is forced to INVOICE, and INVOICE is never filed without a bill. That
+     *   keeps "is an invoice" and "is attached to a bill" the same thing, which is what lets
+     *   every read hide invoices by category alone.
+     * - It is filed to the fit-out and the project, deliberately NOT to the unit or building
+     *   — a unit's file is its deed, its certificates, its drawings, not every sub's bill.
+     * - Uploading needs `interior:finance`, the same gate as adding the bill.
+     *
+     * All of this runs before the storage upload, so a refused invoice leaves nothing behind.
+     */
+    const isInvoice = !!metadata.interiorInvoiceId;
+    if (isInvoice) {
+      if (!canSeeInvoices(uploaderPermissions)) {
+        throw new ForbiddenException('Only people who can see bills can attach an invoice');
+      }
+      if (metadata.unitId || metadata.buildingId || metadata.saleId || metadata.leadId) {
+        throw new BadRequestException('An invoice is attached to a bill only — do not send a unit, building, sale or lead');
+      }
+      const bill = await this.prisma.interiorInvoice.findUnique({
+        where: { id: metadata.interiorInvoiceId },
+        select: { interiorProjectId: true },
+      });
+      if (!bill) throw new NotFoundException('Bill not found');
+      if (interiorProjectId && interiorProjectId !== bill.interiorProjectId) {
+        throw new BadRequestException('That bill belongs to a different fit-out');
+      }
+      interiorProjectId = bill.interiorProjectId;
+      category = DocCategory.INVOICE;
+    } else if (category === DocCategory.INVOICE) {
+      throw new BadRequestException(
+        'An invoice is attached to a bill — add it from the bill on the Purchase orders or Bills tab',
+      );
+    }
 
     /**
      * A document filed against a sale is also filed against that sale's unit and project.
@@ -236,9 +308,9 @@ export class DocumentsService {
      * its anchor, and a caller-supplied unitId could file the certificate against the wrong
      * unit.
      */
-    if (metadata.interiorProjectId) {
+    if (interiorProjectId) {
       const ip = await this.prisma.interiorProject.findUnique({
-        where: { id: metadata.interiorProjectId },
+        where: { id: interiorProjectId },
         select: {
           unitId: true,
           buildingId: true,
@@ -247,13 +319,16 @@ export class DocumentsService {
         },
       });
       if (!ip) throw new NotFoundException('Interior project not found');
-      unitId = ip.unitId ?? unitId;
-      // A fit-out anchored to the BUILDING has no unit to inherit, so without this its
-      // paperwork carried no anchor below the project and the building's own Documents
-      // card could not show it. Only taken from a building-level fit-out: a unit's
-      // certificate belongs to the unit, and copying it up would bury the building's card
-      // under every unit's file.
-      buildingId = ip.buildingId ?? buildingId;
+      // An invoice stays off the unit and building — see the invoice block above.
+      if (!isInvoice) {
+        unitId = ip.unitId ?? unitId;
+        // A fit-out anchored to the BUILDING has no unit to inherit, so without this its
+        // paperwork carried no anchor below the project and the building's own Documents
+        // card could not show it. Only taken from a building-level fit-out: a unit's
+        // certificate belongs to the unit, and copying it up would bury the building's card
+        // under every unit's file.
+        buildingId = ip.buildingId ?? buildingId;
+      }
       projectId = ip.building?.projectId ?? ip.unit?.building?.projectId ?? projectId;
     }
 
@@ -350,7 +425,7 @@ export class DocumentsService {
       {
         projectId,
         projectName,
-        category: metadata.category,
+        category,
       },
     );
 
@@ -361,13 +436,14 @@ export class DocumentsService {
         buildingId: buildingId || null,
         saleId: metadata.saleId || null,
         leadId: metadata.leadId || null,
-        interiorProjectId: metadata.interiorProjectId || null,
+        interiorProjectId: interiorProjectId || null,
+        interiorInvoiceId: metadata.interiorInvoiceId || null,
         fileName,
         fileUrl: publicUrl,
         fileSize: file.size,
         // The type derived from the extension, not the browser's claim — see upload-policy.ts.
         mimeType: contentType,
-        category: (metadata.category as DocCategory) || DocCategory.GENERAL,
+        category,
         uploadedById: userId,
         storagePath,
         expiresAt,
@@ -384,8 +460,8 @@ export class DocumentsService {
    * stored date alone, `null` clears it, a string sets it. Conflating "not sent" with
    * "clear it" would silently wipe a permit's expiry every time somebody renamed a file.
    */
-  async update(id: string, dto: UpdateDocumentDto) {
-    await this.findLive(id);
+  async update(id: string, dto: UpdateDocumentDto, viewerPermissions?: string[]) {
+    await this.findLive(id, viewerPermissions);
 
     const data: { fileName?: string; expiresAt?: Date | null } = {};
 
@@ -432,8 +508,9 @@ export class DocumentsService {
     id: string,
     file: Express.Multer.File,
     newFileName?: string,
+    viewerPermissions?: string[],
   ) {
-    const doc = await this.findLive(id);
+    const doc = await this.findLive(id, viewerPermissions);
 
     // Upload new file; keep original project folder structure from storagePath if possible
     const projectId = doc.projectId ?? undefined;
@@ -513,8 +590,8 @@ export class DocumentsService {
    * reports no URL at all. Handing back the stored `fileUrl` there would be a link into a
    * private bucket with nothing behind it — a 403 dressed as a download.
    */
-  async listVersions(id: string) {
-    await this.findLive(id);
+  async listVersions(id: string, viewerPermissions?: string[]) {
+    await this.findLive(id, viewerPermissions);
 
     const versions = await this.prisma.documentVersion.findMany({
       where: { documentId: id },
@@ -572,8 +649,8 @@ export class DocumentsService {
    * (`getDownloadUrl` 404s), which is the part that is actually enforceable without
    * per-object key rotation.
    */
-  async delete(id: string) {
-    await this.findLive(id);
+  async delete(id: string, viewerPermissions?: string[]) {
+    await this.findLive(id, viewerPermissions);
 
     return this.prisma.document.update({
       where: { id },
@@ -581,10 +658,10 @@ export class DocumentsService {
     });
   }
 
-  async getDownloadUrl(id: string): Promise<{ url: string; fileName: string }> {
+  async getDownloadUrl(id: string, viewerPermissions?: string[]): Promise<{ url: string; fileName: string }> {
     // Live-only: the bytes outlive the delete, so this is the one read that would still
     // hand out a deleted DEED if it resolved by bare id.
-    const doc = await this.findLive(id);
+    const doc = await this.findLive(id, viewerPermissions);
 
     const storagePath = (doc as any).storagePath as string | null;
     if (storagePath) {

@@ -687,3 +687,40 @@ describe('InteriorService — member-project scope', () => {
     expect(mockPrisma.interiorProject.findMany.mock.calls[0][0].where).toMatchObject(viaEitherAnchor({ in: ['p1'] }));
   });
 });
+
+// Invoice files hang off a bill (Document.interiorInvoiceId, client 2026-11-11).
+describe('InteriorService — a bill\'s invoice files', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.interiorInvoice.findUnique = jest.fn().mockResolvedValue({ id: 'bill-1', actualId: 'act-1' });
+    mockPrisma.interiorInvoice.delete = jest.fn().mockResolvedValue({ id: 'bill-1' });
+    mockPrisma.actual.deleteMany = jest.fn().mockResolvedValue({ count: 1 });
+    mockPrisma.document.updateMany = jest.fn().mockResolvedValue({ count: 2 });
+  });
+
+  it('voiding a bill soft-deletes its invoice files in the same transaction', async () => {
+    await makeService().removeInvoice('bill-1');
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    const call = mockPrisma.document.updateMany.mock.calls[0][0];
+    expect(call.where).toEqual({ interiorInvoiceId: 'bill-1', deletedAt: null });
+    expect(call.data.deletedAt).toBeInstanceOf(Date);
+    // Soft, never a hard delete of the rows.
+    expect(mockPrisma.document.delete).toBeUndefined();
+    expect(mockPrisma.interiorInvoice.delete).toHaveBeenCalledWith({ where: { id: 'bill-1' } });
+  });
+
+  it('findById drops invoice files for a viewer who cannot see bills', async () => {
+    const documents = [
+      { id: 'd1', fileName: 'plan.pdf', category: 'DRAWING' },
+      { id: 'd2', fileName: 'BSM-1042.pdf', category: 'INVOICE' },
+    ];
+    stubProject({ scopeItems: [], invoices: [], lease: null, documents });
+
+    const viewer: any = await makeService().findById('ip1', ['interior:view']);
+    expect(viewer.documents.map((d: any) => d.id)).toEqual(['d1']);
+
+    const finance: any = await makeService().findById('ip1', ['interior:view', 'interior:finance']);
+    expect(finance.documents.map((d: any) => d.id)).toEqual(['d1', 'd2']);
+  });
+});

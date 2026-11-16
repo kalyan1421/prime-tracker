@@ -81,9 +81,6 @@ export default function InteriorProjectDetailPage() {
   const { data: project, isLoading, error } = useInteriorProject(id);
   const { data: costing } = useInteriorCosting(id);
   const [tab, setTab] = useState<string | null>(null);
-  // "Bill" on a purchase order opens the Bills tab with that PO picked; the counter remounts
-  // the Bills panel so a second click on another PO applies too.
-  const [billFor, setBillFor] = useState<{ poId: string; n: number } | null>(null);
   const advance = useAdvanceInteriorPhase();
   const approve = useApproveInterior();
   const update = useUpdateInterior();
@@ -131,6 +128,11 @@ export default function InteriorProjectDetailPage() {
     : ['purchase-orders', 'snags', 'documents'];
   const selected = tab && tabKeys.includes(tab) ? tab : tabKeys[0];
   const count = (n?: number) => (n ? ` (${n})` : '');
+  // Names each invoice file in the Documents tab by its bill and PO ("Bill BSM-1042 · FIT-0001").
+  // Empty for anyone who cannot see bills — the API hides their invoice files too.
+  const invoiceLabels: Record<string, string> = Object.fromEntries(
+    (c?.bills ?? []).map((b: any) => [b.id, `Bill ${b.invoiceNo || '(no number)'} · ${b.purchaseOrderNumber ?? 'no PO'}`]),
+  );
 
   const doAdvance = async () => {
     if (!next) return;
@@ -382,17 +384,14 @@ export default function InteriorProjectDetailPage() {
             <Tab key="purchase-orders" title={`Purchase orders${count(c?.purchaseOrders?.length)}`}>
               <div className="pt-3">
                 {c ? (
-                  <InteriorPurchaseOrdersPanel
-                    costing={c}
-                    onAddBill={(poId) => { setBillFor((b) => ({ poId, n: (b?.n ?? 0) + 1 })); setTab('bills'); }}
-                  />
+                  <InteriorPurchaseOrdersPanel costing={c} />
                 ) : <LoadingState message="Loading purchase orders…" />}
               </div>
             </Tab>
             {money && (
               <Tab key="bills" title={`Bills${count(c.bills?.length)}`}>
                 <div className="pt-3">
-                  <InteriorBillsPanel key={billFor?.n ?? 0} costing={c} presetPoId={billFor?.poId} />
+                  <InteriorBillsPanel costing={c} />
                 </div>
               </Tab>
             )}
@@ -408,7 +407,7 @@ export default function InteriorProjectDetailPage() {
 
             <Tab key="documents" title="Documents">
               <div className="pt-3">
-                <InteriorDocumentsPanel interiorProjectId={p.id} currentPhase={p.phase} />
+                <InteriorDocumentsPanel interiorProjectId={p.id} currentPhase={p.phase} invoiceLabels={invoiceLabels} />
               </div>
             </Tab>
 
