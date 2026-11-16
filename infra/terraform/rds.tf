@@ -13,9 +13,12 @@ resource "aws_db_parameter_group" "main" {
   name   = "${local.name}-pg15"
   family = "postgres15"
 
+  # pending-reboot is what AWS records for this static parameter; without saying so,
+  # every plan showed a change (to "immediate") that applying never settled.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
   parameter {
     name  = "log_min_duration_statement"
