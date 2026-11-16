@@ -252,16 +252,17 @@ locals {
 }
 
 # The site's own pages: the AWS-managed SecurityHeadersPolicy's headers, unchanged,
-# plus a Content-Security-Policy that is report-only for now. Nothing is blocked;
-# each violation a visitor's browser sees is posted to /api/csp-report and lands as a
-# `[CSP]` line in the website API's log group. When a week of those shows only
-# expected noise, rename the header to Content-Security-Policy to enforce it.
+# plus an enforced Content-Security-Policy. It ran report-only first; the reports were
+# reviewed in PrimeDevelopers-web's docs/csp-rollout.md before this was enforced.
+# Violations are still posted to /api/csp-report and land as `[CSP]` lines in the
+# website API's log group. Rollback: rename the header back to
+# Content-Security-Policy-Report-Only and apply (minutes).
 # Only the default behaviour uses this — /api/* answers JSON, which a CSP does not
 # govern.
 resource "aws_cloudfront_response_headers_policy" "website_site" {
   count   = var.enable_website ? 1 : 0
   name    = "${local.name}-website-site"
-  comment = "Security headers + report-only CSP for the website's pages"
+  comment = "Security headers + enforced CSP for the website's pages"
 
   security_headers_config {
     strict_transport_security {
@@ -288,7 +289,7 @@ resource "aws_cloudfront_response_headers_policy" "website_site" {
 
   custom_headers_config {
     items {
-      header   = "Content-Security-Policy-Report-Only"
+      header   = "Content-Security-Policy"
       value    = local.website_csp
       override = true
     }
