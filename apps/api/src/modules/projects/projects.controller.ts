@@ -1,6 +1,7 @@
 import {
   Controller, Get, Post, Put, Delete, Param, Body, Query,
   UseGuards, UseInterceptors, HttpCode, HttpStatus,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ProjectsService } from './projects.service';
@@ -129,7 +130,17 @@ export class ProjectsController {
   @Put(':id')
   @RequirePermissions('project:edit')
   @ApiOperation({ summary: 'Update project' })
-  update(@Param('id') id: string, @Body() body: UpdateProjectDto) {
+  update(
+    @Param('id') id: string,
+    @Body() body: UpdateProjectDto,
+    @CurrentUser('permissions') permissions?: string[],
+  ) {
+    // The website slug decides which public listing this project's units are
+    // published to, so setting or clearing it is an admin's call, not every
+    // project editor's (PrimeDevelopers-web security audit M3).
+    if (body.websiteSlug !== undefined && !permissions?.includes('settings:manage')) {
+      throw new ForbiddenException('Missing permissions: settings:manage (needed to change websiteSlug)');
+    }
     return this.projectsService.update(id, body);
   }
 

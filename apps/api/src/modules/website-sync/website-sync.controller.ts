@@ -1,9 +1,9 @@
-import { Controller, Get, Param, ParseBoolPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, ParseBoolPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { ProjectAccessGuard } from '../../common/access/project-access.guard';
-import { RequirePermissions } from '../../common/decorators/index';
+import { CurrentUser, RequirePermissions } from '../../common/decorators/index';
 import { WebsiteSyncService } from './website-sync.service';
 
 @ApiTags('Website sync')
@@ -33,7 +33,13 @@ export class WebsiteSyncController {
     @Param('id') id: string,
     @Query('dryRun', new ParseBoolPipe({ optional: true })) dryRun?: boolean,
     @Query('force', new ParseBoolPipe({ optional: true })) force?: boolean,
+    @CurrentUser('permissions') permissions?: string[],
   ) {
+    // force removes public listing rows past the website's guard: an admin's call,
+    // not every project editor's (PrimeDevelopers-web security audit M3).
+    if (force && !permissions?.includes('settings:manage')) {
+      throw new ForbiddenException('Missing permissions: settings:manage (needed for force)');
+    }
     return this.sync.pushProject(id, { dryRun, force });
   }
 }
