@@ -158,23 +158,56 @@ data "aws_ssm_parameter" "website_origin_secret" {
   with_decryption = true
 }
 
+# Paths that have a prerendered page of their own (PrimeDevelopers-web's
+# scripts/prerender.mjs writes /about/index.html, /properties/<slug>/index.html, …
+# so share previews show that page's title and image). The web deploy keeps this
+# store in step with the files it uploads: one key per path, value unused. Shipped
+# empty, which leaves routing exactly as before.
+resource "aws_cloudfront_key_value_store" "website_routes" {
+  count   = var.enable_website ? 1 : 0
+  name    = "${local.name}-website-routes"
+  comment = "Prerendered website paths (managed by PrimeDevelopers-web deploy)"
+}
+
 # The SPA fallback firebase.json's "**" -> /index.html rewrite provided: a request for
 # an app route (no file extension) gets the app shell; a file keeps its own path and,
 # if missing, its real 403/404. Only the site's default behaviour runs this — /api/*
 # never does, so API status codes reach the browser unchanged.
+#
+# An app route listed in website_routes gets its own prerendered file instead of the
+# shell. Anything else — a property published after the last deploy, a typo, a store
+# lookup that fails — still gets /index.html, so no route can break because of the
+# store. S3 is never asked for a file the store does not name: with OAC and no
+# ListBucket, a missing key would be a 403, not a fallback.
 resource "aws_cloudfront_function" "website_spa" {
-  count   = var.enable_website ? 1 : 0
-  name    = "${local.name}-website-spa"
-  runtime = "cloudfront-js-2.0"
-  comment = "App routes to /index.html"
-  publish = true
-  code    = <<-JS
-    function handler(event) {
+  count                        = var.enable_website ? 1 : 0
+  name                         = "${local.name}-website-spa"
+  runtime                      = "cloudfront-js-2.0"
+  comment                      = "App routes to their prerendered page or /index.html"
+  publish                      = true
+  key_value_store_associations = [aws_cloudfront_key_value_store.website_routes[0].arn]
+  code                         = <<-JS
+    import cf from 'cloudfront';
+    const routes = cf.kvs('${element(split("/", aws_cloudfront_key_value_store.website_routes[0].arn), 1)}');
+
+    async function handler(event) {
       var request = event.request;
       var last = request.uri.split('/').pop();
-      if (last.indexOf('.') === -1) {
-        request.uri = '/index.html';
+      if (last.indexOf('.') !== -1) {
+        return request;
       }
+      var path = request.uri.replace(/\/+$/, '');
+      if (path !== '') {
+        try {
+          if (await routes.exists(path)) {
+            request.uri = path + '/index.html';
+            return request;
+          }
+        } catch (e) {
+          // fall through to the shell
+        }
+      }
+      request.uri = '/index.html';
       return request;
     }
   JS
@@ -183,7 +216,7 @@ resource "aws_cloudfront_function" "website_spa" {
 locals {
   # The two inline <script>s in PrimeDevelopers-web's apps/web/index.html, as built for
   # AWS: `node scripts/csp-hashes.mjs apps/web/dist/index.html` prints these. Editing
-  # either script changes its hash; scripts/deploy-web-aws.sh warns when a build's
+  # either script changes its hash; scripts/deploy-web-aws.sh refuses to upload a build whose
   # hashes are missing here.
   website_inline_script_hashes = [
     "'sha256-MWOenPb/0DJ7K6cRoF3wv9jbY4E3DDKYpTbC86DJapI='", # content prefetch + hero preload
@@ -197,28 +230,17 @@ locals {
   # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
   # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
   # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
-  # - Google Analytics / Firebase: the site's visitor analytics and performance
-  #   monitoring (apps/web/src/lib/firebase.js) — gtag from googletagmanager, hits to
-  #   google-analytics, and the Firebase config, installations, remote-config and
-  #   logging endpoints the SDK calls. Kept when Firebase Hosting was retired.
-  website_analytics_hosts = [
-    "https://*.google-analytics.com",
-    "https://*.analytics.google.com",
-    "https://*.googletagmanager.com",
-    "https://firebase.googleapis.com",
-    "https://firebaseinstallations.googleapis.com",
-    "https://firebaseremoteconfig.googleapis.com",
-    "https://firebaselogging-pa.googleapis.com",
-  ]
+  # No analytics: Google Analytics / Firebase were removed from the site on 16 Nov 2026
+  # (its privacy policy says it runs none), and their hosts with them.
 
   website_csp = join("; ", [
     "default-src 'self'",
-    "script-src 'self' ${join(" ", local.website_inline_script_hashes)} 'wasm-unsafe-eval' https://www.googletagmanager.com",
+    "script-src 'self' ${join(" ", local.website_inline_script_hashes)} 'wasm-unsafe-eval'",
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://storage.googleapis.com https://*.google-analytics.com https://*.googletagmanager.com",
+    "img-src 'self' data: blob: https://storage.googleapis.com",
     "font-src 'self' data:",
-    "connect-src 'self' https://cdn.jsdelivr.net ${join(" ", local.website_analytics_hosts)}",
+    "connect-src 'self' https://cdn.jsdelivr.net",
     "media-src 'self' blob:",
     "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com",
     "object-src 'none'",
