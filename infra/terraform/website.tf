@@ -216,7 +216,7 @@ resource "aws_cloudfront_function" "website_spa" {
 locals {
   # The two inline <script>s in PrimeDevelopers-web's apps/web/index.html, as built for
   # AWS: `node scripts/csp-hashes.mjs apps/web/dist/index.html` prints these. Editing
-  # either script changes its hash; scripts/deploy-web-aws.sh warns when a build's
+  # either script changes its hash; scripts/deploy-web-aws.sh refuses to upload a build whose
   # hashes are missing here.
   website_inline_script_hashes = [
     "'sha256-MWOenPb/0DJ7K6cRoF3wv9jbY4E3DDKYpTbC86DJapI='", # content prefetch + hero preload
@@ -230,28 +230,17 @@ locals {
   # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
   # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
   # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
-  # - Google Analytics / Firebase: the site's visitor analytics and performance
-  #   monitoring (apps/web/src/lib/firebase.js) — gtag from googletagmanager, hits to
-  #   google-analytics, and the Firebase config, installations, remote-config and
-  #   logging endpoints the SDK calls. Kept when Firebase Hosting was retired.
-  website_analytics_hosts = [
-    "https://*.google-analytics.com",
-    "https://*.analytics.google.com",
-    "https://*.googletagmanager.com",
-    "https://firebase.googleapis.com",
-    "https://firebaseinstallations.googleapis.com",
-    "https://firebaseremoteconfig.googleapis.com",
-    "https://firebaselogging-pa.googleapis.com",
-  ]
+  # No analytics: Google Analytics / Firebase were removed from the site on 16 Nov 2026
+  # (its privacy policy says it runs none), and their hosts with them.
 
   website_csp = join("; ", [
     "default-src 'self'",
-    "script-src 'self' ${join(" ", local.website_inline_script_hashes)} 'wasm-unsafe-eval' https://www.googletagmanager.com",
+    "script-src 'self' ${join(" ", local.website_inline_script_hashes)} 'wasm-unsafe-eval'",
     "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://storage.googleapis.com https://*.google-analytics.com https://*.googletagmanager.com",
+    "img-src 'self' data: blob: https://storage.googleapis.com",
     "font-src 'self' data:",
-    "connect-src 'self' https://cdn.jsdelivr.net ${join(" ", local.website_analytics_hosts)}",
+    "connect-src 'self' https://cdn.jsdelivr.net",
     "media-src 'self' blob:",
     "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com",
     "object-src 'none'",
