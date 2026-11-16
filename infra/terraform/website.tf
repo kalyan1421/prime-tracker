@@ -158,23 +158,56 @@ data "aws_ssm_parameter" "website_origin_secret" {
   with_decryption = true
 }
 
+# Paths that have a prerendered page of their own (PrimeDevelopers-web's
+# scripts/prerender.mjs writes /about/index.html, /properties/<slug>/index.html, …
+# so share previews show that page's title and image). The web deploy keeps this
+# store in step with the files it uploads: one key per path, value unused. Shipped
+# empty, which leaves routing exactly as before.
+resource "aws_cloudfront_key_value_store" "website_routes" {
+  count   = var.enable_website ? 1 : 0
+  name    = "${local.name}-website-routes"
+  comment = "Prerendered website paths (managed by PrimeDevelopers-web deploy)"
+}
+
 # The SPA fallback firebase.json's "**" -> /index.html rewrite provided: a request for
 # an app route (no file extension) gets the app shell; a file keeps its own path and,
 # if missing, its real 403/404. Only the site's default behaviour runs this — /api/*
 # never does, so API status codes reach the browser unchanged.
+#
+# An app route listed in website_routes gets its own prerendered file instead of the
+# shell. Anything else — a property published after the last deploy, a typo, a store
+# lookup that fails — still gets /index.html, so no route can break because of the
+# store. S3 is never asked for a file the store does not name: with OAC and no
+# ListBucket, a missing key would be a 403, not a fallback.
 resource "aws_cloudfront_function" "website_spa" {
-  count   = var.enable_website ? 1 : 0
-  name    = "${local.name}-website-spa"
-  runtime = "cloudfront-js-2.0"
-  comment = "App routes to /index.html"
-  publish = true
-  code    = <<-JS
-    function handler(event) {
+  count                        = var.enable_website ? 1 : 0
+  name                         = "${local.name}-website-spa"
+  runtime                      = "cloudfront-js-2.0"
+  comment                      = "App routes to their prerendered page or /index.html"
+  publish                      = true
+  key_value_store_associations = [aws_cloudfront_key_value_store.website_routes[0].arn]
+  code                         = <<-JS
+    import cf from 'cloudfront';
+    const routes = cf.kvs('${element(split("/", aws_cloudfront_key_value_store.website_routes[0].arn), 1)}');
+
+    async function handler(event) {
       var request = event.request;
       var last = request.uri.split('/').pop();
-      if (last.indexOf('.') === -1) {
-        request.uri = '/index.html';
+      if (last.indexOf('.') !== -1) {
+        return request;
       }
+      var path = request.uri.replace(/\/+$/, '');
+      if (path !== '') {
+        try {
+          if (await routes.exists(path)) {
+            request.uri = path + '/index.html';
+            return request;
+          }
+        } catch (e) {
+          // fall through to the shell
+        }
+      }
+      request.uri = '/index.html';
       return request;
     }
   JS
