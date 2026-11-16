@@ -64,6 +64,9 @@ export function reportIssues(body: unknown): Record<string, number> | null {
   return Object.fromEntries(Object.entries(issues).filter(([, n]) => n > 0));
 }
 
+/** https anywhere, or http to a loopback address on this host. */
+export const SAFE_SYNC_URL = /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/)/;
+
 /**
  * Mirrors published projects' unit inventory onto the public website.
  *
@@ -97,7 +100,10 @@ export class WebsiteSyncService {
   target(): { url: string; secret: string } | null {
     const url = (this.config.get<string>('WEBSITE_SYNC_URL') ?? '').trim();
     const secret = (this.config.get<string>('WEBSITE_SYNC_SECRET') ?? '').trim();
-    if (!/^https?:\/\//.test(url) || secret.length < 32 || secret === 'REPLACE_ME') return null;
+    // https, or plain http only to this machine: snapshots carry tenant names,
+    // and the signature protects their integrity, not their privacy
+    // (PrimeDevelopers-web security audit L5).
+    if (!SAFE_SYNC_URL.test(url) || secret.length < 32 || secret === 'REPLACE_ME') return null;
     return { url, secret };
   }
 
