@@ -230,6 +230,11 @@ locals {
   # - storage.googleapis.com: Centro Plaza's tenant images (src/data/centroPlazaInfo.js).
   # - cdn.jsdelivr.net: the HDR the 404 page's 3D scene lights itself with (drei preset).
   # - YouTube and Vimeo: video embeds in the CMS and the Learn pages.
+  # - www.google.com/maps (frames): the map on /contact and each property's
+  #   neighbourhood map. blob: (connect): three.js fetches the textures a .glb
+  #   unpacks into blob URLs. Both found in the report-only review (16 Nov 2026,
+  #   PrimeDevelopers-web docs/csp-rollout.md) — enforcing without them blanks
+  #   the maps and the 3D viewers.
   # No analytics: Google Analytics / Firebase were removed from the site on 16 Nov 2026
   # (its privacy policy says it runs none), and their hosts with them.
 
@@ -240,9 +245,9 @@ locals {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://storage.googleapis.com",
     "font-src 'self' data:",
-    "connect-src 'self' https://cdn.jsdelivr.net",
+    "connect-src 'self' https://cdn.jsdelivr.net blob:",
     "media-src 'self' blob:",
-    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com",
+    "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com/maps",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
