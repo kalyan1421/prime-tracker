@@ -260,8 +260,8 @@ locals {
 # plus an enforced Content-Security-Policy. It ran report-only first; the reports were
 # reviewed in PrimeDevelopers-web's docs/csp-rollout.md before this was enforced.
 # Violations are still posted to /api/csp-report and land as `[CSP]` lines in the
-# website API's log group. Rollback: rename the header back to
-# Content-Security-Policy-Report-Only and apply (minutes).
+# website API's log group. Rollback (minutes): move local.website_csp back into a
+# custom_headers_config item named Content-Security-Policy-Report-Only and apply.
 # Only the default behaviour uses this — /api/* answers JSON, which a CSP does not
 # govern.
 resource "aws_cloudfront_response_headers_policy" "website_site" {
@@ -290,13 +290,12 @@ resource "aws_cloudfront_response_headers_policy" "website_site" {
       mode_block = true
       override   = false
     }
-  }
-
-  custom_headers_config {
-    items {
-      header   = "Content-Security-Policy"
-      value    = local.website_csp
-      override = true
+    # CloudFront refuses Content-Security-Policy as a custom header (400
+    # InvalidArgument): an enforced policy has to be set here. Report-only has no
+    # slot of its own, which is why it was a custom header before.
+    content_security_policy {
+      content_security_policy = local.website_csp
+      override                = true
     }
   }
 }
